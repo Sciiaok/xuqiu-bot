@@ -8,7 +8,12 @@
     "build": "next build",
     "start": "next start -p 3002",
     "lint": "next lint",
-    "migrate:v2": "node scripts/migrate-sessions-to-v2.js"
+    "migrate:v2": "node scripts/migrate-sessions-to-v2.js",
+    "deploy": "npm run build && pm2 restart ecosystem.config.cjs",
+    "deploy:start": "npm run build && pm2 start ecosystem.config.cjs",
+    "cron:start": "pm2 start ecosystem.config.cjs --only lead-sync-cron",
+    "cron:stop": "pm2 stop lead-sync-cron",
+    "cron:logs": "pm2 logs lead-sync-cron"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.74.0",
