@@ -21,10 +21,9 @@ echo -e "${YELLOW}========================================${NC}"
 echo -e "${YELLOW}  Deploying lead_engine_next to $SERVER${NC}"
 echo -e "${YELLOW}========================================${NC}"
 
-# Step 1: Create tarball
+# Step 1: Create tarball (including node_modules for faster deploy)
 echo -e "\n${GREEN}[1/6] Creating tarball...${NC}"
 tar -czvf $TMP_FILE \
-    --exclude='node_modules' \
     --exclude='.next' \
     --exclude='.git' \
     --exclude='scripts/deploy.sh' \
@@ -39,9 +38,9 @@ scp $TMP_FILE $SERVER:~/
 echo -e "\n${GREEN}[3/6] Extracting on server...${NC}"
 ssh $SERVER "rm -rf $REMOTE_DIR && mkdir $REMOTE_DIR && tar -xzf ~/lead_engine_next.tar.gz -C $REMOTE_DIR && rm ~/lead_engine_next.tar.gz"
 
-# Step 4: Install dependencies and build
-echo -e "\n${GREEN}[4/6] Installing dependencies and building...${NC}"
-ssh $SERVER "cd $REMOTE_DIR && npm install --legacy-peer-deps && npm run build"
+# Step 4: Rebuild native modules and build
+echo -e "\n${GREEN}[4/6] Rebuilding native modules and building...${NC}"
+ssh $SERVER "cd $REMOTE_DIR && npm rebuild && npm run build"
 
 # Step 5: Restart PM2 main app
 echo -e "\n${GREEN}[5/6] Restarting PM2 main app...${NC}"
