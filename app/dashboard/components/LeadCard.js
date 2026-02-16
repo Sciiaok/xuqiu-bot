@@ -1,3 +1,4 @@
+// app/dashboard/components/LeadCard.js
 'use client';
 
 import Link from 'next/link';
@@ -32,14 +33,17 @@ function getRelativeTime(timestamp) {
   return `${diffDays} day${diffDays > 1 ? 's' : ''} ago`;
 }
 
-export default function LeadCard({ lead }) {
+export default function LeadCard({ lead, onEdit, onApprove, syncStatus }) {
   const {
+    id,
     wa_id,
     lead_data = {},
     score = 0,
     stage = 'GREET',
     updated_at,
     risk_flags = [],
+    approved = false,
+    brand,
   } = lead;
 
   const {
@@ -54,6 +58,16 @@ export default function LeadCard({ lead }) {
   const destination = destination_port
     ? `${destination_country || ''}/${destination_port}`.replace(/^\//, '')
     : destination_country || '-';
+
+  const handleApprove = async (e) => {
+    e.stopPropagation();
+    onApprove?.(id);
+  };
+
+  const handleEdit = (e) => {
+    e.stopPropagation();
+    onEdit?.(lead);
+  };
 
   return (
     <div className="p-4 hover:bg-surface-hover transition-colors duration-150">
@@ -79,11 +93,30 @@ export default function LeadCard({ lead }) {
             <span className="mx-1">·</span>
             <span>{qty_bucket || '-'} units</span>
             <span className="mx-1">·</span>
-            <span>{car_model || '(No model)'}</span>
+            <span>{brand ? `${brand} ` : ''}{car_model || '(No model)'}</span>
           </div>
 
-          <div className="flex items-center gap-2 text-sm">
+          <div className="flex items-center gap-2 text-sm flex-wrap">
             <span className={`badge ${getStageBadgeStyle(stage)}`}>{stage?.toUpperCase() || 'GREET'}</span>
+
+            {approved && (
+              <span className="badge bg-accent-green/20 text-accent-green border border-accent-green/30">
+                Approved
+              </span>
+            )}
+
+            {syncStatus === 'success' && (
+              <span className="badge bg-accent-blue/20 text-accent-blue border border-accent-blue/30">
+                Synced
+              </span>
+            )}
+
+            {syncStatus === 'failed' && (
+              <span className="badge bg-accent-red/20 text-accent-red border border-accent-red/30">
+                Sync Failed
+              </span>
+            )}
+
             <span className="text-text-muted">·</span>
             <span className="text-text-tertiary">{buyer_type || '(unknown)'}</span>
             <span className="text-text-muted">·</span>
@@ -98,17 +131,39 @@ export default function LeadCard({ lead }) {
           </div>
         </div>
 
-        {/* Chat Button */}
-        <Link
-          href={`/dashboard/inbox?wa_id=${encodeURIComponent(wa_id)}`}
-          className="flex-shrink-0 btn btn-secondary text-sm"
-          onClick={(e) => e.stopPropagation()}
-        >
-          <svg className="w-4 h-4 mr-1.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
-          </svg>
-          Chat
-        </Link>
+        {/* Action Buttons */}
+        <div className="flex-shrink-0 flex items-center gap-2">
+          <button
+            onClick={handleEdit}
+            className="btn btn-secondary text-sm px-3 py-1.5"
+            title="Edit lead"
+          >
+            Edit
+          </button>
+
+          {!approved && (
+            <button
+              onClick={handleApprove}
+              className="btn btn-secondary text-sm px-3 py-1.5 text-accent-green border-accent-green/30 hover:bg-accent-green/10"
+              title="Approve lead"
+            >
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+              </svg>
+            </button>
+          )}
+
+          <Link
+            href={`/dashboard/inbox?wa_id=${encodeURIComponent(wa_id)}`}
+            className="btn btn-secondary text-sm px-3 py-1.5"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <svg className="w-4 h-4 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
+            </svg>
+            Chat
+          </Link>
+        </div>
       </div>
     </div>
   );
