@@ -22,29 +22,34 @@ echo -e "${YELLOW}  Deploying lead_engine_next to $SERVER${NC}"
 echo -e "${YELLOW}========================================${NC}"
 
 # Step 1: Create tarball
-echo -e "\n${GREEN}[1/5] Creating tarball...${NC}"
+echo -e "\n${GREEN}[1/6] Creating tarball...${NC}"
 tar -czvf $TMP_FILE \
     --exclude='node_modules' \
     --exclude='.next' \
     --exclude='.git' \
-    --exclude='scripts' \
+    --exclude='scripts/deploy.sh' \
+    --exclude='scripts/migrate-sessions-to-v2.js' \
     .
 
 # Step 2: Upload to server
-echo -e "\n${GREEN}[2/5] Uploading to $SERVER...${NC}"
+echo -e "\n${GREEN}[2/6] Uploading to $SERVER...${NC}"
 scp $TMP_FILE $SERVER:~/
 
 # Step 3: Extract and setup on server
-echo -e "\n${GREEN}[3/5] Extracting on server...${NC}"
+echo -e "\n${GREEN}[3/6] Extracting on server...${NC}"
 ssh $SERVER "rm -rf $REMOTE_DIR && mkdir $REMOTE_DIR && tar -xzf ~/lead_engine_next.tar.gz -C $REMOTE_DIR && rm ~/lead_engine_next.tar.gz"
 
 # Step 4: Install dependencies and build
-echo -e "\n${GREEN}[4/5] Installing dependencies and building...${NC}"
+echo -e "\n${GREEN}[4/6] Installing dependencies and building...${NC}"
 ssh $SERVER "cd $REMOTE_DIR && npm install --legacy-peer-deps && npm run build"
 
-# Step 5: Restart PM2
-echo -e "\n${GREEN}[5/5] Restarting PM2 process...${NC}"
-ssh $SERVER "pm2 restart $APP_NAME"
+# Step 5: Restart PM2 main app
+echo -e "\n${GREEN}[5/6] Restarting PM2 main app...${NC}"
+ssh $SERVER "pm2 restart $APP_NAME || pm2 start $REMOTE_DIR/ecosystem.config.cjs --only lead-engine-next"
+
+# Step 6: Restart PM2 cron service
+echo -e "\n${GREEN}[6/6] Restarting PM2 cron service...${NC}"
+ssh $SERVER "pm2 restart lead-sync-cron || pm2 start $REMOTE_DIR/ecosystem.config.cjs --only lead-sync-cron"
 
 # Cleanup local temp file
 rm -f $TMP_FILE
@@ -64,3 +69,7 @@ echo "  - Dashboard: http://ec2-3-145-93-205.us-east-2.compute.amazonaws.com/das
 echo "  - Login:     http://ec2-3-145-93-205.us-east-2.compute.amazonaws.com/login"
 echo "  - Webhook:   http://ec2-3-145-93-205.us-east-2.compute.amazonaws.com/webhook"
 echo "  - Health:    http://ec2-3-145-93-205.us-east-2.compute.amazonaws.com/api/health"
+echo "  - Cron Sync: http://ec2-3-145-93-205.us-east-2.compute.amazonaws.com/api/cron/sync-leads"
+
+echo -e "\n${YELLOW}Cron Logs:${NC}"
+echo "  ssh $SERVER 'pm2 logs lead-sync-cron'"
