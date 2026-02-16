@@ -1,0 +1,131 @@
+'use client';
+
+import { useState } from 'react';
+
+function getScoreColor(score) {
+  if (score >= 75) return 'bg-accent-green';
+  if (score >= 50) return 'bg-accent-amber';
+  return 'bg-accent-red';
+}
+
+function getStageColor(stage) {
+  switch (stage) {
+    case 'GREET': return 'bg-accent-blue';
+    case 'QUALIFY': return 'bg-accent-purple';
+    case 'PROOF': return 'bg-accent-green';
+    default: return 'bg-text-muted';
+  }
+}
+
+function getRelativeTime(timestamp) {
+  if (!timestamp) return 'Unknown';
+  const now = new Date();
+  const date = new Date(timestamp);
+  const diffDays = Math.floor((now - date) / 86400000);
+  if (diffDays < 1) return 'Today';
+  if (diffDays === 1) return 'Yesterday';
+  return `${diffDays} days ago`;
+}
+
+const fieldLabels = {
+  destination_country: 'Destination Country',
+  destination_port: 'Destination Port',
+  qty_bucket: 'Quantity',
+  car_model: 'Car Model',
+  buyer_type: 'Buyer Type',
+  timeline: 'Timeline',
+  incoterm: 'Incoterms',
+  loading_port: 'Loading Port',
+};
+
+export default function LeadsList({ leads = [] }) {
+  const [expandedId, setExpandedId] = useState(null);
+
+  if (leads.length === 0) {
+    return (
+      <div className="h-full flex items-center justify-center bg-surface border-l border-border">
+        <p className="text-text-muted text-sm">No leads for this contact</p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="h-full overflow-y-auto bg-surface border-l border-border">
+      <div className="p-3 border-b border-border flex items-center justify-between">
+        <h2 className="text-sm font-semibold text-text-primary">Leads ({leads.length})</h2>
+        {expandedId && (
+          <button
+            onClick={() => setExpandedId(null)}
+            className="text-text-muted hover:text-text-primary"
+          >
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+            </svg>
+          </button>
+        )}
+      </div>
+
+      <div className="p-3 space-y-2">
+        {leads.map((lead) => {
+          const isExpanded = expandedId === lead.id;
+
+          if (isExpanded) {
+            return (
+              <div key={lead.id} className="border border-border rounded-lg p-3 bg-background">
+                <div className="flex items-center gap-2 mb-3">
+                  <div className={`w-10 h-10 rounded-lg text-white font-bold flex items-center justify-center text-sm ${getScoreColor(lead.score)}`}>
+                    {lead.score || 0}
+                  </div>
+                  <span className={`px-2 py-0.5 rounded text-white text-xs font-medium ${getStageColor(lead.stage)}`}>
+                    {lead.stage || 'UNKNOWN'}
+                  </span>
+                </div>
+
+                <div className="space-y-2 text-sm">
+                  {Object.entries(fieldLabels).map(([key, label]) => {
+                    const value = lead[key];
+                    return (
+                      <div key={key} className="flex justify-between">
+                        <span className="text-text-tertiary">{label}:</span>
+                        <span className={value ? 'text-text-primary' : 'text-text-muted italic'}>
+                          {value || '(pending)'}
+                        </span>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            );
+          }
+
+          return (
+            <button
+              key={lead.id}
+              onClick={() => setExpandedId(lead.id)}
+              className="w-full text-left border border-border rounded-lg p-3 hover:bg-surface-hover transition-colors"
+            >
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <div className={`w-8 h-8 rounded text-white font-bold flex items-center justify-center text-xs ${getScoreColor(lead.score)}`}>
+                    {lead.score || 0}
+                  </div>
+                  <div>
+                    <span className={`px-1.5 py-0.5 rounded text-white text-xs ${getStageColor(lead.stage)}`}>
+                      {lead.stage || 'UNKNOWN'}
+                    </span>
+                    <div className="text-xs text-text-muted mt-0.5">
+                      {getRelativeTime(lead.updated_at)}
+                    </div>
+                  </div>
+                </div>
+                <svg className="w-4 h-4 text-text-muted" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+                </svg>
+              </div>
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}

@@ -1,0 +1,129 @@
+{
+  "identity_trust": {
+    "max_points": 30,
+    "criteria": {
+      "company_name_provided": {
+        "points": 10,
+        "description": "Provides company name"
+      },
+      "incoterms_provided": {
+        "points": 10,
+        "description": "Provides Incoterms preference (FOB, CIF, etc.)"
+      },
+      "verifiable_details": {
+        "points": 10,
+        "description": "Mentions verifiable details (registration, office location)"
+      },
+      "vague_company_info": {
+        "points": -10,
+        "description": "Vague or generic company information"
+      },
+      "refuses_company_details": {
+        "points": -15,
+        "description": "Refuses to share company details"
+      }
+    }
+  },
+  "transaction_intent": {
+    "max_points": 40,
+    "criteria": {
+      "quantity_1_5": {
+        "points": 10,
+        "description": "Mentions 1-5 units"
+      },
+      "quantity_6_20": {
+        "points": 15,
+        "description": "Mentions 6-20 units"
+      },
+      "quantity_20_plus": {
+        "points": 20,
+        "description": "Mentions 20+ units"
+      },
+      "clear_destination": {
+        "points": 10,
+        "description": "Clear destination port/city"
+      },
+      "timeline_mentioned": {
+        "points": 10,
+        "description": "Mentions timeline"
+      },
+      "timeline_urgent": {
+        "points": 15,
+        "description": "Urgent timeline (this week/month)"
+      },
+      "budget_discussed": {
+        "points": 5,
+        "description": "Discusses budget or financing"
+      },
+      "price_only_focus": {
+        "points": -20,
+        "description": "Only asks for prices without context"
+      },
+      "vague_requirements": {
+        "points": -15,
+        "description": "Very vague requirements"
+      }
+    }
+  },
+  "requirement_clarity": {
+    "max_points": 20,
+    "criteria": {
+      "specific_model": {
+        "points": 10,
+        "description": "Specific model preferences mentioned"
+      },
+      "technical_requirements": {
+        "points": 5,
+        "description": "Technical requirements discussed"
+      },
+      "logistics_discussion": {
+        "points": 5,
+        "description": "Delivery/logistics considerations"
+      },
+      "extremely_vague": {
+        "points": -10,
+        "description": "Extremely vague needs"
+      }
+    }
+  },
+  "risk_deductions": {
+    "max_deduction": -30,
+    "flags": {
+      "price_focused": {
+        "deduction": -10,
+        "description": "Only interested in prices, no qualifying info"
+      },
+      "vague_location": {
+        "deduction": -10,
+        "description": "Unclear or constantly changing destination"
+      },
+      "no_company": {
+        "deduction": -10,
+        "description": "Refuses to provide company information"
+      },
+      "suspicious_behavior": {
+        "deduction": -15,
+        "description": "Inconsistent information or suspicious patterns"
+      },
+      "unrealistic_expectations": {
+        "deduction": -5,
+        "description": "Demands immediate pricing or unrealistic terms"
+      }
+    }
+  },
+  "routing_thresholds": {
+    "HUMAN_NOW": {
+      "min_score": 75,
+      "description": "High-quality lead - immediate sales handoff"
+    },
+    "NURTURE": {
+      "min_score": 50,
+      "max_score": 74,
+      "description": "Medium quality - 24h follow-up nurture sequence"
+    },
+    "FAQ_END": {
+      "max_score": 49,
+      "description": "Low quality - send FAQ resources and end"
+    }
+  }
+}
