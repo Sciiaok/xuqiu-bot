@@ -1,13 +1,16 @@
+// app/dashboard/leads/page.js
 'use client';
 
 import { useState, useEffect } from 'react';
 import { createClient } from '@/lib/supabase-browser';
 import LeadCard from '../components/LeadCard';
 import FilterBar from '../components/FilterBar';
+import EditModal from '../components/EditModal';
 
 export default function LeadsPage() {
   const [leads, setLeads] = useState([]);
   const [filteredLeads, setFilteredLeads] = useState([]);
+  const [syncStatuses, setSyncStatuses] = useState({});
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [filters, setFilters] = useState({
@@ -18,10 +21,18 @@ export default function LeadsPage() {
   });
   const [carModels, setCarModels] = useState([]);
 
+  // Modal state
+  const [editingLead, setEditingLead] = useState(null);
+  const [isEditModalOpen, setIsEditModalOpen] = useState(false);
+
+  // Action states
+  const [actionLoading, setActionLoading] = useState(null);
+
   const supabase = createClient();
 
   useEffect(() => {
     fetchLeads();
+    fetchSyncStatuses();
   }, []);
 
   useEffect(() => {
@@ -51,6 +62,17 @@ export default function LeadsPage() {
         score: lead.score,
         route: lead.route,
         updated_at: lead.updated_at,
+        approved: lead.approved,
+        approved_at: lead.approved_at,
+        brand: lead.brand,
+        car_model: lead.car_model,
+        destination_country: lead.destination_country,
+        destination_port: lead.destination_port,
+        qty_bucket: lead.qty_bucket,
+        buyer_type: lead.buyer_type,
+        timeline: lead.timeline,
+        incoterm: lead.incoterm,
+        loading_port: lead.loading_port,
         lead_data: {
           destination_country: lead.destination_country,
           destination_port: lead.destination_port,
@@ -74,6 +96,26 @@ export default function LeadsPage() {
       setError(err.message || 'Failed to fetch leads');
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function fetchSyncStatuses() {
+    try {
+      const { data } = await supabase
+        .from('lead_sync_logs')
+        .select('lead_id, status')
+        .order('created_at', { ascending: false });
+
+      // Get latest status for each lead
+      const statusMap = {};
+      for (const log of (data || [])) {
+        if (!statusMap[log.lead_id]) {
+          statusMap[log.lead_id] = log.status;
+        }
+      }
+      setSyncStatuses(statusMap);
+    } catch (err) {
+      console.error('Error fetching sync statuses:', err);
     }
   }
 
@@ -115,6 +157,115 @@ export default function LeadsPage() {
   function handleFilterChange(newFilters) {
     setFilters(prev => ({ ...prev, ...newFilters }));
   }
+
+  async function handleApprove(leadId) {
+    try {
+      setActionLoading('approve');
+      const response = await fetch('/api/leads/approve', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ leadIds: [leadId] }),
+      });
+      const result = await response.json();
+      if (result.success) {
+        fetchLeads();
+      } else {
+        alert(result.error || 'Failed to approve');
+      }
+    } catch (err) {
+      alert(err.message);
+    } finally {
+      setActionLoading(null);
+    }
+  }
+
+  async function handleApproveAll() {
+    try {
+      setActionLoading('approveAll');
+      const ids = filteredLeads.filter(l => !l.approved).map(l => l.id);
+      if (ids.length === 0) {
+        alert('No leads to approve');
+        return;
+      }
+      const response = await fetch('/api/leads/approve', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ leadIds: ids }),
+      });
+      const result = await response.json();
+      if (result.success) {
+        alert(result.message);
+        fetchLeads();
+      } else {
+        alert(result.error || 'Failed to approve');
+      }
+    } catch (err) {
+      alert(err.message);
+    } finally {
+      setActionLoading(null);
+    }
+  }
+
+  async function handleSync24h() {
+    try {
+      setActionLoading('sync24h');
+      const response = await fetch('/api/leads/sync', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ syncAll: true }),
+      });
+      const result = await response.json();
+      if (result.success) {
+        alert(result.message);
+        fetchSyncStatuses();
+      } else {
+        alert(result.error || 'Failed to sync');
+      }
+    } catch (err) {
+      alert(err.message);
+    } finally {
+      setActionLoading(null);
+    }
+  }
+
+  async function handleSyncFiltered() {
+    try {
+      setActionLoading('syncFiltered');
+      const ids = filteredLeads.map(l => l.id);
+      if (ids.length === 0) {
+        alert('No leads to sync');
+        return;
+      }
+      const response = await fetch('/api/leads/sync', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ leadIds: ids }),
+      });
+      const result = await response.json();
+      if (result.success) {
+        alert(result.message);
+        fetchSyncStatuses();
+      } else {
+        alert(result.error || 'Failed to sync');
+      }
+    } catch (err) {
+      alert(err.message);
+    } finally {
+      setActionLoading(null);
+    }
+  }
+
+  function handleEdit(lead) {
+    setEditingLead(lead);
+    setIsEditModalOpen(true);
+  }
+
+  function handleEditSave(updatedLead) {
+    fetchLeads();
+  }
+
+  const approvedCount = filteredLeads.filter(l => l.approved).length;
+  const syncedCount = filteredLeads.filter(l => syncStatuses[l.id] === 'success').length;
 
   if (loading) {
     return (
@@ -161,6 +312,45 @@ export default function LeadsPage() {
         initialScoreRange={filters.scoreRange}
       />
 
+      {/* Action Buttons */}
+      <div className="card p-4">
+        <div className="flex flex-wrap items-center gap-3">
+          <button
+            onClick={handleApproveAll}
+            disabled={actionLoading === 'approveAll'}
+            className="btn btn-secondary text-sm disabled:opacity-50"
+          >
+            {actionLoading === 'approveAll' ? 'Approving...' : 'Approve All Filtered'}
+          </button>
+
+          <button
+            onClick={handleSync24h}
+            disabled={actionLoading === 'sync24h'}
+            className="btn btn-secondary text-sm disabled:opacity-50"
+          >
+            {actionLoading === 'sync24h' ? 'Syncing...' : 'Sync 24h Approved'}
+          </button>
+
+          <button
+            onClick={handleSyncFiltered}
+            disabled={actionLoading === 'syncFiltered'}
+            className="btn btn-secondary text-sm disabled:opacity-50"
+          >
+            {actionLoading === 'syncFiltered' ? 'Syncing...' : 'Sync Filtered'}
+          </button>
+
+          <div className="flex-1" />
+
+          <span className="text-sm text-text-secondary">
+            <span className="font-semibold text-text-primary">{filteredLeads.length}</span> leads
+            <span className="mx-1">·</span>
+            <span className="text-accent-green">{approvedCount} approved</span>
+            <span className="mx-1">·</span>
+            <span className="text-accent-blue">{syncedCount} synced</span>
+          </span>
+        </div>
+      </div>
+
       {leads.length === 0 ? (
         <div className="card p-8">
           <div className="text-center text-text-secondary">
@@ -175,7 +365,13 @@ export default function LeadsPage() {
         <div className="card divide-y divide-border">
           {filteredLeads.length > 0 ? (
             filteredLeads.map((lead) => (
-              <LeadCard key={lead.wa_id || lead.id} lead={lead} />
+              <LeadCard
+                key={lead.id}
+                lead={lead}
+                onEdit={handleEdit}
+                onApprove={handleApprove}
+                syncStatus={syncStatuses[lead.id]}
+              />
             ))
           ) : (
             <div className="p-8 text-center text-text-secondary">
@@ -190,6 +386,16 @@ export default function LeadsPage() {
           )}
         </div>
       )}
+
+      <EditModal
+        lead={editingLead}
+        isOpen={isEditModalOpen}
+        onClose={() => {
+          setIsEditModalOpen(false);
+          setEditingLead(null);
+        }}
+        onSave={handleEditSave}
+      />
     </div>
   );
 }
