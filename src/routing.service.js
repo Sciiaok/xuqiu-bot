@@ -1,10 +1,12 @@
 /**
  * Routing Service
  * Handles lead routing to n8n webhooks and FAQ delivery
+ * Supports both session-based (legacy) and lead-based (multi-lead) routing
  */
 
 import { config } from './config.js';
 import { sendMessage } from './whatsapp.service.js';
+import { updateLead, getLeadsByConversation } from '../lib/repositories/lead.repository.js';
 
 /**
  * Route a high-quality lead to sales team via n8n
@@ -169,9 +171,199 @@ export async function executeRouting(route, session, handoffSummary) {
   }
 }
 
+/**
+ * Route an individual lead to sales team via n8n
+ * @param {Object} lead - Lead object from database
+ * @param {string} handoffSummary - Summary for sales team
+ */
+export async function routeLeadToSales(lead, handoffSummary) {
+  const webhookUrl = config.n8n.webhookHumanNow;
+
+  if (!webhookUrl) {
+    console.log('⚠️  n8n HUMAN_NOW webhook not configured - skipping');
+    return { success: false, reason: 'webhook_not_configured' };
+  }
+
+  const payload = {
+    route: 'HUMAN_NOW',
+    priority: 'high',
+    lead: {
+      id: lead.id,
+      lead_key: lead.lead_key,
+      wa_id: lead.contact?.wa_id,
+      company_name: lead.contact?.company_name,
+      buyer_type: lead.buyer_type,
+      destination_country: lead.destination_country,
+      destination_port: lead.destination_port,
+      qty_bucket: lead.qty_bucket,
+      car_model: lead.car_model,
+      incoterm: lead.incoterm,
+      timeline: lead.timeline,
+      color_quantity: lead.color_quantity,
+    },
+    score: lead.score,
+    stage: lead.stage,
+    handoff_summary: handoffSummary,
+    qualified_at: new Date().toISOString(),
+  };
+
+  try {
+    const response = await fetch(webhookUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+
+    if (!response.ok) {
+      console.error(`n8n webhook failed: ${response.status}`);
+      return { success: false, reason: 'webhook_error', status: response.status };
+    }
+
+    // Update lead route in database
+    await updateLead(lead.id, { route: 'HUMAN_NOW', handoffSummary });
+
+    console.log(`✅ Lead ${lead.id} routed to sales (HUMAN_NOW)`);
+    return { success: true };
+  } catch (error) {
+    console.error('Error calling n8n webhook:', error);
+    return { success: false, reason: 'network_error', error: error.message };
+  }
+}
+
+/**
+ * Route an individual lead to nurture sequence via n8n
+ * @param {Object} lead - Lead object from database
+ * @param {string} handoffSummary - Summary for nurture
+ */
+export async function routeLeadToNurture(lead, handoffSummary) {
+  const webhookUrl = config.n8n.webhookNurture;
+
+  if (!webhookUrl) {
+    console.log('⚠️  n8n NURTURE webhook not configured - skipping');
+    return { success: false, reason: 'webhook_not_configured' };
+  }
+
+  const payload = {
+    route: 'NURTURE',
+    priority: 'medium',
+    lead: {
+      id: lead.id,
+      lead_key: lead.lead_key,
+      wa_id: lead.contact?.wa_id,
+      company_name: lead.contact?.company_name,
+      buyer_type: lead.buyer_type,
+      destination_country: lead.destination_country,
+      destination_port: lead.destination_port,
+      qty_bucket: lead.qty_bucket,
+      car_model: lead.car_model,
+      timeline: lead.timeline,
+    },
+    score: lead.score,
+    stage: lead.stage,
+    handoff_summary: handoffSummary,
+    follow_up_after: '24h',
+    qualified_at: new Date().toISOString(),
+  };
+
+  try {
+    const response = await fetch(webhookUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+
+    if (!response.ok) {
+      console.error(`n8n webhook failed: ${response.status}`);
+      return { success: false, reason: 'webhook_error', status: response.status };
+    }
+
+    // Update lead route in database
+    await updateLead(lead.id, { route: 'NURTURE', handoffSummary });
+
+    console.log(`✅ Lead ${lead.id} routed to nurture (NURTURE)`);
+    return { success: true };
+  } catch (error) {
+    console.error('Error calling n8n webhook:', error);
+    return { success: false, reason: 'network_error', error: error.message };
+  }
+}
+
+/**
+ * Handle routing for an individual lead
+ * @param {string} route - Route decision
+ * @param {Object} lead - Lead object
+ * @param {string} handoffSummary - Optional summary
+ */
+export async function executeLeadRouting(route, lead, handoffSummary) {
+  switch (route) {
+    case 'HUMAN_NOW':
+      return await routeLeadToSales(lead, handoffSummary);
+
+    case 'NURTURE':
+      return await routeLeadToNurture(lead, handoffSummary);
+
+    case 'FAQ_END':
+      // Update lead route in database
+      await updateLead(lead.id, { route: 'FAQ_END' });
+      return { success: true, action: 'marked_faq_end' };
+
+    case 'CONTINUE':
+      return { success: true, action: 'continue_conversation' };
+
+    default:
+      console.log(`Unknown route: ${route}`);
+      return { success: false, reason: 'unknown_route' };
+  }
+}
+
+/**
+ * Route all active leads in a conversation
+ * Used when conversation routing decision applies to all leads
+ * @param {string} route - Route decision
+ * @param {string} conversationId - Conversation UUID
+ * @param {string} waId - WhatsApp ID for FAQ delivery
+ * @param {string} handoffSummary - Optional summary
+ */
+export async function executeConversationRouting(route, conversationId, waId, handoffSummary) {
+  if (route === 'CONTINUE') {
+    return { success: true, action: 'continue_conversation' };
+  }
+
+  // Get all active leads for this conversation
+  const activeLeads = await getLeadsByConversation(conversationId);
+
+  if (activeLeads.length === 0) {
+    console.log('No active leads to route');
+    return { success: true, action: 'no_leads' };
+  }
+
+  console.log(`Routing ${activeLeads.length} active lead(s) to ${route}`);
+
+  const results = [];
+  for (const lead of activeLeads) {
+    const result = await executeLeadRouting(route, lead, handoffSummary);
+    results.push({ leadId: lead.id, leadKey: lead.lead_key, ...result });
+  }
+
+  // Send FAQ resources if applicable (once per conversation)
+  if (route === 'FAQ_END') {
+    await sendFAQResources(waId);
+  }
+
+  return {
+    success: results.every(r => r.success),
+    results,
+    leadsRouted: results.length,
+  };
+}
+
 export default {
   routeToSales,
   routeToNurture,
+  routeLeadToSales,
+  routeLeadToNurture,
   sendFAQResources,
   executeRouting,
+  executeLeadRouting,
+  executeConversationRouting,
 };
