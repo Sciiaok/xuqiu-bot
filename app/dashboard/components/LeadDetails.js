@@ -50,6 +50,14 @@ export default function LeadDetails({ session }) {
     international_commercial_term: 'Incoterms',
   };
 
+  // Format color_quantity for display
+  const formatColorQuantity = (colorQuantity) => {
+    if (!colorQuantity || colorQuantity.length === 0) return null;
+    return colorQuantity;
+  };
+
+  const colorQuantity = formatColorQuantity(lead_data?.color_quantity);
+
   return (
     <div className="h-full overflow-y-auto bg-surface border-l border-border">
       {/* Header with Score and Stage */}
@@ -100,6 +108,28 @@ export default function LeadDetails({ session }) {
             );
           })}
         </div>
+      </div>
+
+      {/* Color Quantity */}
+      <div className="p-4 border-b border-border">
+        <h3 className="text-xs font-semibold text-text-tertiary uppercase tracking-wider mb-3">
+          Color & Quantity
+        </h3>
+        {colorQuantity && colorQuantity.length > 0 ? (
+          <div className="flex flex-wrap gap-2">
+            {colorQuantity.map((cq, idx) => (
+              <div
+                key={idx}
+                className="px-3 py-1.5 bg-surface-hover border border-border rounded-lg"
+              >
+                <span className="text-sm text-text-primary font-medium">{cq.color}</span>
+                <span className="text-sm text-text-muted ml-2">x{cq.qty || '?'}</span>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <p className="text-sm text-text-muted italic">No color/quantity specified</p>
+        )}
       </div>
 
       {/* Score History */}

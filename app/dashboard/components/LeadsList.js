@@ -28,15 +28,31 @@ function getRelativeTime(timestamp) {
 }
 
 const fieldLabels = {
-  destination_country: 'Destination Country',
-  destination_port: 'Destination Port',
+  destination_country: 'Destination',
+  destination_port: 'Port',
   qty_bucket: 'Quantity',
-  car_model: 'Car Model',
+  car_model: 'Model',
   buyer_type: 'Buyer Type',
   timeline: 'Timeline',
   incoterm: 'Incoterms',
   loading_port: 'Loading Port',
+  brand: 'Brand',
 };
+
+function getRouteColor(route) {
+  switch (route) {
+    case 'CONTINUE': return 'text-accent-blue';
+    case 'HUMAN_NOW': return 'text-accent-green';
+    case 'NURTURE': return 'text-accent-amber';
+    case 'FAQ_END': return 'text-accent-red';
+    default: return 'text-text-muted';
+  }
+}
+
+function formatColorQuantity(colorQuantity) {
+  if (!colorQuantity || colorQuantity.length === 0) return null;
+  return colorQuantity.map(cq => `${cq.color}: ${cq.qty || '?'}`).join(', ');
+}
 
 export default function LeadsList({ leads = [] }) {
   const [expandedId, setExpandedId] = useState(null);
@@ -70,15 +86,30 @@ export default function LeadsList({ leads = [] }) {
           const isExpanded = expandedId === lead.id;
 
           if (isExpanded) {
+            const colorQtyStr = formatColorQuantity(lead.color_quantity);
+            const isEnded = lead.route && lead.route !== 'CONTINUE';
+
             return (
-              <div key={lead.id} className="border border-border rounded-lg p-3 bg-background">
+              <div key={lead.id} className={`border rounded-lg p-3 bg-background ${isEnded ? 'border-border/50' : 'border-border'}`}>
                 <div className="flex items-center gap-2 mb-3">
                   <div className={`w-10 h-10 rounded-lg text-white font-bold flex items-center justify-center text-sm ${getScoreColor(lead.score)}`}>
                     {lead.score || 0}
                   </div>
-                  <span className={`px-2 py-0.5 rounded text-white text-xs font-medium ${getStageColor(lead.stage)}`}>
-                    {lead.stage || 'UNKNOWN'}
-                  </span>
+                  <div>
+                    <div className="flex items-center gap-1.5">
+                      <span className={`px-2 py-0.5 rounded text-white text-xs font-medium ${getStageColor(lead.stage)}`}>
+                        {lead.stage || 'UNKNOWN'}
+                      </span>
+                      <span className={`text-xs font-medium ${getRouteColor(lead.route)}`}>
+                        {lead.route || 'CONTINUE'}
+                      </span>
+                    </div>
+                    {lead.lead_key && lead.lead_key !== 'default' && (
+                      <div className="text-xs text-text-muted mt-1">
+                        {lead.lead_key}
+                      </div>
+                    )}
+                  </div>
                 </div>
 
                 <div className="space-y-2 text-sm">
@@ -93,16 +124,42 @@ export default function LeadsList({ leads = [] }) {
                       </div>
                     );
                   })}
+
+                  {/* Color Quantity Section */}
+                  <div className="flex justify-between">
+                    <span className="text-text-tertiary">Colors:</span>
+                    <span className={colorQtyStr ? 'text-text-primary' : 'text-text-muted italic'}>
+                      {colorQtyStr || '(pending)'}
+                    </span>
+                  </div>
                 </div>
+
+                {/* Color chips if available */}
+                {lead.color_quantity && lead.color_quantity.length > 0 && (
+                  <div className="mt-3 pt-3 border-t border-border">
+                    <div className="flex flex-wrap gap-1.5">
+                      {lead.color_quantity.map((cq, idx) => (
+                        <span
+                          key={idx}
+                          className="px-2 py-1 bg-surface-hover rounded text-xs text-text-primary"
+                        >
+                          {cq.color}: {cq.qty || '?'}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                )}
               </div>
             );
           }
+
+          const isEnded = lead.route && lead.route !== 'CONTINUE';
 
           return (
             <button
               key={lead.id}
               onClick={() => setExpandedId(lead.id)}
-              className="w-full text-left border border-border rounded-lg p-3 hover:bg-surface-hover transition-colors"
+              className={`w-full text-left border rounded-lg p-3 hover:bg-surface-hover transition-colors ${isEnded ? 'border-border/50 opacity-60' : 'border-border'}`}
             >
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-2">
@@ -110,10 +167,20 @@ export default function LeadsList({ leads = [] }) {
                     {lead.score || 0}
                   </div>
                   <div>
-                    <span className={`px-1.5 py-0.5 rounded text-white text-xs ${getStageColor(lead.stage)}`}>
-                      {lead.stage || 'UNKNOWN'}
-                    </span>
-                    <div className="text-xs text-text-muted mt-0.5">
+                    <div className="flex items-center gap-1.5">
+                      <span className={`px-1.5 py-0.5 rounded text-white text-xs ${getStageColor(lead.stage)}`}>
+                        {lead.stage || 'UNKNOWN'}
+                      </span>
+                      {isEnded && (
+                        <span className={`text-xs font-medium ${getRouteColor(lead.route)}`}>
+                          {lead.route}
+                        </span>
+                      )}
+                    </div>
+                    <div className="text-xs text-text-primary mt-0.5 font-medium">
+                      {lead.car_model || '?'} → {lead.destination_country || '?'}
+                    </div>
+                    <div className="text-xs text-text-muted">
                       {getRelativeTime(lead.updated_at)}
                     </div>
                   </div>

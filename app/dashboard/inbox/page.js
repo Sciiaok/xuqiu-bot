@@ -71,12 +71,13 @@ function InboxContent() {
     }
   }, [supabase]);
 
-  const fetchLeads = useCallback(async (contactId) => {
+  const fetchLeads = useCallback(async (conversationId) => {
+    // Fetch all leads for this conversation (multi-lead support)
     const { data, error } = await supabase
       .from('leads')
       .select('*')
-      .eq('contact_id', contactId)
-      .order('updated_at', { ascending: false });
+      .eq('conversation_id', conversationId)
+      .order('created_at', { ascending: true });
 
     if (!error) {
       setLeads(data || []);
@@ -86,9 +87,7 @@ function InboxContent() {
   const handleSelectConversation = useCallback((conv) => {
     setSelectedConv(conv);
     fetchMessages(conv.id);
-    if (conv.contact?.id) {
-      fetchLeads(conv.contact.id);
-    }
+    fetchLeads(conv.id);
   }, [fetchMessages, fetchLeads]);
 
   useEffect(() => {
@@ -99,7 +98,7 @@ function InboxContent() {
     if (!selectedConv?.id) return;
 
     const channel = supabase
-      .channel('inbox-messages')
+      .channel('inbox-realtime')
       .on(
         'postgres_changes',
         {
@@ -118,6 +117,19 @@ function InboxContent() {
           }]);
         }
       )
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'leads',
+          filter: `conversation_id=eq.${selectedConv.id}`,
+        },
+        (payload) => {
+          // Refresh leads on any change (INSERT, UPDATE, DELETE)
+          fetchLeads(selectedConv.id);
+        }
+      )
       .subscribe((status) => {
         setRealtimeStatus(status);
       });
@@ -125,7 +137,7 @@ function InboxContent() {
     return () => {
       supabase.removeChannel(channel);
     };
-  }, [selectedConv?.id, supabase]);
+  }, [selectedConv?.id, supabase, fetchLeads]);
 
   const handleSendMessage = async (message) => {
     if (sending || !selectedConv?.contact?.wa_id) return;
