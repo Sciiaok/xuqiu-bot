@@ -31,4 +31,12 @@ export const config = {
     webhookHumanNow: process.env.N8N_WEBHOOK_HUMAN_NOW || '',
     webhookNurture: process.env.N8N_WEBHOOK_NURTURE || '',
   },
+
+  // Message Queue (aggregation for rapid messages)
+  queue: {
+    aggregationWindowMs: parseInt(process.env.QUEUE_AGGREGATION_MS) || 2000, // Wait 2s for more messages
+    maxRetries: parseInt(process.env.QUEUE_MAX_RETRIES) || 3,
+    lockTimeoutMs: parseInt(process.env.QUEUE_LOCK_TIMEOUT_MS) || 30000, // 30s lock timeout
+    instanceId: process.env.INSTANCE_ID || `instance-${process.pid}`,
+  },
 };

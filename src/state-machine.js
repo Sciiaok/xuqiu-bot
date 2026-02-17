@@ -23,14 +23,14 @@ const STAGE_CONFIG = {
   QUALIFY: {
     name: 'QUALIFY',
     description: 'Deep qualification',
-    required_fields: ['company_name', 'buyer_type'],
+    required_fields: ['company_name'],
     optional_fields: ['timeline', 'budget_indication', 'loading_port'],
     next_stage: 'PROOF',
   },
   PROOF: {
     name: 'PROOF',
     description: 'Verify legitimacy and readiness',
-    required_fields: ['international_commercial_term'],
+    required_fields: ['international_commercial_term', 'color_quantity'],
     optional_fields: ['contact_method'],
     next_stage: null, // Final stage
   },
@@ -52,7 +52,19 @@ export function isStageComplete(stage, leadData) {
 
   return config.required_fields.every(field => {
     const value = leadData[field];
-    return value && value.trim() !== '';
+
+    // Handle array fields (e.g., color_quantity)
+    if (Array.isArray(value)) {
+      return value.length > 0;
+    }
+
+    // Handle string fields
+    if (typeof value === 'string') {
+      return value.trim() !== '';
+    }
+
+    // Handle other truthy values
+    return !!value;
   });
 }
 
@@ -114,7 +126,19 @@ export function getMissingFields(stage, leadData) {
 
   return config.required_fields.filter(field => {
     const value = leadData[field];
-    return !value || value.trim() === '';
+
+    // Handle array fields (e.g., color_quantity)
+    if (Array.isArray(value)) {
+      return value.length === 0;
+    }
+
+    // Handle string fields
+    if (typeof value === 'string') {
+      return value.trim() === '';
+    }
+
+    // Handle other values
+    return !value;
   });
 }
 
@@ -127,7 +151,19 @@ export function getStageProgress(stage, leadData) {
 
   const completed = config.required_fields.filter(field => {
     const value = leadData[field];
-    return value && value.trim() !== '';
+
+    // Handle array fields (e.g., color_quantity)
+    if (Array.isArray(value)) {
+      return value.length > 0;
+    }
+
+    // Handle string fields
+    if (typeof value === 'string') {
+      return value.trim() !== '';
+    }
+
+    // Handle other truthy values
+    return !!value;
   }).length;
 
   return Math.round((completed / config.required_fields.length) * 100);
@@ -144,7 +180,7 @@ export function isConversationComplete(session) {
  * Get guidance for Claude based on current stage
  */
 export function getStageGuidance(stage, leadData) {
-  const config = STAGE_CONFIG[stage];
+  const config = STAGE_CONFIG[stage] || STAGE_CONFIG.GREET;
   const missing = getMissingFields(stage, leadData);
   const progress = getStageProgress(stage, leadData);
 
@@ -155,6 +191,71 @@ export function getStageGuidance(stage, leadData) {
     missing_fields: missing,
     progress: progress,
     guidance: generateGuidanceText(stage, missing, progress),
+  };
+}
+
+/**
+ * Get stage guidance from a lead object (multi-lead support)
+ * @param {Object} lead - Lead object with stage and field data
+ * @returns {Object} - Stage guidance info
+ */
+export function getStageGuidanceForLead(lead) {
+  const leadData = {
+    destination_country: lead.destination_country || '',
+    destination_port: lead.destination_port || '',
+    qty_bucket: lead.qty_bucket || '',
+    car_model: lead.car_model || '',
+    company_name: lead.company_name || '',
+    loading_port: lead.loading_port || '',
+    buyer_type: lead.buyer_type || '',
+    timeline: lead.timeline || '',
+    international_commercial_term: lead.incoterm || '',
+    color_quantity: lead.color_quantity || [],
+  };
+
+  return getStageGuidance(lead.stage || 'GREET', leadData);
+}
+
+/**
+ * Check if a lead should advance stage (multi-lead support)
+ * @param {Object} lead - Lead object with stage and field data
+ * @returns {Object} - { shouldAdvance, reason, nextStage }
+ */
+export function shouldAdvanceStageLead(lead) {
+  const currentStage = lead.stage || 'GREET';
+  const config = STAGE_CONFIG[currentStage];
+
+  if (!config) {
+    return { shouldAdvance: false, reason: 'Invalid stage', nextStage: null };
+  }
+
+  const leadData = {
+    destination_country: lead.destination_country || '',
+    destination_port: lead.destination_port || '',
+    qty_bucket: lead.qty_bucket || '',
+    car_model: lead.car_model || '',
+    company_name: lead.company_name || '',
+    loading_port: lead.loading_port || '',
+    buyer_type: lead.buyer_type || '',
+    timeline: lead.timeline || '',
+    international_commercial_term: lead.incoterm || '',
+    color_quantity: lead.color_quantity || [],
+  };
+
+  const isComplete = isStageComplete(currentStage, leadData);
+
+  if (isComplete) {
+    return {
+      shouldAdvance: true,
+      reason: 'Required fields complete',
+      nextStage: config.next_stage,
+    };
+  }
+
+  return {
+    shouldAdvance: false,
+    reason: 'Continue current stage - still collecting required fields',
+    nextStage: null,
   };
 }
 
@@ -179,10 +280,12 @@ export default {
   getStageConfig,
   isStageComplete,
   shouldAdvanceStage,
+  shouldAdvanceStageLead,
   hasReachedGlobalMaxTurns,
   getGlobalMaxTurns,
   getMissingFields,
   getStageProgress,
   isConversationComplete,
   getStageGuidance,
+  getStageGuidanceForLead,
 };

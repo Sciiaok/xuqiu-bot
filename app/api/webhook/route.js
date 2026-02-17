@@ -1,12 +1,9 @@
 import { NextResponse } from 'next/server';
 import { config } from '../../../src/config.js';
-import { getResponse } from '../../../src/claude.service.js';
 import { sendMessage, markAsRead } from '../../../src/whatsapp.service.js';
 import { transcribeWhatsAppAudio } from '../../../src/whisper.service.js';
-import { shouldAdvanceStage, getStageGuidance, hasReachedGlobalMaxTurns, getGlobalMaxTurns } from '../../../src/state-machine.js';
-import { getScoreBreakdown } from '../../../src/lead-scorer.js';
-import { executeRouting } from '../../../src/routing.service.js';
-import { getSession, processMessage, updateSessionStage } from '../../../lib/session.js';
+import { getSession } from '../../../lib/session.js';
+import { enqueueMessage } from '../../../lib/repositories/queue.repository.js';
 
 /**
  * GET /api/webhook - Webhook verification endpoint
@@ -21,19 +18,45 @@ export async function GET(request) {
   console.log('Webhook verification request received');
 
   if (mode === 'subscribe' && token === config.whatsapp.verifyToken) {
-    console.log('✓ Webhook verified successfully');
+    console.log('Webhook verified successfully');
     return new Response(challenge, { status: 200 });
   } else {
-    console.error('✗ Webhook verification failed');
+    console.error('Webhook verification failed');
     return new Response('Forbidden', { status: 403 });
   }
 }
 
 /**
+ * Trigger queue processing after aggregation window
+ * @param {string} conversationId - Conversation UUID
+ */
+async function scheduleProcessing(conversationId) {
+  const delay = config.queue.aggregationWindowMs;
+
+  setTimeout(async () => {
+    try {
+      const baseUrl = process.env.NEXT_PUBLIC_APP_URL || `http://localhost:${config.server.port}`;
+      const response = await fetch(`${baseUrl}/api/webhook/process`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ conversationId }),
+      });
+
+      if (!response.ok) {
+        console.error('Failed to trigger queue processing:', await response.text());
+      }
+    } catch (error) {
+      console.error('Error triggering queue processing:', error);
+    }
+  }, delay);
+}
+
+/**
  * POST /api/webhook - Receive incoming WhatsApp messages
+ * Messages are queued for aggregated processing
  */
 export async function POST(request) {
-  // Quickly acknowledge receipt to WhatsApp
+  // Immediately acknowledge receipt to WhatsApp
   const responsePromise = NextResponse.json({ status: 'ok' }, { status: 200 });
 
   // Process asynchronously after returning 200
@@ -55,7 +78,7 @@ export async function POST(request) {
       const messageId = message.id;
       const messageType = message.type;
 
-      console.log(`\n--- Incoming message from ${waId} ---`);
+      console.log(`\n--- Incoming message from ${waId} (queuing) ---`);
 
       // Handle text and audio (voice) messages
       let userMessage;
@@ -86,65 +109,23 @@ export async function POST(request) {
       // Mark message as read
       await markAsRead(messageId);
 
-      // Get or create session from new schema
+      // Get session to obtain conversation_id and contact_id
       const session = await getSession(waId);
 
-      // Get stage guidance for Claude
-      const stageInfo = getStageGuidance(session.stage, session.lead_data);
+      // Enqueue message for aggregated processing
+      const queuedMsg = await enqueueMessage({
+        conversationId: session.conversation_id,
+        contactId: session.contact_id,
+        waId: waId,
+        content: userMessage,
+        messageType: messageType,
+        waMessageId: messageId,
+      });
 
-      // Call Claude API with stage context
-      const claudeResponse = await getResponse(session.messages, userMessage, stageInfo, session.score);
+      console.log(`Message queued: ${queuedMsg.id}, process_after: ${queuedMsg.process_after}`);
 
-      // Process message and update all data
-      const updatedSession = await processMessage(waId, userMessage, claudeResponse);
-
-      console.log(`  Lead data:`, updatedSession.lead_data);
-
-      // Check if stage should advance using the updated session
-      const advancement = shouldAdvanceStage(updatedSession);
-      if (advancement.shouldAdvance && advancement.nextStage) {
-        console.log(`📈 Stage advancing: ${updatedSession.stage} → ${advancement.nextStage} (${advancement.reason})`);
-        await updateSessionStage(waId, advancement.nextStage);
-      }
-
-      // Log scoring and stage info
-      console.log(`Stage: ${updatedSession.stage}, Score Δ: ${claudeResponse.score_delta}, Total: ${updatedSession.score}`);
-      if (claudeResponse.reasons && claudeResponse.reasons.length > 0) {
-        console.log(`Reasons: ${claudeResponse.reasons.join(', ')}`);
-      }
-      if (claudeResponse.risk_flags && claudeResponse.risk_flags.length > 0) {
-        console.log(`⚠️  Risk Flags: ${claudeResponse.risk_flags.join(', ')}`);
-      }
-
-      // Show score breakdown
-      const breakdown = getScoreBreakdown(updatedSession.lead_data, updatedSession.risk_flags);
-      console.log(`Score Breakdown: Identity=${breakdown.breakdown.identity_trust}, Transaction=${breakdown.breakdown.transaction_intent}, Clarity=${breakdown.breakdown.requirement_clarity}, Risk=${breakdown.breakdown.risk_deductions}`);
-
-      console.log(`Route: ${claudeResponse.route}`);
-
-      // Send response to user
-      await sendMessage(waId, claudeResponse.next_message);
-      console.log(`Assistant: ${claudeResponse.next_message}`);
-
-      // Check global max turns - force FAQ_END if exceeded
-      let finalRoute = claudeResponse.route;
-      if (hasReachedGlobalMaxTurns(updatedSession)) {
-        console.log(`⚠️  Global max turns (${getGlobalMaxTurns()}) reached - routing to FAQ_END`);
-        finalRoute = 'FAQ_END';
-      }
-
-      // Handle routing (async, don't block user response)
-      if (finalRoute !== 'CONTINUE') {
-        console.log(`\n🎯 Executing routing: ${finalRoute}`);
-        const routingResult = await executeRouting(finalRoute, updatedSession, claudeResponse.handoff_summary);
-
-        if (routingResult.success) {
-          console.log(`✅ Routing completed successfully`);
-        } else {
-          console.log(`⚠️  Routing failed: ${routingResult.reason || 'unknown'}`);
-        }
-      }
-      console.log('---\n');
+      // Schedule processing after aggregation window
+      scheduleProcessing(session.conversation_id);
 
     } catch (error) {
       console.error('Error handling webhook:', error);

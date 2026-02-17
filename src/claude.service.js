@@ -65,12 +65,54 @@ MESSAGE STYLE (WhatsApp-friendly, under 120 chars):
 ❌ TOO LONG: "Excellent! 50 units of BYD Seal 05 to Jebel Ali is a substantial order. To provide you with accurate information and pricing, may I know your company name?"
 ✅ GOOD: "Great, friend! 50 units to Jebel Ali 👍 What's your company name?"
 ✅ GOOD: "Thanks, dear! Which country are you shipping to?"
-✅ GOOD: "Perfect! Are you a dealer, store owner, or trading org?"`;
+✅ GOOD: "Perfect! Are you a dealer, store owner, or trading org?"
+
+MULTI-LEAD EXTRACTION:
+User messages may contain multiple product inquiries. Extract each distinct inquiry as a separate lead in the leads array.
+
+RULES:
+1. Each UNIQUE (car_model + destination_country) combination = 1 lead entry
+2. Return leads as an array, even if only 1 lead
+3. ALWAYS include car_model and/or destination_country for lead matching
+4. Shared info (company_name, buyer_type) can be included in each relevant lead
+5. If user asks follow-up without mentioning car/destination, infer from conversation context
+
+EXAMPLES:
+
+Single inquiry:
+User: "I want BYD Seal 50 units to Dubai"
+→ leads: [{ car_model: "BYD Seal", destination_country: "UAE", qty_bucket: "20+" }]
+
+Multiple inquiries in one message:
+User: "I want BYD Seal to Dubai, also Atto 3 to Saudi, and Han to Qatar"
+→ leads: [
+    { car_model: "BYD Seal", destination_country: "UAE" },
+    { car_model: "BYD Atto 3", destination_country: "Saudi Arabia" },
+    { car_model: "BYD Han", destination_country: "Qatar" }
+  ]
+
+Follow-up (infer context):
+Previous: BYD Seal to Dubai
+User: "I want red color, 5 units"
+→ leads: [{ car_model: "BYD Seal", destination_country: "UAE", color_quantity: [{color: "red", qty: 5}] }]
+
+General question (no lead update):
+User: "What payment methods do you accept?"
+→ leads: []
+
+COLOR QUANTITY EXTRACTION:
+When user mentions specific colors and quantities, extract them into color_quantity array within the relevant lead.
+- Format: [{"color": "exterior" or "exterior|interior", "qty": number}]
+- Examples:
+  - "白色6台，黑色4台" → [{color: "white", qty: 6}, {color: "black", qty: 4}]
+  - "灰色外观黑内饰7台" → [{color: "gray|black", qty: 7}]
+- Use "|" to separate exterior and interior colors
+- Leave empty [] if no specific color/quantity mentioned`;
 
 
 const JSON_SCHEMA = {
   type: 'object',
-  required: ['stage', 'extracted_fields', 'score_delta', 'reasons', 'risk_flags', 'route', 'next_message', 'handoff_summary'],
+  required: ['stage', 'leads', 'score_delta', 'reasons', 'risk_flags', 'route', 'next_message', 'handoff_summary'],
   additionalProperties: false,
   properties: {
     stage: {
@@ -78,51 +120,71 @@ const JSON_SCHEMA = {
       enum: ['GREET', 'QUALIFY', 'PROOF'],
       description: 'Current conversation stage',
     },
-    extracted_fields: {
-      type: 'object',
-      additionalProperties: false,
-      properties: {
-        destination_country: {
-          type: 'string',
-          description: 'Country name (e.g., "UAE", "Saudi Arabia", "Qatar")',
-        },
-        destination_port: {
-          type: 'string',
-          description: 'Port or city name (e.g., "Dubai", "Jebel Ali", "Riyadh")',
-        },
-        qty_bucket: {
-          type: 'string',
-          enum: ['1-5', '6-20', '20+'],
-          description: 'Quantity range',
-        },
-        car_model: {
-          type: 'string',
-          description: 'Car model interested in (e.g., "BYD Seal", "BYD Atto 3", "BYD Han")',
-        },
-        loading_port: {
-          type: 'string',
-          description: 'Port of loading/origin (e.g., "Shanghai", "Tianjin", "Guangzhou")',
-        },
-        international_commercial_term: {
-          type: 'string',
-          description: 'Incoterms preference (e.g., "FOB", "CIF", "EXW", "DDP")',
-        },
-        company_name: {
-          type: 'string',
-          description: 'Company or business name',
-        },
-        buyer_type: {
-          type: 'string',
-          enum: ['dealer', 'store_owner', 'trading_org'],
-          description: 'Type of buyer',
-        },
-        timeline: {
-          type: 'string',
-          description: 'Purchase timeline (urgent, this month, this quarter, exploring)',
-        },
-        budget_indication: {
-          type: 'string',
-          description: 'Budget indication if mentioned',
+    leads: {
+      type: 'array',
+      description: 'Array of leads extracted from user message(s). Usually 1, can be multiple for multi-inquiry messages.',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          car_model: {
+            type: 'string',
+            description: 'Car model (REQUIRED for lead matching)',
+          },
+          destination_country: {
+            type: 'string',
+            description: 'Country name (REQUIRED for lead matching)',
+          },
+          destination_port: {
+            type: 'string',
+            description: 'Port or city name',
+          },
+          qty_bucket: {
+            type: 'string',
+            enum: ['1-5', '6-20', '20+'],
+            description: 'Quantity range',
+          },
+          loading_port: {
+            type: 'string',
+            description: 'Port of loading/origin',
+          },
+          international_commercial_term: {
+            type: 'string',
+            enum: ['FOB', 'CIF', 'EXW', 'DDP'],
+            description: 'Incoterms preference',
+          },
+          company_name: {
+            type: 'string',
+            description: 'Company or business name',
+          },
+          buyer_type: {
+            type: 'string',
+            enum: ['dealer', 'store_owner', 'trading_org'],
+            description: 'Type of buyer',
+          },
+          timeline: {
+            type: 'string',
+            description: 'Purchase timeline',
+          },
+          budget_indication: {
+            type: 'string',
+            description: 'Budget indication if mentioned',
+          },
+          brand: {
+            type: 'string',
+            description: 'Vehicle brand (e.g., BYD, Toyota)',
+          },
+          color_quantity: {
+            type: 'array',
+            items: {
+              type: 'object',
+              properties: {
+                color: { type: 'string', description: 'Color: "exterior" or "exterior|interior"' },
+                qty: { type: 'number', description: 'Quantity for this color' },
+              },
+            },
+            description: 'Array of color-quantity pairs',
+          },
         },
       },
     },
@@ -153,8 +215,67 @@ const JSON_SCHEMA = {
       type: 'string',
       description: 'Summary for sales team if routing to HUMAN_NOW or NURTURE',
     },
+    // Deprecated: kept for backward compatibility
+    extracted_fields: {
+      type: 'object',
+      description: 'DEPRECATED: Use leads array instead',
+    },
   },
 };
+
+/**
+ * Generate JSON instruction string from JSON_SCHEMA
+ * Converts schema to example JSON with enum values as pipe-separated options
+ * @param {Object} schema - JSON Schema object
+ * @returns {string} - Formatted JSON instruction string
+ */
+function generateJsonInstruction(schema) {
+  function buildExample(property) {
+    if (!property) return '';
+    const type = property.type;
+
+    if (type === 'object') {
+      const example = {};
+      Object.entries(property.properties || {}).forEach(([key, prop]) => {
+        example[key] = buildExample(prop);
+      });
+      return example;
+    }
+
+    if (type === 'array') {
+      // For array with object items, show one example item
+      if (property.items?.type === 'object') {
+        const itemExample = {};
+        Object.entries(property.items.properties || {}).forEach(([key, prop]) => {
+          itemExample[key] = buildExample(prop);
+        });
+        return [itemExample];
+      }
+      return [];
+    }
+
+    if (type === 'string') {
+      return property.enum ? property.enum.join('|') : '';
+    }
+
+    if (type === 'number') {
+      return 0;
+    }
+
+    if (type === 'boolean') {
+      return false;
+    }
+
+    return '';
+  }
+
+  const example = {};
+  Object.entries(schema.properties || {}).forEach(([key, prop]) => {
+    example[key] = buildExample(prop);
+  });
+
+  return `\n\nRESPONSE FORMAT: You MUST respond with valid JSON only, no markdown. Use this exact structure:\n${JSON.stringify(example)}`;
+}
 
 /**
  * Get an intelligent response from Claude
@@ -195,9 +316,8 @@ Focus on collecting: ${stageInfo.missing_fields.length > 0 ? stageInfo.missing_f
 
     console.log(`Calling Claude API with ${messages.length} messages...`);
 
-    // Append JSON instruction to system prompt
-    const jsonInstruction = `\n\nRESPONSE FORMAT: You MUST respond with valid JSON only, no markdown. Use this exact structure:
-{"stage":"GREET|QUALIFY|PROOF","extracted_fields":{"destination_country":"","destination_port":"","qty_bucket":"1-5|6-20|20+","car_model":"","loading_port":"","international_commercial_term":"FOB|CIF|EXW|DDP","company_name":"","buyer_type":"dealer|store_owner|trading_org","timeline":"","budget_indication":""},"score_delta":0,"reasons":[],"risk_flags":[],"route":"CONTINUE|HUMAN_NOW|NURTURE|FAQ_END","next_message":"","handoff_summary":""}`;
+    // Generate JSON instruction from schema (single source of truth)
+    const jsonInstruction = generateJsonInstruction(JSON_SCHEMA);
 
     const response = await anthropic.messages.create({
       model: config.anthropic.model,
@@ -220,7 +340,11 @@ Focus on collecting: ${stageInfo.missing_fields.length > 0 ? stageInfo.missing_f
 
     const parsed = JSON.parse(jsonText.trim());
     console.log('✓ Claude response received');
-    console.log('  Extracted fields:', Object.keys(parsed.extracted_fields).filter(k => parsed.extracted_fields[k]));
+    console.log('  Leads count:', (parsed.leads || []).length);
+    if (parsed.leads?.length > 0) {
+      const leadSummaries = parsed.leads.map(l => `${l.car_model || '?'}→${l.destination_country || '?'}`);
+      console.log('  Leads:', leadSummaries.join(', '));
+    }
 
     return parsed;
   } catch (error) {
@@ -228,8 +352,16 @@ Focus on collecting: ${stageInfo.missing_fields.length > 0 ? stageInfo.missing_f
 
     // Return fallback response
     return {
-      extracted_fields: {},
+      leads: [],
+      score_delta: 0,
+      reasons: [],
+      risk_flags: [],
+      route: 'CONTINUE',
       next_message: "I apologize, but I'm having technical difficulties. Could you please try again?",
+      handoff_summary: '',
     };
   }
 }
+
+// Export schema for testing/debugging
+export { JSON_SCHEMA, generateJsonInstruction };

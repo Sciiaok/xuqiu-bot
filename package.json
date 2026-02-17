@@ -13,7 +13,10 @@
     "deploy:start": "npm run build && pm2 start ecosystem.config.cjs",
     "cron:start": "pm2 start ecosystem.config.cjs --only lead-sync-cron",
     "cron:stop": "pm2 stop lead-sync-cron",
-    "cron:logs": "pm2 logs lead-sync-cron"
+    "cron:logs": "pm2 logs lead-sync-cron",
+    "queue:start": "pm2 start ecosystem.config.cjs --only queue-cron",
+    "queue:stop": "pm2 stop queue-cron",
+    "queue:logs": "pm2 logs queue-cron"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.74.0",
