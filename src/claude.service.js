@@ -258,11 +258,10 @@ function generateJsonInstruction(schema) {
  * Get an intelligent response from Claude
  * @param {Array} conversationHistory - Array of {role, content} message objects
  * @param {string} userMessage - The latest user message
- * @param {Object} stageInfo - Current stage information and guidance
- * @param {number} currentScore - Current lead score
- * @returns {Promise<Object>} - Parsed JSON response with extracted_fields and next_message
+ * @param {Object} contextInfo - Context information (missing_fields)
+ * @returns {Promise<Object>} - Parsed JSON response
  */
-export async function getResponse(conversationHistory, userMessage, stageInfo, currentScore = 0) {
+export async function getResponse(conversationHistory, userMessage, contextInfo = {}) {
   try {
     // Sanitize conversation history - Claude only accepts 'role' and 'content'
     const sanitizedHistory = conversationHistory.map(msg => ({
@@ -279,17 +278,15 @@ export async function getResponse(conversationHistory, userMessage, stageInfo, c
       },
     ];
 
-    // Build enhanced system prompt with stage context
+    // Build enhanced system prompt with context
+    const missingFieldsText = contextInfo.missing_fields?.length > 0
+      ? `Missing fields to collect: ${contextInfo.missing_fields.join(', ')}`
+      : 'No specific fields required';
+
     const enhancedPrompt = `${SYSTEM_PROMPT}
 
 CURRENT CONTEXT:
-- Stage: ${stageInfo.stage}
-- Current Score: ${currentScore} points
-- Stage Progress: ${stageInfo.progress}%
-- ${stageInfo.guidance}
-- Missing Fields: ${stageInfo.missing_fields.length > 0 ? stageInfo.missing_fields.join(', ') : 'None'}
-
-Focus on collecting: ${stageInfo.missing_fields.length > 0 ? stageInfo.missing_fields.join(', ') : 'verification and readiness signals'}`;
+- ${missingFieldsText}`;
 
     console.log(`Calling Claude API with ${messages.length} messages...`);
 
@@ -317,11 +314,11 @@ Focus on collecting: ${stageInfo.missing_fields.length > 0 ? stageInfo.missing_f
 
     const parsed = JSON.parse(jsonText.trim());
     console.log('✓ Claude response received');
+    console.log('  Intent:', parsed.conversation_intent);
+    console.log('  Quality:', parsed.inquiry_quality);
+    console.log('  Value:', parsed.business_value);
+    console.log('  Route:', parsed.route);
     console.log('  Leads count:', (parsed.leads || []).length);
-    if (parsed.leads?.length > 0) {
-      const leadSummaries = parsed.leads.map(l => `${l.car_model || '?'}→${l.destination_country || '?'}`);
-      console.log('  Leads:', leadSummaries.join(', '));
-    }
 
     return parsed;
   } catch (error) {
@@ -329,10 +326,11 @@ Focus on collecting: ${stageInfo.missing_fields.length > 0 ? stageInfo.missing_f
 
     // Return fallback response
     return {
+      conversation_intent: 'other',
+      conversation_intent_summary: 'Error processing',
+      inquiry_quality: 'BAD',
+      business_value: 'LOW',
       leads: [],
-      score_delta: 0,
-      reasons: [],
-      risk_flags: [],
       route: 'CONTINUE',
       next_message: "I apologize, but I'm having technical difficulties. Could you please try again?",
       handoff_summary: '',
