@@ -8,9 +8,9 @@ const anthropic = new Anthropic({
 const SYSTEM_PROMPT = `You are a B2B lead qualification assistant for a vehicle export company specializing in BYD and other vehicles to WorldWide.
 
 CONVERSATION STAGES:
-1. GREET: Initial contact, gather basic intent (car_model, destination, quantity)
-2. QUALIFY: Deep qualification (company, buyer type, timeline, budget indication)
-3. PROOF: Verify legitimacy and readiness (Incoterms preference)
+1. GREET: Initial contact, gather basic intent (brand, car_model, color)
+2. QUALIFY: Deep qualification (color_quanity, loading_port, desitination_port)
+3. PROOF: Verify legitimacy and readiness (Incoterms preference, company_name)
 
 SCORING GUIDELINES (score_delta: -30 to +30 per turn):
 Identity Trust (0-30 points):
@@ -48,13 +48,13 @@ ROUTING LOGIC:
 - FAQ_END: score <50 - Low quality, send resources
 
 RULES:
-1. Ask only ONE question per message
-2. Keep responses under 120 characters - WhatsApp style, short and friendly
+1. Ask only ONE or TWO question per message
+2. Keep responses under 180 characters - WhatsApp style, short and friendly
 3. Use friendly greetings: "Friend", "Dear", casual tone
 4. Never promise final prices
 5. Progress through stages: GREET → QUALIFY → PROOF
-6. In GREET: Focus on destination, quantity, and car model
-7. In QUALIFY: Get company, buyer type, timeline, loading port (optional)
+6. In GREET: Focus on brand, car_model, quantity
+7. In QUALIFY: Get color_quantity, loading_port
 8. In PROOF: Verify legitimacy, ask Incoterms (required: FOB, CIF, EXW, DDP)
 9. Calculate score_delta based on information quality
 10. Provide clear reasons for scoring
@@ -112,37 +112,50 @@ When user mentions specific colors and quantities, extract them into color_quant
 
 const JSON_SCHEMA = {
   type: 'object',
-  required: ['stage', 'leads', 'score_delta', 'reasons', 'risk_flags', 'route', 'next_message', 'handoff_summary'],
+  required: ['conversation_intent', 'inquiry_quality', 'business_value', 'leads', 'route', 'next_message', 'handoff_summary'],
   additionalProperties: false,
   properties: {
-    stage: {
+    conversation_intent: {
       type: 'string',
-      enum: ['GREET', 'QUALIFY', 'PROOF'],
-      description: 'Current conversation stage',
+      enum: ['personal_consumer', 'business_inquiry', 'business_cooperation', 'other'],
+      description: 'Customer intent classification',
+    },
+    conversation_intent_summary: {
+      type: 'string',
+      description: 'Brief summary when intent is "other"',
+    },
+    inquiry_quality: {
+      type: 'string',
+      enum: ['BAD', 'GOOD', 'QUALIFY', 'PROOF'],
+      description: 'Lead qualification level',
+    },
+    business_value: {
+      type: 'string',
+      enum: ['LOW', 'AVERAGE', 'HIGH'],
+      description: 'Business value assessment based on quantity and quality',
     },
     leads: {
       type: 'array',
-      description: 'Array of leads extracted from user message(s). Usually 1, can be multiple for multi-inquiry messages.',
+      description: 'Array of leads extracted from user message(s)',
       items: {
         type: 'object',
         additionalProperties: false,
         properties: {
+          brand: {
+            type: 'string',
+            description: 'Car brand (e.g., BYD, Toyota)',
+          },
           car_model: {
             type: 'string',
             description: 'Car model (REQUIRED for lead matching)',
           },
           destination_country: {
             type: 'string',
-            description: 'Country name (REQUIRED for lead matching)',
+            description: 'Country name',
           },
           destination_port: {
             type: 'string',
             description: 'Port or city name',
-          },
-          qty_bucket: {
-            type: 'string',
-            enum: ['1-5', '6-20', '20+'],
-            description: 'Quantity range',
           },
           loading_port: {
             type: 'string',
@@ -157,22 +170,9 @@ const JSON_SCHEMA = {
             type: 'string',
             description: 'Company or business name',
           },
-          buyer_type: {
-            type: 'string',
-            enum: ['dealer', 'store_owner', 'trading_org'],
-            description: 'Type of buyer',
-          },
           timeline: {
             type: 'string',
             description: 'Purchase timeline',
-          },
-          budget_indication: {
-            type: 'string',
-            description: 'Budget indication if mentioned',
-          },
-          brand: {
-            type: 'string',
-            description: 'Vehicle brand (e.g., BYD, Toyota)',
           },
           color_quantity: {
             type: 'array',
@@ -188,37 +188,18 @@ const JSON_SCHEMA = {
         },
       },
     },
-    score_delta: {
-      type: 'number',
-      description: 'Score change for this turn (-30 to +30)',
-    },
-    reasons: {
-      type: 'array',
-      items: { type: 'string' },
-      description: 'Reasons for score change',
-    },
-    risk_flags: {
-      type: 'array',
-      items: { type: 'string' },
-      description: 'Detected risk flags (e.g., "vague_location", "no_company", "price_focused")',
-    },
     route: {
       type: 'string',
-      enum: ['CONTINUE', 'HUMAN_NOW', 'NURTURE', 'FAQ_END'],
-      description: 'Routing decision based on score and stage',
+      enum: ['CONTINUE', 'HUMAN_NOW', 'FAQ_END'],
+      description: 'Routing decision based on inquiry_quality',
     },
     next_message: {
       type: 'string',
-      description: 'The next question or response (max 120 chars, WhatsApp-style friendly with "Friend"/"Dear")',
+      description: 'The next response (max 180 chars, WhatsApp-style friendly)',
     },
     handoff_summary: {
       type: 'string',
-      description: 'Summary for sales team if routing to HUMAN_NOW or NURTURE',
-    },
-    // Deprecated: kept for backward compatibility
-    extracted_fields: {
-      type: 'object',
-      description: 'DEPRECATED: Use leads array instead',
+      description: 'Summary for sales team if routing to HUMAN_NOW',
     },
   },
 };
