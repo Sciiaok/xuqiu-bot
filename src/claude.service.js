@@ -122,6 +122,60 @@ COLOR QUANTITY FORMAT:
 ✅ GOOD: "Thanks, dear! Which country are you shipping to?"`;
 
 
+/**
+ * Generate JSON instruction string from JSON_SCHEMA
+ * Converts schema to example JSON with enum values as pipe-separated options
+ * @param {Object} schema - JSON Schema object
+ * @returns {string} - Formatted JSON instruction string
+ */
+function generateJsonInstruction(schema) {
+  function buildExample(property) {
+    if (!property) return '';
+    const type = property.type;
+
+    if (type === 'object') {
+      const example = {};
+      Object.entries(property.properties || {}).forEach(([key, prop]) => {
+        example[key] = buildExample(prop);
+      });
+      return example;
+    }
+
+    if (type === 'array') {
+      // For array with object items, show one example item
+      if (property.items?.type === 'object') {
+        const itemExample = {};
+        Object.entries(property.items.properties || {}).forEach(([key, prop]) => {
+          itemExample[key] = buildExample(prop);
+        });
+        return [itemExample];
+      }
+      return [];
+    }
+
+    if (type === 'string') {
+      return property.enum ? property.enum.join('|') : '';
+    }
+
+    if (type === 'number') {
+      return 0;
+    }
+
+    if (type === 'boolean') {
+      return false;
+    }
+
+    return '';
+  }
+
+  const example = {};
+  Object.entries(schema.properties || {}).forEach(([key, prop]) => {
+    example[key] = buildExample(prop);
+  });
+
+  return `\n\nRESPONSE FORMAT: You MUST respond with valid JSON only, no markdown. Use this exact structure:\n${JSON.stringify(example)}`;
+}
+
 const JSON_SCHEMA = {
   type: 'object',
   required: ['conversation_intent', 'inquiry_quality', 'business_value', 'leads', 'route', 'next_message', 'handoff_summary'],
@@ -217,60 +271,6 @@ const JSON_SCHEMA = {
 };
 
 /**
- * Generate JSON instruction string from JSON_SCHEMA
- * Converts schema to example JSON with enum values as pipe-separated options
- * @param {Object} schema - JSON Schema object
- * @returns {string} - Formatted JSON instruction string
- */
-function generateJsonInstruction(schema) {
-  function buildExample(property) {
-    if (!property) return '';
-    const type = property.type;
-
-    if (type === 'object') {
-      const example = {};
-      Object.entries(property.properties || {}).forEach(([key, prop]) => {
-        example[key] = buildExample(prop);
-      });
-      return example;
-    }
-
-    if (type === 'array') {
-      // For array with object items, show one example item
-      if (property.items?.type === 'object') {
-        const itemExample = {};
-        Object.entries(property.items.properties || {}).forEach(([key, prop]) => {
-          itemExample[key] = buildExample(prop);
-        });
-        return [itemExample];
-      }
-      return [];
-    }
-
-    if (type === 'string') {
-      return property.enum ? property.enum.join('|') : '';
-    }
-
-    if (type === 'number') {
-      return 0;
-    }
-
-    if (type === 'boolean') {
-      return false;
-    }
-
-    return '';
-  }
-
-  const example = {};
-  Object.entries(schema.properties || {}).forEach(([key, prop]) => {
-    example[key] = buildExample(prop);
-  });
-
-  return `\n\nRESPONSE FORMAT: You MUST respond with valid JSON only, no markdown. Use this exact structure:\n${JSON.stringify(example)}`;
-}
-
-/**
  * Get an intelligent response from Claude
  * @param {Array} conversationHistory - Array of {role, content} message objects
  * @param {string} userMessage - The latest user message
@@ -306,29 +306,30 @@ CURRENT CONTEXT:
 
     console.log(`Calling Claude API with ${messages.length} messages...`);
 
-    // Generate JSON instruction from schema (single source of truth)
+    // Generate JSON instruction from schema (belt-and-suspenders with structured outputs)
     const jsonInstruction = generateJsonInstruction(JSON_SCHEMA);
 
+    // Use structured outputs to guarantee JSON schema compliance
     const response = await anthropic.messages.create({
       model: config.anthropic.model,
       max_tokens: 1024,
       system: enhancedPrompt + jsonInstruction,
       messages: messages,
+      output_config: {
+        format: {
+          type: 'json_schema',
+          schema: JSON_SCHEMA,
+        },
+      },
     });
 
-    // Extract the JSON content
+    // Extract the JSON content - structured outputs guarantees valid JSON
     const content = response.content[0];
     if (content.type !== 'text') {
       throw new Error('Unexpected response type from Claude');
     }
 
-    // Parse JSON, handling possible markdown code blocks
-    let jsonText = content.text.trim();
-    if (jsonText.startsWith('```json')) jsonText = jsonText.slice(7);
-    else if (jsonText.startsWith('```')) jsonText = jsonText.slice(3);
-    if (jsonText.endsWith('```')) jsonText = jsonText.slice(0, -3);
-
-    const parsed = JSON.parse(jsonText.trim());
+    const parsed = JSON.parse(content.text);
     console.log('✓ Claude response received');
     console.log('  Intent:', parsed.conversation_intent);
     console.log('  Quality:', parsed.inquiry_quality);
