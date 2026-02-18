@@ -7,7 +7,15 @@
  *   pm2 start scripts/cron-sync-leads.js --name "lead-sync-cron"
  */
 
-import 'dotenv/config';
+import dotenv from 'dotenv';
+import { fileURLToPath } from 'url';
+import { dirname, join } from 'path';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
+
+// Load .env.local (same as Next.js)
+dotenv.config({ path: join(__dirname, '..', '.env.local') });
 
 const SYNC_INTERVAL = 30 * 1000; // 30 seconds
 const API_BASE_URL = process.env.API_BASE_URL || 'http://localhost:3002';
