@@ -244,6 +244,7 @@ const JSON_SCHEMA = {
             type: 'array',
             items: {
               type: 'object',
+              additionalProperties: false,
               properties: {
                 color: { type: 'string', description: 'Color: "exterior" or "exterior|interior"' },
                 qty: { type: 'number', description: 'Quantity for this color' },
