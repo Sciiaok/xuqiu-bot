@@ -72,14 +72,12 @@ export async function sendFAQResources(waId) {
 
 Here are some helpful resources:
 
-📋 **Vehicle Catalog**: https://example.com/catalog
-💰 **Pricing Guide**: https://example.com/pricing
-🚢 **Shipping Information**: https://example.com/shipping
-❓ **FAQ**: https://example.com/faq
+📋 **Vehicle Catalog**: https://revopanda.com/explore-cars
+❓ **FAQ**: https://revopanda.com/contact-us
 
 For immediate assistance, please contact our sales team:
 📧 Email: official@revopanda.com
-📱 WhatsApp: +971-XXX-XXXX
+📱 WhatsApp: +86 13392464782
 
 We look forward to serving you!`;
 

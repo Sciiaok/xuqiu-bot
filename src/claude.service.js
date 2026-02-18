@@ -182,13 +182,16 @@ const JSON_SCHEMA = {
   additionalProperties: false,
   properties: {
     conversation_intent: {
-      type: 'string',
-      enum: ['personal_consumer', 'business_inquiry', 'business_cooperation', 'other'],
-      description: 'Customer intent classification',
+      type: 'array',
+      items: {
+        type: 'string',
+        enum: ['personal_consumer', 'business_inquiry', 'business_cooperation', 'other'],
+      },
+      description: 'Customer intent(s) - can detect multiple intents in one conversation',
     },
     conversation_intent_summary: {
       type: 'string',
-      description: 'Brief summary when intent is "other"',
+      description: 'Brief analysis of all detected intents and customer situation',
     },
     inquiry_quality: {
       type: 'string',

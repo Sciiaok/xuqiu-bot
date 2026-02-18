@@ -50,6 +50,21 @@ function getIntentColor(intent) {
   }
 }
 
+function getIntentBgColor(intent) {
+  switch (intent) {
+    case 'business_inquiry': return 'bg-accent-green/20 text-accent-green';
+    case 'business_cooperation': return 'bg-accent-blue/20 text-accent-blue';
+    case 'personal_consumer': return 'bg-accent-amber/20 text-accent-amber';
+    case 'other': return 'bg-text-muted/20 text-text-muted';
+    default: return 'bg-text-muted/20 text-text-muted';
+  }
+}
+
+function parseIntents(intentString) {
+  if (!intentString) return [];
+  return intentString.split(',').map(s => s.trim()).filter(Boolean);
+}
+
 function getRelativeTime(timestamp) {
   if (!timestamp) return 'Unknown';
   const now = new Date();
@@ -137,10 +152,15 @@ export default function LeadsList({ leads = [] }) {
                         {lead.route || 'CONTINUE'}
                       </span>
                     </div>
-                    <div className="flex items-center gap-1.5 mt-1">
-                      <span className={`text-xs ${getIntentColor(lead.conversation_intent)}`}>
-                        {getIntentLabel(lead.conversation_intent)}
-                      </span>
+                    <div className="flex flex-wrap items-center gap-1 mt-1">
+                      {parseIntents(lead.conversation_intent).map((intent, idx) => (
+                        <span key={idx} className={`text-xs px-1.5 py-0.5 rounded ${getIntentBgColor(intent)}`}>
+                          {getIntentLabel(intent)}
+                        </span>
+                      ))}
+                      {!lead.conversation_intent && (
+                        <span className="text-xs text-text-muted">No intent</span>
+                      )}
                     </div>
                     {lead.lead_key && lead.lead_key !== 'default' && (
                       <div className="text-xs text-text-muted mt-1">
@@ -150,9 +170,9 @@ export default function LeadsList({ leads = [] }) {
                   </div>
                 </div>
 
-                {/* Intent summary if present */}
-                {lead.conversation_intent === 'other' && lead.conversation_intent_summary && (
-                  <div className="mb-3 p-2 bg-surface-hover rounded text-xs text-text-secondary italic">
+                {/* Intent summary - always show if present */}
+                {lead.conversation_intent_summary && (
+                  <div className="mb-3 p-2 bg-surface-hover rounded text-xs text-text-secondary">
                     {lead.conversation_intent_summary}
                   </div>
                 )}
