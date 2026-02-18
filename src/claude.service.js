@@ -101,6 +101,12 @@ Special cases:
 
 Extract each distinct (car_model + destination_country) as separate lead.
 
+IMPORTANT - car_model consistency:
+- Use EXACTLY the same car_model string across all messages in a conversation
+- Once a car_model is established (e.g., "Seal 05 dmi 128km"), keep using that exact string
+- Do NOT auto-correct or normalize the model name (dmi vs dm-i, etc.)
+- If customer clarifies or corrects the model name, use the corrected version going forward
+
 Examples:
 - "BYD Seal to Dubai, Atto 3 to Saudi" → 2 leads
 - "50 units red, 30 units black" → 1 lead with color_quantity array
