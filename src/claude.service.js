@@ -307,30 +307,29 @@ CURRENT CONTEXT:
 
     console.log(`Calling Claude API with ${messages.length} messages...`);
 
-    // Generate JSON instruction from schema (belt-and-suspenders with structured outputs)
+    // Generate JSON instruction from schema
     const jsonInstruction = generateJsonInstruction(JSON_SCHEMA);
 
-    // Use structured outputs to guarantee JSON schema compliance
     const response = await anthropic.messages.create({
       model: config.anthropic.model,
       max_tokens: 1024,
       system: enhancedPrompt + jsonInstruction,
       messages: messages,
-      output_config: {
-        format: {
-          type: 'json_schema',
-          schema: JSON_SCHEMA,
-        },
-      },
     });
 
-    // Extract the JSON content - structured outputs guarantees valid JSON
+    // Extract the JSON content
     const content = response.content[0];
     if (content.type !== 'text') {
       throw new Error('Unexpected response type from Claude');
     }
 
-    const parsed = JSON.parse(content.text);
+    // Parse JSON, handling possible markdown code blocks
+    let jsonText = content.text.trim();
+    if (jsonText.startsWith('```json')) jsonText = jsonText.slice(7);
+    else if (jsonText.startsWith('```')) jsonText = jsonText.slice(3);
+    if (jsonText.endsWith('```')) jsonText = jsonText.slice(0, -3);
+
+    const parsed = JSON.parse(jsonText.trim());
     console.log('✓ Claude response received');
     console.log('  Intent:', parsed.conversation_intent);
     console.log('  Quality:', parsed.inquiry_quality);
