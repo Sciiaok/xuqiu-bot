@@ -65,60 +65,6 @@ export async function routeToSales(session, handoffSummary) {
 }
 
 /**
- * Route a medium-quality lead to nurture sequence via n8n
- */
-export async function routeToNurture(session, handoffSummary) {
-  const webhookUrl = config.n8n.webhookNurture;
-
-  if (!webhookUrl) {
-    console.log('⚠️  n8n NURTURE webhook not configured - skipping');
-    return { success: false, reason: 'webhook_not_configured' };
-  }
-
-  const payload = {
-    route: 'NURTURE',
-    priority: 'medium',
-    lead: {
-      wa_id: session.wa_id,
-      company_name: session.lead_data.company_name,
-      buyer_type: session.lead_data.buyer_type,
-      destination_country: session.lead_data.destination_country,
-      destination_port: session.lead_data.destination_port,
-      qty_bucket: session.lead_data.qty_bucket,
-      international_commercial_term: session.lead_data.international_commercial_term,
-      timeline: session.lead_data.timeline,
-    },
-    score: session.score,
-    handoff_summary: handoffSummary,
-    follow_up_after: '24h',
-    conversation_snippet: session.messages.slice(-4),
-    created_at: session.created_at,
-    qualified_at: new Date().toISOString(),
-  };
-
-  try {
-    const response = await fetch(webhookUrl, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify(payload),
-    });
-
-    if (!response.ok) {
-      console.error(`n8n webhook failed: ${response.status}`);
-      return { success: false, reason: 'webhook_error', status: response.status };
-    }
-
-    console.log(`✅ Lead routed to nurture sequence (n8n NURTURE)`);
-    return { success: true };
-  } catch (error) {
-    console.error('Error calling n8n webhook:', error);
-    return { success: false, reason: 'network_error', error: error.message };
-  }
-}
-
-/**
  * Send FAQ resources to low-quality leads
  */
 export async function sendFAQResources(waId) {
@@ -155,14 +101,10 @@ export async function executeRouting(route, session, handoffSummary) {
     case 'HUMAN_NOW':
       return await routeToSales(session, handoffSummary);
 
-    case 'NURTURE':
-      return await routeToNurture(session, handoffSummary);
-
     case 'FAQ_END':
       return await sendFAQResources(session.wa_id);
 
     case 'CONTINUE':
-      // No routing action needed
       return { success: true, action: 'continue_conversation' };
 
     default:
@@ -231,64 +173,6 @@ export async function routeLeadToSales(lead, handoffSummary) {
 }
 
 /**
- * Route an individual lead to nurture sequence via n8n
- * @param {Object} lead - Lead object from database
- * @param {string} handoffSummary - Summary for nurture
- */
-export async function routeLeadToNurture(lead, handoffSummary) {
-  const webhookUrl = config.n8n.webhookNurture;
-
-  if (!webhookUrl) {
-    console.log('⚠️  n8n NURTURE webhook not configured - skipping');
-    return { success: false, reason: 'webhook_not_configured' };
-  }
-
-  const payload = {
-    route: 'NURTURE',
-    priority: 'medium',
-    lead: {
-      id: lead.id,
-      lead_key: lead.lead_key,
-      wa_id: lead.contact?.wa_id,
-      company_name: lead.contact?.company_name,
-      buyer_type: lead.buyer_type,
-      destination_country: lead.destination_country,
-      destination_port: lead.destination_port,
-      qty_bucket: lead.qty_bucket,
-      car_model: lead.car_model,
-      timeline: lead.timeline,
-    },
-    score: lead.score,
-    stage: lead.stage,
-    handoff_summary: handoffSummary,
-    follow_up_after: '24h',
-    qualified_at: new Date().toISOString(),
-  };
-
-  try {
-    const response = await fetch(webhookUrl, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
-    });
-
-    if (!response.ok) {
-      console.error(`n8n webhook failed: ${response.status}`);
-      return { success: false, reason: 'webhook_error', status: response.status };
-    }
-
-    // Update lead route in database
-    await updateLead(lead.id, { route: 'NURTURE', handoffSummary });
-
-    console.log(`✅ Lead ${lead.id} routed to nurture (NURTURE)`);
-    return { success: true };
-  } catch (error) {
-    console.error('Error calling n8n webhook:', error);
-    return { success: false, reason: 'network_error', error: error.message };
-  }
-}
-
-/**
  * Handle routing for an individual lead
  * @param {string} route - Route decision
  * @param {Object} lead - Lead object
@@ -299,11 +183,7 @@ export async function executeLeadRouting(route, lead, handoffSummary) {
     case 'HUMAN_NOW':
       return await routeLeadToSales(lead, handoffSummary);
 
-    case 'NURTURE':
-      return await routeLeadToNurture(lead, handoffSummary);
-
     case 'FAQ_END':
-      // Update lead route in database
       await updateLead(lead.id, { route: 'FAQ_END' });
       return { success: true, action: 'marked_faq_end' };
 
@@ -359,9 +239,7 @@ export async function executeConversationRouting(route, conversationId, waId, ha
 
 export default {
   routeToSales,
-  routeToNurture,
   routeLeadToSales,
-  routeLeadToNurture,
   sendFAQResources,
   executeRouting,
   executeLeadRouting,
