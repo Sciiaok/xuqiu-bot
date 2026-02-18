@@ -1,4 +1,9 @@
 /**
+ * @deprecated This file is deprecated. Scoring logic has moved to Claude prompt.
+ * Kept for backward compatibility during migration.
+ */
+
+/**
  * Lead Scoring Engine
  * Calculates lead quality scores and determines routing
  */
