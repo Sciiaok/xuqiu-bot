@@ -14,8 +14,8 @@ export default function LeadsPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [filters, setFilters] = useState({
-    stage: 'all',
-    scoreRange: 'all',
+    inquiryQuality: 'all',
+    businessValue: 'all',
     customer: '',
     model: 'all',
   });
@@ -58,8 +58,9 @@ export default function LeadsPage() {
       const transformedLeads = (data || []).map(lead => ({
         id: lead.id,
         wa_id: lead.contact?.wa_id,
-        stage: lead.stage,
-        score: lead.score,
+        inquiry_quality: lead.inquiry_quality || 'GOOD',
+        business_value: lead.business_value || 'LOW',
+        conversation_intent: lead.conversation_intent,
         route: lead.route,
         updated_at: lead.updated_at,
         approved: lead.approved,
@@ -82,7 +83,6 @@ export default function LeadsPage() {
           buyer_type: lead.buyer_type,
           timeline: lead.timeline,
         },
-        risk_flags: [],
         conversation_status: lead.conversation?.status,
         message_count: lead.conversation?.message_count,
       }));
@@ -122,22 +122,16 @@ export default function LeadsPage() {
   function applyFilters() {
     let result = [...leads];
 
-    if (filters.stage !== 'all') {
+    if (filters.inquiryQuality !== 'all') {
       result = result.filter(
-        (lead) => lead.stage?.toUpperCase() === filters.stage.toUpperCase()
+        (lead) => lead.inquiry_quality?.toUpperCase() === filters.inquiryQuality.toUpperCase()
       );
     }
 
-    if (filters.scoreRange !== 'all') {
-      result = result.filter((lead) => {
-        const score = lead.score || 0;
-        switch (filters.scoreRange) {
-          case 'high': return score >= 75;
-          case 'medium': return score >= 50 && score < 75;
-          case 'low': return score < 50;
-          default: return true;
-        }
-      });
+    if (filters.businessValue !== 'all') {
+      result = result.filter(
+        (lead) => lead.business_value?.toUpperCase() === filters.businessValue.toUpperCase()
+      );
     }
 
     if (filters.customer.trim()) {
@@ -266,6 +260,7 @@ export default function LeadsPage() {
 
   const approvedCount = filteredLeads.filter(l => l.approved).length;
   const syncedCount = filteredLeads.filter(l => syncStatuses[l.id] === 'success').length;
+  const proofCount = filteredLeads.filter(l => l.inquiry_quality === 'PROOF').length;
 
   if (loading) {
     return (
@@ -308,8 +303,8 @@ export default function LeadsPage() {
         leads={leads}
         carModels={carModels}
         onFilterChange={handleFilterChange}
-        initialStage={filters.stage}
-        initialScoreRange={filters.scoreRange}
+        initialInquiryQuality={filters.inquiryQuality}
+        initialBusinessValue={filters.businessValue}
       />
 
       {/* Action Buttons */}
@@ -344,6 +339,8 @@ export default function LeadsPage() {
           <span className="text-sm text-text-secondary">
             <span className="font-semibold text-text-primary">{filteredLeads.length}</span> leads
             <span className="mx-1">·</span>
+            <span className="text-accent-green">{proofCount} PROOF</span>
+            <span className="mx-1">·</span>
             <span className="text-accent-green">{approvedCount} approved</span>
             <span className="mx-1">·</span>
             <span className="text-accent-blue">{syncedCount} synced</span>
@@ -377,7 +374,7 @@ export default function LeadsPage() {
             <div className="p-8 text-center text-text-secondary">
               <p>No leads match the current filters.</p>
               <button
-                onClick={() => setFilters({ stage: 'all', scoreRange: 'all', customer: '', model: 'all' })}
+                onClick={() => setFilters({ inquiryQuality: 'all', businessValue: 'all', customer: '', model: 'all' })}
                 className="mt-2 text-accent-blue hover:text-accent-blue/80 underline"
               >
                 Clear filters

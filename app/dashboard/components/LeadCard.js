@@ -3,18 +3,41 @@
 
 import Link from 'next/link';
 
-function getScoreBadgeStyle(score) {
-  if (score >= 75) return 'bg-accent-green/20 text-accent-green border-accent-green/30';
-  if (score >= 50) return 'bg-accent-amber/20 text-accent-amber border-accent-amber/30';
-  return 'bg-accent-red/20 text-accent-red border-accent-red/30';
+function getInquiryQualityBadgeStyle(quality) {
+  switch (quality?.toUpperCase()) {
+    case 'PROOF': return 'bg-accent-green/20 text-accent-green border-accent-green/30';
+    case 'QUALIFY': return 'bg-accent-purple/20 text-accent-purple border-accent-purple/30';
+    case 'GOOD': return 'bg-accent-blue/20 text-accent-blue border-accent-blue/30';
+    case 'BAD': return 'bg-accent-red/20 text-accent-red border-accent-red/30';
+    default: return 'bg-text-muted/20 text-text-muted';
+  }
 }
 
-function getStageBadgeStyle(stage) {
-  switch (stage?.toUpperCase()) {
-    case 'GREET': return 'badge-blue';
-    case 'QUALIFY': return 'badge-purple';
-    case 'PROOF': return 'badge-green';
+function getBusinessValueBadgeStyle(value) {
+  switch (value?.toUpperCase()) {
+    case 'HIGH': return 'bg-accent-green/20 text-accent-green border-accent-green/30';
+    case 'AVERAGE': return 'bg-accent-amber/20 text-accent-amber border-accent-amber/30';
+    case 'LOW': return 'bg-text-muted/20 text-text-muted border-text-muted/30';
     default: return 'bg-text-muted/20 text-text-muted';
+  }
+}
+
+function getIntentBadgeStyle(intent) {
+  switch (intent) {
+    case 'business_inquiry': return 'bg-accent-blue/20 text-accent-blue border-accent-blue/30';
+    case 'business_cooperation': return 'bg-accent-purple/20 text-accent-purple border-accent-purple/30';
+    case 'personal_consumer': return 'bg-accent-amber/20 text-accent-amber border-accent-amber/30';
+    default: return 'bg-text-muted/20 text-text-muted';
+  }
+}
+
+function getIntentLabel(intent) {
+  switch (intent) {
+    case 'business_inquiry': return 'B2B Inquiry';
+    case 'business_cooperation': return 'B2B Coop';
+    case 'personal_consumer': return 'Consumer';
+    case 'other': return 'Other';
+    default: return '';
   }
 }
 
@@ -38,17 +61,16 @@ export default function LeadCard({ lead, onEdit, onApprove, syncStatus }) {
     id,
     wa_id,
     lead_data = {},
-    score = 0,
-    stage = 'GREET',
+    inquiry_quality = 'GOOD',
+    business_value = 'LOW',
+    conversation_intent,
     updated_at,
-    risk_flags = [],
     approved = false,
     brand,
   } = lead;
 
   const {
     company_name,
-    buyer_type,
     destination_country,
     destination_port,
     qty_bucket,
@@ -72,12 +94,10 @@ export default function LeadCard({ lead, onEdit, onApprove, syncStatus }) {
   return (
     <div className="p-4 hover:bg-surface-hover transition-colors duration-150">
       <div className="flex items-start gap-4">
-        {/* Score Badge */}
-        <div className={`flex-shrink-0 w-14 h-14 flex flex-col items-center justify-center border rounded-lg ${getScoreBadgeStyle(score)}`}>
-          <span className="text-lg font-bold">{score}</span>
-          <div className="w-8 h-1.5 bg-current rounded-full opacity-30 mt-0.5">
-            <div className="h-full bg-current rounded-full" style={{ width: `${Math.min(score, 100)}%` }} />
-          </div>
+        {/* Inquiry Quality Badge */}
+        <div className={`flex-shrink-0 w-16 h-14 flex flex-col items-center justify-center border rounded-lg ${getInquiryQualityBadgeStyle(inquiry_quality)}`}>
+          <span className="text-xs font-medium opacity-70">Quality</span>
+          <span className="text-sm font-bold">{inquiry_quality || 'GOOD'}</span>
         </div>
 
         {/* Lead Info */}
@@ -97,7 +117,17 @@ export default function LeadCard({ lead, onEdit, onApprove, syncStatus }) {
           </div>
 
           <div className="flex items-center gap-2 text-sm flex-wrap">
-            <span className={`badge ${getStageBadgeStyle(stage)}`}>{stage?.toUpperCase() || 'GREET'}</span>
+            {/* Business Value Badge */}
+            <span className={`badge border ${getBusinessValueBadgeStyle(business_value)}`}>
+              {business_value || 'LOW'}
+            </span>
+
+            {/* Intent Badge */}
+            {conversation_intent && (
+              <span className={`badge border ${getIntentBadgeStyle(conversation_intent)}`}>
+                {getIntentLabel(conversation_intent)}
+              </span>
+            )}
 
             {approved && (
               <span className="badge bg-accent-green/20 text-accent-green border border-accent-green/30">
@@ -118,16 +148,7 @@ export default function LeadCard({ lead, onEdit, onApprove, syncStatus }) {
             )}
 
             <span className="text-text-muted">·</span>
-            <span className="text-text-tertiary">{buyer_type || '(unknown)'}</span>
-            <span className="text-text-muted">·</span>
             <span className="text-text-muted">{getRelativeTime(updated_at)}</span>
-
-            {risk_flags && risk_flags.length > 0 && (
-              <>
-                <span className="text-text-muted">·</span>
-                <span className="badge-red badge">risk</span>
-              </>
-            )}
           </div>
         </div>
 
