@@ -2,18 +2,51 @@
 
 import { useState } from 'react';
 
-function getScoreColor(score) {
-  if (score >= 75) return 'bg-accent-green';
-  if (score >= 50) return 'bg-accent-amber';
-  return 'bg-accent-red';
+function getBusinessValueColor(value) {
+  switch (value) {
+    case 'HIGH': return 'bg-accent-green';
+    case 'AVERAGE': return 'bg-accent-amber';
+    case 'LOW': return 'bg-accent-red';
+    default: return 'bg-text-muted';
+  }
 }
 
-function getStageColor(stage) {
-  switch (stage) {
-    case 'GREET': return 'bg-accent-blue';
-    case 'QUALIFY': return 'bg-accent-purple';
+function getBusinessValueLabel(value) {
+  switch (value) {
+    case 'HIGH': return 'H';
+    case 'AVERAGE': return 'M';
+    case 'LOW': return 'L';
+    default: return '?';
+  }
+}
+
+function getInquiryQualityColor(quality) {
+  switch (quality) {
     case 'PROOF': return 'bg-accent-green';
+    case 'QUALIFY': return 'bg-accent-purple';
+    case 'GOOD': return 'bg-accent-blue';
+    case 'BAD': return 'bg-accent-red';
     default: return 'bg-text-muted';
+  }
+}
+
+function getIntentLabel(intent) {
+  switch (intent) {
+    case 'business_inquiry': return 'B2B Inquiry';
+    case 'business_cooperation': return 'B2B Coop';
+    case 'personal_consumer': return 'C-end';
+    case 'other': return 'Other';
+    default: return intent || 'Unknown';
+  }
+}
+
+function getIntentColor(intent) {
+  switch (intent) {
+    case 'business_inquiry': return 'text-accent-green';
+    case 'business_cooperation': return 'text-accent-blue';
+    case 'personal_consumer': return 'text-accent-amber';
+    case 'other': return 'text-text-muted';
+    default: return 'text-text-muted';
   }
 }
 
@@ -92,16 +125,21 @@ export default function LeadsList({ leads = [] }) {
             return (
               <div key={lead.id} className={`border rounded-lg p-3 bg-background ${isEnded ? 'border-border/50' : 'border-border'}`}>
                 <div className="flex items-center gap-2 mb-3">
-                  <div className={`w-10 h-10 rounded-lg text-white font-bold flex items-center justify-center text-sm ${getScoreColor(lead.score)}`}>
-                    {lead.score || 0}
+                  <div className={`w-10 h-10 rounded-lg text-white font-bold flex items-center justify-center text-sm ${getBusinessValueColor(lead.business_value)}`}>
+                    {getBusinessValueLabel(lead.business_value)}
                   </div>
                   <div>
                     <div className="flex items-center gap-1.5">
-                      <span className={`px-2 py-0.5 rounded text-white text-xs font-medium ${getStageColor(lead.stage)}`}>
-                        {lead.stage || 'UNKNOWN'}
+                      <span className={`px-2 py-0.5 rounded text-white text-xs font-medium ${getInquiryQualityColor(lead.inquiry_quality)}`}>
+                        {lead.inquiry_quality || 'GOOD'}
                       </span>
                       <span className={`text-xs font-medium ${getRouteColor(lead.route)}`}>
                         {lead.route || 'CONTINUE'}
+                      </span>
+                    </div>
+                    <div className="flex items-center gap-1.5 mt-1">
+                      <span className={`text-xs ${getIntentColor(lead.conversation_intent)}`}>
+                        {getIntentLabel(lead.conversation_intent)}
                       </span>
                     </div>
                     {lead.lead_key && lead.lead_key !== 'default' && (
@@ -111,6 +149,13 @@ export default function LeadsList({ leads = [] }) {
                     )}
                   </div>
                 </div>
+
+                {/* Intent summary if present */}
+                {lead.conversation_intent === 'other' && lead.conversation_intent_summary && (
+                  <div className="mb-3 p-2 bg-surface-hover rounded text-xs text-text-secondary italic">
+                    {lead.conversation_intent_summary}
+                  </div>
+                )}
 
                 <div className="space-y-2 text-sm">
                   {Object.entries(fieldLabels).map(([key, label]) => {
@@ -163,13 +208,13 @@ export default function LeadsList({ leads = [] }) {
             >
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-2">
-                  <div className={`w-8 h-8 rounded text-white font-bold flex items-center justify-center text-xs ${getScoreColor(lead.score)}`}>
-                    {lead.score || 0}
+                  <div className={`w-8 h-8 rounded text-white font-bold flex items-center justify-center text-xs ${getBusinessValueColor(lead.business_value)}`}>
+                    {getBusinessValueLabel(lead.business_value)}
                   </div>
                   <div>
                     <div className="flex items-center gap-1.5">
-                      <span className={`px-1.5 py-0.5 rounded text-white text-xs ${getStageColor(lead.stage)}`}>
-                        {lead.stage || 'UNKNOWN'}
+                      <span className={`px-1.5 py-0.5 rounded text-white text-xs ${getInquiryQualityColor(lead.inquiry_quality)}`}>
+                        {lead.inquiry_quality || 'GOOD'}
                       </span>
                       {isEnded && (
                         <span className={`text-xs font-medium ${getRouteColor(lead.route)}`}>
