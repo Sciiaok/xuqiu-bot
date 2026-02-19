@@ -34,7 +34,7 @@ const supabase = createClient(
 );
 
 // Dynamic imports for ES modules
-let extractLeadsFromMessages, compareLeads, replaceConversationLeads;
+let extractLeadsFromMessages, compareLeads, batchExtractLeads, replaceConversationLeads;
 
 /**
  * Parse command line arguments
@@ -49,6 +49,7 @@ function parseArgs() {
     dryRun: false,
     apply: false,
     output: null,
+    concurrency: 3,
     help: false,
   };
 
@@ -67,6 +68,8 @@ function parseArgs() {
       options.limit = parseInt(arg.split('=')[1], 10);
     } else if (arg.startsWith('--output=')) {
       options.output = arg.split('=')[1];
+    } else if (arg.startsWith('--concurrency=')) {
+      options.concurrency = parseInt(arg.split('=')[1], 10);
     }
   }
 
@@ -90,6 +93,7 @@ OPTIONS:
   --dry-run           Skip Claude API calls, show what would be processed
   --apply             Auto-apply changes without confirmation prompt
   --output=FILE       Write JSON report to file
+  --concurrency=N     Number of concurrent Claude API calls (default: 3)
   --help, -h          Show this help message
 
 EXAMPLES:
@@ -330,6 +334,7 @@ async function main() {
   const leadExtractor = await import('../lib/lead-extractor.js');
   extractLeadsFromMessages = leadExtractor.extractLeadsFromMessages;
   compareLeads = leadExtractor.compareLeads;
+  batchExtractLeads = leadExtractor.batchExtractLeads;
 
   const leadRepo = await import('../lib/repositories/lead.repository.js');
   replaceConversationLeads = leadRepo.replaceConversationLeads;
@@ -339,6 +344,8 @@ async function main() {
 
   if (options.dryRun) {
     console.log('DRY RUN MODE - No Claude API calls will be made\n');
+  } else {
+    console.log(`Concurrency: ${options.concurrency}\n`);
   }
 
   // Get contacts to process
@@ -362,34 +369,62 @@ async function main() {
     contacts: [],
   };
 
-  // Process each contact
-  for (let i = 0; i < contacts.length; i++) {
-    const contact = contacts[i];
+  // Prepare contacts with messages and existing leads
+  console.log('Loading messages and existing leads...');
+  const contactsWithData = [];
+  for (const contact of contacts) {
+    const messages = await getMessages(contact.conversationId);
+    if (messages.length === 0) {
+      console.log(`Skipping ${contact.waId} - no messages`);
+      continue;
+    }
+    const oldLeads = await getExistingLeads(contact.conversationId);
+    contactsWithData.push({
+      ...contact,
+      messages,
+      oldLeads,
+      contextInfo: {
+        contactName: contact.name,
+        companyName: contact.companyName,
+      },
+    });
+  }
+
+  console.log(`Prepared ${contactsWithData.length} contact(s) for processing\n`);
+
+  // Extract leads using batch processing (or skip in dry-run mode)
+  let extractionResults = [];
+  if (!options.dryRun) {
+    console.log(`Extracting leads with concurrency=${options.concurrency}...`);
+    extractionResults = await batchExtractLeads(contactsWithData, {
+      concurrency: options.concurrency,
+      onProgress: showProgress,
+    });
+  } else {
+    // In dry-run mode, create empty results
+    extractionResults = contactsWithData.map(c => ({
+      contactId: c.contactId,
+      conversationId: c.conversationId,
+      success: true,
+      result: { leads: [] },
+    }));
+  }
+
+  // Process extraction results and compare
+  for (let i = 0; i < contactsWithData.length; i++) {
+    const contact = contactsWithData[i];
+    const extraction = extractionResults[i];
 
     try {
-      // Get messages
-      const messages = await getMessages(contact.conversationId);
-
-      if (messages.length === 0) {
-        console.log(`Skipping ${contact.waId} - no messages`);
-        continue;
+      if (!extraction.success) {
+        throw new Error(extraction.error);
       }
 
-      // Get existing leads
-      const oldLeads = await getExistingLeads(contact.conversationId);
-
+      const oldLeads = contact.oldLeads;
       let newLeads = [];
-      let extractionResult = null;
 
       if (!options.dryRun) {
-        // Call Claude to extract leads
-        showProgress(i + 1, contacts.length, contact.contactId, null);
-
-        extractionResult = await extractLeadsFromMessages(messages, {
-          contactName: contact.name,
-          companyName: contact.companyName,
-        });
-
+        const extractionResult = extraction.result;
         // Enrich leads with conversation-level fields
         newLeads = (extractionResult.leads || []).map(lead => ({
           ...lead,
@@ -410,7 +445,7 @@ async function main() {
         waId: contact.waId,
         name: contact.name,
         companyName: contact.companyName,
-        messageCount: messages.length,
+        messageCount: contact.messages.length,
         oldLeadCount: oldLeads.length,
         newLeadCount: newLeads.length,
         changed: comparison.changed,
@@ -466,7 +501,6 @@ async function main() {
         waId: contact.waId,
         error: error.message,
       });
-      showProgress(i + 1, contacts.length, contact.contactId, error);
       console.error(`\nError processing ${contact.waId}: ${error.message}`);
     }
   }
@@ -493,6 +527,7 @@ async function main() {
         all: options.all,
         dryRun: options.dryRun,
         apply: options.apply,
+        concurrency: options.concurrency,
       },
       summary: {
         processed: results.processed,
