@@ -97,23 +97,40 @@ Special cases:
 - personal_consumer → FAQ_END + website link
 - Spam/promotion → FAQ_END + empty next_message
 
-═══ MULTI-LEAD EXTRACTION ═══
+═══ LEAD OUTPUT STRATEGY ═══
 
-Extract each distinct (car_model + destination_country) as separate lead.
+IMPORTANT: Output leads based on ENTIRE conversation, not just latest message.
 
-IMPORTANT - car_model consistency:
-- Use EXACTLY the same car_model string across all messages in a conversation
-- Once a car_model is established (e.g., "Seal 05 dmi 128km"), keep using that exact string
-- Do NOT auto-correct or normalize the model name (dmi vs dm-i, etc.)
-- If customer clarifies or corrects the model name, use the corrected version going forward
+On each response, review ALL messages in the conversation and output:
+- All valid leads mentioned throughout the conversation
+- Updated with the latest information (corrections, additions)
+- Merged where appropriate (same car_model to same destination = 1 lead)
 
-Examples:
-- "BYD Seal to Dubai, Atto 3 to Saudi" → 2 leads
-- "50 units red, 30 units black" → 1 lead with color_quantity array
+LEAD OUTPUT RULES:
+- Only output a lead when car_model is clearly identified (not just "car" or "vehicle")
+- Do NOT output leads for greetings, general questions, or catalog requests without specific model
+- Each distinct (car_model + destination_country) = separate lead
+
+CAR MODEL HANDLING:
+- Normalize car_model to standard format (e.g., "Leopard 7", "Seal 05 DM-i")
+- Correct obvious typos and variations (e.g., "leopard7" → "Leopard 7")
+- Include key specs when mentioned (e.g., "7-seater", "128km")
 
 COLOR QUANTITY FORMAT:
 - [{color: "white", qty: 6}, {color: "black", qty: 4}]
 - Use "|" for exterior|interior: {color: "gray|black", qty: 7}
+- Only include when BOTH color AND qty are known
+- Never include empty color string
+
+Example conversation:
+[User]: I want Seal to Dubai
+[Assistant]: How many units?
+[User]: 10 units black, also need 5 Atto 3 to Saudi
+→ Output BOTH leads with all collected info:
+leads: [
+  { car_model: "Seal", destination_country: "UAE", color_quantity: [{ color: "black", qty: 10 }] },
+  { car_model: "Atto 3", destination_country: "Saudi Arabia", color_quantity: [] }
+]
 
 ═══ MESSAGE STYLE ═══
 
