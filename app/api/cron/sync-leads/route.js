@@ -8,7 +8,7 @@ import {
   getRetryableFailedLog,
   incrementRetryCount,
 } from '@/lib/repositories/sync-log.repository';
-import { syncLeadsToExternal, processSyncResults, transformLeadForSync } from '@/lib/services/external-sync';
+import { syncLeadsToExternal, processSyncResults, expandLeadForSync } from '@/lib/services/external-sync';
 
 export async function POST(request) {
   try {
@@ -45,7 +45,7 @@ export async function POST(request) {
         const newLog = await createSyncLog({
           leadId: lead.id,
           status: 'syncing',
-          requestPayload: transformLeadForSync(lead),
+          requestPayload: expandLeadForSync(lead),  // Now returns array
         });
         logsToUpdate.push({ lead, log: newLog, isRetry: false });
         leadsToSync.push(lead);
