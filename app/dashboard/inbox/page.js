@@ -3,7 +3,7 @@
 import { useState, useEffect, useMemo, useCallback, Suspense } from 'react';
 import { useSearchParams } from 'next/navigation';
 import { createClient } from '@/lib/supabase-browser';
-import ConversationList from '../components/ConversationList';
+import ContactList from '../components/ContactList';
 import ChatLog from '../components/ChatLog';
 import ChatInput from '../components/ChatInput';
 import LeadsList from '../components/LeadsList';
@@ -12,8 +12,8 @@ function InboxContent() {
   const searchParams = useSearchParams();
   const initialWaId = searchParams.get('wa_id');
 
-  const [conversations, setConversations] = useState([]);
-  const [selectedConv, setSelectedConv] = useState(null);
+  const [contacts, setContacts] = useState([]);
+  const [selectedContact, setSelectedContact] = useState(null);
   const [messages, setMessages] = useState([]);
   const [leads, setLeads] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -22,61 +22,106 @@ function InboxContent() {
 
   const supabase = useMemo(() => createClient(), []);
 
-  const fetchConversations = useCallback(async () => {
+  // Fetch contacts with their latest message info
+  const fetchContacts = useCallback(async () => {
     try {
       setLoading(true);
       const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
 
-      const { data, error } = await supabase
-        .from('conversations')
+      // Get all contacts with conversations in last 30 days
+      const { data: contactsData, error } = await supabase
+        .from('contacts')
         .select(`
-          *,
-          contact:contacts(id, wa_id, company_name, name),
-          messages(content, sent_at, role)
+          id,
+          wa_id,
+          company_name,
+          name,
+          conversations!inner (
+            id,
+            last_message_at
+          )
         `)
-        .gte('last_message_at', thirtyDaysAgo)
-        .order('last_message_at', { ascending: false });
+        .gte('conversations.last_message_at', thirtyDaysAgo);
 
       if (error) throw error;
-      setConversations(data || []);
 
-      if (initialWaId && data) {
-        const match = data.find(c => c.contact?.wa_id === initialWaId);
+      // Process contacts: get latest message and conversation count
+      const contactMap = new Map();
+
+      for (const contact of contactsData || []) {
+        if (!contactMap.has(contact.id)) {
+          // Get the latest message for this contact
+          const { data: latestMsg } = await supabase
+            .from('messages')
+            .select('content, role, sent_at, conversation_id')
+            .in('conversation_id', contact.conversations.map(c => c.id))
+            .order('sent_at', { ascending: false })
+            .limit(1)
+            .single();
+
+          contactMap.set(contact.id, {
+            id: contact.id,
+            wa_id: contact.wa_id,
+            company_name: contact.company_name,
+            name: contact.name,
+            conversationCount: contact.conversations.length,
+            conversationIds: contact.conversations.map(c => c.id),
+            lastMessage: latestMsg,
+            lastMessageAt: latestMsg?.sent_at || contact.conversations[0]?.last_message_at,
+          });
+        }
+      }
+
+      // Sort by last message time
+      const sorted = Array.from(contactMap.values()).sort((a, b) =>
+        new Date(b.lastMessageAt) - new Date(a.lastMessageAt)
+      );
+
+      setContacts(sorted);
+
+      // Auto-select if wa_id provided
+      if (initialWaId) {
+        const match = sorted.find(c => c.wa_id === initialWaId);
         if (match) {
-          handleSelectConversation(match);
+          handleSelectContact(match);
         }
       }
     } catch (err) {
-      console.error('Error fetching conversations:', err);
+      console.error('Error fetching contacts:', err);
     } finally {
       setLoading(false);
     }
   }, [supabase, initialWaId]);
 
-  const fetchMessages = useCallback(async (conversationId) => {
+  // Fetch all messages for a contact (across all conversations)
+  const fetchMessages = useCallback(async (contact) => {
+    if (!contact.conversationIds?.length) {
+      setMessages([]);
+      return;
+    }
+
     const { data, error } = await supabase
       .from('messages')
-      .select('*')
-      .eq('conversation_id', conversationId)
+      .select('id, role, content, sent_at, sent_by, conversation_id')
+      .in('conversation_id', contact.conversationIds)
       .order('sent_at', { ascending: true });
 
     if (!error) {
-      setMessages((data || []).map(m => ({
-        id: m.id,
-        role: m.role,
-        content: m.content,
-        sent_at: m.sent_at,
-        sent_by: m.sent_by,
-      })));
+      setMessages(data || []);
     }
   }, [supabase]);
 
-  const fetchLeads = useCallback(async (conversationId) => {
-    // Fetch all leads for this conversation (multi-lead support)
+  // Fetch all leads for a contact (across all conversations)
+  const fetchLeads = useCallback(async (contact) => {
+    if (!contact.conversationIds?.length) {
+      setLeads([]);
+      return;
+    }
+
     const { data, error } = await supabase
       .from('leads')
       .select('*')
-      .eq('conversation_id', conversationId)
+      .in('conversation_id', contact.conversationIds)
       .order('created_at', { ascending: true });
 
     if (!error) {
@@ -84,70 +129,73 @@ function InboxContent() {
     }
   }, [supabase]);
 
-  const handleSelectConversation = useCallback((conv) => {
-    setSelectedConv(conv);
-    fetchMessages(conv.id);
-    fetchLeads(conv.id);
+  const handleSelectContact = useCallback((contact) => {
+    setSelectedContact(contact);
+    fetchMessages(contact);
+    fetchLeads(contact);
   }, [fetchMessages, fetchLeads]);
 
   useEffect(() => {
-    fetchConversations();
-  }, [fetchConversations]);
+    fetchContacts();
+  }, [fetchContacts]);
 
+  // Realtime subscription for selected contact's conversations
   useEffect(() => {
-    if (!selectedConv?.id) return;
+    if (!selectedContact?.conversationIds?.length) return;
 
-    const channel = supabase
-      .channel('inbox-realtime')
-      .on(
-        'postgres_changes',
-        {
-          event: 'INSERT',
-          schema: 'public',
-          table: 'messages',
-          filter: `conversation_id=eq.${selectedConv.id}`,
-        },
-        (payload) => {
-          setMessages(prev => [...prev, {
-            id: payload.new.id,
-            role: payload.new.role,
-            content: payload.new.content,
-            sent_at: payload.new.sent_at,
-            sent_by: payload.new.sent_by,
-          }]);
-        }
-      )
-      .on(
-        'postgres_changes',
-        {
-          event: '*',
-          schema: 'public',
-          table: 'leads',
-          filter: `conversation_id=eq.${selectedConv.id}`,
-        },
-        (payload) => {
-          // Refresh leads on any change (INSERT, UPDATE, DELETE)
-          fetchLeads(selectedConv.id);
-        }
-      )
-      .subscribe((status) => {
-        setRealtimeStatus(status);
-      });
+    const channels = selectedContact.conversationIds.map((convId, idx) => {
+      return supabase
+        .channel(`inbox-realtime-${convId}`)
+        .on(
+          'postgres_changes',
+          {
+            event: 'INSERT',
+            schema: 'public',
+            table: 'messages',
+            filter: `conversation_id=eq.${convId}`,
+          },
+          (payload) => {
+            setMessages(prev => [...prev, {
+              id: payload.new.id,
+              role: payload.new.role,
+              content: payload.new.content,
+              sent_at: payload.new.sent_at,
+              sent_by: payload.new.sent_by,
+              conversation_id: payload.new.conversation_id,
+            }]);
+          }
+        )
+        .on(
+          'postgres_changes',
+          {
+            event: '*',
+            schema: 'public',
+            table: 'leads',
+            filter: `conversation_id=eq.${convId}`,
+          },
+          () => {
+            fetchLeads(selectedContact);
+          }
+        )
+        .subscribe((status) => {
+          if (idx === 0) setRealtimeStatus(status);
+        });
+    });
 
     return () => {
-      supabase.removeChannel(channel);
+      channels.forEach(channel => supabase.removeChannel(channel));
     };
-  }, [selectedConv?.id, supabase, fetchLeads]);
+  }, [selectedContact?.conversationIds, supabase, fetchLeads, selectedContact]);
 
   const handleSendMessage = async (message) => {
-    if (sending || !selectedConv?.contact?.wa_id) return;
+    if (sending || !selectedContact?.wa_id) return;
 
     setSending(true);
     try {
       const response = await fetch('/api/send-message', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ waId: selectedConv.contact.wa_id, message }),
+        body: JSON.stringify({ waId: selectedContact.wa_id, message }),
       });
 
       const data = await response.json();
@@ -173,23 +221,28 @@ function InboxContent() {
   return (
     <div className="h-[calc(100vh-0px)] flex">
       <div className="w-1/4 min-w-[250px]">
-        <ConversationList
-          conversations={conversations}
-          selectedId={selectedConv?.id}
-          onSelect={handleSelectConversation}
+        <ContactList
+          contacts={contacts}
+          selectedId={selectedContact?.id}
+          onSelect={handleSelectContact}
         />
       </div>
 
       <div className="flex-1 flex flex-col bg-background-secondary">
-        {selectedConv ? (
+        {selectedContact ? (
           <>
             <div className="bg-surface border-b border-border px-4 py-3 flex items-center justify-between">
               <div>
                 <div className="font-semibold text-text-primary">
-                  {selectedConv.contact?.wa_id}
+                  {selectedContact.wa_id}
                 </div>
                 <div className="text-sm text-text-secondary">
-                  {selectedConv.contact?.company_name || '(No company)'}
+                  {selectedContact.company_name || '(No company)'}
+                  {selectedContact.conversationCount > 1 && (
+                    <span className="text-text-muted ml-2">
+                      · {selectedContact.conversationCount} conversations
+                    </span>
+                  )}
                 </div>
               </div>
               <div className="flex items-center gap-2 text-sm">
@@ -200,12 +253,15 @@ function InboxContent() {
               </div>
             </div>
 
-            <ChatLog messages={messages} />
+            <ChatLog
+              messages={messages}
+              showConversationSeparators={selectedContact.conversationCount > 1}
+            />
             <ChatInput onSend={handleSendMessage} disabled={sending} />
           </>
         ) : (
           <div className="flex-1 flex items-center justify-center">
-            <p className="text-text-muted">Select a conversation to start chatting</p>
+            <p className="text-text-muted">Select a contact to start chatting</p>
           </div>
         )}
       </div>
