@@ -3,7 +3,7 @@ import { NextResponse } from 'next/server';
 import supabase from '@/lib/supabase';
 import { getLeadsNeedingSync, getLeadById } from '@/lib/repositories/lead.repository';
 import { createSyncLog, updateSyncLog, hasSuccessfulSync } from '@/lib/repositories/sync-log.repository';
-import { syncLeadsToExternal, processSyncResults, transformLeadForSync } from '@/lib/services/external-sync';
+import { syncLeadsToExternal, processSyncResults, expandLeadForSync } from '@/lib/services/external-sync';
 
 export async function POST(request) {
   try {
@@ -63,7 +63,7 @@ export async function POST(request) {
       const log = await createSyncLog({
         leadId: lead.id,
         status: 'syncing',
-        requestPayload: transformLeadForSync(lead),
+        requestPayload: expandLeadForSync(lead),  // Now returns array
       });
       syncLogs.push({ lead, log });
     }
