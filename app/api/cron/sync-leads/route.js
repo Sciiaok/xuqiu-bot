@@ -82,8 +82,8 @@ export async function POST(request) {
           if (logEntry) {
             await updateSyncLog(logEntry.log.id, {
               status: result.status,
-              externalId: result.externalId,
-              externalNo: result.externalNo,
+              externalId: result.externalIds,  // Now an array
+              externalNo: result.externalNos,  // Now an array
               responsePayload: apiResponse,
               errorMessage: result.error,
               syncedAt: result.status === 'success' ? new Date().toISOString() : null,
@@ -91,13 +91,14 @@ export async function POST(request) {
           }
 
           if (result.status === 'success') {
-            // Check if it was created or skipped based on API response
-            const apiResult = apiResponse.results?.find(r => r.external_id === result.leadId);
-            if (apiResult?.status === 'created') {
-              totalCreated++;
-            } else {
-              totalSkipped++;
-            }
+            // Count based on expanded inquiries
+            const createdCount = (apiResponse.results || []).filter(
+              r => (r.external_id === result.leadId || r.external_id.startsWith(`${result.leadId}_`))
+                && r.status === 'created'
+            ).length;
+            const skippedCount = result.expandedCount - createdCount;
+            totalCreated += createdCount;
+            totalSkipped += skippedCount;
           } else {
             totalFailed++;
           }
