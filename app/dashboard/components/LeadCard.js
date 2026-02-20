@@ -37,13 +37,52 @@ function getIntentLabel(intent) {
     case 'business_cooperation': return 'B2B Coop';
     case 'personal_consumer': return 'Consumer';
     case 'other': return 'Other';
-    default: return '';
+    default:
+      return intent
+        ? intent
+            .replace(/[_-]+/g, ' ')
+            .replace(/\b\w/g, (ch) => ch.toUpperCase())
+        : '';
   }
 }
 
-function parseIntents(intentString) {
-  if (!intentString) return [];
-  return intentString.split(',').map(s => s.trim()).filter(Boolean);
+function parseIntents(intentValue) {
+  if (!intentValue) return [];
+
+  // Already an array
+  if (Array.isArray(intentValue)) {
+    return intentValue
+      .map((v) => String(v).trim().toLowerCase())
+      .filter(Boolean);
+  }
+
+  const raw = String(intentValue).trim();
+  if (!raw) return [];
+
+  // JSON array string, e.g. '["business_inquiry","business_cooperation"]'
+  if (raw.startsWith('[') && raw.endsWith(']')) {
+    try {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) {
+        return parsed
+          .map((v) => String(v).trim().toLowerCase())
+          .filter(Boolean);
+      }
+    } catch {
+      // fallback to split below
+    }
+  }
+
+  // Comma/pipe/semicolon separated string
+  return raw
+    .split(/[,\|;]+/)
+    .map((s) =>
+      s
+        .trim()
+        .replace(/^[\[\]\s"']+|[\[\]\s"']+$/g, '')
+        .toLowerCase()
+    )
+    .filter(Boolean);
 }
 
 function getTotalQuantity(colorQuantity) {
@@ -79,6 +118,7 @@ export default function LeadCard({ lead, onEdit, onApprove, syncStatus }) {
     inquiry_quality = 'GOOD',
     business_value = 'LOW',
     conversation_intent,
+    conversation_intent_summary,
     updated_at,
     approved = false,
     brand,
@@ -156,6 +196,11 @@ export default function LeadCard({ lead, onEdit, onApprove, syncStatus }) {
                 {getIntentLabel(intent)}
               </span>
             ))}
+            {intents.length === 0 && (
+              <span className="badge border bg-text-muted/20 text-text-muted border-text-muted/30">
+                No Intent
+              </span>
+            )}
 
             {approved && (
               <span className="badge bg-accent-green/20 text-accent-green border border-accent-green/30">
@@ -178,6 +223,11 @@ export default function LeadCard({ lead, onEdit, onApprove, syncStatus }) {
             <span className="text-text-muted">·</span>
             <span className="text-text-muted">{getRelativeTime(updated_at)}</span>
           </div>
+          {conversation_intent_summary && (
+            <div className="mt-2 text-xs text-text-muted line-clamp-2">
+              {conversation_intent_summary}
+            </div>
+          )}
         </div>
 
         {/* Action Buttons */}

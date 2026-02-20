@@ -61,6 +61,7 @@ export default function LeadsPage() {
         inquiry_quality: lead.inquiry_quality || 'GOOD',
         business_value: lead.business_value || 'LOW',
         conversation_intent: lead.conversation_intent,
+        conversation_intent_summary: lead.conversation_intent_summary,
         route: lead.route,
         updated_at: lead.updated_at,
         approved: lead.approved,
