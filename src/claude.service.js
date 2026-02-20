@@ -271,6 +271,10 @@ const JSON_SCHEMA = {
             },
             description: 'Array of color-quantity pairs',
           },
+          qty_bucket: {
+            type: 'string',
+            description: 'Approximate total quantity. Can be a single number (e.g., "10") or a range (e.g., "10-15"). Calculate from color_quantity sum or explicit mention.',
+          },
         },
       },
     },
