@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useMemo, useCallback, Suspense } from 'react';
+import { useState, useEffect, useMemo, useCallback, useRef, Suspense } from 'react';
 import { useSearchParams } from 'next/navigation';
 import { createClient } from '@/lib/supabase-browser';
 import ContactList from '../components/ContactList';
@@ -14,136 +14,212 @@ function InboxContent() {
 
   const [contacts, setContacts] = useState([]);
   const [selectedContact, setSelectedContact] = useState(null);
+  const [selectedConversationIds, setSelectedConversationIds] = useState([]);
   const [messages, setMessages] = useState([]);
   const [leads, setLeads] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [panelLoading, setPanelLoading] = useState(false);
   const [sending, setSending] = useState(false);
   const [realtimeStatus, setRealtimeStatus] = useState('connecting');
 
   const supabase = useMemo(() => createClient(), []);
+  const conversationIdsCacheRef = useRef(new Map());
+  const selectionRequestRef = useRef(0);
 
-  // Fetch contacts with their latest message info
+  // Fetch contacts with conversation summary only (no per-contact full message load)
   const fetchContacts = useCallback(async () => {
     try {
       setLoading(true);
       const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
 
-      // Get all contacts with conversations in last 30 days
-      const { data: contactsData, error } = await supabase
-        .from('contacts')
+      const { data: conversationRows, error } = await supabase
+        .from('conversations')
         .select(`
           id,
-          wa_id,
-          company_name,
-          name,
-          conversations!inner (
+          contact_id,
+          last_message_at,
+          contact:contacts!inner (
             id,
-            last_message_at
+            wa_id,
+            company_name,
+            name
           )
         `)
-        .gte('conversations.last_message_at', thirtyDaysAgo);
+        .gte('last_message_at', thirtyDaysAgo)
+        .order('last_message_at', { ascending: false });
 
       if (error) throw error;
 
-      // Process contacts: get latest message and conversation count
       const contactMap = new Map();
+      for (const row of conversationRows || []) {
+        const contact = row.contact;
+        if (!contact?.id) continue;
 
-      for (const contact of contactsData || []) {
         if (!contactMap.has(contact.id)) {
-          // Get the latest message for this contact
-          const { data: latestMsg } = await supabase
-            .from('messages')
-            .select('content, role, sent_at, conversation_id')
-            .in('conversation_id', contact.conversations.map(c => c.id))
-            .order('sent_at', { ascending: false })
-            .limit(1)
-            .single();
-
           contactMap.set(contact.id, {
             id: contact.id,
             wa_id: contact.wa_id,
             company_name: contact.company_name,
             name: contact.name,
-            conversationCount: contact.conversations.length,
-            conversationIds: contact.conversations.map(c => c.id),
-            lastMessage: latestMsg,
-            lastMessageAt: latestMsg?.sent_at || contact.conversations[0]?.last_message_at,
+            conversationCount: 1,
+            latestConversationId: row.id,
+            lastMessageAt: row.last_message_at,
+            lastMessage: null,
           });
+        } else {
+          const existing = contactMap.get(contact.id);
+          existing.conversationCount += 1;
+
+          if (new Date(row.last_message_at) > new Date(existing.lastMessageAt)) {
+            existing.lastMessageAt = row.last_message_at;
+            existing.latestConversationId = row.id;
+          }
         }
       }
 
-      // Sort by last message time
       const sorted = Array.from(contactMap.values()).sort((a, b) =>
         new Date(b.lastMessageAt) - new Date(a.lastMessageAt)
       );
 
-      setContacts(sorted);
+      // Fetch only one preview message per contact (latest conversation only)
+      const latestConversationIds = sorted
+        .map((c) => c.latestConversationId)
+        .filter(Boolean);
 
-      // Auto-select if wa_id provided
-      if (initialWaId) {
-        const match = sorted.find(c => c.wa_id === initialWaId);
-        if (match) {
-          handleSelectContact(match);
+      if (latestConversationIds.length) {
+        const { data: previewMessages } = await supabase
+          .from('messages')
+          .select('content, role, sent_at, conversation_id')
+          .in('conversation_id', latestConversationIds)
+          .order('sent_at', { ascending: false });
+
+        const previewMap = new Map();
+        for (const msg of previewMessages || []) {
+          if (!previewMap.has(msg.conversation_id)) {
+            previewMap.set(msg.conversation_id, msg);
+          }
         }
+
+        sorted.forEach((contact) => {
+          contact.lastMessage = previewMap.get(contact.latestConversationId) || null;
+        });
       }
+
+      setContacts(sorted);
     } catch (err) {
       console.error('Error fetching contacts:', err);
     } finally {
       setLoading(false);
     }
-  }, [supabase, initialWaId]);
+  }, [supabase]);
 
-  // Fetch all messages for a contact (across all conversations)
-  const fetchMessages = useCallback(async (contact) => {
-    if (!contact.conversationIds?.length) {
-      setMessages([]);
-      return;
-    }
+  const fetchMessages = useCallback(async (conversationIds) => {
+    if (!conversationIds?.length) return [];
 
     const { data, error } = await supabase
       .from('messages')
       .select('id, role, content, sent_at, sent_by, conversation_id')
-      .in('conversation_id', contact.conversationIds)
+      .in('conversation_id', conversationIds)
       .order('sent_at', { ascending: true });
 
-    if (!error) {
-      setMessages(data || []);
+    if (error) {
+      console.error('Error fetching messages:', error);
+      return [];
     }
+
+    return data || [];
   }, [supabase]);
 
-  // Fetch all leads for a contact (across all conversations)
-  const fetchLeads = useCallback(async (contact) => {
-    if (!contact.conversationIds?.length) {
-      setLeads([]);
-      return;
-    }
+  const fetchLeads = useCallback(async (conversationIds) => {
+    if (!conversationIds?.length) return [];
 
     const { data, error } = await supabase
       .from('leads')
       .select('*')
-      .in('conversation_id', contact.conversationIds)
+      .in('conversation_id', conversationIds)
       .order('created_at', { ascending: true });
 
-    if (!error) {
-      setLeads(data || []);
+    if (error) {
+      console.error('Error fetching leads:', error);
+      return [];
     }
+
+    return data || [];
   }, [supabase]);
 
-  const handleSelectContact = useCallback((contact) => {
+  const ensureConversationIds = useCallback(async (contactId) => {
+    const cached = conversationIdsCacheRef.current.get(contactId);
+    if (cached) return cached;
+
+    const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
+
+    const { data, error } = await supabase
+      .from('conversations')
+      .select('id')
+      .eq('contact_id', contactId)
+      .gte('last_message_at', thirtyDaysAgo)
+      .order('last_message_at', { ascending: false });
+
+    if (error) {
+      console.error('Error fetching conversation IDs:', error);
+      return [];
+    }
+
+    const ids = (data || []).map((row) => row.id);
+    conversationIdsCacheRef.current.set(contactId, ids);
+    return ids;
+  }, [supabase]);
+
+  const handleSelectContact = useCallback(async (contact) => {
+    const requestId = ++selectionRequestRef.current;
+
     setSelectedContact(contact);
-    fetchMessages(contact);
-    fetchLeads(contact);
-  }, [fetchMessages, fetchLeads]);
+    setRealtimeStatus('connecting');
+    setPanelLoading(true);
+    setMessages([]);
+    setLeads([]);
+
+    const conversationIds = await ensureConversationIds(contact.id);
+    if (selectionRequestRef.current !== requestId) return;
+
+    setSelectedConversationIds(conversationIds);
+
+    const [nextMessages, nextLeads] = await Promise.all([
+      fetchMessages(conversationIds),
+      fetchLeads(conversationIds),
+    ]);
+
+    if (selectionRequestRef.current !== requestId) return;
+
+    setMessages(nextMessages);
+    setLeads(nextLeads);
+    setPanelLoading(false);
+  }, [ensureConversationIds, fetchMessages, fetchLeads]);
 
   useEffect(() => {
     fetchContacts();
   }, [fetchContacts]);
 
+  // Auto-select contact: wa_id first, otherwise first contact in list
+  useEffect(() => {
+    if (!contacts.length) return;
+    if (selectedContact && contacts.some((c) => c.id === selectedContact.id)) return;
+
+    const preferred = initialWaId
+      ? contacts.find((c) => c.wa_id === initialWaId)
+      : null;
+
+    const nextContact = preferred || contacts[0];
+    if (nextContact) {
+      handleSelectContact(nextContact);
+    }
+  }, [contacts, initialWaId, selectedContact, handleSelectContact]);
+
   // Realtime subscription for selected contact's conversations
   useEffect(() => {
-    if (!selectedContact?.conversationIds?.length) return;
+    if (!selectedConversationIds.length) return;
 
-    const channels = selectedContact.conversationIds.map((convId, idx) => {
+    const channels = selectedConversationIds.map((convId, idx) => {
       return supabase
         .channel(`inbox-realtime-${convId}`)
         .on(
@@ -155,7 +231,7 @@ function InboxContent() {
             filter: `conversation_id=eq.${convId}`,
           },
           (payload) => {
-            setMessages(prev => [...prev, {
+            setMessages((prev) => [...prev, {
               id: payload.new.id,
               role: payload.new.role,
               content: payload.new.content,
@@ -173,8 +249,9 @@ function InboxContent() {
             table: 'leads',
             filter: `conversation_id=eq.${convId}`,
           },
-          () => {
-            fetchLeads(selectedContact);
+          async () => {
+            const latestLeads = await fetchLeads(selectedConversationIds);
+            setLeads(latestLeads);
           }
         )
         .subscribe((status) => {
@@ -183,9 +260,9 @@ function InboxContent() {
     });
 
     return () => {
-      channels.forEach(channel => supabase.removeChannel(channel));
+      channels.forEach((channel) => supabase.removeChannel(channel));
     };
-  }, [selectedContact?.conversationIds, supabase, fetchLeads, selectedContact]);
+  }, [selectedConversationIds, supabase, fetchLeads]);
 
   const handleSendMessage = async (message) => {
     if (sending || !selectedContact?.wa_id) return;
@@ -253,11 +330,17 @@ function InboxContent() {
               </div>
             </div>
 
-            <ChatLog
-              messages={messages}
-              showConversationSeparators={selectedContact.conversationCount > 1}
-            />
-            <ChatInput onSend={handleSendMessage} disabled={sending} />
+            {panelLoading ? (
+              <div className="flex-1 flex items-center justify-center">
+                <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-accent-blue"></div>
+              </div>
+            ) : (
+              <ChatLog
+                messages={messages}
+                showConversationSeparators={selectedContact.conversationCount > 1}
+              />
+            )}
+            <ChatInput onSend={handleSendMessage} disabled={sending || panelLoading} />
           </>
         ) : (
           <div className="flex-1 flex items-center justify-center">

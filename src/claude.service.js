@@ -52,7 +52,7 @@ Classify each conversation into one of these intents:
    - BRAND-MODEL-OPTION:
    - COLOR:
    - DESTINATION/LOADING PORT:
-   - TERM (FOB|CIF):"
+   - TERM (FOB|CIF|EXW|DDP, support multiple with comma like FOB,CIF):"
 
 ═══ COOPERATION TERMS (when customer asks) ═══
 
@@ -249,8 +249,7 @@ const JSON_SCHEMA = {
           },
           international_commercial_term: {
             type: 'string',
-            enum: ['FOB', 'CIF', 'EXW', 'DDP'],
-            description: 'Incoterms preference',
+            description: 'Incoterms preference. Use comma-separated values from FOB,CIF,EXW,DDP when multiple terms are requested (e.g., FOB,CIF).',
           },
           company_name: {
             type: 'string',

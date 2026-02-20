@@ -64,7 +64,7 @@ CREATE TABLE IF NOT EXISTS leads (
   qty_bucket TEXT CHECK (qty_bucket IN ('1-5', '6-20', '20+')),
   buyer_type TEXT CHECK (buyer_type IN ('dealer', 'store_owner', 'trading_org')),
   timeline TEXT,
-  incoterm TEXT CHECK (incoterm IN ('FOB', 'CIF', 'EXW', 'DDP')),
+  incoterm TEXT,
   loading_port TEXT,
   extra_data JSONB DEFAULT '{}',
   handoff_summary TEXT,

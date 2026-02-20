@@ -41,6 +41,21 @@ function getIntentLabel(intent) {
   }
 }
 
+function parseIntents(intentString) {
+  if (!intentString) return [];
+  return intentString.split(',').map(s => s.trim()).filter(Boolean);
+}
+
+function getTotalQuantity(colorQuantity) {
+  if (!colorQuantity || colorQuantity.length === 0) return null;
+  return colorQuantity.reduce((sum, cq) => sum + (cq.qty || 0), 0);
+}
+
+function formatColorQuantity(colorQuantity) {
+  if (!colorQuantity || colorQuantity.length === 0) return null;
+  return colorQuantity.map(cq => `${cq.color}: ${cq.qty || '?'}`).join(', ');
+}
+
 function getRelativeTime(timestamp) {
   if (!timestamp) return 'Unknown';
   const now = new Date();
@@ -67,6 +82,7 @@ export default function LeadCard({ lead, onEdit, onApprove, syncStatus }) {
     updated_at,
     approved = false,
     brand,
+    color_quantity,
   } = lead;
 
   const {
@@ -75,7 +91,14 @@ export default function LeadCard({ lead, onEdit, onApprove, syncStatus }) {
     destination_port,
     qty_bucket,
     car_model,
+    color_quantity: leadDataColorQty,
   } = lead_data;
+
+  // Use color_quantity from root or lead_data
+  const colorQty = color_quantity || leadDataColorQty;
+  const totalQty = getTotalQuantity(colorQty);
+  const colorQtyStr = formatColorQuantity(colorQty);
+  const intents = parseIntents(conversation_intent);
 
   const destination = destination_port
     ? `${destination_country || ''}/${destination_port}`.replace(/^\//, '')
@@ -111,10 +134,15 @@ export default function LeadCard({ lead, onEdit, onApprove, syncStatus }) {
           <div className="text-sm text-text-tertiary mb-2">
             <span>{destination}</span>
             <span className="mx-1">·</span>
-            <span>{qty_bucket || '-'} units</span>
+            <span>{totalQty ? `${totalQty} units` : (qty_bucket ? `${qty_bucket} units` : '-')}</span>
             <span className="mx-1">·</span>
             <span>{brand ? `${brand} ` : ''}{car_model || '(No model)'}</span>
           </div>
+          {colorQtyStr && (
+            <div className="text-xs text-text-muted mb-2">
+              {colorQtyStr}
+            </div>
+          )}
 
           <div className="flex items-center gap-2 text-sm flex-wrap">
             {/* Business Value Badge */}
@@ -122,12 +150,12 @@ export default function LeadCard({ lead, onEdit, onApprove, syncStatus }) {
               {business_value || 'LOW'}
             </span>
 
-            {/* Intent Badge */}
-            {conversation_intent && (
-              <span className={`badge border ${getIntentBadgeStyle(conversation_intent)}`}>
-                {getIntentLabel(conversation_intent)}
+            {/* Intent Badges */}
+            {intents.map((intent, idx) => (
+              <span key={idx} className={`badge border ${getIntentBadgeStyle(intent)}`}>
+                {getIntentLabel(intent)}
               </span>
-            )}
+            ))}
 
             {approved && (
               <span className="badge bg-accent-green/20 text-accent-green border border-accent-green/30">

@@ -7,6 +7,28 @@ const QTY_OPTIONS = ['1-5', '6-20', '20+'];
 const BUYER_TYPE_OPTIONS = ['dealer', 'store_owner', 'trading_org'];
 const INCOTERM_OPTIONS = ['FOB', 'CIF', 'EXW', 'DDP'];
 
+function normalizeIncotermValue(value) {
+  if (!value) return '';
+
+  const raw = String(value).toUpperCase();
+  const normalized = raw
+    .replace(/\bAND\b/g, ',')
+    .replace(/[|/&;+，、]+/g, ',')
+    .replace(/\s+/g, '');
+
+  const selected = new Set();
+  for (const token of normalized.split(',').filter(Boolean)) {
+    if (token === 'BOTH') {
+      selected.add('FOB');
+      selected.add('CIF');
+      continue;
+    }
+    if (INCOTERM_OPTIONS.includes(token)) selected.add(token);
+  }
+
+  return INCOTERM_OPTIONS.filter((term) => selected.has(term)).join(',');
+}
+
 export default function EditModal({ lead, isOpen, onClose, onSave }) {
   const [formData, setFormData] = useState({});
   const [saving, setSaving] = useState(false);
@@ -35,16 +57,37 @@ export default function EditModal({ lead, isOpen, onClose, onSave }) {
     setFormData(prev => ({ ...prev, [field]: value }));
   };
 
+  const selectedIncoterms = (formData.incoterm || '')
+    .split(',')
+    .map(v => v.trim())
+    .filter(Boolean);
+
+  const handleIncotermToggle = (term) => {
+    const current = new Set(selectedIncoterms);
+    if (current.has(term)) {
+      current.delete(term);
+    } else {
+      current.add(term);
+    }
+    const normalized = INCOTERM_OPTIONS.filter((item) => current.has(item)).join(',');
+    handleChange('incoterm', normalized);
+  };
+
   const handleSubmit = async (e) => {
     e.preventDefault();
     setSaving(true);
     setError(null);
 
     try {
+      const payload = {
+        ...formData,
+        incoterm: normalizeIncotermValue(formData.incoterm),
+      };
+
       const response = await fetch(`/api/leads/${lead.id}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(formData),
+        body: JSON.stringify(payload),
       });
 
       const result = await response.json();
@@ -169,16 +212,25 @@ export default function EditModal({ lead, isOpen, onClose, onSave }) {
             </div>
             <div>
               <label className="block text-sm font-medium text-text-secondary mb-1">Incoterm</label>
-              <select
-                value={formData.incoterm}
-                onChange={(e) => handleChange('incoterm', e.target.value)}
-                className="w-full bg-background border border-border rounded-lg px-3 py-2 text-text-primary focus:outline-none focus:ring-1 focus:ring-accent-blue"
-              >
-                <option value="">Select...</option>
-                {INCOTERM_OPTIONS.map(opt => (
-                  <option key={opt} value={opt}>{opt}</option>
+              <div className="grid grid-cols-2 gap-2">
+                {INCOTERM_OPTIONS.map(term => (
+                  <button
+                    key={term}
+                    type="button"
+                    onClick={() => handleIncotermToggle(term)}
+                    className={`px-3 py-2 rounded-lg border text-sm ${
+                      selectedIncoterms.includes(term)
+                        ? 'border-accent-blue bg-accent-blue/15 text-text-primary'
+                        : 'border-border bg-background text-text-secondary'
+                    }`}
+                  >
+                    {term}
+                  </button>
                 ))}
-              </select>
+              </div>
+              <p className="mt-1 text-xs text-text-muted">
+                Selected: {formData.incoterm || 'None'}
+              </p>
             </div>
           </div>
 
