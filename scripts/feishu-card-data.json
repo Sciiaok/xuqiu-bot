@@ -1,0 +1,113 @@
+{
+  "schema": "2.0",
+  "config": {
+    "update_multi": true
+  },
+  "header": {
+    "template": "red",
+    "title": {
+      "tag": "plain_text",
+      "content": "🔥 高意向线索 - 需立即跟进"
+    }
+  },
+  "body": {
+    "direction": "vertical",
+    "padding": "12px 12px 12px 12px",
+    "elements": [
+      {
+        "tag": "markdown",
+        "content": "**询盘质量：** PROOF\n**商业价值：** 低\n\n**联系人：** 未知\n**公司：** Yibeltal Amogne elmayehu\n**WhatsApp：** 251912609997\n\n**车型：** Leopard 3 Ultra 4WD Long Range\n**目的国：** Ethiopia\n**目的港：** Djibouti\n**数量：** 1-10\n**颜色/数量：** green × 3\n**贸易条款：** FOB,CIF\n**装运港：** -\n**时间线：** -\n\n**意图摘要：** Business inquiry for 3 units BYD Leopard 3 Ultra 4WD Long Range to Ethiopia with COC requirement"
+      },
+      {
+        "tag": "column_set",
+        "columns": [
+          {
+            "tag": "column",
+            "width": "weighted",
+            "weight": 1,
+            "elements": [
+              {
+                "tag": "button",
+                "type": "primary",
+                "text": {
+                  "tag": "plain_text",
+                  "content": "标记已跟进"
+                },
+                "behaviors": [
+                  {
+                    "type": "callback",
+                    "value": {
+                      "action": "mark_followed",
+                      "lead_id": "LEAD_ID",
+                      "wa_id": "251912609997"
+                    }
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "tag": "column",
+            "width": "weighted",
+            "weight": 1,
+            "elements": [
+              {
+                "tag": "button",
+                "type": "default",
+                "text": {
+                  "tag": "plain_text",
+                  "content": "对WA发送消息链接"
+                },
+                "behaviors": [
+                  {
+                    "type": "open_url",
+                    "default_url": "https://wa.me/251912609997"
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "tag": "column",
+            "width": "weighted",
+            "weight": 1,
+            "elements": [
+              {
+                "tag": "button",
+                "type": "danger",
+                "text": {
+                  "tag": "plain_text",
+                  "content": "忽略跟进"
+                },
+                "confirm": {
+                  "title": {
+                    "tag": "plain_text",
+                    "content": "确认忽略？"
+                  },
+                  "text": {
+                    "tag": "plain_text",
+                    "content": "该线索将标记为忽略跟进"
+                  }
+                },
+                "behaviors": [
+                  {
+                    "type": "callback",
+                    "value": {
+                      "action": "ignore_followup",
+                      "lead_id": "LEAD_ID",
+                      "wa_id": "251912609997"
+                    }
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "tag": "markdown",
+        "content": "<at id=\"all\"></at>"
+      }
+    ]
+  }
+}
