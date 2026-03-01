@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import { config } from '../../../src/config.js';
 import { sendMessage, markAsRead } from '../../../src/whatsapp.service.js';
 import { transcribeWhatsAppAudio } from '../../../src/whisper.service.js';
-import { getSession } from '../../../lib/session.js';
+import { getOrCreateConversationContext } from '../../../lib/session.js';
 import { enqueueMessage } from '../../../lib/repositories/queue.repository.js';
 
 /**
@@ -77,6 +77,7 @@ export async function POST(request) {
       const waId = message.from;
       const messageId = message.id;
       const messageType = message.type;
+      const profileName = change.contacts?.[0]?.profile?.name?.trim() || null;
 
       console.log(`\n--- Incoming message from ${waId} (queuing) ---`);
 
@@ -109,13 +110,13 @@ export async function POST(request) {
       // Mark message as read
       await markAsRead(messageId);
 
-      // Get session to obtain conversation_id and contact_id
-      const session = await getSession(waId);
+      // Get the minimum context needed to queue the message and sync contact name
+      const context = await getOrCreateConversationContext({ waId, profileName });
 
       // Enqueue message for aggregated processing
       const queuedMsg = await enqueueMessage({
-        conversationId: session.conversation_id,
-        contactId: session.contact_id,
+        conversationId: context.conversation_id,
+        contactId: context.contact_id,
         waId: waId,
         content: userMessage,
         messageType: messageType,
@@ -125,7 +126,7 @@ export async function POST(request) {
       console.log(`Message queued: ${queuedMsg.id}, process_after: ${queuedMsg.process_after}`);
 
       // Schedule processing after aggregation window
-      scheduleProcessing(session.conversation_id);
+      scheduleProcessing(context.conversation_id);
 
     } catch (error) {
       console.error('Error handling webhook:', error);
