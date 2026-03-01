@@ -4,7 +4,7 @@ export const config = {
   // Claude API
   anthropic: {
     apiKey: process.env.ANTHROPIC_API_KEY,
-    model: process.env.CLAUDE_MODEL || 'claude-sonnet-4-5-20250929',
+    model: process.env.CLAUDE_MODEL || 'claude-sonnet-4-6',
   },
 
   // OpenAI Whisper

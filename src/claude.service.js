@@ -195,7 +195,7 @@ function generateJsonInstruction(schema) {
 
 const JSON_SCHEMA = {
   type: 'object',
-  required: ['conversation_intent', 'inquiry_quality', 'business_value', 'leads', 'route', 'next_message', 'handoff_summary'],
+  required: ['conversation_intent', 'conversation_intent_summary', 'inquiry_quality', 'business_value', 'leads', 'route', 'next_message', 'handoff_summary'],
   additionalProperties: false,
   properties: {
     conversation_intent: {
@@ -226,10 +226,11 @@ const JSON_SCHEMA = {
       items: {
         type: 'object',
         additionalProperties: false,
+        required: ['brand', 'car_model', 'destination_country', 'destination_port', 'loading_port', 'international_commercial_term', 'company_name', 'timeline', 'color_quantity', 'qty_bucket'],
         properties: {
           brand: {
             type: 'string',
-            description: 'Car brand (e.g., BYD, Toyota)',
+            description: 'Car brand (e.g., BYD, Toyota). Empty string if unknown.',
           },
           car_model: {
             type: 'string',
@@ -237,43 +238,44 @@ const JSON_SCHEMA = {
           },
           destination_country: {
             type: 'string',
-            description: 'Country name',
+            description: 'Country name. Empty string if unknown.',
           },
           destination_port: {
             type: 'string',
-            description: 'Port or city name',
+            description: 'Port or city name. Empty string if unknown.',
           },
           loading_port: {
             type: 'string',
-            description: 'Port of loading/origin',
+            description: 'Port of loading/origin. Empty string if unknown.',
           },
           international_commercial_term: {
             type: 'string',
-            description: 'Incoterms preference. Use comma-separated values from FOB,CIF,EXW,DDP when multiple terms are requested (e.g., FOB,CIF).',
+            description: 'Incoterms preference (FOB,CIF,EXW,DDP). Empty string if unknown.',
           },
           company_name: {
             type: 'string',
-            description: 'Company or business name',
+            description: 'Company or business name. Empty string if unknown.',
           },
           timeline: {
             type: 'string',
-            description: 'Purchase timeline',
+            description: 'Purchase timeline. Empty string if unknown.',
           },
           color_quantity: {
             type: 'array',
             items: {
               type: 'object',
               additionalProperties: false,
+              required: ['color', 'qty'],
               properties: {
                 color: { type: 'string', description: 'Color: "exterior" or "exterior|interior"' },
                 qty: { type: 'number', description: 'Quantity for this color' },
               },
             },
-            description: 'Array of color-quantity pairs',
+            description: 'Array of color-quantity pairs. Empty array if unknown.',
           },
           qty_bucket: {
             type: 'string',
-            description: 'Approximate total quantity. Can be a single number (e.g., "10") or a range (e.g., "10-15"). Calculate from color_quantity sum or explicit mention.',
+            description: 'Approximate total quantity (e.g., "10" or "10-15"). Empty string if unknown.',
           },
         },
       },
@@ -329,14 +331,17 @@ CURRENT CONTEXT:
 
   console.log(`Calling Claude API with ${messages.length} messages...`);
 
-  // Generate JSON instruction from schema
-  const jsonInstruction = generateJsonInstruction(JSON_SCHEMA);
-
-  const response = await anthropic.messages.create({
+const response = await anthropic.messages.create({
     model: config.anthropic.model,
-    max_tokens: 1024,
-    system: enhancedPrompt + jsonInstruction,
+    max_tokens: 4096,
+    system: enhancedPrompt,
     messages: messages,
+    output_config: {
+      format: {
+        type: 'json_schema',
+        schema: JSON_SCHEMA,
+      },
+    },
   });
 
   // Extract the JSON content
@@ -345,13 +350,20 @@ CURRENT CONTEXT:
     throw new Error('Unexpected response type from Claude');
   }
 
-  // Parse JSON, handling possible markdown code blocks
-  let jsonText = content.text.trim();
-  if (jsonText.startsWith('```json')) jsonText = jsonText.slice(7);
-  else if (jsonText.startsWith('```')) jsonText = jsonText.slice(3);
-  if (jsonText.endsWith('```')) jsonText = jsonText.slice(0, -3);
+  const parsed = JSON.parse(content.text);
 
-  const parsed = JSON.parse(jsonText.trim());
+  // Clean up empty strings from structured output (required fields output "" when unknown)
+  if (parsed.leads) {
+    parsed.leads = parsed.leads.map(lead => {
+      const cleaned = {};
+      for (const [key, value] of Object.entries(lead)) {
+        if (value === '') continue;
+        cleaned[key] = value;
+      }
+      return cleaned;
+    });
+  }
+
   console.log('✓ Claude response received');
   console.log('  Intent:', parsed.conversation_intent);
   console.log('  Quality:', parsed.inquiry_quality);
