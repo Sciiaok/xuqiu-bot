@@ -302,80 +302,64 @@ const JSON_SCHEMA = {
  * @returns {Promise<Object>} - Parsed JSON response
  */
 export async function getResponse(conversationHistory, userMessage, contextInfo = {}) {
-  try {
-    // Sanitize conversation history - Claude only accepts 'role' and 'content'
-    const sanitizedHistory = conversationHistory.map(msg => ({
-      role: msg.role,
-      content: msg.content,
-    }));
+  // Sanitize conversation history - Claude only accepts 'role' and 'content'
+  const sanitizedHistory = conversationHistory.map(msg => ({
+    role: msg.role,
+    content: msg.content,
+  }));
 
-    // Build messages array with conversation history + new user message
-    const messages = [
-      ...sanitizedHistory,
-      {
-        role: 'user',
-        content: userMessage,
-      },
-    ];
+  // Build messages array with conversation history + new user message
+  const messages = [
+    ...sanitizedHistory,
+    {
+      role: 'user',
+      content: userMessage,
+    },
+  ];
 
-    // Build enhanced system prompt with context
-    const missingFieldsText = contextInfo.missing_fields?.length > 0
-      ? `Missing fields to collect: ${contextInfo.missing_fields.join(', ')}`
-      : 'No specific fields required';
+  // Build enhanced system prompt with context
+  const missingFieldsText = contextInfo.missing_fields?.length > 0
+    ? `Missing fields to collect: ${contextInfo.missing_fields.join(', ')}`
+    : 'No specific fields required';
 
-    const enhancedPrompt = `${SYSTEM_PROMPT}
+  const enhancedPrompt = `${SYSTEM_PROMPT}
 
 CURRENT CONTEXT:
 - ${missingFieldsText}`;
 
-    console.log(`Calling Claude API with ${messages.length} messages...`);
+  console.log(`Calling Claude API with ${messages.length} messages...`);
 
-    // Generate JSON instruction from schema
-    const jsonInstruction = generateJsonInstruction(JSON_SCHEMA);
+  // Generate JSON instruction from schema
+  const jsonInstruction = generateJsonInstruction(JSON_SCHEMA);
 
-    const response = await anthropic.messages.create({
-      model: config.anthropic.model,
-      max_tokens: 1024,
-      system: enhancedPrompt + jsonInstruction,
-      messages: messages,
-    });
+  const response = await anthropic.messages.create({
+    model: config.anthropic.model,
+    max_tokens: 1024,
+    system: enhancedPrompt + jsonInstruction,
+    messages: messages,
+  });
 
-    // Extract the JSON content
-    const content = response.content[0];
-    if (content.type !== 'text') {
-      throw new Error('Unexpected response type from Claude');
-    }
-
-    // Parse JSON, handling possible markdown code blocks
-    let jsonText = content.text.trim();
-    if (jsonText.startsWith('```json')) jsonText = jsonText.slice(7);
-    else if (jsonText.startsWith('```')) jsonText = jsonText.slice(3);
-    if (jsonText.endsWith('```')) jsonText = jsonText.slice(0, -3);
-
-    const parsed = JSON.parse(jsonText.trim());
-    console.log('✓ Claude response received');
-    console.log('  Intent:', parsed.conversation_intent);
-    console.log('  Quality:', parsed.inquiry_quality);
-    console.log('  Value:', parsed.business_value);
-    console.log('  Route:', parsed.route);
-    console.log('  Leads count:', (parsed.leads || []).length);
-
-    return parsed;
-  } catch (error) {
-    console.error('Claude API error:', error);
-
-    // Return fallback response
-    return {
-      conversation_intent: 'other',
-      conversation_intent_summary: 'Error processing',
-      inquiry_quality: 'BAD',
-      business_value: 'LOW',
-      leads: [],
-      route: 'CONTINUE',
-      next_message: "I apologize, but I'm having technical difficulties. Could you please try again?",
-      handoff_summary: '',
-    };
+  // Extract the JSON content
+  const content = response.content[0];
+  if (content.type !== 'text') {
+    throw new Error('Unexpected response type from Claude');
   }
+
+  // Parse JSON, handling possible markdown code blocks
+  let jsonText = content.text.trim();
+  if (jsonText.startsWith('```json')) jsonText = jsonText.slice(7);
+  else if (jsonText.startsWith('```')) jsonText = jsonText.slice(3);
+  if (jsonText.endsWith('```')) jsonText = jsonText.slice(0, -3);
+
+  const parsed = JSON.parse(jsonText.trim());
+  console.log('✓ Claude response received');
+  console.log('  Intent:', parsed.conversation_intent);
+  console.log('  Quality:', parsed.inquiry_quality);
+  console.log('  Value:', parsed.business_value);
+  console.log('  Route:', parsed.route);
+  console.log('  Leads count:', (parsed.leads || []).length);
+
+  return parsed;
 }
 
 // Export schema for testing/debugging
