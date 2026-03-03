@@ -76,7 +76,8 @@ We look forward to serving you!`;
  */
 export async function routeLeadToSales(lead, handoffSummary) {
   const message = buildFeishuLeadMessage(lead, handoffSummary);
-  const routeUuid = `lead_${lead.id}_${Date.parse(lead.updated_at || '') || 'no_updated_at'}`;
+  // Feishu uuid max 50 chars; lead.id(36) + '_' + timestamp(13) = 50
+  const routeUuid = `${lead.id}_${Date.parse(lead.updated_at || '') || 0}`;
 
   sendFeishuMessage(message, true, process.env.FEISHU_CHAT_ID, routeUuid).catch(err =>
     console.error('Feishu notification failed:', err.message)

@@ -68,7 +68,7 @@ export async function sendFeishuMessage(markdownContent, atAll = false, chatId =
 
   const data = await response.json();
   if (data.code !== 0) {
-    throw new Error(`Feishu message error: ${data.msg}`);
+    throw new Error(`Feishu message error: ${data.msg} (code=${data.code}, uuid=${routeUuid})`);
   }
 
   return data;
