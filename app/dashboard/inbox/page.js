@@ -21,6 +21,8 @@ function InboxContent() {
   const [panelLoading, setPanelLoading] = useState(false);
   const [sending, setSending] = useState(false);
   const [realtimeStatus, setRealtimeStatus] = useState('connecting');
+  const [isHumanTakeover, setIsHumanTakeover] = useState(false);
+  const [takeoverLoading, setTakeoverLoading] = useState(false);
 
   const supabase = useMemo(() => createClient(), []);
   const conversationIdsCacheRef = useRef(new Map());
@@ -174,6 +176,8 @@ function InboxContent() {
     const requestId = ++selectionRequestRef.current;
 
     setSelectedContact(contact);
+    // FIX (Codex W7): Reset takeover state immediately on contact switch
+    setIsHumanTakeover(false);
     setRealtimeStatus('connecting');
     setPanelLoading(true);
     setMessages([]);
@@ -183,6 +187,18 @@ function InboxContent() {
     if (selectionRequestRef.current !== requestId) return;
 
     setSelectedConversationIds(conversationIds);
+
+    // Fetch takeover status of latest conversation
+    if (conversationIds.length > 0) {
+      const { data: conv } = await supabase
+        .from('conversations')
+        .select('is_human_takeover')
+        .eq('id', conversationIds[0])
+        .single();
+      if (selectionRequestRef.current === requestId) {
+        setIsHumanTakeover(conv?.is_human_takeover || false);
+      }
+    }
 
     const [nextMessages, nextLeads] = await Promise.all([
       fetchMessages(conversationIds),
@@ -287,6 +303,65 @@ function InboxContent() {
     }
   };
 
+  const handleStartTakeover = async () => {
+    if (!selectedConversationIds.length) return;
+    setTakeoverLoading(true);
+    try {
+      const activeConvId = selectedConversationIds[0];
+      const res = await fetch(`/api/conversations/${activeConvId}/takeover`, { method: 'POST' });
+      if (!res.ok) throw new Error('Failed to start takeover');
+      setIsHumanTakeover(true);
+    } catch (err) {
+      console.error('Takeover error:', err);
+      alert('Failed to start takeover: ' + err.message);
+    } finally {
+      setTakeoverLoading(false);
+    }
+  };
+
+  const handleEndTakeover = async () => {
+    if (!selectedConversationIds.length) return;
+    setTakeoverLoading(true);
+    try {
+      const activeConvId = selectedConversationIds[0];
+      const res = await fetch(`/api/conversations/${activeConvId}/takeover`, { method: 'DELETE' });
+      if (!res.ok) throw new Error('Failed to end takeover');
+      setIsHumanTakeover(false);
+    } catch (err) {
+      console.error('End takeover error:', err);
+      alert('Failed to end takeover: ' + err.message);
+    } finally {
+      setTakeoverLoading(false);
+    }
+  };
+
+  const handleSendMedia = async (file, caption) => {
+    if (sending || !selectedContact?.wa_id) return;
+
+    setSending(true);
+    try {
+      const formData = new FormData();
+      formData.append('waId', selectedContact.wa_id);
+      formData.append('file', file);
+      if (caption) formData.append('caption', caption);
+
+      const response = await fetch('/api/send-message', {
+        method: 'POST',
+        body: formData,
+      });
+
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data.message || 'Failed to send media');
+      }
+    } catch (err) {
+      console.error('Send media error:', err);
+      alert('Failed to send media: ' + err.message);
+    } finally {
+      setSending(false);
+    }
+  };
+
   if (loading) {
     return (
       <div className="h-full flex items-center justify-center">
@@ -323,6 +398,30 @@ function InboxContent() {
                 </div>
               </div>
               <div className="flex items-center gap-2 text-sm">
+                {isHumanTakeover ? (
+                  <button
+                    onClick={handleEndTakeover}
+                    disabled={takeoverLoading}
+                    className="px-3 py-1.5 rounded-lg text-xs font-medium bg-accent-amber/20 text-accent-amber border border-accent-amber/30 hover:bg-accent-amber/30 transition-colors disabled:opacity-50"
+                  >
+                    {takeoverLoading ? 'Releasing...' : 'Exit Takeover'}
+                  </button>
+                ) : (
+                  <button
+                    onClick={handleStartTakeover}
+                    disabled={takeoverLoading}
+                    className="px-3 py-1.5 rounded-lg text-xs font-medium bg-accent-blue/20 text-accent-blue border border-accent-blue/30 hover:bg-accent-blue/30 transition-colors disabled:opacity-50"
+                  >
+                    {takeoverLoading ? 'Taking over...' : 'Take Over'}
+                  </button>
+                )}
+
+                {isHumanTakeover && (
+                  <span className="px-2 py-1 rounded bg-accent-amber/10 text-accent-amber text-xs font-medium">
+                    Human Mode
+                  </span>
+                )}
+
                 <span className={`w-2 h-2 rounded-full ${realtimeStatus === 'SUBSCRIBED' ? 'bg-accent-green' : 'bg-accent-amber'}`} />
                 <span className="text-text-muted">
                   {realtimeStatus === 'SUBSCRIBED' ? 'Live' : 'Connecting...'}
@@ -340,7 +439,11 @@ function InboxContent() {
                 showConversationSeparators={selectedContact.conversationCount > 1}
               />
             )}
-            <ChatInput onSend={handleSendMessage} disabled={sending || panelLoading} />
+            <ChatInput
+              onSend={handleSendMessage}
+              onSendMedia={handleSendMedia}
+              disabled={sending || panelLoading}
+            />
           </>
         ) : (
           <div className="flex-1 flex items-center justify-center">
