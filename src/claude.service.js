@@ -303,7 +303,7 @@ const JSON_SCHEMA = {
  * @param {Object} contextInfo - Context information (missing_fields)
  * @returns {Promise<Object>} - Parsed JSON response
  */
-export async function getResponse(conversationHistory, userMessage, contextInfo = {}) {
+export async function getResponse(conversationHistory, userMessage, contextInfo = {}, agentConfig = null) {
   // Sanitize conversation history - Claude only accepts 'role' and 'content'
   const sanitizedHistory = conversationHistory.map(msg => ({
     role: msg.role,
@@ -319,12 +319,18 @@ export async function getResponse(conversationHistory, userMessage, contextInfo 
     },
   ];
 
+  // Use agent config if provided, otherwise fall back to hardcoded defaults
+  const systemPrompt = agentConfig?.system_prompt || SYSTEM_PROMPT;
+  const outputSchema = agentConfig?.output_schema && Object.keys(agentConfig.output_schema).length > 0
+    ? agentConfig.output_schema
+    : JSON_SCHEMA;
+
   // Build enhanced system prompt with context
   const missingFieldsText = contextInfo.missing_fields?.length > 0
     ? `Missing fields to collect: ${contextInfo.missing_fields.join(', ')}`
     : 'No specific fields required';
 
-  const enhancedPrompt = `${SYSTEM_PROMPT}
+  const enhancedPrompt = `${systemPrompt}
 
 CURRENT CONTEXT:
 - ${missingFieldsText}`;
@@ -339,7 +345,7 @@ const response = await anthropic.messages.create({
     output_config: {
       format: {
         type: 'json_schema',
-        schema: JSON_SCHEMA,
+        schema: outputSchema,
       },
     },
   });
@@ -375,4 +381,4 @@ const response = await anthropic.messages.create({
 }
 
 // Export schema for testing/debugging
-export { JSON_SCHEMA, generateJsonInstruction };
+export { SYSTEM_PROMPT, JSON_SCHEMA, generateJsonInstruction };
