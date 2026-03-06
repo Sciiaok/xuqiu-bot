@@ -30,6 +30,7 @@
     "react-dom": "^18"
   },
   "devDependencies": {
+    "@playwright/test": "^1.58.2",
     "@tailwindcss/postcss": "^4.0.14",
     "autoprefixer": "^10.4.21",
     "eslint": "^8",
