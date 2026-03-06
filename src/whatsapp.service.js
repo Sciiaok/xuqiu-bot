@@ -6,8 +6,9 @@ import { config } from './config.js';
  * @param {string} messageText - Message content to send
  * @returns {Promise<Object>} - WhatsApp API response
  */
-export async function sendMessage(waId, messageText) {
-  const url = `https://graph.facebook.com/${config.whatsapp.apiVersion}/${config.whatsapp.phoneNumberId}/messages`;
+export async function sendMessage(waId, messageText, phoneNumberId) {
+  const pnid = phoneNumberId || config.whatsapp.phoneNumberId;
+  const url = `https://graph.facebook.com/${config.whatsapp.apiVersion}/${pnid}/messages`;
 
   const payload = {
     messaging_product: 'whatsapp',
@@ -47,8 +48,9 @@ export async function sendMessage(waId, messageText) {
  * Mark a message as read
  * @param {string} messageId - WhatsApp message ID
  */
-export async function markAsRead(messageId) {
-  const url = `https://graph.facebook.com/${config.whatsapp.apiVersion}/${config.whatsapp.phoneNumberId}/messages`;
+export async function markAsRead(messageId, phoneNumberId) {
+  const pnid = phoneNumberId || config.whatsapp.phoneNumberId;
+  const url = `https://graph.facebook.com/${config.whatsapp.apiVersion}/${pnid}/messages`;
 
   const payload = {
     messaging_product: 'whatsapp',

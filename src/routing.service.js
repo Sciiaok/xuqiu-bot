@@ -45,7 +45,7 @@ function buildFeishuLeadMessage(lead, handoffSummary) {
 /**
  * Send FAQ resources to low-quality leads
  */
-export async function sendFAQResources(waId) {
+export async function sendFAQResources(waId, phoneNumberId) {
   const faqMessage = `Thank you for your interest in our vehicle export services!
 
 Here are some helpful resources:
@@ -60,7 +60,7 @@ For immediate assistance, please contact our sales team:
 We look forward to serving you!`;
 
   try {
-    await sendMessage(waId, faqMessage);
+    await sendMessage(waId, faqMessage, phoneNumberId);
     console.log(`📚 FAQ resources sent to ${waId}`);
     return { success: true };
   } catch (error) {
@@ -118,7 +118,7 @@ export async function executeLeadRouting(route, lead, handoffSummary) {
  * @param {string} waId - WhatsApp ID for FAQ delivery
  * @param {string} handoffSummary - Optional summary
  */
-export async function executeConversationRouting(route, conversationId, waId, handoffSummary) {
+export async function executeConversationRouting(route, conversationId, waId, handoffSummary, phoneNumberId) {
   if (route === 'CONTINUE') {
     return { success: true, action: 'continue_conversation' };
   }
@@ -140,7 +140,7 @@ export async function executeConversationRouting(route, conversationId, waId, ha
   }
 
   if (route === 'FAQ_END') {
-    await sendFAQResources(waId);
+    await sendFAQResources(waId, phoneNumberId);
   }
 
   return {
