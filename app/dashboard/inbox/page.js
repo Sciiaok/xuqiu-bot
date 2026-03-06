@@ -254,6 +254,7 @@ function InboxContent() {
               sent_at: payload.new.sent_at,
               sent_by: payload.new.sent_by,
               conversation_id: payload.new.conversation_id,
+              metadata: payload.new.metadata,
             }]);
           }
         )

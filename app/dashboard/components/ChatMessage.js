@@ -31,8 +31,8 @@ export default function ChatMessage({ role, content, timestamp, metadata }) {
           <img
             src={mediaUrl}
             alt={metadata?.filename || 'image'}
-            className="max-w-full rounded-lg"
-            style={{ maxHeight: '300px', objectFit: 'contain' }}
+            className="block rounded-lg"
+            style={{ maxWidth: '100%', maxHeight: '300px', width: 'auto', height: 'auto' }}
           />
           {mediaCaption && (
             <p className="text-text-primary text-sm mt-1 whitespace-pre-wrap break-words">{mediaCaption}</p>

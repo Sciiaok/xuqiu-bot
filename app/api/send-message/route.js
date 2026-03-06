@@ -79,7 +79,9 @@ export async function POST(request) {
 
       // Upload to Supabase Storage for display in chat
       try {
-        const storagePath = `${waId}/${Date.now()}_${filename}`;
+        const ext = filename.slice(filename.lastIndexOf('.')) || '';
+        const safeName = `${Date.now()}_${Math.random().toString(36).slice(2, 8)}${ext}`;
+        const storagePath = `${waId}/${safeName}`;
         const { data: uploadData, error: uploadError } = await supabase.storage
           .from('chat-media')
           .upload(storagePath, fileBuffer, { contentType: mimeType, upsert: false });
