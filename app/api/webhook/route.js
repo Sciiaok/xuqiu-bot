@@ -79,14 +79,15 @@ export async function POST(request) {
       const messageId = message.id;
       const messageType = message.type;
       const profileName = change.contacts?.[0]?.profile?.name?.trim() || null;
+      const phoneNumberId = change.metadata?.phone_number_id || null;
 
       console.log(`\n--- Incoming message from ${waId} (queuing) ---`);
 
       // Mark message as read (moved before context creation)
-      await markAsRead(messageId);
+      await markAsRead(messageId, phoneNumberId);
 
       // Get the minimum context needed
-      const context = await getOrCreateConversationContext({ waId, profileName });
+      const context = await getOrCreateConversationContext({ waId, profileName, phoneNumberId });
 
       // Check takeover status for auto-reply suppression
       const isTakeover = await isHumanTakeover(context.conversation_id);
@@ -103,21 +104,21 @@ export async function POST(request) {
           userMessage = await transcribeWhatsAppAudio(mediaId);
           if (!userMessage) {
             if (!isTakeover) {
-              await sendMessage(waId, "Sorry, I couldn't understand the voice message. Could you please type your message?");
+              await sendMessage(waId, "Sorry, I couldn't understand the voice message. Could you please type your message?", phoneNumberId);
             }
             return;
           }
         } catch (err) {
           console.error('Transcription error:', err);
           if (!isTakeover) {
-            await sendMessage(waId, "Sorry, I had trouble processing the voice message. Could you please type your message?");
+            await sendMessage(waId, "Sorry, I had trouble processing the voice message. Could you please type your message?", phoneNumberId);
           }
           return;
         }
       } else {
         console.log(`Unsupported message type: ${messageType}`);
         if (!isTakeover) {
-          await sendMessage(waId, "I can only process text and voice messages.");
+          await sendMessage(waId, "I can only process text and voice messages.", phoneNumberId);
         }
         return;
       }
