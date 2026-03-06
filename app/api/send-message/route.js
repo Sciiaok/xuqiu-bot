@@ -1,15 +1,10 @@
 import { NextResponse } from 'next/server';
-import { sendMessage } from '../../../src/whatsapp.service.js';
+import { sendMessage, sendMedia, validateMedia } from '../../../src/whatsapp.service.js';
 import { createClient } from '../../../lib/supabase-server.js';
 import { getSession, addOperatorMessage } from '../../../lib/session.js';
 
-/**
- * POST /api/send-message - Send a WhatsApp message to a customer
- * Protected endpoint - requires authenticated user
- */
 export async function POST(request) {
   try {
-    // Check authentication using server client
     const supabase = await createClient();
     const { data: { user } } = await supabase.auth.getUser();
 
@@ -20,41 +15,78 @@ export async function POST(request) {
       );
     }
 
-    const authSession = { user };
+    const contentType = request.headers.get('content-type') || '';
 
-    // Parse request body
-    const body = await request.json();
-    const { waId, message } = body;
+    let waId, message, mediaType, fileBuffer, mimeType, filename, caption;
 
-    // Validate required fields
-    if (!waId || typeof waId !== 'string') {
-      return NextResponse.json(
-        { error: 'Bad Request', message: 'waId is required and must be a string' },
-        { status: 400 }
-      );
+    if (contentType.includes('multipart/form-data')) {
+      // Media upload
+      const formData = await request.formData();
+      waId = formData.get('waId');
+      caption = formData.get('caption') || '';
+      const file = formData.get('file');
+
+      if (!waId || !file) {
+        return NextResponse.json(
+          { error: 'Bad Request', message: 'waId and file are required for media' },
+          { status: 400 }
+        );
+      }
+
+      mimeType = file.type;
+      filename = file.name;
+      fileBuffer = Buffer.from(await file.arrayBuffer());
+
+      // FIX (Codex C7): Server-side validation — type whitelist + size limit
+      const validation = validateMedia(mimeType, fileBuffer.length);
+      if (!validation.valid) {
+        return NextResponse.json(
+          { error: 'Bad Request', message: validation.error },
+          { status: 400 }
+        );
+      }
+      mediaType = validation.waType;
+    } else {
+      // Text message (existing behavior)
+      const body = await request.json();
+      waId = body.waId;
+      message = body.message;
+
+      if (!waId || typeof waId !== 'string') {
+        return NextResponse.json(
+          { error: 'Bad Request', message: 'waId is required and must be a string' },
+          { status: 400 }
+        );
+      }
+
+      if (!message || typeof message !== 'string') {
+        return NextResponse.json(
+          { error: 'Bad Request', message: 'message is required and must be a string' },
+          { status: 400 }
+        );
+      }
     }
 
-    if (!message || typeof message !== 'string') {
-      return NextResponse.json(
-        { error: 'Bad Request', message: 'message is required and must be a string' },
-        { status: 400 }
-      );
+    let whatsappResponse;
+    let messageContent;
+
+    if (mediaType) {
+      whatsappResponse = await sendMedia(waId, mediaType, fileBuffer, mimeType, filename, caption);
+      messageContent = caption
+        ? `[${mediaType}: ${filename}] ${caption}`
+        : `[${mediaType}: ${filename}]`;
+    } else {
+      whatsappResponse = await sendMessage(waId, message);
+      messageContent = message;
     }
 
-    // Get the current session for the customer
-    const session = await getSession(waId);
-
-    // Send the WhatsApp message
-    const whatsappResponse = await sendMessage(waId, message);
-
-    // Add the sent message to the conversation
     const updatedSession = await addOperatorMessage(
       waId,
-      message,
-      authSession.user.email || 'operator'
+      messageContent,
+      user.email || 'operator'
     );
 
-    console.log(`Operator message sent to ${waId} by ${authSession.user.email}`);
+    console.log(`Operator ${mediaType || 'text'} message sent to ${waId} by ${user.email}`);
 
     return NextResponse.json({
       success: true,
@@ -68,8 +100,7 @@ export async function POST(request) {
   } catch (error) {
     console.error('Error sending message:', error);
 
-    // Handle specific error types
-    if (error.message?.includes('WhatsApp API error')) {
+    if (error.message?.includes('WhatsApp')) {
       return NextResponse.json(
         { error: 'WhatsApp Error', message: error.message },
         { status: 502 }
