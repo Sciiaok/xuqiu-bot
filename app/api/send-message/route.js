@@ -69,12 +69,30 @@ export async function POST(request) {
 
     let whatsappResponse;
     let messageContent;
+    let extraMetadata = {};
 
     if (mediaType) {
       whatsappResponse = await sendMedia(waId, mediaType, fileBuffer, mimeType, filename, caption);
       messageContent = caption
         ? `[${mediaType}: ${filename}] ${caption}`
         : `[${mediaType}: ${filename}]`;
+
+      // Upload to Supabase Storage for display in chat
+      try {
+        const storagePath = `${waId}/${Date.now()}_${filename}`;
+        const { data: uploadData, error: uploadError } = await supabase.storage
+          .from('chat-media')
+          .upload(storagePath, fileBuffer, { contentType: mimeType, upsert: false });
+
+        if (!uploadError) {
+          const { data: { publicUrl } } = supabase.storage
+            .from('chat-media')
+            .getPublicUrl(storagePath);
+          extraMetadata = { media_url: publicUrl, media_type: mediaType, filename };
+        }
+      } catch (storageErr) {
+        console.warn('Storage upload failed, media will show as placeholder:', storageErr.message);
+      }
     } else {
       whatsappResponse = await sendMessage(waId, message);
       messageContent = message;
@@ -83,7 +101,8 @@ export async function POST(request) {
     const updatedSession = await addOperatorMessage(
       waId,
       messageContent,
-      user.email || 'operator'
+      user.email || 'operator',
+      extraMetadata
     );
 
     console.log(`Operator ${mediaType || 'text'} message sent to ${waId} by ${user.email}`);

@@ -71,6 +71,7 @@ export default function ChatLog({ messages = [], showConversationSeparators = fa
               role={message.role}
               content={message.content}
               timestamp={message.sent_at || message.timestamp}
+              metadata={message.metadata}
             />
           </div>
         );

@@ -120,7 +120,7 @@ function InboxContent() {
 
     const { data, error } = await supabase
       .from('messages')
-      .select('id, role, content, sent_at, sent_by, conversation_id')
+      .select('id, role, content, sent_at, sent_by, conversation_id, metadata')
       .in('conversation_id', conversationIds)
       .order('sent_at', { ascending: true });
 
@@ -336,7 +336,7 @@ function InboxContent() {
   };
 
   const handleSendMedia = async (file, caption) => {
-    if (sending || !selectedContact?.wa_id) return;
+    if (!selectedContact?.wa_id) return;
 
     setSending(true);
     try {
@@ -356,10 +356,10 @@ function InboxContent() {
       }
     } catch (err) {
       console.error('Send media error:', err);
-      alert('Failed to send media: ' + err.message);
-    } finally {
       setSending(false);
+      throw err;
     }
+    setSending(false);
   };
 
   if (loading) {
