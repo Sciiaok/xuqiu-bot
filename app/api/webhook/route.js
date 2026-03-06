@@ -4,6 +4,7 @@ import { sendMessage, markAsRead } from '../../../src/whatsapp.service.js';
 import { transcribeWhatsAppAudio } from '../../../src/whisper.service.js';
 import { getOrCreateConversationContext } from '../../../lib/session.js';
 import { enqueueMessage } from '../../../lib/repositories/queue.repository.js';
+import { isHumanTakeover } from '../../../lib/repositories/conversation.repository.js';
 
 /**
  * GET /api/webhook - Webhook verification endpoint
@@ -81,7 +82,16 @@ export async function POST(request) {
 
       console.log(`\n--- Incoming message from ${waId} (queuing) ---`);
 
-      // Handle text and audio (voice) messages
+      // Mark message as read (moved before context creation)
+      await markAsRead(messageId);
+
+      // Get the minimum context needed
+      const context = await getOrCreateConversationContext({ waId, profileName });
+
+      // Check takeover status for auto-reply suppression
+      const isTakeover = await isHumanTakeover(context.conversation_id);
+
+      // Handle message types
       let userMessage;
 
       if (messageType === 'text') {
@@ -92,26 +102,26 @@ export async function POST(request) {
         try {
           userMessage = await transcribeWhatsAppAudio(mediaId);
           if (!userMessage) {
-            await sendMessage(waId, "Sorry, I couldn't understand the voice message. Could you please type your message?");
+            if (!isTakeover) {
+              await sendMessage(waId, "Sorry, I couldn't understand the voice message. Could you please type your message?");
+            }
             return;
           }
         } catch (err) {
           console.error('Transcription error:', err);
-          await sendMessage(waId, "Sorry, I had trouble processing the voice message. Could you please type your message?");
+          if (!isTakeover) {
+            await sendMessage(waId, "Sorry, I had trouble processing the voice message. Could you please type your message?");
+          }
           return;
         }
       } else {
         console.log(`Unsupported message type: ${messageType}`);
-        await sendMessage(waId, "I can only process text and voice messages.");
+        if (!isTakeover) {
+          await sendMessage(waId, "I can only process text and voice messages.");
+        }
         return;
       }
       console.log(`User: ${userMessage}`);
-
-      // Mark message as read
-      await markAsRead(messageId);
-
-      // Get the minimum context needed to queue the message and sync contact name
-      const context = await getOrCreateConversationContext({ waId, profileName });
 
       // Enqueue message for aggregated processing
       const queuedMsg = await enqueueMessage({
