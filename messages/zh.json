@@ -198,7 +198,9 @@
     "messagesLabel": "消息数",
     "quickActions": "快捷操作",
     "openInbox": "打开收件箱",
-    "viewLeads": "查看线索"
+    "viewLeads": "查看线索",
+    "filterAll": "全部",
+    "filterHumanTakeover": "人工接管"
   },
   "agents": {
     "title": "智能体",

@@ -86,7 +86,7 @@ function ContactItem({ contact, isSelected, onClick, t, tt }) {
   );
 }
 
-export default function ContactList({ contacts, selectedId, onSelect, onLoadMore, hasMore, loadingMore }) {
+export default function ContactList({ contacts, selectedId, onSelect, onLoadMore, hasMore, loadingMore, activeTab, onTabChange }) {
   const [search, setSearch] = useState('');
   const sentinelRef = useRef(null);
   const t = useTranslations('contacts');
@@ -139,6 +139,26 @@ export default function ContactList({ contacts, selectedId, onSelect, onLoadMore
             placeholder={t('searchPlaceholder')}
             className="w-full bg-background border border-border text-text-primary text-sm rounded-lg pl-9 pr-3 py-1.5 focus:outline-none focus:ring-1 focus:ring-accent-blue focus:border-accent-blue transition-colors placeholder:text-text-muted"
           />
+        </div>
+
+        {/* Tab filter */}
+        <div className="flex gap-1.5 mt-2">
+          {[
+            { key: 'all', label: t('filterAll') },
+            { key: 'human', label: t('filterHumanTakeover') },
+          ].map((tab) => (
+            <button
+              key={tab.key}
+              onClick={() => onTabChange(tab.key)}
+              className={`px-3 py-1 text-xs font-medium rounded-lg transition-colors ${
+                activeTab === tab.key
+                  ? 'bg-accent-blue text-white'
+                  : 'bg-surface-hover text-text-secondary hover:text-text-primary'
+              }`}
+            >
+              {tab.label}
+            </button>
+          ))}
         </div>
       </div>
 

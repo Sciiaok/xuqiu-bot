@@ -198,7 +198,9 @@
     "messagesLabel": "Messages",
     "quickActions": "Quick Actions",
     "openInbox": "Open Inbox",
-    "viewLeads": "View Leads"
+    "viewLeads": "View Leads",
+    "filterAll": "All",
+    "filterHumanTakeover": "Human Takeover"
   },
   "agents": {
     "title": "Agents",

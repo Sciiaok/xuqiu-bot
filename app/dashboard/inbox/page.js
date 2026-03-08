@@ -30,6 +30,9 @@ function InboxContent() {
   const [isHumanTakeover, setIsHumanTakeover] = useState(false);
   const [takeoverLoading, setTakeoverLoading] = useState(false);
 
+  // Contacts tab filter
+  const [contactsTab, setContactsTab] = useState('all');
+
   // Pagination state — contacts
   const [contactsOffset, setContactsOffset] = useState(0);
   const [contactsHasMore, setContactsHasMore] = useState(false);
@@ -49,20 +52,22 @@ function InboxContent() {
   const conversationIdsCacheRef = useRef(new Map());
   const selectionRequestRef = useRef(0);
   const contactMapRef = useRef(new Map());
+  const initialLoadDoneRef = useRef(false);
 
   // Fetch contacts with conversation summary only (no per-contact full message load)
-  const fetchContacts = useCallback(async () => {
+  const fetchContacts = useCallback(async (tab = 'all') => {
     try {
-      setLoading(true);
+      if (!initialLoadDoneRef.current) setLoading(true);
       contactMapRef.current.clear();
       const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
 
-      const { data: conversationRows, error } = await supabase
+      let query = supabase
         .from('conversations')
         .select(`
           id,
           contact_id,
           last_message_at,
+          is_human_takeover,
           contact:contacts!inner (
             id,
             wa_id,
@@ -73,6 +78,12 @@ function InboxContent() {
         .gte('last_message_at', thirtyDaysAgo)
         .order('last_message_at', { ascending: false })
         .range(0, CONVERSATIONS_PAGE_SIZE - 1);
+
+      if (tab === 'human') {
+        query = query.eq('is_human_takeover', true);
+      }
+
+      const { data: conversationRows, error } = await query;
 
       if (error) throw error;
 
@@ -94,6 +105,7 @@ function InboxContent() {
             latestConversationId: row.id,
             lastMessageAt: row.last_message_at,
             lastMessage: null,
+            isHumanTakeover: row.is_human_takeover || false,
           });
         } else {
           const existing = contactMapRef.current.get(contact.id);
@@ -102,6 +114,7 @@ function InboxContent() {
           if (new Date(row.last_message_at) > new Date(existing.lastMessageAt)) {
             existing.lastMessageAt = row.last_message_at;
             existing.latestConversationId = row.id;
+            existing.isHumanTakeover = row.is_human_takeover || false;
           }
         }
       }
@@ -139,6 +152,7 @@ function InboxContent() {
       console.error('Error fetching contacts:', err);
     } finally {
       setLoading(false);
+      initialLoadDoneRef.current = true;
     }
   }, [supabase]);
 
@@ -150,12 +164,13 @@ function InboxContent() {
       const from = contactsOffset;
       const to = from + CONVERSATIONS_PAGE_SIZE - 1;
 
-      const { data: conversationRows, error } = await supabase
+      let query = supabase
         .from('conversations')
         .select(`
           id,
           contact_id,
           last_message_at,
+          is_human_takeover,
           contact:contacts!inner (
             id,
             wa_id,
@@ -166,6 +181,12 @@ function InboxContent() {
         .gte('last_message_at', thirtyDaysAgo)
         .order('last_message_at', { ascending: false })
         .range(from, to);
+
+      if (contactsTab === 'human') {
+        query = query.eq('is_human_takeover', true);
+      }
+
+      const { data: conversationRows, error } = await query;
 
       if (error) throw error;
 
@@ -192,6 +213,7 @@ function InboxContent() {
             latestConversationId: row.id,
             lastMessageAt: row.last_message_at,
             lastMessage: null,
+            isHumanTakeover: row.is_human_takeover || false,
           });
         } else {
           const existing = contactMapRef.current.get(contact.id);
@@ -199,6 +221,7 @@ function InboxContent() {
           if (new Date(row.last_message_at) > new Date(existing.lastMessageAt)) {
             existing.lastMessageAt = row.last_message_at;
             existing.latestConversationId = row.id;
+            existing.isHumanTakeover = row.is_human_takeover || false;
           }
         }
       }
@@ -241,7 +264,7 @@ function InboxContent() {
     } finally {
       setContactsLoadingMore(false);
     }
-  }, [supabase, contactsOffset, contactsHasMore, contactsLoadingMore]);
+  }, [supabase, contactsOffset, contactsHasMore, contactsLoadingMore, contactsTab]);
 
   const fetchMessages = useCallback(async (conversationIds) => {
     if (!conversationIds?.length) return { messages: [], hasMore: false };
@@ -426,8 +449,12 @@ function InboxContent() {
   }, [ensureConversationIds, fetchMessages, fetchLeads, supabase]);
 
   useEffect(() => {
-    fetchContacts();
-  }, [fetchContacts]);
+    fetchContacts(contactsTab);
+  }, [fetchContacts, contactsTab]);
+
+  const handleTabChange = useCallback((tab) => {
+    setContactsTab(tab);
+  }, []);
 
   // Auto-select contact: wa_id first, otherwise first contact in list
   useEffect(() => {
@@ -530,6 +557,13 @@ function InboxContent() {
       const res = await fetch(`/api/conversations/${activeConvId}/takeover`, { method: 'POST' });
       if (!res.ok) throw new Error('Failed to start takeover');
       setIsHumanTakeover(true);
+      // Sync contact list so tab filter reflects the change
+      if (selectedContact) {
+        const cid = selectedContact.id;
+        const entry = contactMapRef.current.get(cid);
+        if (entry) entry.isHumanTakeover = true;
+        setContacts(prev => prev.map(c => c.id === cid ? { ...c, isHumanTakeover: true } : c));
+      }
     } catch (err) {
       console.error('Takeover error:', err);
       alert(t('failedToTakeOver', { error: err.message }));
@@ -546,6 +580,13 @@ function InboxContent() {
       const res = await fetch(`/api/conversations/${activeConvId}/takeover`, { method: 'DELETE' });
       if (!res.ok) throw new Error('Failed to end takeover');
       setIsHumanTakeover(false);
+      // Sync contact list so tab filter reflects the change
+      if (selectedContact) {
+        const cid = selectedContact.id;
+        const entry = contactMapRef.current.get(cid);
+        if (entry) entry.isHumanTakeover = false;
+        setContacts(prev => prev.map(c => c.id === cid ? { ...c, isHumanTakeover: false } : c));
+      }
     } catch (err) {
       console.error('End takeover error:', err);
       alert(t('failedToEndTakeover', { error: err.message }));
@@ -612,6 +653,8 @@ function InboxContent() {
           onLoadMore={loadMoreContacts}
           hasMore={contactsHasMore}
           loadingMore={contactsLoadingMore}
+          activeTab={contactsTab}
+          onTabChange={handleTabChange}
         />
       </div>
 
