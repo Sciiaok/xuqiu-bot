@@ -49,11 +49,21 @@ export async function GET(request) {
     const { data: leads, error: leadsError } = await leadsQuery;
     if (leadsError) throw leadsError;
 
-    // 3. HUMAN_NOW leads (current, not time-filtered)
+    // 3. HUMAN_NOW leads (filtered by humanNowDays param, default today)
+    const humanNowDays = parseInt(searchParams.get('humanNowDays') || '1');
+    const humanNowFrom = new Date();
+    humanNowFrom.setDate(humanNowFrom.getDate() - humanNowDays);
+    // For "today" (1 day), use start of today
+    if (humanNowDays === 1) {
+      humanNowFrom.setHours(0, 0, 0, 0);
+    }
+
     let humanNowQuery = supabase
       .from('leads')
       .select('id, conversation_id, contact_id, destination_country, car_model, qty_bucket, handoff_summary, company_name, created_at, updated_at, inquiry_quality, business_value')
-      .eq('route', 'HUMAN_NOW');
+      .eq('route', 'HUMAN_NOW')
+      .gte('created_at', humanNowFrom.toISOString())
+      .limit(10000);
 
     if (country) {
       humanNowQuery = humanNowQuery.eq('destination_country', country);

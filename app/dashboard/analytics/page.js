@@ -41,6 +41,7 @@ function useAnalytics() {
       if (params.country) qs.set('country', params.country);
       if (params.startDate) qs.set('startDate', params.startDate);
       if (params.endDate) qs.set('endDate', params.endDate);
+      if (params.humanNowDays) qs.set('humanNowDays', params.humanNowDays);
       const res = await fetch(`/api/analytics?${qs}`);
       if (!res.ok) throw new Error('Failed to fetch analytics');
       const json = await res.json();
@@ -153,14 +154,15 @@ export default function AnalyticsPage() {
   const [country, setCountry] = useState('');
   const [customRange, setCustomRange] = useState({ start: '', end: '' });
   const [isCustom, setIsCustom] = useState(false);
+  const [humanNowDays, setHumanNowDays] = useState(1);
 
   useEffect(() => {
     if (isCustom && customRange.start && customRange.end) {
-      fetchData({ startDate: customRange.start, endDate: customRange.end, country });
+      fetchData({ startDate: customRange.start, endDate: customRange.end, country, humanNowDays });
     } else if (!isCustom) {
-      fetchData({ days, country });
+      fetchData({ days, country, humanNowDays });
     }
-  }, [days, country, isCustom, customRange.start, customRange.end, fetchData]);
+  }, [days, country, isCustom, customRange.start, customRange.end, humanNowDays, fetchData]);
 
   const handleDays = (d) => {
     setIsCustom(false);
@@ -408,9 +410,27 @@ export default function AnalyticsPage() {
       </div>
 
       {/* HUMAN_NOW Leads Table */}
-      {humanNowList?.length > 0 && (
-        <ChartCard title={`HUMAN_NOW Leads (${humanNowList.length})`} className="overflow-hidden">
-          <div className="overflow-x-auto -mx-5 -mb-5">
+      <div className="card p-5 overflow-hidden">
+        <div className="flex items-center justify-between mb-4">
+          <h3 className="text-sm font-semibold text-text-secondary">HUMAN_NOW Leads ({humanNowList?.length || 0})</h3>
+          <div className="flex items-center gap-1">
+            {[{ label: 'Today', value: 1 }, { label: '7D', value: 7 }, { label: '30D', value: 30 }].map(opt => (
+              <button
+                key={opt.value}
+                onClick={() => setHumanNowDays(opt.value)}
+                className={`px-2.5 py-1 rounded-md text-xs font-medium transition-colors ${
+                  humanNowDays === opt.value
+                    ? 'bg-accent-blue text-white'
+                    : 'bg-surface-hover text-text-secondary hover:text-text-primary'
+                }`}
+              >
+                {opt.label}
+              </button>
+            ))}
+          </div>
+        </div>
+        {humanNowList?.length > 0 ? (
+          <div className="overflow-x-auto -mx-5 -mb-5 mt-[-4px]">
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b border-border bg-background-secondary">
@@ -459,8 +479,10 @@ export default function AnalyticsPage() {
               </tbody>
             </table>
           </div>
-        </ChartCard>
-      )}
+        ) : (
+          <p className="text-text-muted text-sm text-center py-6">No HUMAN_NOW leads in this period</p>
+        )}
+      </div>
     </div>
   );
 }
