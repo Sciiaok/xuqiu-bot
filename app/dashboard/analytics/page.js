@@ -295,6 +295,81 @@ export default function AnalyticsPage() {
         />
       </div>
 
+      {/* HUMAN_NOW Leads Table */}
+      <div className="card p-5 overflow-hidden">
+        <div className="flex items-center justify-between mb-4">
+          <h3 className="text-sm font-semibold text-text-secondary">HUMAN_NOW Leads ({humanNowList?.length || 0})</h3>
+          <div className="flex items-center gap-1">
+            {[{ label: 'Today', value: 1 }, { label: '7D', value: 7 }, { label: '30D', value: 30 }].map(opt => (
+              <button
+                key={opt.value}
+                onClick={() => setHumanNowDays(opt.value)}
+                className={`px-2.5 py-1 rounded-md text-xs font-medium transition-colors ${
+                  humanNowDays === opt.value
+                    ? 'bg-accent-blue text-white'
+                    : 'bg-surface-hover text-text-secondary hover:text-text-primary'
+                }`}
+              >
+                {opt.label}
+              </button>
+            ))}
+          </div>
+        </div>
+        {humanNowList?.length > 0 ? (
+          <div className="overflow-x-auto -mx-5 -mb-5 mt-[-4px]">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b border-border bg-background-secondary">
+                  <th className="text-left px-5 py-2.5 text-xs font-medium text-text-tertiary uppercase tracking-wider">Contact</th>
+                  <th className="text-left px-3 py-2.5 text-xs font-medium text-text-tertiary uppercase tracking-wider">Company</th>
+                  <th className="text-left px-3 py-2.5 text-xs font-medium text-text-tertiary uppercase tracking-wider">Country</th>
+                  <th className="text-left px-3 py-2.5 text-xs font-medium text-text-tertiary uppercase tracking-wider">Model</th>
+                  <th className="text-left px-3 py-2.5 text-xs font-medium text-text-tertiary uppercase tracking-wider">Qty</th>
+                  <th className="text-left px-3 py-2.5 text-xs font-medium text-text-tertiary uppercase tracking-wider">Quality</th>
+                  <th className="text-left px-3 py-2.5 text-xs font-medium text-text-tertiary uppercase tracking-wider">Value</th>
+                  <th className="text-left px-3 py-2.5 text-xs font-medium text-text-tertiary uppercase tracking-wider">Summary</th>
+                  <th className="text-left px-5 py-2.5 text-xs font-medium text-text-tertiary uppercase tracking-wider">Updated</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-border">
+                {humanNowList.map(lead => (
+                  <tr
+                    key={lead.id}
+                    onClick={() => router.push(`/dashboard/inbox?conversation=${lead.conversationId}`)}
+                    className="hover:bg-surface-hover cursor-pointer transition-colors"
+                  >
+                    <td className="px-5 py-3 text-text-primary font-medium whitespace-nowrap">{lead.contactName}</td>
+                    <td className="px-3 py-3 text-text-secondary whitespace-nowrap">{lead.companyName}</td>
+                    <td className="px-3 py-3 text-text-secondary whitespace-nowrap">{lead.country}</td>
+                    <td className="px-3 py-3 text-text-secondary whitespace-nowrap">{lead.carModel}</td>
+                    <td className="px-3 py-3 text-text-secondary whitespace-nowrap">{lead.qty}</td>
+                    <td className="px-3 py-3 whitespace-nowrap">
+                      <span className={`badge ${
+                        lead.inquiryQuality === 'PROOF' ? 'badge-green' :
+                        lead.inquiryQuality === 'QUALIFY' ? 'badge-blue' :
+                        lead.inquiryQuality === 'GOOD' ? 'badge-amber' : 'badge-red'
+                      }`}>{lead.inquiryQuality}</span>
+                    </td>
+                    <td className="px-3 py-3 whitespace-nowrap">
+                      <span className={`badge ${
+                        lead.businessValue === 'HIGH' ? 'badge-green' :
+                        lead.businessValue === 'MEDIUM' ? 'badge-amber' : 'badge-purple'
+                      }`}>{lead.businessValue}</span>
+                    </td>
+                    <td className="px-3 py-3 text-text-secondary max-w-xs truncate">{lead.handoffSummary}</td>
+                    <td className="px-5 py-3 text-text-muted whitespace-nowrap text-xs">
+                      {new Date(lead.updatedAt).toLocaleDateString()}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        ) : (
+          <p className="text-text-muted text-sm text-center py-6">No HUMAN_NOW leads in this period</p>
+        )}
+      </div>
+
       {/* Row 1: Conversations + Qualify Rate */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
         <ChartCard title="Daily Conversations">
@@ -409,80 +484,6 @@ export default function AnalyticsPage() {
         </ChartCard>
       </div>
 
-      {/* HUMAN_NOW Leads Table */}
-      <div className="card p-5 overflow-hidden">
-        <div className="flex items-center justify-between mb-4">
-          <h3 className="text-sm font-semibold text-text-secondary">HUMAN_NOW Leads ({humanNowList?.length || 0})</h3>
-          <div className="flex items-center gap-1">
-            {[{ label: 'Today', value: 1 }, { label: '7D', value: 7 }, { label: '30D', value: 30 }].map(opt => (
-              <button
-                key={opt.value}
-                onClick={() => setHumanNowDays(opt.value)}
-                className={`px-2.5 py-1 rounded-md text-xs font-medium transition-colors ${
-                  humanNowDays === opt.value
-                    ? 'bg-accent-blue text-white'
-                    : 'bg-surface-hover text-text-secondary hover:text-text-primary'
-                }`}
-              >
-                {opt.label}
-              </button>
-            ))}
-          </div>
-        </div>
-        {humanNowList?.length > 0 ? (
-          <div className="overflow-x-auto -mx-5 -mb-5 mt-[-4px]">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="border-b border-border bg-background-secondary">
-                  <th className="text-left px-5 py-2.5 text-xs font-medium text-text-tertiary uppercase tracking-wider">Contact</th>
-                  <th className="text-left px-3 py-2.5 text-xs font-medium text-text-tertiary uppercase tracking-wider">Company</th>
-                  <th className="text-left px-3 py-2.5 text-xs font-medium text-text-tertiary uppercase tracking-wider">Country</th>
-                  <th className="text-left px-3 py-2.5 text-xs font-medium text-text-tertiary uppercase tracking-wider">Model</th>
-                  <th className="text-left px-3 py-2.5 text-xs font-medium text-text-tertiary uppercase tracking-wider">Qty</th>
-                  <th className="text-left px-3 py-2.5 text-xs font-medium text-text-tertiary uppercase tracking-wider">Quality</th>
-                  <th className="text-left px-3 py-2.5 text-xs font-medium text-text-tertiary uppercase tracking-wider">Value</th>
-                  <th className="text-left px-3 py-2.5 text-xs font-medium text-text-tertiary uppercase tracking-wider">Summary</th>
-                  <th className="text-left px-5 py-2.5 text-xs font-medium text-text-tertiary uppercase tracking-wider">Updated</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-border">
-                {humanNowList.map(lead => (
-                  <tr
-                    key={lead.id}
-                    onClick={() => router.push(`/dashboard/inbox?conversation=${lead.conversationId}`)}
-                    className="hover:bg-surface-hover cursor-pointer transition-colors"
-                  >
-                    <td className="px-5 py-3 text-text-primary font-medium whitespace-nowrap">{lead.contactName}</td>
-                    <td className="px-3 py-3 text-text-secondary whitespace-nowrap">{lead.companyName}</td>
-                    <td className="px-3 py-3 text-text-secondary whitespace-nowrap">{lead.country}</td>
-                    <td className="px-3 py-3 text-text-secondary whitespace-nowrap">{lead.carModel}</td>
-                    <td className="px-3 py-3 text-text-secondary whitespace-nowrap">{lead.qty}</td>
-                    <td className="px-3 py-3 whitespace-nowrap">
-                      <span className={`badge ${
-                        lead.inquiryQuality === 'PROOF' ? 'badge-green' :
-                        lead.inquiryQuality === 'QUALIFY' ? 'badge-blue' :
-                        lead.inquiryQuality === 'GOOD' ? 'badge-amber' : 'badge-red'
-                      }`}>{lead.inquiryQuality}</span>
-                    </td>
-                    <td className="px-3 py-3 whitespace-nowrap">
-                      <span className={`badge ${
-                        lead.businessValue === 'HIGH' ? 'badge-green' :
-                        lead.businessValue === 'MEDIUM' ? 'badge-amber' : 'badge-purple'
-                      }`}>{lead.businessValue}</span>
-                    </td>
-                    <td className="px-3 py-3 text-text-secondary max-w-xs truncate">{lead.handoffSummary}</td>
-                    <td className="px-5 py-3 text-text-muted whitespace-nowrap text-xs">
-                      {new Date(lead.updatedAt).toLocaleDateString()}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        ) : (
-          <p className="text-text-muted text-sm text-center py-6">No HUMAN_NOW leads in this period</p>
-        )}
-      </div>
     </div>
   );
 }
