@@ -19,6 +19,10 @@ export async function GET(request) {
   }
 
   try {
+    if (process.env.TAKEOVER_AUTO_EXPIRE === 'off') {
+      return NextResponse.json({ released: 0, skipped: 'TAKEOVER_AUTO_EXPIRE=off' });
+    }
+
     const expiredIds = await findExpiredTakeovers();
 
     if (expiredIds.length === 0) {
