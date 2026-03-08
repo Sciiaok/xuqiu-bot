@@ -27,7 +27,8 @@ export async function GET(request) {
       .from('conversations')
       .select('id, created_at, is_human_takeover, human_takeover_at')
       .gte('created_at', fromISO)
-      .lte('created_at', toISO);
+      .lte('created_at', toISO)
+      .limit(10000);
 
     // If country filter, join through leads
     const { data: conversations, error: convError } = await convQuery;
@@ -38,7 +39,8 @@ export async function GET(request) {
       .from('leads')
       .select('id, inquiry_quality, business_value, conversation_intent, route, buyer_type, destination_country, car_model, qty_bucket, approved, approved_at, conversation_id, contact_id, created_at, updated_at, handoff_summary, company_name, score')
       .gte('created_at', fromISO)
-      .lte('created_at', toISO);
+      .lte('created_at', toISO)
+      .limit(10000);
 
     if (country) {
       leadsQuery = leadsQuery.eq('destination_country', country);
@@ -64,10 +66,11 @@ export async function GET(request) {
     const contactIds = [...new Set(humanNowLeads.map(l => l.contact_id).filter(Boolean))];
     let contactMap = {};
     if (contactIds.length > 0) {
-      const { data: contacts } = await supabase
+      const { data: contacts, error: contactsError } = await supabase
         .from('contacts')
         .select('id, name, wa_id')
         .in('id', contactIds);
+      if (contactsError) throw contactsError;
       if (contacts) {
         contacts.forEach(c => { contactMap[c.id] = c; });
       }
@@ -80,7 +83,8 @@ export async function GET(request) {
       .gte('sent_at', fromISO)
       .lte('sent_at', toISO)
       .in('role', ['user', 'assistant'])
-      .order('sent_at', { ascending: true });
+      .order('sent_at', { ascending: true })
+      .limit(10000);
     if (msgError) throw msgError;
 
     // --- Aggregation ---
@@ -300,8 +304,15 @@ export async function GET(request) {
       humanNowCount: humanNowList.length,
     };
 
-    // Available countries for filter
-    const countries = [...new Set(leads.map(l => l.destination_country).filter(Boolean))].sort();
+    // Available countries for filter (always unfiltered so dropdown doesn't collapse)
+    const { data: allLeadsCountries } = await supabase
+      .from('leads')
+      .select('destination_country')
+      .gte('created_at', fromISO)
+      .lte('created_at', toISO)
+      .not('destination_country', 'is', null)
+      .limit(10000);
+    const countries = [...new Set((allLeadsCountries || []).map(l => l.destination_country))].sort();
 
     return NextResponse.json({
       kpi,

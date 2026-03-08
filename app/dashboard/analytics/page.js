@@ -189,7 +189,13 @@ export default function AnalyticsPage() {
         <div className="card border-accent-red/30 bg-accent-red/5 p-8 text-center">
           <p className="text-accent-red font-medium">Failed to load analytics</p>
           <p className="text-text-secondary text-sm mt-1">{error}</p>
-          <button onClick={() => fetchData({ days, country })} className="btn btn-primary mt-4 text-sm">Retry</button>
+          <button onClick={() => {
+            if (isCustom && customRange.start && customRange.end) {
+              fetchData({ startDate: customRange.start, endDate: customRange.end, country });
+            } else {
+              fetchData({ days, country });
+            }
+          }} className="btn btn-primary mt-4 text-sm">Retry</button>
         </div>
       </div>
     );
