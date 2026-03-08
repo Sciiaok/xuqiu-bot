@@ -212,3 +212,8 @@ body {
 .theme-transition {
   transition: background-color 0.2s ease, border-color 0.2s ease, color 0.2s ease;
 }
+
+/* Dark mode panel shadows need more opacity */
+:root.dark [style*="shadow"] {
+  --tw-shadow-color: rgba(0, 0, 0, 0.2);
+}

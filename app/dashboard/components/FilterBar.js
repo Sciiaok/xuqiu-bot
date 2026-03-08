@@ -1,6 +1,7 @@
 'use client';
 
 import { useState } from 'react';
+import { useTranslations } from 'next-intl';
 
 export default function FilterBar({
   leads = [],
@@ -13,6 +14,7 @@ export default function FilterBar({
   const [businessValue, setBusinessValue] = useState(initialBusinessValue);
   const [customer, setCustomer] = useState('');
   const [model, setModel] = useState('all');
+  const t = useTranslations('filters');
 
   const handleInquiryQualityChange = (e) => {
     const newValue = e.target.value;
@@ -49,7 +51,7 @@ export default function FilterBar({
   return (
     <div className="card p-4">
       <div className="flex flex-wrap items-center gap-4">
-        <span className="text-sm font-medium text-text-secondary">Filters:</span>
+        <span className="text-sm font-medium text-text-secondary">{t('label')}</span>
 
         {/* Inquiry Quality Filter */}
         <div className="relative">
@@ -58,7 +60,7 @@ export default function FilterBar({
             onChange={handleInquiryQualityChange}
             className="appearance-none bg-surface border border-border text-text-primary text-sm rounded-lg px-3 py-1.5 pr-8 focus:outline-none focus:ring-1 focus:ring-accent-blue focus:border-accent-blue transition-colors"
           >
-            <option value="all">All Quality</option>
+            <option value="all">{t('allQuality')}</option>
             <option value="PROOF">PROOF</option>
             <option value="QUALIFY">QUALIFY</option>
             <option value="GOOD">GOOD</option>
@@ -78,7 +80,7 @@ export default function FilterBar({
             onChange={handleBusinessValueChange}
             className="appearance-none bg-surface border border-border text-text-primary text-sm rounded-lg px-3 py-1.5 pr-8 focus:outline-none focus:ring-1 focus:ring-accent-blue focus:border-accent-blue transition-colors"
           >
-            <option value="all">All Values</option>
+            <option value="all">{t('allValues')}</option>
             <option value="HIGH">HIGH</option>
             <option value="AVERAGE">AVERAGE</option>
             <option value="LOW">LOW</option>
@@ -95,7 +97,7 @@ export default function FilterBar({
           type="text"
           value={customer}
           onChange={handleCustomerChange}
-          placeholder="Customer..."
+          placeholder={t('customerPlaceholder')}
           className="bg-surface border border-border text-text-primary text-sm rounded-lg px-3 py-1.5 w-40 focus:outline-none focus:ring-1 focus:ring-accent-blue focus:border-accent-blue transition-colors placeholder:text-text-muted"
         />
 
@@ -106,7 +108,7 @@ export default function FilterBar({
             onChange={handleModelChange}
             className="appearance-none bg-surface border border-border text-text-primary text-sm rounded-lg px-3 py-1.5 pr-8 focus:outline-none focus:ring-1 focus:ring-accent-blue focus:border-accent-blue transition-colors"
           >
-            <option value="all">All Models</option>
+            <option value="all">{t('allModels')}</option>
             {carModels.map((m) => (
               <option key={m} value={m}>{m}</option>
             ))}
@@ -121,7 +123,7 @@ export default function FilterBar({
         <div className="flex-1" />
 
         <span className="text-sm text-text-secondary">
-          <span className="font-semibold text-text-primary">{filteredCount}</span> lead{filteredCount !== 1 ? 's' : ''}
+          <span className="font-semibold text-text-primary">{filteredCount}</span> {filteredCount !== 1 ? t('leadsLabel') : t('leadLabel')}
         </span>
       </div>
     </div>

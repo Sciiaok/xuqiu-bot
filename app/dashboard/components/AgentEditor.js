@@ -1,6 +1,7 @@
 'use client';
 
 import { useState } from 'react';
+import { useTranslations } from 'next-intl';
 
 export default function AgentEditor({ agent, onSave, onCancel }) {
   const [name, setName] = useState(agent?.name || '');
@@ -12,12 +13,13 @@ export default function AgentEditor({ agent, onSave, onCancel }) {
   const [waPhoneNumberId, setWaPhoneNumberId] = useState(agent?.wa_phone_number_id || '');
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState(null);
+  const t = useTranslations('agents');
 
   const handleSave = async () => {
     setError(null);
 
     if (!name.trim() || !productLine.trim() || !systemPrompt.trim()) {
-      setError('Name, product line, and system prompt are required');
+      setError(t('validationError'));
       return;
     }
 
@@ -25,7 +27,7 @@ export default function AgentEditor({ agent, onSave, onCancel }) {
     try {
       parsedSchema = JSON.parse(outputSchema);
     } catch {
-      setError('Output schema must be valid JSON');
+      setError(t('jsonError'));
       return;
     }
 
@@ -49,13 +51,13 @@ export default function AgentEditor({ agent, onSave, onCancel }) {
     <div className="bg-surface rounded-xl border border-border p-6 space-y-4">
       <div className="flex items-center justify-between">
         <h3 className="text-lg font-semibold text-text-primary">
-          {agent ? 'Edit Agent' : 'New Agent'}
+          {agent ? t('editAgent') : t('newAgentTitle')}
         </h3>
         <button
           onClick={onCancel}
           className="text-text-muted hover:text-text-primary transition-colors"
         >
-          Cancel
+          {t('cancel')}
         </button>
       </div>
 
@@ -67,22 +69,22 @@ export default function AgentEditor({ agent, onSave, onCancel }) {
 
       <div className="grid grid-cols-2 gap-4">
         <div>
-          <label className="block text-sm font-medium text-text-secondary mb-1">Name</label>
+          <label className="block text-sm font-medium text-text-secondary mb-1">{t('name')}</label>
           <input
             type="text"
             value={name}
             onChange={(e) => setName(e.target.value)}
-            placeholder="Vehicle Export Agent"
+            placeholder={t('namePlaceholder')}
             className="input w-full"
           />
         </div>
         <div>
-          <label className="block text-sm font-medium text-text-secondary mb-1">Product Line</label>
+          <label className="block text-sm font-medium text-text-secondary mb-1">{t('productLine')}</label>
           <input
             type="text"
             value={productLine}
             onChange={(e) => setProductLine(e.target.value)}
-            placeholder="auto"
+            placeholder={t('productLinePlaceholder')}
             className="input w-full"
             disabled={!!agent}
           />
@@ -91,33 +93,33 @@ export default function AgentEditor({ agent, onSave, onCancel }) {
 
       <div>
         <label className="block text-sm font-medium text-text-secondary mb-1">
-          WhatsApp Phone Number ID
+          {t('waPhoneNumberId')}
         </label>
         <input
           type="text"
           value={waPhoneNumberId}
           onChange={(e) => setWaPhoneNumberId(e.target.value)}
-          placeholder="Optional - maps this agent to a specific WA number"
+          placeholder={t('waPhoneNumberIdPlaceholder')}
           className="input w-full"
         />
       </div>
 
       <div>
         <label className="block text-sm font-medium text-text-secondary mb-1">
-          System Prompt
+          {t('systemPrompt')}
         </label>
         <textarea
           value={systemPrompt}
           onChange={(e) => setSystemPrompt(e.target.value)}
           rows={12}
           className="input w-full font-mono text-sm"
-          placeholder="Enter the system prompt for this agent..."
+          placeholder={t('systemPromptPlaceholder')}
         />
       </div>
 
       <div>
         <label className="block text-sm font-medium text-text-secondary mb-1">
-          Output Schema (JSON)
+          {t('outputSchema')}
         </label>
         <textarea
           value={outputSchema}
@@ -133,14 +135,14 @@ export default function AgentEditor({ agent, onSave, onCancel }) {
           onClick={onCancel}
           className="btn bg-background-secondary text-text-secondary hover:bg-surface-hover"
         >
-          Cancel
+          {t('cancel')}
         </button>
         <button
           onClick={handleSave}
           disabled={saving}
           className="btn btn-primary disabled:opacity-50"
         >
-          {saving ? 'Saving...' : agent ? 'Update Agent' : 'Create Agent'}
+          {saving ? t('saving') : agent ? t('updateAgent') : t('createAgent')}
         </button>
       </div>
     </div>

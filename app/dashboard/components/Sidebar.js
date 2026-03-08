@@ -5,14 +5,8 @@ import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import { createClient } from '@/lib/supabase-browser';
 import { useTheme } from '../../components/ThemeProvider';
-
-const navItems = [
-  { href: '/dashboard/analytics', label: 'Analytics', icon: 'analytics' },
-  { href: '/dashboard/leads', label: 'Leads', icon: 'chart' },
-  { href: '/dashboard/inbox', label: 'Inbox', icon: 'chat' },
-  { href: '/dashboard/contacts', label: 'Contacts', icon: 'user' },
-  { href: '/dashboard/agents', label: 'Agents', icon: 'agent' },
-];
+import { useTranslations } from 'next-intl';
+import LocaleSwitcher from '../../components/LocaleSwitcher';
 
 const icons = {
   analytics: (
@@ -48,6 +42,15 @@ export default function Sidebar() {
   const supabase = createClient();
   const { theme, toggleTheme } = useTheme();
   const [collapsed, setCollapsed] = useState(false);
+  const t = useTranslations('nav');
+
+  const navItems = [
+    { href: '/dashboard/analytics', label: t('analytics'), icon: 'analytics' },
+    { href: '/dashboard/leads', label: t('leads'), icon: 'chart' },
+    { href: '/dashboard/inbox', label: t('inbox'), icon: 'chat' },
+    { href: '/dashboard/contacts', label: t('contacts'), icon: 'user' },
+    { href: '/dashboard/agents', label: t('agents'), icon: 'agent' },
+  ];
 
   // Auto-collapse on inbox; restore localStorage preference on other pages
   useEffect(() => {
@@ -72,7 +75,7 @@ export default function Sidebar() {
     router.push('/login');
   };
 
-  const themeLabel = theme === 'light' ? 'Dark mode' : 'Light mode';
+  const themeLabel = theme === 'light' ? t('darkMode') : t('lightMode');
 
   return (
     <aside
@@ -85,7 +88,7 @@ export default function Sidebar() {
           <button
             onClick={toggleCollapsed}
             className="w-8 h-8 rounded-lg bg-accent-blue flex items-center justify-center mx-auto hover:opacity-90 transition-opacity"
-            title="Expand sidebar"
+            title={t('expandSidebar')}
           >
             <svg className="w-4 h-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
@@ -104,7 +107,7 @@ export default function Sidebar() {
             <button
               onClick={toggleCollapsed}
               className="p-1.5 rounded-md text-text-muted hover:text-text-primary hover:bg-surface-hover transition-colors"
-              title="Collapse sidebar"
+              title={t('collapseSidebar')}
             >
               <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 19l-7-7 7-7m8 14l-7-7 7-7" />
@@ -142,6 +145,9 @@ export default function Sidebar() {
 
       {/* Bottom section */}
       <div className={`border-t border-border ${collapsed ? 'p-2' : 'p-3'} space-y-1 shrink-0`}>
+        {/* Language Switcher */}
+        <LocaleSwitcher collapsed={collapsed} />
+
         {/* Theme Toggle */}
         <button
           onClick={toggleTheme}
@@ -165,7 +171,7 @@ export default function Sidebar() {
         {/* Sign out */}
         <button
           onClick={handleSignOut}
-          title={collapsed ? 'Sign out' : undefined}
+          title={collapsed ? t('signOut') : undefined}
           className={`w-full flex items-center rounded-lg text-text-secondary hover:text-text-primary hover:bg-surface-hover transition-colors ${
             collapsed ? 'justify-center p-2.5' : 'gap-3 px-3 py-2.5'
           }`}
@@ -173,7 +179,7 @@ export default function Sidebar() {
           <svg className="w-5 h-5 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
           </svg>
-          {!collapsed && <span className="font-medium whitespace-nowrap">Sign out</span>}
+          {!collapsed && <span className="font-medium whitespace-nowrap">{t('signOut')}</span>}
         </button>
       </div>
     </aside>

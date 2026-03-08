@@ -3,6 +3,7 @@
 import { useState, useEffect, useMemo, useCallback, useRef, Suspense } from 'react';
 import { useSearchParams } from 'next/navigation';
 import { createClient } from '@/lib/supabase-browser';
+import { useTranslations } from 'next-intl';
 import ContactList from '../components/ContactList';
 import ChatLog from '../components/ChatLog';
 import ChatInput from '../components/ChatInput';
@@ -15,6 +16,7 @@ const LEADS_PAGE_SIZE = 20;
 function InboxContent() {
   const searchParams = useSearchParams();
   const initialWaId = searchParams.get('wa_id');
+  const t = useTranslations('inbox');
 
   const [contacts, setContacts] = useState([]);
   const [selectedContact, setSelectedContact] = useState(null);
@@ -514,7 +516,7 @@ function InboxContent() {
       }
     } catch (err) {
       console.error('Send message error:', err);
-      alert('Failed to send message: ' + err.message);
+      alert(t('failedToSendMessage', { error: err.message }));
     } finally {
       setSending(false);
     }
@@ -530,7 +532,7 @@ function InboxContent() {
       setIsHumanTakeover(true);
     } catch (err) {
       console.error('Takeover error:', err);
-      alert('Failed to start takeover: ' + err.message);
+      alert(t('failedToTakeOver', { error: err.message }));
     } finally {
       setTakeoverLoading(false);
     }
@@ -546,7 +548,7 @@ function InboxContent() {
       setIsHumanTakeover(false);
     } catch (err) {
       console.error('End takeover error:', err);
-      alert('Failed to end takeover: ' + err.message);
+      alert(t('failedToEndTakeover', { error: err.message }));
     } finally {
       setTakeoverLoading(false);
     }
@@ -579,6 +581,8 @@ function InboxContent() {
     setSending(false);
   };
 
+  const [leadsExpanded, setLeadsExpanded] = useState(true);
+
   if (loading) {
     return (
       <div className="h-full flex items-center justify-center">
@@ -587,9 +591,20 @@ function InboxContent() {
     );
   }
 
+  const displayName = selectedContact
+    ? (selectedContact.name || selectedContact.company_name || selectedContact.wa_id)
+    : '';
+  const displaySubtitle = selectedContact
+    ? [
+        selectedContact.name ? selectedContact.company_name : null,
+        selectedContact.wa_id,
+        selectedContact.conversationCount > 1 ? t('conversations', { count: selectedContact.conversationCount }) : null,
+      ].filter(Boolean).join(' · ')
+    : '';
+
   return (
     <div className="h-[calc(100vh-0px)] flex">
-      <div className="w-1/4 min-w-[250px]">
+      <div className="w-[300px] shrink-0 shadow-[2px_0_8px_rgba(0,0,0,0.06)]">
         <ContactList
           contacts={contacts}
           selectedId={selectedContact?.id}
@@ -600,54 +615,63 @@ function InboxContent() {
         />
       </div>
 
-      <div className="flex-1 flex flex-col bg-background-secondary">
+      <div className="flex-1 flex flex-col bg-background-secondary min-w-0">
         {selectedContact ? (
           <>
-            <div className="bg-surface border-b border-border px-4 py-3 flex items-center justify-between">
-              <div>
-                <div className="font-semibold text-text-primary">
-                  {selectedContact.wa_id}
-                </div>
-                <div className="text-sm text-text-secondary">
-                  {selectedContact.name && selectedContact.company_name
-                    ? `${selectedContact.name} · ${selectedContact.company_name}`
-                    : selectedContact.name || selectedContact.company_name || '(Unknown)'}
-                  {selectedContact.conversationCount > 1 && (
-                    <span className="text-text-muted ml-2">
-                      · {selectedContact.conversationCount} conversations
-                    </span>
-                  )}
+            {/* Chat Header */}
+            <div className="bg-surface border-b border-border px-5 py-3 flex items-center justify-between shadow-[0_1px_3px_rgba(0,0,0,0.04)]">
+              <div className="flex items-center gap-3 min-w-0">
+                <div>
+                  <div className="font-semibold text-text-primary text-base leading-tight">
+                    {displayName}
+                  </div>
+                  <div className="text-xs text-text-muted mt-0.5 truncate">
+                    {displaySubtitle}
+                  </div>
                 </div>
               </div>
-              <div className="flex items-center gap-2 text-sm">
+              <div className="flex items-center gap-2 shrink-0">
                 {isHumanTakeover ? (
                   <button
                     onClick={handleEndTakeover}
                     disabled={takeoverLoading}
-                    className="px-3 py-1.5 rounded-lg text-xs font-medium bg-accent-amber/20 text-accent-amber border border-accent-amber/30 hover:bg-accent-amber/30 transition-colors disabled:opacity-50"
+                    className="px-3 py-1.5 rounded-lg text-xs font-medium bg-accent-amber/15 text-accent-amber border border-accent-amber/25 hover:bg-accent-amber/25 transition-colors disabled:opacity-50"
                   >
-                    {takeoverLoading ? 'Releasing...' : 'Exit Takeover'}
+                    {takeoverLoading ? t('releasing') : t('exitTakeover')}
                   </button>
                 ) : (
                   <button
                     onClick={handleStartTakeover}
                     disabled={takeoverLoading}
-                    className="px-3 py-1.5 rounded-lg text-xs font-medium bg-accent-blue/20 text-accent-blue border border-accent-blue/30 hover:bg-accent-blue/30 transition-colors disabled:opacity-50"
+                    className="px-3 py-1.5 rounded-lg text-xs font-medium bg-accent-blue/15 text-accent-blue border border-accent-blue/25 hover:bg-accent-blue/25 transition-colors disabled:opacity-50"
                   >
-                    {takeoverLoading ? 'Taking over...' : 'Take Over'}
+                    {takeoverLoading ? t('takingOver') : t('takeOver')}
                   </button>
                 )}
 
                 {isHumanTakeover && (
-                  <span className="px-2 py-1 rounded bg-accent-amber/10 text-accent-amber text-xs font-medium">
-                    Human Mode
+                  <span className="px-2 py-1 rounded-md bg-accent-amber/10 text-accent-amber text-xs font-medium">
+                    {t('humanMode')}
                   </span>
                 )}
 
-                <span className={`w-2 h-2 rounded-full ${realtimeStatus === 'SUBSCRIBED' ? 'bg-accent-green' : 'bg-accent-amber'}`} />
-                <span className="text-text-muted">
-                  {realtimeStatus === 'SUBSCRIBED' ? 'Live' : 'Connecting...'}
-                </span>
+                <div className="flex items-center gap-1.5 ml-1 pl-2 border-l border-border">
+                  <span className={`w-2 h-2 rounded-full ${realtimeStatus === 'SUBSCRIBED' ? 'bg-accent-green animate-pulse' : 'bg-accent-amber'}`} />
+                  <span className="text-xs text-text-muted">
+                    {realtimeStatus === 'SUBSCRIBED' ? t('live') : t('connecting')}
+                  </span>
+                </div>
+
+                {/* Leads panel toggle */}
+                <button
+                  onClick={() => setLeadsExpanded(!leadsExpanded)}
+                  className="p-1.5 rounded-lg text-text-muted hover:text-text-primary hover:bg-surface-hover transition-colors ml-1"
+                  title={leadsExpanded ? t('hideLeadsPanel') : t('showLeadsPanel')}
+                >
+                  <svg className={`w-4 h-4 transition-transform ${leadsExpanded ? '' : 'rotate-180'}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 5l7 7-7 7M5 5l7 7-7 7" />
+                  </svg>
+                </button>
               </div>
             </div>
 
@@ -671,20 +695,26 @@ function InboxContent() {
             />
           </>
         ) : (
-          <div className="flex-1 flex items-center justify-center">
-            <p className="text-text-muted">Select a contact to start chatting</p>
+          <div className="flex-1 flex flex-col items-center justify-center gap-3">
+            <svg className="w-12 h-12 text-text-muted/50" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
+            </svg>
+            <p className="text-text-muted text-sm">{t('selectContact')}</p>
           </div>
         )}
       </div>
 
-      <div className="w-1/4 min-w-[250px]">
-        <LeadsList
-          leads={leads}
-          onLoadMore={loadMoreLeads}
-          hasMore={leadsHasMore}
-          loadingMore={leadsLoadingMore}
-        />
-      </div>
+      {/* Collapsible leads panel */}
+      {leadsExpanded && (
+        <div className="w-[280px] shrink-0 shadow-[-2px_0_8px_rgba(0,0,0,0.06)]">
+          <LeadsList
+            leads={leads}
+            onLoadMore={loadMoreLeads}
+            hasMore={leadsHasMore}
+            loadingMore={leadsLoadingMore}
+          />
+        </div>
+      )}
     </div>
   );
 }

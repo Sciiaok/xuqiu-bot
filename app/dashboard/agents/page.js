@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect, useCallback } from 'react';
+import { useTranslations } from 'next-intl';
 import AgentEditor from '../components/AgentEditor';
 
 export default function AgentsPage() {
@@ -8,6 +9,7 @@ export default function AgentsPage() {
   const [loading, setLoading] = useState(true);
   const [editing, setEditing] = useState(null); // null | 'new' | agent object
   const [error, setError] = useState(null);
+  const t = useTranslations('agents');
 
   const fetchAgents = useCallback(async () => {
     try {
@@ -47,7 +49,7 @@ export default function AgentsPage() {
   };
 
   const handleDeactivate = async (agentId) => {
-    if (!confirm('Are you sure you want to deactivate this agent?')) return;
+    if (!confirm(t('confirmDeactivate'))) return;
 
     try {
       const res = await fetch(`/api/agents/${agentId}`, { method: 'DELETE' });
@@ -72,13 +74,13 @@ export default function AgentsPage() {
   return (
     <div className="p-6 max-w-4xl mx-auto space-y-6">
       <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-bold text-text-primary">Agents</h1>
+        <h1 className="text-2xl font-bold text-text-primary">{t('title')}</h1>
         {!editing && (
           <button
             onClick={() => setEditing('new')}
             className="btn btn-primary"
           >
-            + New Agent
+            {t('newAgent')}
           </button>
         )}
       </div>
@@ -111,17 +113,17 @@ export default function AgentsPage() {
                     ? 'bg-accent-green/10 text-accent-green'
                     : 'bg-text-muted/10 text-text-muted'
                 }`}>
-                  {agent.is_active ? 'Active' : 'Inactive'}
+                  {agent.is_active ? t('active') : t('inactive')}
                 </span>
               </div>
               <div className="text-sm text-text-secondary mt-1">
-                Product: {agent.product_line}
+                {t('product', { line: agent.product_line })}
                 {agent.wa_phone_number_id && (
-                  <span className="ml-3">WA: {agent.wa_phone_number_id}</span>
+                  <span className="ml-3">{t('wa', { id: agent.wa_phone_number_id })}</span>
                 )}
               </div>
               <div className="text-xs text-text-muted mt-1">
-                Prompt: {agent.system_prompt?.substring(0, 100)}...
+                {t('prompt', { text: agent.system_prompt?.substring(0, 100) + '...' })}
               </div>
             </div>
             <div className="flex gap-2 ml-4">
@@ -129,14 +131,14 @@ export default function AgentsPage() {
                 onClick={() => setEditing(agent)}
                 className="px-3 py-1.5 rounded-lg text-xs font-medium bg-accent-blue/10 text-accent-blue hover:bg-accent-blue/20 transition-colors"
               >
-                Edit
+                {t('edit')}
               </button>
               {agent.is_active && (
                 <button
                   onClick={() => handleDeactivate(agent.id)}
                   className="px-3 py-1.5 rounded-lg text-xs font-medium bg-accent-red/10 text-accent-red hover:bg-accent-red/20 transition-colors"
                 >
-                  Deactivate
+                  {t('deactivate')}
                 </button>
               )}
             </div>
@@ -145,7 +147,7 @@ export default function AgentsPage() {
 
         {agents.length === 0 && (
           <div className="text-center py-12 text-text-muted">
-            No agents configured. Create one to get started.
+            {t('noAgents')}
           </div>
         )}
       </div>

@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useRef } from 'react';
+import { useTranslations } from 'next-intl';
 
 const ALLOWED_TYPES = [
   'image/jpeg', 'image/png', 'image/webp',
@@ -30,11 +31,12 @@ export default function ChatInput({ onSend, onSendMedia, disabled = false }) {
   const [dragging, setDragging] = useState(false);
   const [isSendingFiles, setIsSendingFiles] = useState(false);
   const fileInputRef = useRef(null);
+  const t = useTranslations('inbox');
 
   const addFiles = (files) => {
     const valid = Array.from(files).filter((f) => {
       if (!ALLOWED_TYPES.includes(f.type)) {
-        alert(`Unsupported file type: ${f.name}`);
+        alert(t('unsupportedFileType', { name: f.name }));
         return false;
       }
       return true;
@@ -152,13 +154,13 @@ export default function ChatInput({ onSend, onSendMedia, disabled = false }) {
       onDragOver={handleDragOver}
       onDragLeave={handleDragLeave}
       onDrop={handleDrop}
-      className={`border-t border-border bg-surface p-4 transition-colors ${
+      className={`border-t border-border bg-surface px-5 py-3 transition-colors shadow-[0_-1px_3px_rgba(0,0,0,0.04)] ${
         dragging ? 'bg-accent-blue/10 border-accent-blue' : ''
       }`}
     >
       {dragging && (
         <div className="mb-2 text-center text-sm text-accent-blue pointer-events-none">
-          Drop files here
+          {t('dropFilesHere')}
         </div>
       )}
 
@@ -185,7 +187,7 @@ export default function ChatInput({ onSend, onSendMedia, disabled = false }) {
                 type="text"
                 value={caption}
                 onChange={(e) => updateCaption(index, e.target.value)}
-                placeholder="Caption..."
+                placeholder={t('captionPlaceholder')}
                 disabled={status === 'sending' || status === 'done'}
                 className="input text-sm py-1 w-28 disabled:opacity-50"
               />
@@ -197,7 +199,7 @@ export default function ChatInput({ onSend, onSendMedia, disabled = false }) {
                 <span className="shrink-0 text-green-500 text-sm">✓</span>
               )}
               {status === 'error' && (
-                <span className="shrink-0 text-red-500 text-sm" title="Failed">✕</span>
+                <span className="shrink-0 text-red-500 text-sm" title={t('failed')}>✕</span>
               )}
               {(status === 'pending' || status === 'error') && (
                 <button
@@ -205,7 +207,7 @@ export default function ChatInput({ onSend, onSendMedia, disabled = false }) {
                   onClick={() => removeFile(index)}
                   className="shrink-0 text-text-muted hover:text-text-primary text-sm"
                 >
-                  Remove
+                  {t('remove')}
                 </button>
               )}
             </div>
@@ -227,7 +229,7 @@ export default function ChatInput({ onSend, onSendMedia, disabled = false }) {
           onClick={() => fileInputRef.current?.click()}
           disabled={isSubmitting}
           className="p-2 rounded-lg text-text-muted hover:text-text-primary hover:bg-background-secondary transition-colors disabled:opacity-50"
-          title="Attach file"
+          title={t('attachFile')}
         >
           <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
             <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48" />
@@ -239,7 +241,7 @@ export default function ChatInput({ onSend, onSendMedia, disabled = false }) {
           onChange={(e) => setMessage(e.target.value)}
           onKeyDown={handleKeyDown}
           onPaste={handlePaste}
-          placeholder={hasFiles ? 'Press Send to send files...' : 'Type a message...'}
+          placeholder={hasFiles ? t('pressSendFiles') : t('typeMessage')}
           disabled={isSubmitting}
           className="input disabled:bg-background-tertiary disabled:cursor-not-allowed"
         />
@@ -251,17 +253,17 @@ export default function ChatInput({ onSend, onSendMedia, disabled = false }) {
           {isSendingFiles ? (
             <div className="flex items-center gap-2">
               <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white" />
-              <span>Sending</span>
+              <span>{t('sending')}</span>
             </div>
           ) : disabled ? (
             <div className="flex items-center gap-2">
               <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white" />
-              <span>Sending</span>
+              <span>{t('sending')}</span>
             </div>
           ) : hasFiles ? (
-            `Send${fileQueue.length > 1 ? ` (${fileQueue.length})` : ''}`
+            `${t('send')}${fileQueue.length > 1 ? ` (${fileQueue.length})` : ''}`
           ) : (
-            'Send'
+            t('send')
           )}
         </button>
       </div>

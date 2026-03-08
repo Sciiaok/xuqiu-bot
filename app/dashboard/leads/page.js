@@ -3,6 +3,7 @@
 
 import { useState, useEffect } from 'react';
 import { createClient } from '@/lib/supabase-browser';
+import { useTranslations } from 'next-intl';
 import LeadCard from '../components/LeadCard';
 import FilterBar from '../components/FilterBar';
 import EditModal from '../components/EditModal';
@@ -29,6 +30,7 @@ export default function LeadsPage() {
   const [actionLoading, setActionLoading] = useState(null);
 
   const supabase = createClient();
+  const t = useTranslations('leads');
 
   useEffect(() => {
     fetchLeads();
@@ -167,7 +169,7 @@ export default function LeadsPage() {
       if (result.success) {
         fetchLeads();
       } else {
-        alert(result.error || 'Failed to approve');
+        alert(result.error || t('failedToApprove'));
       }
     } catch (err) {
       alert(err.message);
@@ -181,7 +183,7 @@ export default function LeadsPage() {
       setActionLoading('approveAll');
       const ids = filteredLeads.filter(l => !l.approved).map(l => l.id);
       if (ids.length === 0) {
-        alert('No leads to approve');
+        alert(t('noLeadsToApprove'));
         return;
       }
       const response = await fetch('/api/leads/approve', {
@@ -194,7 +196,7 @@ export default function LeadsPage() {
         alert(result.message);
         fetchLeads();
       } else {
-        alert(result.error || 'Failed to approve');
+        alert(result.error || t('failedToApprove'));
       }
     } catch (err) {
       alert(err.message);
@@ -216,7 +218,7 @@ export default function LeadsPage() {
         alert(result.message);
         fetchSyncStatuses();
       } else {
-        alert(result.error || 'Failed to sync');
+        alert(result.error || t('failedToSync'));
       }
     } catch (err) {
       alert(err.message);
@@ -230,7 +232,7 @@ export default function LeadsPage() {
       setActionLoading('syncFiltered');
       const ids = filteredLeads.map(l => l.id);
       if (ids.length === 0) {
-        alert('No leads to sync');
+        alert(t('noLeadsToSync'));
         return;
       }
       const response = await fetch('/api/leads/sync', {
@@ -243,7 +245,7 @@ export default function LeadsPage() {
         alert(result.message);
         fetchSyncStatuses();
       } else {
-        alert(result.error || 'Failed to sync');
+        alert(result.error || t('failedToSync'));
       }
     } catch (err) {
       alert(err.message);
@@ -271,7 +273,7 @@ export default function LeadsPage() {
         <div className="card p-8">
           <div className="flex items-center justify-center">
             <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-accent-blue"></div>
-            <span className="ml-3 text-text-secondary">Loading leads...</span>
+            <span className="ml-3 text-text-secondary">{t('loadingLeads')}</span>
           </div>
         </div>
       </div>
@@ -286,10 +288,10 @@ export default function LeadsPage() {
             <svg className="w-6 h-6 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
             </svg>
-            <span>Error: {error}</span>
+            <span>{error}</span>
           </div>
           <div className="mt-4 text-center">
-            <button onClick={fetchLeads} className="btn btn-primary">Try Again</button>
+            <button onClick={fetchLeads} className="btn btn-primary">{t('title')}</button>
           </div>
         </div>
       </div>
@@ -299,7 +301,7 @@ export default function LeadsPage() {
   return (
     <div className="p-6 space-y-4">
       <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-semibold text-text-primary">Leads</h1>
+        <h1 className="text-2xl font-semibold text-text-primary">{t('title')}</h1>
       </div>
 
       <FilterBar
@@ -318,7 +320,7 @@ export default function LeadsPage() {
             disabled={actionLoading === 'approveAll'}
             className="btn btn-secondary text-sm disabled:opacity-50"
           >
-            {actionLoading === 'approveAll' ? 'Approving...' : 'Approve All Filtered'}
+            {actionLoading === 'approveAll' ? t('approving') : t('approveAllFiltered')}
           </button>
 
           <button
@@ -326,7 +328,7 @@ export default function LeadsPage() {
             disabled={actionLoading === 'sync24h'}
             className="btn btn-secondary text-sm disabled:opacity-50"
           >
-            {actionLoading === 'sync24h' ? 'Syncing...' : 'Sync 24h Approved'}
+            {actionLoading === 'sync24h' ? t('syncing') : t('sync24hApproved')}
           </button>
 
           <button
@@ -334,19 +336,19 @@ export default function LeadsPage() {
             disabled={actionLoading === 'syncFiltered'}
             className="btn btn-secondary text-sm disabled:opacity-50"
           >
-            {actionLoading === 'syncFiltered' ? 'Syncing...' : 'Sync Filtered'}
+            {actionLoading === 'syncFiltered' ? t('syncing') : t('syncFiltered')}
           </button>
 
           <div className="flex-1" />
 
           <span className="text-sm text-text-secondary">
-            <span className="font-semibold text-text-primary">{filteredLeads.length}</span> leads
+            <span className="font-semibold text-text-primary">{filteredLeads.length}</span> {filteredLeads.length !== 1 ? t('leadsLabel') : t('leadLabel')}
             <span className="mx-1">·</span>
             <span className="text-accent-green">{proofCount} PROOF</span>
             <span className="mx-1">·</span>
-            <span className="text-accent-green">{approvedCount} approved</span>
+            <span className="text-accent-green">{approvedCount} {t('approved')}</span>
             <span className="mx-1">·</span>
-            <span className="text-accent-blue">{syncedCount} synced</span>
+            <span className="text-accent-blue">{syncedCount} {t('synced')}</span>
           </span>
         </div>
       </div>
@@ -357,8 +359,8 @@ export default function LeadsPage() {
             <svg className="w-12 h-12 mx-auto mb-4 text-text-muted" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M20 13V6a2 2 0 00-2-2H6a2 2 0 00-2 2v7m16 0v5a2 2 0 01-2 2H6a2 2 0 01-2-2v-5m16 0h-2.586a1 1 0 00-.707.293l-2.414 2.414a1 1 0 01-.707.293h-3.172a1 1 0 01-.707-.293l-2.414-2.414A1 1 0 006.586 13H4" />
             </svg>
-            <p className="text-lg font-medium text-text-primary">No leads yet</p>
-            <p className="mt-1">Leads will appear here when customers start conversations.</p>
+            <p className="text-lg font-medium text-text-primary">{t('noLeadsYet')}</p>
+            <p className="mt-1">{t('noLeadsDescription')}</p>
           </div>
         </div>
       ) : (
@@ -375,12 +377,12 @@ export default function LeadsPage() {
             ))
           ) : (
             <div className="p-8 text-center text-text-secondary">
-              <p>No leads match the current filters.</p>
+              <p>{t('noMatchingLeads')}</p>
               <button
                 onClick={() => setFilters({ inquiryQuality: 'all', businessValue: 'all', customer: '', model: 'all' })}
                 className="mt-2 text-accent-blue hover:text-accent-blue/80 underline"
               >
-                Clear filters
+                {t('clearFilters')}
               </button>
             </div>
           )}

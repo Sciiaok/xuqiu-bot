@@ -1,14 +1,15 @@
 'use client';
 
 import { useEffect, useRef } from 'react';
+import { useTranslations, useLocale } from 'next-intl';
 import ChatMessage from './ChatMessage';
 
 /**
  * Format date for conversation separator
  */
-function formatSeparatorDate(timestamp) {
+function formatSeparatorDate(timestamp, locale) {
   const date = new Date(timestamp);
-  return date.toLocaleDateString('en-US', {
+  return date.toLocaleDateString(locale === 'zh' ? 'zh-CN' : 'en-US', {
     month: 'short',
     day: 'numeric',
     hour: '2-digit',
@@ -26,6 +27,8 @@ export default function ChatLog({ messages = [], showConversationSeparators = fa
   const sentinelRef = useRef(null);
   const prevFirstIdRef = useRef(null);
   const scrollSnapshotRef = useRef({ scrollHeight: 0, scrollTop: 0 });
+  const t = useTranslations('inbox');
+  const locale = useLocale();
 
   // IntersectionObserver for top sentinel (load older messages)
   useEffect(() => {
@@ -81,8 +84,11 @@ export default function ChatLog({ messages = [], showConversationSeparators = fa
 
   if (messages.length === 0) {
     return (
-      <div className="flex-1 flex items-center justify-center bg-background-secondary">
-        <p className="text-text-muted text-sm">No messages yet</p>
+      <div className="flex-1 flex flex-col items-center justify-center bg-background-secondary gap-2">
+        <svg className="w-10 h-10 text-text-muted/40" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
+        </svg>
+        <p className="text-text-muted text-sm">{t('noMessages')}</p>
       </div>
     );
   }
@@ -119,7 +125,7 @@ export default function ChatLog({ messages = [], showConversationSeparators = fa
               <div className="flex items-center my-4">
                 <div className="flex-1 border-t border-border"></div>
                 <span className="px-3 text-xs text-text-muted">
-                  {formatSeparatorDate(message.sent_at)} — New conversation
+                  {formatSeparatorDate(message.sent_at, locale)} — {t('newConversation')}
                 </span>
                 <div className="flex-1 border-t border-border"></div>
               </div>

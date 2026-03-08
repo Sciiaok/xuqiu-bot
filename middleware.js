@@ -1,19 +1,32 @@
 import { createServerClient } from '@supabase/ssr';
 import { NextResponse } from 'next/server';
+import { defaultLocale, locales } from './i18n/config';
 
 export async function middleware(request) {
   if (process.env.PLAYWRIGHT_TEST === '1') {
     return NextResponse.next();
   }
 
-  // Only protect /dashboard routes
-  if (!request.nextUrl.pathname.startsWith('/dashboard')) {
-    return NextResponse.next();
+  // --- Locale detection & cookie ---
+  let response = NextResponse.next({ request });
+  const localeCookie = request.cookies.get('NEXT_LOCALE')?.value;
+
+  if (!localeCookie || !locales.includes(localeCookie)) {
+    // Try Accept-Language header
+    const acceptLang = request.headers.get('accept-language') || '';
+    const preferred = acceptLang.split(',').map(l => l.split(';')[0].trim().substring(0, 2));
+    const detected = preferred.find(l => locales.includes(l)) || defaultLocale;
+
+    response = NextResponse.next({ request });
+    response.cookies.set('NEXT_LOCALE', detected, { path: '/', maxAge: 365 * 24 * 60 * 60 });
   }
 
-  let supabaseResponse = NextResponse.next({
-    request,
-  });
+  // Only protect /dashboard routes
+  if (!request.nextUrl.pathname.startsWith('/dashboard')) {
+    return response;
+  }
+
+  let supabaseResponse = response;
 
   const supabase = createServerClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL,
@@ -30,6 +43,13 @@ export async function middleware(request) {
           supabaseResponse = NextResponse.next({
             request,
           });
+          // Re-apply locale cookie on supabase response
+          if (!localeCookie || !locales.includes(localeCookie)) {
+            const acceptLang = request.headers.get('accept-language') || '';
+            const preferred = acceptLang.split(',').map(l => l.split(';')[0].trim().substring(0, 2));
+            const detected = preferred.find(l => locales.includes(l)) || defaultLocale;
+            supabaseResponse.cookies.set('NEXT_LOCALE', detected, { path: '/', maxAge: 365 * 24 * 60 * 60 });
+          }
           cookiesToSet.forEach(({ name, value, options }) =>
             supabaseResponse.cookies.set(name, value, options)
           );
@@ -52,5 +72,5 @@ export async function middleware(request) {
 }
 
 export const config = {
-  matcher: ['/dashboard/:path*'],
+  matcher: ['/dashboard/:path*', '/login'],
 };

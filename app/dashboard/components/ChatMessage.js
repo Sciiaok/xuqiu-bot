@@ -1,20 +1,23 @@
 'use client';
 
+import { useLocale } from 'next-intl';
+
 /**
  * Individual chat message bubble component
  * Dark theme styling with different colors for user/assistant
  */
 export default function ChatMessage({ role, content, timestamp, metadata }) {
   const isUser = role === 'user';
+  const locale = useLocale();
 
   // Format timestamp
   const formatTime = (ts) => {
     if (!ts) return '';
     const date = new Date(ts);
-    return date.toLocaleTimeString('en-US', {
+    return date.toLocaleTimeString(locale === 'zh' ? 'zh-CN' : 'en-US', {
       hour: '2-digit',
       minute: '2-digit',
-      hour12: true,
+      hour12: locale !== 'zh',
     });
   };
 
@@ -78,31 +81,39 @@ export default function ChatMessage({ role, content, timestamp, metadata }) {
     }
 
     return (
-      <p className="text-text-primary text-sm whitespace-pre-wrap break-words">
+      <p className="text-text-primary text-sm whitespace-pre-wrap break-words leading-relaxed">
         {content}
       </p>
     );
   };
+
+  // Sent checkmark for outgoing messages
+  const SentCheck = () => (
+    <svg className="w-3.5 h-3.5 text-accent-blue/60 inline-block ml-1" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M20 6L9 17l-5-5" />
+    </svg>
+  );
 
   return (
     <div className={`flex ${isUser ? 'justify-start' : 'justify-end'} mb-3`}>
       <div
         className={`max-w-[70%] px-4 py-2.5 ${
           isUser
-            ? 'bg-surface border border-border rounded-tl-none rounded-tr-2xl rounded-br-2xl rounded-bl-2xl'
-            : 'bg-accent-blue/20 border border-accent-blue/30 rounded-tl-2xl rounded-tr-none rounded-br-2xl rounded-bl-2xl'
+            ? 'bg-surface border border-border rounded-tl-sm rounded-tr-2xl rounded-br-2xl rounded-bl-2xl'
+            : 'bg-accent-blue/15 border border-accent-blue/20 rounded-tl-2xl rounded-tr-sm rounded-br-2xl rounded-bl-2xl'
         }`}
       >
         {/* Message content */}
         {renderContent()}
 
-        {/* Timestamp */}
+        {/* Timestamp + status */}
         <div
-          className={`text-xs text-text-muted mt-1.5 ${
-            isUser ? 'text-left' : 'text-right'
+          className={`flex items-center gap-0.5 text-xs text-text-muted mt-1.5 ${
+            isUser ? 'justify-start' : 'justify-end'
           }`}
         >
-          {formatTime(timestamp)}
+          <span>{formatTime(timestamp)}</span>
+          {!isUser && <SentCheck />}
         </div>
       </div>
     </div>

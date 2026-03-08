@@ -1,6 +1,8 @@
 'use client';
 
 import { useState, useEffect, useRef } from 'react';
+import { useTranslations } from 'next-intl';
+import { getRelativeTimeDay } from '@/lib/i18n-utils';
 
 function getBusinessValueColor(value) {
   switch (value) {
@@ -30,23 +32,13 @@ function getInquiryQualityColor(quality) {
   }
 }
 
-function getIntentLabel(intent) {
+function getIntentLabel(intent, t) {
   switch (intent) {
-    case 'business_inquiry': return 'B2B Inquiry';
-    case 'business_cooperation': return 'B2B Coop';
-    case 'personal_consumer': return 'C-end';
-    case 'other': return 'Other';
-    default: return intent || 'Unknown';
-  }
-}
-
-function getIntentColor(intent) {
-  switch (intent) {
-    case 'business_inquiry': return 'text-accent-green';
-    case 'business_cooperation': return 'text-accent-blue';
-    case 'personal_consumer': return 'text-accent-amber';
-    case 'other': return 'text-text-muted';
-    default: return 'text-text-muted';
+    case 'business_inquiry': return t('intentB2bInquiry');
+    case 'business_cooperation': return t('intentB2bCoop');
+    case 'personal_consumer': return t('intentConsumer');
+    case 'other': return t('intentOther');
+    default: return intent || t('unknown');
   }
 }
 
@@ -64,28 +56,6 @@ function parseIntents(intentString) {
   if (!intentString) return [];
   return intentString.split(',').map(s => s.trim()).filter(Boolean);
 }
-
-function getRelativeTime(timestamp) {
-  if (!timestamp) return 'Unknown';
-  const now = new Date();
-  const date = new Date(timestamp);
-  const diffDays = Math.floor((now - date) / 86400000);
-  if (diffDays < 1) return 'Today';
-  if (diffDays === 1) return 'Yesterday';
-  return `${diffDays} days ago`;
-}
-
-const fieldLabels = {
-  destination_country: 'Destination',
-  destination_port: 'Port',
-  qty_bucket: 'Quantity',
-  car_model: 'Model',
-  buyer_type: 'Buyer Type',
-  timeline: 'Timeline',
-  incoterm: 'Incoterms',
-  loading_port: 'Loading Port',
-  brand: 'Brand',
-};
 
 function getRouteColor(route) {
   switch (route) {
@@ -105,6 +75,21 @@ function formatColorQuantity(colorQuantity) {
 export default function LeadsList({ leads = [], onLoadMore, hasMore, loadingMore }) {
   const [expandedId, setExpandedId] = useState(null);
   const sentinelRef = useRef(null);
+  const t = useTranslations('leadsPanel');
+  const tl = useTranslations('leads');
+  const tt = useTranslations('time');
+
+  const fieldLabels = {
+    destination_country: t('destination'),
+    destination_port: t('port'),
+    qty_bucket: t('quantity'),
+    car_model: t('model'),
+    buyer_type: t('buyerType'),
+    timeline: t('timeline'),
+    incoterm: t('incoterms'),
+    loading_port: t('loadingPort'),
+    brand: t('brand'),
+  };
 
   // IntersectionObserver for bottom sentinel
   useEffect(() => {
@@ -127,8 +112,12 @@ export default function LeadsList({ leads = [], onLoadMore, hasMore, loadingMore
 
   if (leads.length === 0) {
     return (
-      <div className="h-full flex items-center justify-center bg-surface border-l border-border">
-        <p className="text-text-muted text-sm">No leads for this contact</p>
+      <div className="h-full flex flex-col items-center justify-center bg-surface border-l border-border gap-2">
+        <svg className="w-10 h-10 text-text-muted/40" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" />
+        </svg>
+        <p className="text-text-muted text-sm">{t('noLeadsYet')}</p>
+        <p className="text-text-muted/60 text-xs">{t('noLeadsDescription')}</p>
       </div>
     );
   }
@@ -136,7 +125,7 @@ export default function LeadsList({ leads = [], onLoadMore, hasMore, loadingMore
   return (
     <div className="h-full overflow-y-auto bg-surface border-l border-border">
       <div className="p-3 border-b border-border flex items-center justify-between">
-        <h2 className="text-sm font-semibold text-text-primary">Leads ({leads.length})</h2>
+        <h2 className="text-sm font-semibold text-text-primary">{t('title', { count: leads.length })}</h2>
         {expandedId && (
           <button
             onClick={() => setExpandedId(null)}
@@ -175,11 +164,11 @@ export default function LeadsList({ leads = [], onLoadMore, hasMore, loadingMore
                     <div className="flex flex-wrap items-center gap-1 mt-1">
                       {parseIntents(lead.conversation_intent).map((intent, idx) => (
                         <span key={idx} className={`text-xs px-1.5 py-0.5 rounded ${getIntentBgColor(intent)}`}>
-                          {getIntentLabel(intent)}
+                          {getIntentLabel(intent, tl)}
                         </span>
                       ))}
                       {!lead.conversation_intent && (
-                        <span className="text-xs text-text-muted">No intent</span>
+                        <span className="text-xs text-text-muted">{t('noIntent')}</span>
                       )}
                     </div>
                     {lead.lead_key && lead.lead_key !== 'default' && (
@@ -204,7 +193,7 @@ export default function LeadsList({ leads = [], onLoadMore, hasMore, loadingMore
                       <div key={key} className="flex justify-between">
                         <span className="text-text-tertiary">{label}:</span>
                         <span className={value ? 'text-text-primary' : 'text-text-muted italic'}>
-                          {value || '(pending)'}
+                          {value || t('pending')}
                         </span>
                       </div>
                     );
@@ -212,9 +201,9 @@ export default function LeadsList({ leads = [], onLoadMore, hasMore, loadingMore
 
                   {/* Color Quantity Section */}
                   <div className="flex justify-between">
-                    <span className="text-text-tertiary">Colors:</span>
+                    <span className="text-text-tertiary">{t('colors')}:</span>
                     <span className={colorQtyStr ? 'text-text-primary' : 'text-text-muted italic'}>
-                      {colorQtyStr || '(pending)'}
+                      {colorQtyStr || t('pending')}
                     </span>
                   </div>
                 </div>
@@ -266,7 +255,7 @@ export default function LeadsList({ leads = [], onLoadMore, hasMore, loadingMore
                       {lead.car_model || '?'} → {lead.destination_country || '?'}
                     </div>
                     <div className="text-xs text-text-muted">
-                      {getRelativeTime(lead.updated_at)}
+                      {getRelativeTimeDay(lead.updated_at, tt)}
                     </div>
                   </div>
                 </div>

@@ -2,6 +2,8 @@
 'use client';
 
 import Link from 'next/link';
+import { useTranslations } from 'next-intl';
+import { getRelativeTime } from '@/lib/i18n-utils';
 
 function getInquiryQualityBadgeStyle(quality) {
   switch (quality?.toUpperCase()) {
@@ -31,12 +33,12 @@ function getIntentBadgeStyle(intent) {
   }
 }
 
-function getIntentLabel(intent) {
+function getIntentLabel(intent, t) {
   switch (intent) {
-    case 'business_inquiry': return 'B2B Inquiry';
-    case 'business_cooperation': return 'B2B Coop';
-    case 'personal_consumer': return 'Consumer';
-    case 'other': return 'Other';
+    case 'business_inquiry': return t('intentB2bInquiry');
+    case 'business_cooperation': return t('intentB2bCoop');
+    case 'personal_consumer': return t('intentConsumer');
+    case 'other': return t('intentOther');
     default:
       return intent
         ? intent
@@ -95,22 +97,10 @@ function formatColorQuantity(colorQuantity) {
   return colorQuantity.map(cq => `${cq.color}: ${cq.qty || '?'}`).join(', ');
 }
 
-function getRelativeTime(timestamp) {
-  if (!timestamp) return 'Unknown';
-  const now = new Date();
-  const date = new Date(timestamp);
-  const diffMs = now - date;
-  const diffMins = Math.floor(diffMs / 60000);
-  const diffHours = Math.floor(diffMs / 3600000);
-  const diffDays = Math.floor(diffMs / 86400000);
-
-  if (diffMins < 1) return 'Just now';
-  if (diffMins < 60) return `${diffMins} min ago`;
-  if (diffHours < 24) return `${diffHours} hour${diffHours > 1 ? 's' : ''} ago`;
-  return `${diffDays} day${diffDays > 1 ? 's' : ''} ago`;
-}
-
 export default function LeadCard({ lead, onEdit, onApprove, syncStatus }) {
+  const t = useTranslations('leads');
+  const tt = useTranslations('time');
+
   const {
     id,
     wa_id,
@@ -159,7 +149,7 @@ export default function LeadCard({ lead, onEdit, onApprove, syncStatus }) {
       <div className="flex items-start gap-4">
         {/* Inquiry Quality Badge */}
         <div className={`flex-shrink-0 w-16 h-14 flex flex-col items-center justify-center border rounded-lg ${getInquiryQualityBadgeStyle(inquiry_quality)}`}>
-          <span className="text-xs font-medium opacity-70">Quality</span>
+          <span className="text-xs font-medium opacity-70">{t('quality')}</span>
           <span className="text-sm font-bold">{inquiry_quality || 'GOOD'}</span>
         </div>
 
@@ -168,15 +158,15 @@ export default function LeadCard({ lead, onEdit, onApprove, syncStatus }) {
           <div className="flex items-center gap-2 mb-1">
             <span className="font-semibold text-text-primary truncate">{wa_id}</span>
             <span className="text-text-muted">·</span>
-            <span className="text-text-secondary truncate">{company_name || '(No company)'}</span>
+            <span className="text-text-secondary truncate">{company_name || t('noCompany')}</span>
           </div>
 
           <div className="text-sm text-text-tertiary mb-2">
             <span>{destination}</span>
             <span className="mx-1">·</span>
-            <span>{totalQty ? `${totalQty} units` : (qty_bucket ? `${qty_bucket} units` : '-')}</span>
+            <span>{totalQty ? `${totalQty} ${t('units')}` : (qty_bucket ? `${qty_bucket} ${t('units')}` : '-')}</span>
             <span className="mx-1">·</span>
-            <span>{brand ? `${brand} ` : ''}{car_model || '(No model)'}</span>
+            <span>{brand ? `${brand} ` : ''}{car_model || t('noModel')}</span>
           </div>
           {colorQtyStr && (
             <div className="text-xs text-text-muted mb-2">
@@ -193,35 +183,35 @@ export default function LeadCard({ lead, onEdit, onApprove, syncStatus }) {
             {/* Intent Badges */}
             {intents.map((intent, idx) => (
               <span key={idx} className={`badge border ${getIntentBadgeStyle(intent)}`}>
-                {getIntentLabel(intent)}
+                {getIntentLabel(intent, t)}
               </span>
             ))}
             {intents.length === 0 && (
               <span className="badge border bg-text-muted/20 text-text-muted border-text-muted/30">
-                No Intent
+                {t('noIntent')}
               </span>
             )}
 
             {approved && (
               <span className="badge bg-accent-green/20 text-accent-green border border-accent-green/30">
-                Approved
+                {t('approved')}
               </span>
             )}
 
             {syncStatus === 'success' && (
               <span className="badge bg-accent-blue/20 text-accent-blue border border-accent-blue/30">
-                Synced
+                {t('synced')}
               </span>
             )}
 
             {syncStatus === 'failed' && (
               <span className="badge bg-accent-red/20 text-accent-red border border-accent-red/30">
-                Sync Failed
+                {t('syncFailed')}
               </span>
             )}
 
             <span className="text-text-muted">·</span>
-            <span className="text-text-muted">{getRelativeTime(updated_at)}</span>
+            <span className="text-text-muted">{getRelativeTime(updated_at, tt)}</span>
           </div>
           {conversation_intent_summary && (
             <div className="mt-2 text-xs text-text-muted line-clamp-2">
@@ -235,16 +225,16 @@ export default function LeadCard({ lead, onEdit, onApprove, syncStatus }) {
           <button
             onClick={handleEdit}
             className="btn btn-secondary text-sm px-3 py-1.5"
-            title="Edit lead"
+            title={t('edit')}
           >
-            Edit
+            {t('edit')}
           </button>
 
           {!approved && (
             <button
               onClick={handleApprove}
               className="btn btn-secondary text-sm px-3 py-1.5 text-accent-green border-accent-green/30 hover:bg-accent-green/10"
-              title="Approve lead"
+              title={t('approved')}
             >
               <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
@@ -260,7 +250,7 @@ export default function LeadCard({ lead, onEdit, onApprove, syncStatus }) {
             <svg className="w-4 h-4 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
             </svg>
-            Chat
+            {t('chat')}
           </Link>
         </div>
       </div>

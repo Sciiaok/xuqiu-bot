@@ -2,6 +2,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
+import { useTranslations } from 'next-intl';
 
 const QTY_OPTIONS = ['1-5', '6-20', '20+'];
 const BUYER_TYPE_OPTIONS = ['dealer', 'store_owner', 'trading_org'];
@@ -33,6 +34,7 @@ export default function EditModal({ lead, isOpen, onClose, onSave }) {
   const [formData, setFormData] = useState({});
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState(null);
+  const t = useTranslations('editModal');
 
   useEffect(() => {
     if (lead) {
@@ -109,7 +111,7 @@ export default function EditModal({ lead, isOpen, onClose, onSave }) {
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
       <div className="bg-surface border border-border rounded-lg w-full max-w-md mx-4 max-h-[90vh] overflow-y-auto">
         <div className="flex items-center justify-between p-4 border-b border-border">
-          <h2 className="text-lg font-semibold text-text-primary">Edit Lead</h2>
+          <h2 className="text-lg font-semibold text-text-primary">{t('title')}</h2>
           <button
             onClick={onClose}
             className="text-text-muted hover:text-text-primary"
@@ -128,30 +130,30 @@ export default function EditModal({ lead, isOpen, onClose, onSave }) {
           )}
 
           <div>
-            <label className="block text-sm font-medium text-text-secondary mb-1">Brand</label>
+            <label className="block text-sm font-medium text-text-secondary mb-1">{t('brand')}</label>
             <input
               type="text"
               value={formData.brand}
               onChange={(e) => handleChange('brand', e.target.value)}
               className="w-full bg-background border border-border rounded-lg px-3 py-2 text-text-primary focus:outline-none focus:ring-1 focus:ring-accent-blue"
-              placeholder="e.g. Toyota"
+              placeholder={t('brandPlaceholder')}
             />
           </div>
 
           <div>
-            <label className="block text-sm font-medium text-text-secondary mb-1">Model</label>
+            <label className="block text-sm font-medium text-text-secondary mb-1">{t('model')}</label>
             <input
               type="text"
               value={formData.car_model}
               onChange={(e) => handleChange('car_model', e.target.value)}
               className="w-full bg-background border border-border rounded-lg px-3 py-2 text-text-primary focus:outline-none focus:ring-1 focus:ring-accent-blue"
-              placeholder="e.g. Land Cruiser 300"
+              placeholder={t('modelPlaceholder')}
             />
           </div>
 
           <div className="grid grid-cols-2 gap-4">
             <div>
-              <label className="block text-sm font-medium text-text-secondary mb-1">Country</label>
+              <label className="block text-sm font-medium text-text-secondary mb-1">{t('country')}</label>
               <input
                 type="text"
                 value={formData.destination_country}
@@ -160,7 +162,7 @@ export default function EditModal({ lead, isOpen, onClose, onSave }) {
               />
             </div>
             <div>
-              <label className="block text-sm font-medium text-text-secondary mb-1">Port</label>
+              <label className="block text-sm font-medium text-text-secondary mb-1">{t('port')}</label>
               <input
                 type="text"
                 value={formData.destination_port}
@@ -172,26 +174,26 @@ export default function EditModal({ lead, isOpen, onClose, onSave }) {
 
           <div className="grid grid-cols-2 gap-4">
             <div>
-              <label className="block text-sm font-medium text-text-secondary mb-1">Quantity</label>
+              <label className="block text-sm font-medium text-text-secondary mb-1">{t('quantity')}</label>
               <select
                 value={formData.qty_bucket}
                 onChange={(e) => handleChange('qty_bucket', e.target.value)}
                 className="w-full bg-background border border-border rounded-lg px-3 py-2 text-text-primary focus:outline-none focus:ring-1 focus:ring-accent-blue"
               >
-                <option value="">Select...</option>
+                <option value="">{t('select')}</option>
                 {QTY_OPTIONS.map(opt => (
                   <option key={opt} value={opt}>{opt}</option>
                 ))}
               </select>
             </div>
             <div>
-              <label className="block text-sm font-medium text-text-secondary mb-1">Buyer Type</label>
+              <label className="block text-sm font-medium text-text-secondary mb-1">{t('buyerType')}</label>
               <select
                 value={formData.buyer_type}
                 onChange={(e) => handleChange('buyer_type', e.target.value)}
                 className="w-full bg-background border border-border rounded-lg px-3 py-2 text-text-primary focus:outline-none focus:ring-1 focus:ring-accent-blue"
               >
-                <option value="">Select...</option>
+                <option value="">{t('select')}</option>
                 {BUYER_TYPE_OPTIONS.map(opt => (
                   <option key={opt} value={opt}>{opt}</option>
                 ))}
@@ -201,17 +203,17 @@ export default function EditModal({ lead, isOpen, onClose, onSave }) {
 
           <div className="grid grid-cols-2 gap-4">
             <div>
-              <label className="block text-sm font-medium text-text-secondary mb-1">Timeline</label>
+              <label className="block text-sm font-medium text-text-secondary mb-1">{t('timeline')}</label>
               <input
                 type="text"
                 value={formData.timeline}
                 onChange={(e) => handleChange('timeline', e.target.value)}
                 className="w-full bg-background border border-border rounded-lg px-3 py-2 text-text-primary focus:outline-none focus:ring-1 focus:ring-accent-blue"
-                placeholder="e.g. 1 month"
+                placeholder={t('timelinePlaceholder')}
               />
             </div>
             <div>
-              <label className="block text-sm font-medium text-text-secondary mb-1">Incoterm</label>
+              <label className="block text-sm font-medium text-text-secondary mb-1">{t('incoterm')}</label>
               <div className="grid grid-cols-2 gap-2">
                 {INCOTERM_OPTIONS.map(term => (
                   <button
@@ -229,13 +231,13 @@ export default function EditModal({ lead, isOpen, onClose, onSave }) {
                 ))}
               </div>
               <p className="mt-1 text-xs text-text-muted">
-                Selected: {formData.incoterm || 'None'}
+                {t('selected', { value: formData.incoterm || t('none') })}
               </p>
             </div>
           </div>
 
           <div>
-            <label className="block text-sm font-medium text-text-secondary mb-1">Loading Port</label>
+            <label className="block text-sm font-medium text-text-secondary mb-1">{t('loadingPort')}</label>
             <input
               type="text"
               value={formData.loading_port}
@@ -252,7 +254,7 @@ export default function EditModal({ lead, isOpen, onClose, onSave }) {
               onChange={(e) => handleChange('approved', e.target.checked)}
               className="w-4 h-4 rounded border-border text-accent-blue focus:ring-accent-blue"
             />
-            <label htmlFor="approved" className="text-sm text-text-primary">Approved</label>
+            <label htmlFor="approved" className="text-sm text-text-primary">{t('approved')}</label>
           </div>
 
           <div className="flex gap-3 pt-4 border-t border-border">
@@ -261,14 +263,14 @@ export default function EditModal({ lead, isOpen, onClose, onSave }) {
               onClick={onClose}
               className="flex-1 btn btn-secondary"
             >
-              Cancel
+              {t('cancel')}
             </button>
             <button
               type="submit"
               disabled={saving}
               className="flex-1 btn btn-primary disabled:opacity-50"
             >
-              {saving ? 'Saving...' : 'Save Changes'}
+              {saving ? t('saving') : t('save')}
             </button>
           </div>
         </form>
