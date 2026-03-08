@@ -201,7 +201,7 @@ export default function AnalyticsPage() {
     );
   }
 
-  const { kpi, dailyConversations, qualifyRate, dailyLeads, dailyTakeover, countryDistribution, businessValueDist, buyerTypeDist, intentDistribution, approvalRate, avgResponseTime, humanNowList, countries } = data || {};
+  const { kpi, dailyConversations, qualifyRate, dailyLeads, dailyTakeover, businessValueDist, intentDistribution, approvalRate, avgResponseTime, humanNowList, countries } = data || {};
 
   return (
     <div className="p-6 space-y-5 max-w-[1400px] mx-auto">
@@ -326,39 +326,33 @@ export default function AnalyticsPage() {
         </ChartCard>
       </div>
 
-      {/* Row 2: Leads by Quality + Country Distribution */}
+      {/* Row 2: Daily Leads by Quality */}
+      <ChartCard title="Daily Leads by Quality">
+        <ResponsiveContainer width="100%" height={240}>
+          <AreaChart data={dailyLeads?.map(d => ({ ...d, date: formatDate(d.date) }))}>
+            <defs>
+              {Object.entries(QUALITY_COLORS).map(([key, color]) => (
+                <linearGradient key={key} id={`grad-${key}`} x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="0%" stopColor={color} stopOpacity={0.3} />
+                  <stop offset="100%" stopColor={color} stopOpacity={0} />
+                </linearGradient>
+              ))}
+            </defs>
+            <CartesianGrid {...gridStyle} />
+            <XAxis dataKey="date" tick={chartAxisStyle} tickLine={false} axisLine={false} />
+            <YAxis tick={chartAxisStyle} tickLine={false} axisLine={false} width={35} />
+            <Tooltip content={<CustomTooltip />} />
+            <Area type="monotone" dataKey="PROOF" stackId="1" stroke={QUALITY_COLORS.PROOF} fill={`url(#grad-PROOF)`} strokeWidth={1.5} name="PROOF" />
+            <Area type="monotone" dataKey="QUALIFY" stackId="1" stroke={QUALITY_COLORS.QUALIFY} fill={`url(#grad-QUALIFY)`} strokeWidth={1.5} name="QUALIFY" />
+            <Area type="monotone" dataKey="GOOD" stackId="1" stroke={QUALITY_COLORS.GOOD} fill={`url(#grad-GOOD)`} strokeWidth={1.5} name="GOOD" />
+            <Area type="monotone" dataKey="BAD" stackId="1" stroke={QUALITY_COLORS.BAD} fill={`url(#grad-BAD)`} strokeWidth={1.5} name="BAD" />
+            <Legend iconType="circle" iconSize={8} wrapperStyle={{ fontSize: 11 }} />
+          </AreaChart>
+        </ResponsiveContainer>
+      </ChartCard>
+
+      {/* Row 3: Takeover + Business Value */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-        <ChartCard title="Daily Leads by Quality">
-          <ResponsiveContainer width="100%" height={240}>
-            <AreaChart data={dailyLeads?.map(d => ({ ...d, date: formatDate(d.date) }))}>
-              <defs>
-                {Object.entries(QUALITY_COLORS).map(([key, color]) => (
-                  <linearGradient key={key} id={`grad-${key}`} x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="0%" stopColor={color} stopOpacity={0.3} />
-                    <stop offset="100%" stopColor={color} stopOpacity={0} />
-                  </linearGradient>
-                ))}
-              </defs>
-              <CartesianGrid {...gridStyle} />
-              <XAxis dataKey="date" tick={chartAxisStyle} tickLine={false} axisLine={false} />
-              <YAxis tick={chartAxisStyle} tickLine={false} axisLine={false} width={35} />
-              <Tooltip content={<CustomTooltip />} />
-              <Area type="monotone" dataKey="PROOF" stackId="1" stroke={QUALITY_COLORS.PROOF} fill={`url(#grad-PROOF)`} strokeWidth={1.5} name="PROOF" />
-              <Area type="monotone" dataKey="QUALIFY" stackId="1" stroke={QUALITY_COLORS.QUALIFY} fill={`url(#grad-QUALIFY)`} strokeWidth={1.5} name="QUALIFY" />
-              <Area type="monotone" dataKey="GOOD" stackId="1" stroke={QUALITY_COLORS.GOOD} fill={`url(#grad-GOOD)`} strokeWidth={1.5} name="GOOD" />
-              <Area type="monotone" dataKey="BAD" stackId="1" stroke={QUALITY_COLORS.BAD} fill={`url(#grad-BAD)`} strokeWidth={1.5} name="BAD" />
-              <Legend iconType="circle" iconSize={8} wrapperStyle={{ fontSize: 11 }} />
-            </AreaChart>
-          </ResponsiveContainer>
-        </ChartCard>
-
-        <ChartCard title="Country Distribution">
-          <DonutChart data={countryDistribution} />
-        </ChartCard>
-      </div>
-
-      {/* Row 3: Takeover + Business Value + Buyer Type */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
         <ChartCard title="Human Takeover Trend">
           <ResponsiveContainer width="100%" height={200}>
             <AreaChart data={dailyTakeover?.map(d => ({ ...d, date: formatDate(d.date) }))}>
@@ -379,10 +373,6 @@ export default function AnalyticsPage() {
 
         <ChartCard title="Business Value">
           <DonutChart data={businessValueDist} />
-        </ChartCard>
-
-        <ChartCard title="Buyer Type">
-          <DonutChart data={buyerTypeDist} />
         </ChartCard>
       </div>
 

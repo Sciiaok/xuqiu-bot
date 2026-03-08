@@ -173,16 +173,6 @@ export async function GET(request) {
     const takeoverConvs = filteredConversations.filter(c => c.is_human_takeover);
     const dailyTakeover = fillDates(groupByDate(takeoverConvs, 'human_takeover_at'));
 
-    // Country distribution
-    const countryDist = {};
-    leads.forEach(lead => {
-      const c = lead.destination_country || 'Unknown';
-      countryDist[c] = (countryDist[c] || 0) + 1;
-    });
-    const countryDistribution = Object.entries(countryDist)
-      .map(([name, value]) => ({ name, value }))
-      .sort((a, b) => b.value - a.value);
-
     // Business value distribution
     const bvDist = {};
     leads.forEach(lead => {
@@ -192,23 +182,24 @@ export async function GET(request) {
     const businessValueDist = Object.entries(bvDist)
       .map(([name, value]) => ({ name, value }));
 
-    // Buyer type distribution
-    const btDist = {};
-    leads.forEach(lead => {
-      const bt = lead.buyer_type || 'Unknown';
-      btDist[bt] = (btDist[bt] || 0) + 1;
-    });
-    const buyerTypeDist = Object.entries(btDist)
-      .map(([name, value]) => ({ name, value }));
-
-    // Conversation intent distribution
+    // Conversation intent distribution (normalized)
     const intentDist = {};
     leads.forEach(lead => {
-      const intent = lead.conversation_intent || 'Unknown';
-      intentDist[intent] = (intentDist[intent] || 0) + 1;
+      let raw = lead.conversation_intent;
+      if (!raw) return;
+      // Normalize: strip JSON array brackets like ["business_inquiry"]
+      if (typeof raw === 'string' && raw.startsWith('[')) {
+        try { raw = JSON.parse(raw).join(','); } catch { raw = raw.replace(/[\[\]"]/g, ''); }
+      }
+      // Split comma-separated intents and count each
+      const intents = raw.split(',').map(s => s.trim()).filter(Boolean);
+      intents.forEach(intent => {
+        intentDist[intent] = (intentDist[intent] || 0) + 1;
+      });
     });
     const intentDistribution = Object.entries(intentDist)
-      .map(([name, value]) => ({ name, value }));
+      .map(([name, value]) => ({ name, value }))
+      .sort((a, b) => b.value - a.value);
 
     // Lead approval rate trend
     const approvedByDate = {};
@@ -320,9 +311,7 @@ export async function GET(request) {
       qualifyRate,
       dailyLeads,
       dailyTakeover,
-      countryDistribution,
       businessValueDist,
-      buyerTypeDist,
       intentDistribution,
       approvalRate,
       avgResponseTime,
