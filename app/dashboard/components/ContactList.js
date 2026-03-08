@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect, useRef } from 'react';
 
 function getRelativeTime(timestamp) {
   if (!timestamp) return '';
@@ -37,7 +37,9 @@ function ContactItem({ contact, isSelected, onClick }) {
         </span>
       </div>
       <div className="text-sm text-text-secondary truncate">
-        {contact.company_name || '(No company)'}
+        {contact.name && contact.company_name
+          ? `${contact.name} · ${contact.company_name}`
+          : contact.name || contact.company_name || '(Unknown)'}
       </div>
       <div className="text-xs text-text-muted truncate mt-1">
         {lastMessage?.role === 'assistant' ? '↩ ' : ''}{preview}
@@ -51,14 +53,37 @@ function ContactItem({ contact, isSelected, onClick }) {
   );
 }
 
-export default function ContactList({ contacts, selectedId, onSelect }) {
+export default function ContactList({ contacts, selectedId, onSelect, onLoadMore, hasMore, loadingMore }) {
   const [search, setSearch] = useState('');
+  const sentinelRef = useRef(null);
+
+  const isSearching = search.trim().length > 0;
+
+  // IntersectionObserver for bottom sentinel (disabled during search)
+  useEffect(() => {
+    if (!onLoadMore || !hasMore || loadingMore || isSearching) return;
+    const sentinel = sentinelRef.current;
+    if (!sentinel) return;
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries[0].isIntersecting) {
+          onLoadMore();
+        }
+      },
+      { threshold: 0.1 }
+    );
+
+    observer.observe(sentinel);
+    return () => observer.disconnect();
+  }, [onLoadMore, hasMore, loadingMore, isSearching]);
 
   const filtered = contacts.filter((contact) => {
     if (!search.trim()) return true;
     const s = search.toLowerCase();
     return (
       contact.wa_id?.toLowerCase().includes(s) ||
+      contact.name?.toLowerCase().includes(s) ||
       contact.company_name?.toLowerCase().includes(s)
     );
   });
@@ -84,14 +109,25 @@ export default function ContactList({ contacts, selectedId, onSelect }) {
             No contacts found
           </div>
         ) : (
-          filtered.map((contact) => (
-            <ContactItem
-              key={contact.id}
-              contact={contact}
-              isSelected={contact.id === selectedId}
-              onClick={() => onSelect(contact)}
-            />
-          ))
+          <>
+            {filtered.map((contact) => (
+              <ContactItem
+                key={contact.id}
+                contact={contact}
+                isSelected={contact.id === selectedId}
+                onClick={() => onSelect(contact)}
+              />
+            ))}
+
+            {/* Bottom sentinel for infinite scroll (hidden during search) */}
+            {!isSearching && hasMore && (
+              <div ref={sentinelRef} className="flex justify-center py-3">
+                {loadingMore && (
+                  <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-accent-blue"></div>
+                )}
+              </div>
+            )}
+          </>
         )}
       </div>
     </div>

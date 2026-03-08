@@ -8,6 +8,10 @@ import ChatLog from '../components/ChatLog';
 import ChatInput from '../components/ChatInput';
 import LeadsList from '../components/LeadsList';
 
+const CONVERSATIONS_PAGE_SIZE = 30;
+const MESSAGES_PAGE_SIZE = 50;
+const LEADS_PAGE_SIZE = 20;
+
 function InboxContent() {
   const searchParams = useSearchParams();
   const initialWaId = searchParams.get('wa_id');
@@ -24,14 +28,31 @@ function InboxContent() {
   const [isHumanTakeover, setIsHumanTakeover] = useState(false);
   const [takeoverLoading, setTakeoverLoading] = useState(false);
 
+  // Pagination state — contacts
+  const [contactsOffset, setContactsOffset] = useState(0);
+  const [contactsHasMore, setContactsHasMore] = useState(false);
+  const [contactsLoadingMore, setContactsLoadingMore] = useState(false);
+
+  // Pagination state — messages
+  const [messagesOffset, setMessagesOffset] = useState(0);
+  const [messagesHasMore, setMessagesHasMore] = useState(false);
+  const [messagesLoadingMore, setMessagesLoadingMore] = useState(false);
+
+  // Pagination state — leads
+  const [leadsOffset, setLeadsOffset] = useState(0);
+  const [leadsHasMore, setLeadsHasMore] = useState(false);
+  const [leadsLoadingMore, setLeadsLoadingMore] = useState(false);
+
   const supabase = useMemo(() => createClient(), []);
   const conversationIdsCacheRef = useRef(new Map());
   const selectionRequestRef = useRef(0);
+  const contactMapRef = useRef(new Map());
 
   // Fetch contacts with conversation summary only (no per-contact full message load)
   const fetchContacts = useCallback(async () => {
     try {
       setLoading(true);
+      contactMapRef.current.clear();
       const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
 
       const { data: conversationRows, error } = await supabase
@@ -48,17 +69,21 @@ function InboxContent() {
           )
         `)
         .gte('last_message_at', thirtyDaysAgo)
-        .order('last_message_at', { ascending: false });
+        .order('last_message_at', { ascending: false })
+        .range(0, CONVERSATIONS_PAGE_SIZE - 1);
 
       if (error) throw error;
 
-      const contactMap = new Map();
-      for (const row of conversationRows || []) {
+      const rows = conversationRows || [];
+      setContactsHasMore(rows.length === CONVERSATIONS_PAGE_SIZE);
+      setContactsOffset(CONVERSATIONS_PAGE_SIZE);
+
+      for (const row of rows) {
         const contact = row.contact;
         if (!contact?.id) continue;
 
-        if (!contactMap.has(contact.id)) {
-          contactMap.set(contact.id, {
+        if (!contactMapRef.current.has(contact.id)) {
+          contactMapRef.current.set(contact.id, {
             id: contact.id,
             wa_id: contact.wa_id,
             company_name: contact.company_name,
@@ -69,7 +94,7 @@ function InboxContent() {
             lastMessage: null,
           });
         } else {
-          const existing = contactMap.get(contact.id);
+          const existing = contactMapRef.current.get(contact.id);
           existing.conversationCount += 1;
 
           if (new Date(row.last_message_at) > new Date(existing.lastMessageAt)) {
@@ -79,7 +104,7 @@ function InboxContent() {
         }
       }
 
-      const sorted = Array.from(contactMap.values()).sort((a, b) =>
+      const sorted = Array.from(contactMapRef.current.values()).sort((a, b) =>
         new Date(b.lastMessageAt) - new Date(a.lastMessageAt)
       );
 
@@ -115,39 +140,213 @@ function InboxContent() {
     }
   }, [supabase]);
 
+  const loadMoreContacts = useCallback(async () => {
+    if (contactsLoadingMore || !contactsHasMore) return;
+    setContactsLoadingMore(true);
+    try {
+      const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
+      const from = contactsOffset;
+      const to = from + CONVERSATIONS_PAGE_SIZE - 1;
+
+      const { data: conversationRows, error } = await supabase
+        .from('conversations')
+        .select(`
+          id,
+          contact_id,
+          last_message_at,
+          contact:contacts!inner (
+            id,
+            wa_id,
+            company_name,
+            name
+          )
+        `)
+        .gte('last_message_at', thirtyDaysAgo)
+        .order('last_message_at', { ascending: false })
+        .range(from, to);
+
+      if (error) throw error;
+
+      const rows = conversationRows || [];
+      if (rows.length < CONVERSATIONS_PAGE_SIZE) {
+        setContactsHasMore(false);
+      }
+      setContactsOffset(from + CONVERSATIONS_PAGE_SIZE);
+
+      const newContactIds = new Set();
+
+      for (const row of rows) {
+        const contact = row.contact;
+        if (!contact?.id) continue;
+
+        if (!contactMapRef.current.has(contact.id)) {
+          newContactIds.add(contact.id);
+          contactMapRef.current.set(contact.id, {
+            id: contact.id,
+            wa_id: contact.wa_id,
+            company_name: contact.company_name,
+            name: contact.name,
+            conversationCount: 1,
+            latestConversationId: row.id,
+            lastMessageAt: row.last_message_at,
+            lastMessage: null,
+          });
+        } else {
+          const existing = contactMapRef.current.get(contact.id);
+          existing.conversationCount += 1;
+          if (new Date(row.last_message_at) > new Date(existing.lastMessageAt)) {
+            existing.lastMessageAt = row.last_message_at;
+            existing.latestConversationId = row.id;
+          }
+        }
+      }
+
+      // Fetch preview messages for new contacts only
+      if (newContactIds.size > 0) {
+        const newConvIds = Array.from(contactMapRef.current.values())
+          .filter(c => newContactIds.has(c.id))
+          .map(c => c.latestConversationId)
+          .filter(Boolean);
+
+        if (newConvIds.length) {
+          const { data: previewMessages } = await supabase
+            .from('messages')
+            .select('content, role, sent_at, conversation_id')
+            .in('conversation_id', newConvIds)
+            .order('sent_at', { ascending: false });
+
+          const previewMap = new Map();
+          for (const msg of previewMessages || []) {
+            if (!previewMap.has(msg.conversation_id)) {
+              previewMap.set(msg.conversation_id, msg);
+            }
+          }
+
+          for (const [contactId, contact] of contactMapRef.current) {
+            if (newContactIds.has(contactId)) {
+              contact.lastMessage = previewMap.get(contact.latestConversationId) || null;
+            }
+          }
+        }
+      }
+
+      const sorted = Array.from(contactMapRef.current.values()).sort((a, b) =>
+        new Date(b.lastMessageAt) - new Date(a.lastMessageAt)
+      );
+      setContacts(sorted);
+    } catch (err) {
+      console.error('Error loading more contacts:', err);
+    } finally {
+      setContactsLoadingMore(false);
+    }
+  }, [supabase, contactsOffset, contactsHasMore, contactsLoadingMore]);
+
   const fetchMessages = useCallback(async (conversationIds) => {
-    if (!conversationIds?.length) return [];
+    if (!conversationIds?.length) return { messages: [], hasMore: false };
 
     const { data, error } = await supabase
       .from('messages')
       .select('id, role, content, sent_at, sent_by, conversation_id, metadata')
       .in('conversation_id', conversationIds)
-      .order('sent_at', { ascending: true });
+      .order('sent_at', { ascending: false })
+      .range(0, MESSAGES_PAGE_SIZE - 1);
 
     if (error) {
       console.error('Error fetching messages:', error);
-      return [];
+      return { messages: [], hasMore: false };
     }
 
-    return data || [];
+    const rows = data || [];
+    return { messages: rows.reverse(), hasMore: rows.length === MESSAGES_PAGE_SIZE };
   }, [supabase]);
 
+  const loadMoreMessages = useCallback(async () => {
+    if (messagesLoadingMore || !messagesHasMore || !selectedConversationIds.length) return;
+    setMessagesLoadingMore(true);
+    try {
+      const from = messagesOffset;
+      const to = from + MESSAGES_PAGE_SIZE - 1;
+
+      const { data, error } = await supabase
+        .from('messages')
+        .select('id, role, content, sent_at, sent_by, conversation_id, metadata')
+        .in('conversation_id', selectedConversationIds)
+        .order('sent_at', { ascending: false })
+        .range(from, to);
+
+      if (error) throw error;
+
+      const rows = data || [];
+      if (rows.length < MESSAGES_PAGE_SIZE) {
+        setMessagesHasMore(false);
+      }
+      setMessagesOffset(from + MESSAGES_PAGE_SIZE);
+
+      const olderMessages = rows.reverse();
+      setMessages((prev) => {
+        const existingIds = new Set(prev.map(m => m.id));
+        const unique = olderMessages.filter(m => !existingIds.has(m.id));
+        return [...unique, ...prev];
+      });
+    } catch (err) {
+      console.error('Error loading more messages:', err);
+    } finally {
+      setMessagesLoadingMore(false);
+    }
+  }, [supabase, selectedConversationIds, messagesOffset, messagesHasMore, messagesLoadingMore]);
+
   const fetchLeads = useCallback(async (conversationIds) => {
-    if (!conversationIds?.length) return [];
+    if (!conversationIds?.length) return { leads: [], hasMore: false };
 
     const { data, error } = await supabase
       .from('leads')
       .select('*')
       .in('conversation_id', conversationIds)
-      .order('created_at', { ascending: true });
+      .order('created_at', { ascending: true })
+      .range(0, LEADS_PAGE_SIZE - 1);
 
     if (error) {
       console.error('Error fetching leads:', error);
-      return [];
+      return { leads: [], hasMore: false };
     }
 
-    return data || [];
+    const rows = data || [];
+    return { leads: rows, hasMore: rows.length === LEADS_PAGE_SIZE };
   }, [supabase]);
+
+  const loadMoreLeads = useCallback(async () => {
+    if (leadsLoadingMore || !leadsHasMore || !selectedConversationIds.length) return;
+    setLeadsLoadingMore(true);
+    try {
+      const from = leadsOffset;
+      const to = from + LEADS_PAGE_SIZE - 1;
+
+      const { data, error } = await supabase
+        .from('leads')
+        .select('*')
+        .in('conversation_id', selectedConversationIds)
+        .order('created_at', { ascending: true })
+        .range(from, to);
+
+      if (error) throw error;
+
+      const rows = data || [];
+      if (rows.length < LEADS_PAGE_SIZE) {
+        setLeadsHasMore(false);
+      }
+      setLeadsOffset(from + LEADS_PAGE_SIZE);
+
+      setLeads((prev) => {
+        const existingIds = new Set(prev.map(l => l.id));
+        const unique = rows.filter(l => !existingIds.has(l.id));
+        return [...prev, ...unique];
+      });
+    } catch (err) {
+      console.error('Error loading more leads:', err);
+    } finally {
+      setLeadsLoadingMore(false);
+    }
+  }, [supabase, selectedConversationIds, leadsOffset, leadsHasMore, leadsLoadingMore]);
 
   const ensureConversationIds = useCallback(async (contactId) => {
     const cached = conversationIdsCacheRef.current.get(contactId);
@@ -176,12 +375,18 @@ function InboxContent() {
     const requestId = ++selectionRequestRef.current;
 
     setSelectedContact(contact);
-    // FIX (Codex W7): Reset takeover state immediately on contact switch
+    // Reset takeover state immediately on contact switch
     setIsHumanTakeover(false);
     setRealtimeStatus('connecting');
     setPanelLoading(true);
     setMessages([]);
     setLeads([]);
+
+    // Reset pagination state
+    setMessagesOffset(0);
+    setMessagesHasMore(false);
+    setLeadsOffset(0);
+    setLeadsHasMore(false);
 
     const conversationIds = await ensureConversationIds(contact.id);
     if (selectionRequestRef.current !== requestId) return;
@@ -200,17 +405,23 @@ function InboxContent() {
       }
     }
 
-    const [nextMessages, nextLeads] = await Promise.all([
+    const [messagesResult, leadsResult] = await Promise.all([
       fetchMessages(conversationIds),
       fetchLeads(conversationIds),
     ]);
 
     if (selectionRequestRef.current !== requestId) return;
 
-    setMessages(nextMessages);
-    setLeads(nextLeads);
+    setMessages(messagesResult.messages);
+    setMessagesHasMore(messagesResult.hasMore);
+    setMessagesOffset(MESSAGES_PAGE_SIZE);
+
+    setLeads(leadsResult.leads);
+    setLeadsHasMore(leadsResult.hasMore);
+    setLeadsOffset(LEADS_PAGE_SIZE);
+
     setPanelLoading(false);
-  }, [ensureConversationIds, fetchMessages, fetchLeads]);
+  }, [ensureConversationIds, fetchMessages, fetchLeads, supabase]);
 
   useEffect(() => {
     fetchContacts();
@@ -247,15 +458,18 @@ function InboxContent() {
             filter: `conversation_id=eq.${convId}`,
           },
           (payload) => {
-            setMessages((prev) => [...prev, {
-              id: payload.new.id,
-              role: payload.new.role,
-              content: payload.new.content,
-              sent_at: payload.new.sent_at,
-              sent_by: payload.new.sent_by,
-              conversation_id: payload.new.conversation_id,
-              metadata: payload.new.metadata,
-            }]);
+            setMessages((prev) => {
+              if (prev.some(m => m.id === payload.new.id)) return prev;
+              return [...prev, {
+                id: payload.new.id,
+                role: payload.new.role,
+                content: payload.new.content,
+                sent_at: payload.new.sent_at,
+                sent_by: payload.new.sent_by,
+                conversation_id: payload.new.conversation_id,
+                metadata: payload.new.metadata,
+              }];
+            });
           }
         )
         .on(
@@ -267,8 +481,10 @@ function InboxContent() {
             filter: `conversation_id=eq.${convId}`,
           },
           async () => {
-            const latestLeads = await fetchLeads(selectedConversationIds);
+            const { leads: latestLeads, hasMore } = await fetchLeads(selectedConversationIds);
             setLeads(latestLeads);
+            setLeadsHasMore(hasMore);
+            setLeadsOffset(LEADS_PAGE_SIZE);
           }
         )
         .subscribe((status) => {
@@ -378,6 +594,9 @@ function InboxContent() {
           contacts={contacts}
           selectedId={selectedContact?.id}
           onSelect={handleSelectContact}
+          onLoadMore={loadMoreContacts}
+          hasMore={contactsHasMore}
+          loadingMore={contactsLoadingMore}
         />
       </div>
 
@@ -390,7 +609,9 @@ function InboxContent() {
                   {selectedContact.wa_id}
                 </div>
                 <div className="text-sm text-text-secondary">
-                  {selectedContact.company_name || '(No company)'}
+                  {selectedContact.name && selectedContact.company_name
+                    ? `${selectedContact.name} · ${selectedContact.company_name}`
+                    : selectedContact.name || selectedContact.company_name || '(Unknown)'}
                   {selectedContact.conversationCount > 1 && (
                     <span className="text-text-muted ml-2">
                       · {selectedContact.conversationCount} conversations
@@ -438,6 +659,9 @@ function InboxContent() {
               <ChatLog
                 messages={messages}
                 showConversationSeparators={selectedContact.conversationCount > 1}
+                onLoadMore={loadMoreMessages}
+                hasMore={messagesHasMore}
+                loadingMore={messagesLoadingMore}
               />
             )}
             <ChatInput
@@ -454,7 +678,12 @@ function InboxContent() {
       </div>
 
       <div className="w-1/4 min-w-[250px]">
-        <LeadsList leads={leads} />
+        <LeadsList
+          leads={leads}
+          onLoadMore={loadMoreLeads}
+          hasMore={leadsHasMore}
+          loadingMore={leadsLoadingMore}
+        />
       </div>
     </div>
   );

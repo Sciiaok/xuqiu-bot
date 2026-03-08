@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect, useRef } from 'react';
 
 function getBusinessValueColor(value) {
   switch (value) {
@@ -102,8 +102,28 @@ function formatColorQuantity(colorQuantity) {
   return colorQuantity.map(cq => `${cq.color}: ${cq.qty || '?'}`).join(', ');
 }
 
-export default function LeadsList({ leads = [] }) {
+export default function LeadsList({ leads = [], onLoadMore, hasMore, loadingMore }) {
   const [expandedId, setExpandedId] = useState(null);
+  const sentinelRef = useRef(null);
+
+  // IntersectionObserver for bottom sentinel
+  useEffect(() => {
+    if (!onLoadMore || !hasMore || loadingMore) return;
+    const sentinel = sentinelRef.current;
+    if (!sentinel) return;
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries[0].isIntersecting) {
+          onLoadMore();
+        }
+      },
+      { threshold: 0.1 }
+    );
+
+    observer.observe(sentinel);
+    return () => observer.disconnect();
+  }, [onLoadMore, hasMore, loadingMore]);
 
   if (leads.length === 0) {
     return (
@@ -257,6 +277,15 @@ export default function LeadsList({ leads = [] }) {
             </button>
           );
         })}
+
+        {/* Bottom sentinel for infinite scroll */}
+        {hasMore && (
+          <div ref={sentinelRef} className="flex justify-center py-2">
+            {loadingMore && (
+              <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-accent-blue"></div>
+            )}
+          </div>
+        )}
       </div>
     </div>
   );
