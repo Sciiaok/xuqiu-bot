@@ -155,11 +155,17 @@ export async function GET(request) {
       current.setDate(current.getDate() + 1);
     }
 
-    // Qualify conversion rate: conversations that produced QUALIFY+ leads / total conversations per day
+    // Qualify conversion rate: conversations with at least 1 QUALIFY+ lead / total conversations per day
+    // Group by CONVERSATION created_at date (not lead date) to match denominator
+    const convDateMap = {};
+    filteredConversations.forEach(c => {
+      convDateMap[c.id] = c.created_at?.split('T')[0];
+    });
+
     const qualifyConvByDate = {};
     leads.forEach(lead => {
       if (['QUALIFY', 'PROOF'].includes(lead.inquiry_quality)) {
-        const date = lead.created_at?.split('T')[0];
+        const date = convDateMap[lead.conversation_id];
         if (date) {
           if (!qualifyConvByDate[date]) qualifyConvByDate[date] = new Set();
           qualifyConvByDate[date].add(lead.conversation_id);
