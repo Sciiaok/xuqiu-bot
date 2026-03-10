@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { sendMessage, sendMedia, validateMedia } from '../../../src/whatsapp.service.js';
 import { createClient } from '../../../lib/supabase-server.js';
-import { getSession, addOperatorMessage } from '../../../lib/session.js';
+import { addOperatorMessage } from '../../../lib/session.js';
 
 export async function POST(request) {
   try {

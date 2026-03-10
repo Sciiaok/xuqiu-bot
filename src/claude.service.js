@@ -5,7 +5,7 @@ const anthropic = new Anthropic({
   apiKey: config.anthropic.apiKey,
 });
 
-const SYSTEM_PROMPT = `You are a B2B lead qualification assistant for a vehicle export company specializing in BYD and other vehicles worldwide.
+const SYSTEM_PROMPT = `You are a B2B lead qualification assistant for a vehicle export company specializing in BYD/Changan/GSC and other vehicles worldwide.
 
 ═══ CUSTOMER INTENT CLASSIFICATION ═══
 
@@ -41,8 +41,8 @@ Classify each conversation into one of these intents:
    - Other potential business intent → Continue probing
 
 ═══ CONVERSATION TECHNIQUES ═══
-
-1. Max 1-2 questions per message, under 180 characters
+DO NOT USE EMOJI
+1. Max 1-2 questions per message, under 180 characters.
 2. Friendly greetings: "Friend", "Dear", casual WhatsApp tone
 3. NEVER promise final prices
 4. In casual chat, answer first then add ONE business question
@@ -297,6 +297,87 @@ const JSON_SCHEMA = {
 };
 
 /**
+ * Normalize non-standard agent response to standard pipeline format.
+ * Maps alternative field names (rfq_items, customer_profile, etc.)
+ * to the standard leads-based structure expected by session.js and lead.repository.js.
+ *
+ * Field mapping:
+ *   rfq_items           → leads
+ *   item.model           → car_model
+ *   item.machinery_type  → product_name
+ *   item.specifications  → sku_description
+ *   item.quantity         → qty_bucket
+ *   item.incoterm         → international_commercial_term
+ *   customer_profile.company_name → lead.company_name
+ *   customer_profile.company_type → lead.buyer_type
+ *   All original fields + customer_profile → details (JSONB)
+ */
+function normalizeAgentResponse(parsed) {
+  // Case 1: rfq_items → leads (e.g., agricultural machinery agent)
+  if (parsed.rfq_items) {
+    const customerProfile = parsed.customer_profile || {};
+
+    parsed.leads = parsed.rfq_items.map(item => ({
+      // Map to standard DB columns
+      brand: item.brand || '',
+      car_model: item.model || item.machinery_type || '',
+      destination_country: item.destination_country || '',
+      destination_port: item.destination_port || '',
+      loading_port: item.loading_port || '',
+      international_commercial_term: item.incoterm || '',
+      company_name: customerProfile.company_name || '',
+      timeline: item.timeline || '',
+      color_quantity: [],
+      qty_bucket: item.quantity || '',
+      // Multi-product columns
+      product_name: item.machinery_type || '',
+      sku_description: item.specifications || '',
+      buyer_type: customerProfile.company_type || '',
+      // Preserve all original data in details JSONB
+      details: {
+        machinery_type: item.machinery_type,
+        model: item.model,
+        specifications: item.specifications,
+        quantity: item.quantity,
+        customer_profile: cleanEmptyValues(customerProfile),
+      },
+    }));
+
+    delete parsed.rfq_items;
+    delete parsed.customer_profile;
+    return;
+  }
+
+  // Case 2: Standard leads + customer_profile → merge profile into leads
+  if (parsed.customer_profile && parsed.leads) {
+    const cp = parsed.customer_profile;
+    parsed.leads = parsed.leads.map(lead => ({
+      ...lead,
+      company_name: lead.company_name || cp.company_name || '',
+      buyer_type: lead.buyer_type || cp.company_type || '',
+      details: {
+        ...(lead.details || {}),
+        customer_profile: cleanEmptyValues(cp),
+      },
+    }));
+    delete parsed.customer_profile;
+  }
+}
+
+/**
+ * Remove empty string values from a flat object (for cleaner JSONB storage)
+ */
+function cleanEmptyValues(obj) {
+  if (!obj || typeof obj !== 'object') return obj;
+  const cleaned = {};
+  for (const [key, value] of Object.entries(obj)) {
+    if (value === '' || value === null || value === undefined) continue;
+    cleaned[key] = value;
+  }
+  return cleaned;
+}
+
+/**
  * Get an intelligent response from Claude
  * @param {Array} conversationHistory - Array of {role, content} message objects
  * @param {string} userMessage - The latest user message
@@ -357,6 +438,11 @@ const response = await anthropic.messages.create({
   }
 
   const parsed = JSON.parse(content.text);
+
+  // Normalize non-standard agent output to standard pipeline format
+  if (agentConfig?.output_schema && Object.keys(agentConfig.output_schema).length > 0) {
+    normalizeAgentResponse(parsed);
+  }
 
   // Clean up empty strings from structured output (required fields output "" when unknown)
   if (parsed.leads) {

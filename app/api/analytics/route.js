@@ -63,6 +63,7 @@ export async function GET(request) {
       .select('id, conversation_id, contact_id, destination_country, car_model, qty_bucket, handoff_summary, company_name, created_at, updated_at, inquiry_quality, business_value')
       .eq('route', 'HUMAN_NOW')
       .gte('created_at', humanNowFrom.toISOString())
+      .order('created_at', { ascending: false })
       .limit(10000);
 
     if (country) {
