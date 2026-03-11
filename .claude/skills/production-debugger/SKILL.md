@@ -1,6 +1,6 @@
 ---
 name: production-debugger
-description: Debug production issues for the lead_engine_next WhatsApp chatbot system. Use this skill when investigating why a contact didn't receive a Feishu notification, why a message wasn't processed, why routing failed, or any production anomaly involving contacts, leads, conversations, or the message queue. Trigger whenever the user mentions debugging production, checking logs, investigating a contact/lead issue, or asks "why didn't X happen" about the live system.
+description: Debug production issues for the lead_engine_next WhatsApp chatbot system. Use this skill whenever the user asks to check live or production logs, SSH to the server, inspect PM2 processes, investigate why a contact or lead was not processed, or verify a suspected production fix by running relevant local tests. This skill should also trigger when the user mentions线上, production, prod, PM2, server logs, queue-cron, lead-sync-cron, webhook failures, or asks to "go online and check logs" even if they do not explicitly ask for a skill.
 ---
 
 # Production Debugger
@@ -9,12 +9,26 @@ Systematic approach to debugging production issues in the lead_engine_next syste
 
 ## Infrastructure
 
-- **Server**: `aws-foggy` (SSH alias)
+- **SSH alias source**: read from environment variable `SSH_ALIAS`
 - **App directory**: `~/lead_engine_next`
 - **PM2 processes**:
   - `lead_engine_next` — Next.js app (webhook, dashboard)
   - `queue-cron` — Polls and processes the message queue
   - `lead-sync-cron` — Syncs approved leads
+
+## Required Checks Before SSH
+
+Before any SSH-based step:
+
+1. Resolve the SSH alias in this order:
+   - current environment variable `SSH_ALIAS`
+   - `.env.local`
+   - `.env`
+2. Read only the `SSH_ALIAS=` line from env files when falling back
+3. If no value is found, stop and tell the user `SSH_ALIAS` is not set in the environment or env files
+4. Use the helper script `./.claude/skills/production-debugger/scripts/ssh_prod.sh` instead of hardcoding an alias
+
+The skill must never assume a server alias like `aws-foggy`. It must always resolve `SSH_ALIAS` from the environment or local env files.
 
 ## Debugging Workflow
 
@@ -86,22 +100,27 @@ SSH into the server and search PM2 logs for relevant patterns:
 
 ```bash
 # Check PM2 process status
-ssh aws-foggy "pm2 list"
+./.claude/skills/production-debugger/scripts/ssh_prod.sh "pm2 list"
 
 # Search logs for a specific contact
-ssh aws-foggy "pm2 logs lead_engine_next --lines 2000 --nostream" 2>&1 | grep -i "<wa_id>"
+./.claude/skills/production-debugger/scripts/ssh_prod.sh \
+  "bash -lc 'pm2 logs lead_engine_next --lines 2000 --nostream 2>&1 | grep -i -- \"<wa_id>\"'"
 
 # Search for error patterns
-ssh aws-foggy "pm2 logs lead_engine_next --lines 2000 --nostream" 2>&1 | grep -i -E "(error|failed|feishu|HUMAN_NOW)"
+./.claude/skills/production-debugger/scripts/ssh_prod.sh \
+  "bash -lc 'pm2 logs lead_engine_next --lines 2000 --nostream 2>&1 | grep -i -E \"(error|failed|feishu|HUMAN_NOW)\"'"
 
 # Get context around errors
-ssh aws-foggy "pm2 logs lead_engine_next --lines 5000 --nostream" 2>&1 | grep -B5 -A5 "<error_pattern>"
+./.claude/skills/production-debugger/scripts/ssh_prod.sh \
+  "bash -lc 'pm2 logs lead_engine_next --lines 5000 --nostream 2>&1 | grep -B5 -A5 -- \"<error_pattern>\"'"
 
 # Check queue-cron logs
-ssh aws-foggy "pm2 logs queue-cron --lines 500 --nostream" 2>&1 | grep -i "error"
+./.claude/skills/production-debugger/scripts/ssh_prod.sh \
+  "bash -lc 'pm2 logs queue-cron --lines 500 --nostream 2>&1 | grep -i -- \"error\"'"
 
 # Count occurrences of an error
-ssh aws-foggy "pm2 logs lead_engine_next --lines 5000 --nostream" 2>&1 | grep -c "<pattern>"
+./.claude/skills/production-debugger/scripts/ssh_prod.sh \
+  "bash -lc 'pm2 logs lead_engine_next --lines 5000 --nostream 2>&1 | grep -c -- \"<pattern>\"'"
 ```
 
 **Key log patterns:**
@@ -115,14 +134,43 @@ ssh aws-foggy "pm2 logs lead_engine_next --lines 5000 --nostream" 2>&1 | grep -c
 | `"Global max turns"` | Conversation forced to FAQ_END |
 | `"Error processing queue for"` | Queue processing failed entirely |
 
-### Step 4: Trace the Message Pipeline
+### Step 4: Run Relevant Tests Locally
+
+After collecting live evidence, run the smallest useful local test set that can confirm or falsify the hypothesis.
+
+Use these defaults:
+
+```bash
+# Shared-number routing, inbound image handling, queue metadata
+npm run test:webhook-tdd
+
+# Full current unit suite for this repo
+node --experimental-loader ./tests/unit/loaders/next-server-loader.mjs \
+  --experimental-test-module-mocks \
+  --test tests/unit/*.test.js
+
+# Specific inbox media UI regression
+npx playwright test tests/e2e/inbox-media-upload.spec.js
+```
+
+Selection rules:
+
+- If the issue is webhook, queue, routing, referral, or inbound media related, start with `npm run test:webhook-tdd`
+- If the scope is broader or the fix touched several services, run the full unit suite
+- If the user is investigating an inbox UI or upload regression, run the specific Playwright spec
+- Do not run large unrelated suites just to look busy
+
+### Step 5: Trace the Message Pipeline
+
+Use this mental model to connect live logs to code paths:
 
 ```
 WhatsApp webhook → message_queue (deduplicated by wa_message_id)
   → queue-processor.js (acquires + locks pending messages)
-  → session.js getSession() (loads contact, conversation, lead, messages)
-  → claude.service.js getResponse() (analyzes intent, extracts leads)
-  → session.js processMessage() (validates car_model, replaceConversationLeads)
+  → session.js / conversation-context.service.js (loads contact, conversation, lead, messages)
+  → agent-routing.service.js / agent-router.service.js (shared-number routing)
+  → claude.service.js getResponse() (analyzes intent, extracts leads, can include images)
+  → session.js processMessageForConversation() (persists user/assistant messages, replaces leads)
   → queue-processor.js (checks global max turns, determines finalRoute)
   → routing.service.js executeConversationRouting()
       → HUMAN_NOW: routeLeadToSales() → sendFeishuMessage() (fire-and-forget)
@@ -139,9 +187,34 @@ WhatsApp webhook → message_queue (deduplicated by wa_message_id)
 5. **Routing skipped** — `finalRoute === 'CONTINUE'` skips routing entirely
 6. **Feishu send failed silently** — fire-and-forget `.catch()` only logs. Check for `"Feishu notification failed:"`
 
+## Current Code Paths Worth Checking
+
+- `app/api/webhook/route.js` — ingress, queueing, referral capture, trace logs
+- `lib/queue-processor.js` — aggregation, router invocation, Claude call, reply send
+- `lib/conversation-context.service.js` — shared-number conversation reuse and phone number tracking
+- `src/agent-router.service.js` — Claude tool-use agent selection and clarification
+- `src/claude.service.js` — multimodal image attachment to Claude
+- `src/routing.service.js` — HUMAN_NOW / FAQ_END execution
+
+## Expected Report Structure
+
+When using this skill, summarize findings in this order:
+
+1. `Live evidence`
+   Include exact PM2 process or log signals found
+2. `DB or state evidence`
+   Include the minimum rows or fields that explain the behavior
+3. `Local verification`
+   State which tests were run and whether they passed
+4. `Conclusion`
+   State the most likely root cause or confirm that the issue could not yet be reproduced locally
+5. `Next action`
+   State the concrete next command or code area to inspect
+
 ## Known Gotchas
 
 - **Feishu UUID limit**: The Feishu API `uuid` field has a 50-character maximum. Longer dedup keys cause "field validation failed" and the notification silently fails.
 - **Fire-and-forget Feishu sends**: `routeLeadToSales` doesn't await the Feishu call. Errors are caught and logged but routing still reports success.
 - **replaceConversationLeads is non-atomic**: Deletes all leads then inserts new ones. If insert fails, leads are lost.
 - **handoff_summary not persisted**: `replaceConversationLeads` doesn't include `handoff_summary` in the insert. The field is passed separately to the routing function but is null on the lead record.
+- **Missing SSH_ALIAS**: if `SSH_ALIAS` is unset, production log inspection is blocked until the environment variable is exported.

@@ -1,50 +1,61 @@
 'use client';
 
-import { useState } from 'react';
 import { useTranslations } from 'next-intl';
 
 export default function FilterBar({
   leads = [],
   carModels = [],
+  agentOptions = [],
+  filters = {},
   onFilterChange,
-  initialInquiryQuality = 'all',
-  initialBusinessValue = 'all',
 }) {
-  const [inquiryQuality, setInquiryQuality] = useState(initialInquiryQuality);
-  const [businessValue, setBusinessValue] = useState(initialBusinessValue);
-  const [customer, setCustomer] = useState('');
-  const [model, setModel] = useState('all');
   const t = useTranslations('filters');
+  const inquiryQuality = filters.inquiryQuality || 'all';
+  const businessValue = filters.businessValue || 'all';
+  const customer = filters.customer || '';
+  const model = filters.model || 'all';
+  const agentIds = filters.agentIds || [];
 
   const handleInquiryQualityChange = (e) => {
     const newValue = e.target.value;
-    setInquiryQuality(newValue);
-    onFilterChange?.({ inquiryQuality: newValue, businessValue, customer, model });
+    onFilterChange?.({ inquiryQuality: newValue, businessValue, customer, model, agentIds });
   };
 
   const handleBusinessValueChange = (e) => {
     const newValue = e.target.value;
-    setBusinessValue(newValue);
-    onFilterChange?.({ inquiryQuality, businessValue: newValue, customer, model });
+    onFilterChange?.({ inquiryQuality, businessValue: newValue, customer, model, agentIds });
   };
 
   const handleCustomerChange = (e) => {
     const newCustomer = e.target.value;
-    setCustomer(newCustomer);
-    onFilterChange?.({ inquiryQuality, businessValue, customer: newCustomer, model });
+    onFilterChange?.({ inquiryQuality, businessValue, customer: newCustomer, model, agentIds });
   };
 
   const handleModelChange = (e) => {
     const newModel = e.target.value;
-    setModel(newModel);
-    onFilterChange?.({ inquiryQuality, businessValue, customer, model: newModel });
+    onFilterChange?.({ inquiryQuality, businessValue, customer, model: newModel, agentIds });
+  };
+
+  const toggleAgent = (agentId) => {
+    const nextAgentIds = agentIds.includes(agentId)
+      ? agentIds.filter((id) => id !== agentId)
+      : [...agentIds, agentId];
+
+    onFilterChange?.({
+      inquiryQuality,
+      businessValue,
+      customer,
+      model,
+      agentIds: nextAgentIds,
+    });
   };
 
   const filteredCount = leads.filter((lead) => {
     if (inquiryQuality !== 'all' && lead.inquiry_quality?.toUpperCase() !== inquiryQuality.toUpperCase()) return false;
     if (businessValue !== 'all' && lead.business_value?.toUpperCase() !== businessValue.toUpperCase()) return false;
-    if (customer.trim() && !lead.lead_data?.company_name?.toLowerCase().includes(customer.toLowerCase())) return false;
+    if (customer.trim() && !(lead.lead_data?.company_name || '').toLowerCase().includes(customer.toLowerCase())) return false;
     if (model !== 'all' && lead.lead_data?.car_model !== model) return false;
+    if (agentIds.length > 0 && (!lead.agent_id || !agentIds.includes(lead.agent_id))) return false;
     return true;
   }).length;
 
@@ -118,6 +129,41 @@ export default function FilterBar({
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
             </svg>
           </div>
+        </div>
+
+        <div className="flex items-center gap-2 flex-wrap">
+          <span className="text-sm text-text-secondary">{t('agent')}</span>
+          <button
+            type="button"
+            onClick={() => onFilterChange?.({
+              inquiryQuality,
+              businessValue,
+              customer,
+              model,
+              agentIds: [],
+            })}
+            className={`px-3 py-1.5 rounded-lg text-sm border transition-colors ${
+              agentIds.length === 0
+                ? 'bg-accent-blue text-white border-accent-blue'
+                : 'bg-surface border-border text-text-secondary hover:text-text-primary'
+            }`}
+          >
+            {t('allAgents')}
+          </button>
+          {agentOptions.map((agent) => (
+            <button
+              key={agent.id}
+              type="button"
+              onClick={() => toggleAgent(agent.id)}
+              className={`px-3 py-1.5 rounded-lg text-sm border transition-colors ${
+                agentIds.includes(agent.id)
+                  ? 'bg-accent-blue/10 text-accent-blue border-accent-blue/30'
+                  : 'bg-surface border-border text-text-secondary hover:text-text-primary'
+              }`}
+            >
+              {agent.product_line}
+            </button>
+          ))}
         </div>
 
         <div className="flex-1" />

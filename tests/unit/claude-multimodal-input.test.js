@@ -97,3 +97,90 @@ test('getResponse sends inbound WhatsApp images to Claude as image blocks', asyn
     fakeImageBytes.toString('base64')
   );
 });
+
+test('getResponse traces contextInfo in claude.request.started log', async () => {
+  const originalConsoleLog = console.log;
+  const logLines = [];
+
+  class FakeAnthropic {
+    constructor() {
+      this.messages = {
+        create: async () => ({
+          content: [
+            {
+              type: 'text',
+              text: JSON.stringify({
+                conversation_intent: ['business_inquiry'],
+                conversation_intent_summary: 'Need more company details',
+                inquiry_quality: 'GOOD',
+                business_value: 'LOW',
+                leads: [],
+                route: 'CONTINUE',
+                next_message: 'Please share your company name.',
+                handoff_summary: '',
+              }),
+            },
+          ],
+        }),
+      };
+    }
+  }
+
+  mock.module('@anthropic-ai/sdk', {
+    defaultExport: FakeAnthropic,
+  });
+
+  mock.module(configModuleUrl, {
+    namedExports: {
+      config: {
+        anthropic: {
+          apiKey: 'anthropic-test-key',
+          model: 'claude-test-model',
+        },
+      },
+    },
+  });
+
+  mock.module(mediaServiceModuleUrl, {
+    namedExports: {
+      downloadWhatsAppMediaBuffer: async () => {
+        throw new Error('media download should not be called');
+      },
+      isClaudeSupportedImageMimeType: () => false,
+    },
+  });
+
+  console.log = (line) => {
+    logLines.push(line);
+  };
+
+  try {
+    const { getResponse } = await import(`${claudeModuleUrl}?test=${Date.now()}-${Math.random()}`);
+
+    await getResponse(
+      [],
+      'Need quote',
+      {
+        missing_fields: ['company_name', 'destination_country'],
+        companyName: 'ACME Trading',
+      },
+      null,
+      { traceId: 'trace-123', conversationId: 'conv-123', waId: 'wa-123' }
+    );
+  } finally {
+    console.log = originalConsoleLog;
+  }
+
+  const startedLog = logLines
+    .map((line) => JSON.parse(line))
+    .find((entry) => entry.event === 'claude.request.started');
+
+  assert.ok(startedLog, 'expected claude.request.started log');
+  assert.deepEqual(startedLog.context_info, {
+    missing_fields: ['company_name', 'destination_country'],
+    companyName: 'ACME Trading',
+  });
+  assert.equal(startedLog.trace_id, 'trace-123');
+  assert.equal(startedLog.conversation_id, 'conv-123');
+  assert.equal(startedLog.wa_id, 'wa-123');
+});

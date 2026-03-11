@@ -19,8 +19,10 @@ export default function LeadsPage() {
     businessValue: 'all',
     customer: '',
     model: 'all',
+    agentIds: [],
   });
   const [carModels, setCarModels] = useState([]);
+  const [agentOptions, setAgentOptions] = useState([]);
 
   // Modal state
   const [editingLead, setEditingLead] = useState(null);
@@ -35,6 +37,7 @@ export default function LeadsPage() {
   useEffect(() => {
     fetchLeads();
     fetchSyncStatuses();
+    fetchAgentOptions();
   }, []);
 
   useEffect(() => {
@@ -51,7 +54,8 @@ export default function LeadsPage() {
         .select(`
           *,
           contact:contacts(wa_id, company_name, name),
-          conversation:conversations(status, last_message_at, message_count)
+          conversation:conversations(status, last_message_at, message_count),
+          agent:agents(id, product_line)
         `)
         .order('updated_at', { ascending: false });
 
@@ -90,12 +94,15 @@ export default function LeadsPage() {
         },
         conversation_status: lead.conversation?.status,
         message_count: lead.conversation?.message_count,
+        agent_id: lead.agent_id || lead.agent?.id || null,
+        agent_product_line: lead.agent?.product_line || null,
       }));
 
       setLeads(transformedLeads);
 
       const models = [...new Set(data?.map(l => l.car_model).filter(Boolean))];
       setCarModels(models);
+
     } catch (err) {
       console.error('Error fetching leads:', err);
       setError(err.message || 'Failed to fetch leads');
@@ -124,6 +131,25 @@ export default function LeadsPage() {
     }
   }
 
+  async function fetchAgentOptions() {
+    try {
+      const response = await fetch('/api/agents');
+      if (!response.ok) throw new Error('Failed to fetch agents');
+      const payload = await response.json();
+      const options = (payload.agents || [])
+        .filter((agent) => agent?.id && agent?.product_line)
+        .map((agent) => ({
+          id: agent.id,
+          product_line: agent.product_line,
+        }))
+        .sort((a, b) => a.product_line.localeCompare(b.product_line));
+
+      setAgentOptions(options);
+    } catch (err) {
+      console.error('Error fetching agent options:', err);
+    }
+  }
+
   function applyFilters() {
     let result = [...leads];
 
@@ -142,12 +168,16 @@ export default function LeadsPage() {
     if (filters.customer.trim()) {
       const search = filters.customer.toLowerCase();
       result = result.filter((lead) =>
-        lead.lead_data?.company_name?.toLowerCase().includes(search)
+        (lead.lead_data?.company_name || '').toLowerCase().includes(search)
       );
     }
 
     if (filters.model !== 'all') {
       result = result.filter((lead) => lead.lead_data?.car_model === filters.model);
+    }
+
+    if (filters.agentIds.length > 0) {
+      result = result.filter((lead) => lead.agent_id && filters.agentIds.includes(lead.agent_id));
     }
 
     setFilteredLeads(result);
@@ -307,9 +337,9 @@ export default function LeadsPage() {
       <FilterBar
         leads={leads}
         carModels={carModels}
+        agentOptions={agentOptions}
+        filters={filters}
         onFilterChange={handleFilterChange}
-        initialInquiryQuality={filters.inquiryQuality}
-        initialBusinessValue={filters.businessValue}
       />
 
       {/* Action Buttons */}
@@ -379,7 +409,13 @@ export default function LeadsPage() {
             <div className="p-8 text-center text-text-secondary">
               <p>{t('noMatchingLeads')}</p>
               <button
-                onClick={() => setFilters({ inquiryQuality: 'all', businessValue: 'all', customer: '', model: 'all' })}
+                onClick={() => setFilters({
+                  inquiryQuality: 'all',
+                  businessValue: 'all',
+                  customer: '',
+                  model: 'all',
+                  agentIds: [],
+                })}
                 className="mt-2 text-accent-blue hover:text-accent-blue/80 underline"
               >
                 {t('clearFilters')}

@@ -16,8 +16,12 @@ Classify each conversation into one of these intents:
    - Action: Provide product catalog link, route to FAQ_END
    - Example: "I need one small tractor for my 5-acre farm"
 
-   IMPORTANT: Unclear quantity does NOT mean personal_farmer.
-   "I want a tractor" without personal signals → treat as business_inquiry
+   IMPORTANT - DO NOT misclassify as personal_farmer:
+   - "self employed", "freelance", "independent" → these are BUSINESS buyers (small business)
+   - Farm operators, contractors, cooperative leaders → BUSINESS buyers
+   - If conversation already has business signals (bulk quantity, export, specific model requests), NEVER reclassify as personal_farmer based on job title alone
+   - Unclear quantity does NOT mean personal_farmer
+   - "I want a tractor" without personal signals → treat as business_inquiry
 
 2. business_inquiry (B端主动询盘)
    - Proactive inquiry about machinery (with or without quantity)
@@ -153,6 +157,21 @@ Do NOT ask all questions at once. Weave into natural conversation over multiple 
 ❌ TOO LONG: "Thank you for your interest in our agricultural machinery! We have a wide range of tractors suitable for the African market. To provide you with the best quotation..."
 ✅ GOOD: "Great, friend! 20 tractors to Lagos. What horsepower do you need?"
 ✅ GOOD: "Thanks, dear! Have you imported from China before? We can arrange better terms for experienced buyers."`;
+
+const AGRI_QUALIFICATION_CONFIG = {
+  inquiry_quality_requirements: {
+    GOOD: {
+      required_fields: ['machinery_type'],
+    },
+    QUALIFY: {
+      required_fields: ['model', 'specifications', 'quantity', 'destination_country'],
+    },
+    PROOF: {
+      required_fields: ['company_name'],
+      require_any_of: [['china_procurement_history', 'current_fleet', 'business_scale']],
+    },
+  },
+};
 
 
 const AGRI_JSON_SCHEMA = {
@@ -302,6 +321,7 @@ async function seedAgriMachineryAgent() {
         name: 'Agricultural Machinery Export Agent',
         system_prompt: AGRI_SYSTEM_PROMPT,
         output_schema: AGRI_JSON_SCHEMA,
+        qualification_config: AGRI_QUALIFICATION_CONFIG,
         updated_at: new Date().toISOString(),
       })
       .eq('id', existing.id)
@@ -323,6 +343,7 @@ async function seedAgriMachineryAgent() {
       product_line: 'agri_machinery',
       system_prompt: AGRI_SYSTEM_PROMPT,
       output_schema: AGRI_JSON_SCHEMA,
+      qualification_config: AGRI_QUALIFICATION_CONFIG,
       is_active: true,
     })
     .select()
@@ -338,4 +359,4 @@ async function seedAgriMachineryAgent() {
 
 seedAgriMachineryAgent();
 
-export { AGRI_SYSTEM_PROMPT, AGRI_JSON_SCHEMA };
+export { AGRI_SYSTEM_PROMPT, AGRI_JSON_SCHEMA, AGRI_QUALIFICATION_CONFIG };

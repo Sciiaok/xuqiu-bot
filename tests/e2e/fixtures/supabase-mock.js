@@ -10,6 +10,7 @@
  * @param {Array}  opts.conversations - conversation rows (with nested contact)
  * @param {Array}  opts.messages      - message rows
  * @param {Array}  opts.leads         - lead rows
+ * @param {Array}  opts.leadSyncLogs  - lead sync log rows
  * @param {boolean} opts.takeoverStatus - is_human_takeover for the first conversation
  */
 export async function mockSupabase(page, opts = {}) {
@@ -53,6 +54,11 @@ export async function mockSupabase(page, opts = {}) {
   // ---- Leads ----
   await page.route('**/rest/v1/leads*', (route) =>
     route.fulfill({ json: opts.leads || [] })
+  );
+
+  // ---- Lead sync logs ----
+  await page.route('**/rest/v1/lead_sync_logs*', (route) =>
+    route.fulfill({ json: opts.leadSyncLogs || [] })
   );
 
   // ---- Realtime WebSocket — just abort ----

@@ -48,5 +48,6 @@ export function buildRuntimeAgentConfig(agent) {
     ...agent,
     system_prompt: systemPrompt,
     output_schema: agent.output_schema || {},
+    qualification_config: agent.qualification_config || {},
   };
 }

@@ -113,6 +113,7 @@ export default function LeadCard({ lead, onEdit, onApprove, syncStatus }) {
     approved = false,
     brand,
     color_quantity,
+    agent_product_line,
   } = lead;
 
   const {
@@ -175,6 +176,12 @@ export default function LeadCard({ lead, onEdit, onApprove, syncStatus }) {
           )}
 
           <div className="flex items-center gap-2 text-sm flex-wrap">
+            {agent_product_line && (
+              <span className="badge border bg-surface-hover text-text-primary border-border">
+                {agent_product_line}
+              </span>
+            )}
+
             {/* Business Value Badge */}
             <span className={`badge border ${getBusinessValueBadgeStyle(business_value)}`}>
               {business_value || 'LOW'}

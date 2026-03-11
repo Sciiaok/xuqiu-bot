@@ -9,15 +9,19 @@ Your goal: Through multi-turn WhatsApp conversations, identify customer business
 Classify each conversation into one of these intents:
 
 1. personal_consumer (C端个人)
-   - MUST have EXPLICIT personal/individual signals:
+   - MUST have EXPLICIT personal/individual signals in Declarative Sentence/Statement:
      * "for my car", "personal use", "just one piece for myself"
      * Asking about retail price, local repair shop, installation
-   - AND must NOT have business signals (company, bulk, export, resale)
+   - AND must NOT have any business signals (company, bulk, export, resale)
    - Action: Politely inform we do wholesale only, route to FAQ_END
    - Example: "I need one fuel pump for my Corolla"
 
-   IMPORTANT: Unclear quantity does NOT mean personal_consumer.
-   "I need fuel pumps" without personal signals → treat as business_inquiry
+   IMPORTANT - DO NOT misclassify as personal_consumer:
+   - "self employed", "freelance", "independent" → these are BUSINESS buyers (small business)
+   - Mechanics, technicians, workshop owners, garage owners → BUSINESS buyers
+   - If conversation already has business signals (bulk quantity, export, specific model requests), NEVER reclassify as personal_consumer based on job title alone
+   - Unclear quantity does NOT mean personal_consumer
+   - "I need fuel pumps" without personal signals → treat as business_inquiry
 
 2. business_inquiry (B端主动询盘)
    - Proactive inquiry about auto parts (with or without quantity)
@@ -155,6 +159,21 @@ CAR MODEL HANDLING:
 ✅ GOOD: "Great, friend! Corolla fuel pump, OEM 23221-0D010. How many pieces do you need?"
 ✅ GOOD: "Thanks, dear! Which year Camry? We have parts from 2002 to 2012."`;
 
+const AUTO_PARTS_QUALIFICATION_CONFIG = {
+  inquiry_quality_requirements: {
+    GOOD: {
+      required_fields: ['part_name', 'car_model'],
+    },
+    QUALIFY: {
+      required_fields: ['year_range', 'quantity', 'destination_country'],
+    },
+    PROOF: {
+      required_fields: ['international_commercial_term'],
+      require_any_of: [['oem_code', 'company_name']],
+    },
+  },
+};
+
 
 const AUTO_PARTS_JSON_SCHEMA = {
   type: 'object',
@@ -275,6 +294,7 @@ async function seedAutoPartsAgent() {
         name: 'Japanese Auto Parts Export Agent',
         system_prompt: AUTO_PARTS_SYSTEM_PROMPT,
         output_schema: AUTO_PARTS_JSON_SCHEMA,
+        qualification_config: AUTO_PARTS_QUALIFICATION_CONFIG,
         updated_at: new Date().toISOString(),
       })
       .eq('id', existing.id)
@@ -296,6 +316,7 @@ async function seedAutoPartsAgent() {
       product_line: 'auto_parts',
       system_prompt: AUTO_PARTS_SYSTEM_PROMPT,
       output_schema: AUTO_PARTS_JSON_SCHEMA,
+      qualification_config: AUTO_PARTS_QUALIFICATION_CONFIG,
       is_active: true,
     })
     .select()
@@ -311,4 +332,4 @@ async function seedAutoPartsAgent() {
 
 seedAutoPartsAgent();
 
-export { AUTO_PARTS_SYSTEM_PROMPT, AUTO_PARTS_JSON_SCHEMA };
+export { AUTO_PARTS_SYSTEM_PROMPT, AUTO_PARTS_JSON_SCHEMA, AUTO_PARTS_QUALIFICATION_CONFIG };

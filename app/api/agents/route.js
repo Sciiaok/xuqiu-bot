@@ -36,7 +36,14 @@ export async function POST(request) {
     }
 
     const body = await request.json();
-    const { name, productLine, systemPrompt, outputSchema, adContextMap } = body;
+    const {
+      name,
+      productLine,
+      systemPrompt,
+      outputSchema,
+      qualificationConfig,
+      adContextMap,
+    } = body;
 
     if (!name || !productLine || !systemPrompt) {
       return NextResponse.json(
@@ -50,6 +57,7 @@ export async function POST(request) {
       productLine,
       systemPrompt,
       outputSchema: outputSchema || {},
+      qualificationConfig: qualificationConfig || {},
       adContextMap: adContextMap || {},
     });
 

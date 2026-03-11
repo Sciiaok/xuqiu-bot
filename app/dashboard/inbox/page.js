@@ -23,6 +23,7 @@ function InboxContent() {
   const [selectedConversationIds, setSelectedConversationIds] = useState([]);
   const [messages, setMessages] = useState([]);
   const [leads, setLeads] = useState([]);
+  const [agents, setAgents] = useState([]);
   const [loading, setLoading] = useState(true);
   const [panelLoading, setPanelLoading] = useState(false);
   const [sending, setSending] = useState(false);
@@ -32,6 +33,7 @@ function InboxContent() {
 
   // Contacts tab filter
   const [contactsTab, setContactsTab] = useState('all');
+  const [selectedAgentId, setSelectedAgentId] = useState('all');
 
   // Pagination state — contacts
   const [contactsOffset, setContactsOffset] = useState(0);
@@ -51,14 +53,30 @@ function InboxContent() {
   const supabase = useMemo(() => createClient(), []);
   const conversationIdsCacheRef = useRef(new Map());
   const selectionRequestRef = useRef(0);
+  const contactsRequestRef = useRef(0);
   const contactMapRef = useRef(new Map());
   const initialLoadDoneRef = useRef(false);
 
+  const resetContactsState = useCallback(() => {
+    contactMapRef.current.clear();
+    setContacts([]);
+    setContactsOffset(0);
+    setContactsHasMore(false);
+    setContactsLoadingMore(false);
+  }, []);
+
+  const invalidateContactsRequest = useCallback(() => {
+    contactsRequestRef.current += 1;
+    resetContactsState();
+  }, [resetContactsState]);
+
   // Fetch contacts with conversation summary only (no per-contact full message load)
   const fetchContacts = useCallback(async (tab = 'all') => {
+    const requestId = ++contactsRequestRef.current;
+
     try {
       if (!initialLoadDoneRef.current) setLoading(true);
-      contactMapRef.current.clear();
+      resetContactsState();
       const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
 
       let query = supabase
@@ -83,8 +101,13 @@ function InboxContent() {
         query = query.eq('is_human_takeover', true);
       }
 
+      if (selectedAgentId !== 'all') {
+        query = query.eq('agent_id', selectedAgentId);
+      }
+
       const { data: conversationRows, error } = await query;
 
+      if (requestId !== contactsRequestRef.current) return;
       if (error) throw error;
 
       const rows = conversationRows || [];
@@ -135,6 +158,7 @@ function InboxContent() {
           .in('conversation_id', latestConversationIds)
           .order('sent_at', { ascending: false });
 
+        if (requestId !== contactsRequestRef.current) return;
         const previewMap = new Map();
         for (const msg of previewMessages || []) {
           if (!previewMap.has(msg.conversation_id)) {
@@ -149,15 +173,20 @@ function InboxContent() {
 
       setContacts(sorted);
     } catch (err) {
-      console.error('Error fetching contacts:', err);
+      if (requestId === contactsRequestRef.current) {
+        console.error('Error fetching contacts:', err);
+      }
     } finally {
-      setLoading(false);
-      initialLoadDoneRef.current = true;
+      if (requestId === contactsRequestRef.current) {
+        setLoading(false);
+        initialLoadDoneRef.current = true;
+      }
     }
-  }, [supabase]);
+  }, [supabase, selectedAgentId, resetContactsState]);
 
   const loadMoreContacts = useCallback(async () => {
     if (contactsLoadingMore || !contactsHasMore) return;
+    const requestId = contactsRequestRef.current;
     setContactsLoadingMore(true);
     try {
       const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
@@ -186,8 +215,13 @@ function InboxContent() {
         query = query.eq('is_human_takeover', true);
       }
 
+      if (selectedAgentId !== 'all') {
+        query = query.eq('agent_id', selectedAgentId);
+      }
+
       const { data: conversationRows, error } = await query;
 
+      if (requestId !== contactsRequestRef.current) return;
       if (error) throw error;
 
       const rows = conversationRows || [];
@@ -240,6 +274,7 @@ function InboxContent() {
             .in('conversation_id', newConvIds)
             .order('sent_at', { ascending: false });
 
+          if (requestId !== contactsRequestRef.current) return;
           const previewMap = new Map();
           for (const msg of previewMessages || []) {
             if (!previewMap.has(msg.conversation_id)) {
@@ -260,11 +295,15 @@ function InboxContent() {
       );
       setContacts(sorted);
     } catch (err) {
-      console.error('Error loading more contacts:', err);
+      if (requestId === contactsRequestRef.current) {
+        console.error('Error loading more contacts:', err);
+      }
     } finally {
-      setContactsLoadingMore(false);
+      if (requestId === contactsRequestRef.current) {
+        setContactsLoadingMore(false);
+      }
     }
-  }, [supabase, contactsOffset, contactsHasMore, contactsLoadingMore, contactsTab]);
+  }, [supabase, contactsOffset, contactsHasMore, contactsLoadingMore, contactsTab, selectedAgentId]);
 
   const fetchMessages = useCallback(async (conversationIds) => {
     if (!conversationIds?.length) return { messages: [], hasMore: false };
@@ -374,17 +413,24 @@ function InboxContent() {
   }, [supabase, selectedConversationIds, leadsOffset, leadsHasMore, leadsLoadingMore]);
 
   const ensureConversationIds = useCallback(async (contactId) => {
-    const cached = conversationIdsCacheRef.current.get(contactId);
+    const cacheKey = `${contactId}:${selectedAgentId}`;
+    const cached = conversationIdsCacheRef.current.get(cacheKey);
     if (cached) return cached;
 
     const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
 
-    const { data, error } = await supabase
+    let query = supabase
       .from('conversations')
       .select('id')
       .eq('contact_id', contactId)
       .gte('last_message_at', thirtyDaysAgo)
       .order('last_message_at', { ascending: false });
+
+    if (selectedAgentId !== 'all') {
+      query = query.eq('agent_id', selectedAgentId);
+    }
+
+    const { data, error } = await query;
 
     if (error) {
       console.error('Error fetching conversation IDs:', error);
@@ -392,9 +438,9 @@ function InboxContent() {
     }
 
     const ids = (data || []).map((row) => row.id);
-    conversationIdsCacheRef.current.set(contactId, ids);
+    conversationIdsCacheRef.current.set(cacheKey, ids);
     return ids;
-  }, [supabase]);
+  }, [supabase, selectedAgentId]);
 
   const handleSelectContact = useCallback(async (contact) => {
     const requestId = ++selectionRequestRef.current;
@@ -452,9 +498,54 @@ function InboxContent() {
     fetchContacts(contactsTab);
   }, [fetchContacts, contactsTab]);
 
+  useEffect(() => {
+    const fetchAgents = async () => {
+      const { data, error } = await supabase
+        .from('agents')
+        .select('id, product_line')
+        .order('created_at', { ascending: true });
+
+      if (error) {
+        console.error('Error fetching agents:', error);
+        return;
+      }
+
+      setAgents(data || []);
+    };
+
+    fetchAgents();
+  }, [supabase]);
+
   const handleTabChange = useCallback((tab) => {
+    conversationIdsCacheRef.current.clear();
+    invalidateContactsRequest();
+    setSelectedContact(null);
+    setSelectedConversationIds([]);
+    setMessages([]);
+    setLeads([]);
+    setIsHumanTakeover(false);
     setContactsTab(tab);
-  }, []);
+  }, [invalidateContactsRequest]);
+
+  const handleAgentChange = useCallback((agentId) => {
+    conversationIdsCacheRef.current.clear();
+    invalidateContactsRequest();
+    setSelectedContact(null);
+    setSelectedConversationIds([]);
+    setMessages([]);
+    setLeads([]);
+    setIsHumanTakeover(false);
+    setSelectedAgentId(agentId);
+  }, [invalidateContactsRequest]);
+
+  useEffect(() => {
+    if (contacts.length > 0) return;
+    setSelectedContact(null);
+    setSelectedConversationIds([]);
+    setMessages([]);
+    setLeads([]);
+    setIsHumanTakeover(false);
+  }, [contacts]);
 
   // Auto-select contact: wa_id first, otherwise first contact in list
   useEffect(() => {
@@ -653,8 +744,11 @@ function InboxContent() {
       <div className="w-[300px] shrink-0 shadow-[2px_0_8px_rgba(0,0,0,0.06)]">
         <ContactList
           contacts={contacts}
+          agents={agents}
           selectedId={selectedContact?.id}
+          selectedAgentId={selectedAgentId}
           onSelect={handleSelectContact}
+          onAgentChange={handleAgentChange}
           onLoadMore={loadMoreContacts}
           hasMore={contactsHasMore}
           loadingMore={contactsLoadingMore}

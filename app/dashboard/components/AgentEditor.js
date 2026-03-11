@@ -10,6 +10,9 @@ export default function AgentEditor({ agent, onSave, onCancel }) {
   const [outputSchema, setOutputSchema] = useState(
     agent?.output_schema ? JSON.stringify(agent.output_schema, null, 2) : '{}'
   );
+  const [qualificationConfig, setQualificationConfig] = useState(
+    agent?.qualification_config ? JSON.stringify(agent.qualification_config, null, 2) : '{}'
+  );
   const [adContextMap, setAdContextMap] = useState(
     agent?.ad_context_map ? JSON.stringify(agent.ad_context_map, null, 2) : '{}'
   );
@@ -26,9 +29,11 @@ export default function AgentEditor({ agent, onSave, onCancel }) {
     }
 
     let parsedSchema;
+    let parsedQualificationConfig;
     let parsedAdContextMap;
     try {
       parsedSchema = JSON.parse(outputSchema);
+      parsedQualificationConfig = JSON.parse(qualificationConfig);
       parsedAdContextMap = JSON.parse(adContextMap);
     } catch {
       setError(t('jsonError'));
@@ -42,6 +47,7 @@ export default function AgentEditor({ agent, onSave, onCancel }) {
         productLine: productLine.trim(),
         systemPrompt: systemPrompt.trim(),
         outputSchema: parsedSchema,
+        qualificationConfig: parsedQualificationConfig,
         adContextMap: parsedAdContextMap,
       });
     } catch (err) {
@@ -115,6 +121,19 @@ export default function AgentEditor({ agent, onSave, onCancel }) {
         <textarea
           value={outputSchema}
           onChange={(e) => setOutputSchema(e.target.value)}
+          rows={8}
+          className="input w-full font-mono text-sm"
+          placeholder="{}"
+        />
+      </div>
+
+      <div>
+        <label className="block text-sm font-medium text-text-secondary mb-1">
+          {t('qualificationConfig')}
+        </label>
+        <textarea
+          value={qualificationConfig}
+          onChange={(e) => setQualificationConfig(e.target.value)}
           rows={8}
           className="input w-full font-mono text-sm"
           placeholder="{}"

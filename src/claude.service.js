@@ -25,8 +25,12 @@ Classify each conversation into one of these intents:
    - Action: Send company website link, route to FAQ_END
    - Example: "I want to buy one BYD Seal for myself"
 
-   IMPORTANT: Unclear quantity does NOT mean personal_consumer.
-   "I want BYD Seal" without personal signals → treat as business_inquiry
+   IMPORTANT - DO NOT misclassify as personal_consumer:
+   - "self employed", "freelance", "independent" → these are BUSINESS buyers (small business)
+   - Mechanics, technicians, workshop owners, dealers → BUSINESS buyers
+   - If conversation already has business signals (bulk quantity, export, specific model requests), NEVER reclassify as personal_consumer based on job title alone
+   - Unclear quantity does NOT mean personal_consumer
+   - "I want BYD Seal" without personal signals → treat as business_inquiry
 
 2. business_inquiry (B端主动询盘)
    - Proactive inquiry about vehicles (with or without quantity specified)
@@ -421,6 +425,20 @@ function cleanEmptyValues(obj) {
   return cleaned;
 }
 
+function buildTraceContextInfo(contextInfo = {}) {
+  const entries = Object.entries(contextInfo || {}).filter(([, value]) => value !== undefined);
+  if (entries.length === 0) {
+    return {};
+  }
+
+  return Object.fromEntries(entries.map(([key, value]) => {
+    if (Array.isArray(value)) {
+      return [key, value.slice(0, 20)];
+    }
+    return [key, value];
+  }));
+}
+
 /**
  * Get an intelligent response from Claude
  * @param {Array} conversationHistory - Array of {role, content, metadata} message objects
@@ -545,10 +563,26 @@ export async function getResponse(conversationHistory, userMessage, contextInfo 
     ? `Missing fields to collect: ${contextInfo.missing_fields.join(', ')}`
     : 'No specific fields required';
 
+  const priorState = contextInfo.prior_state;
+  const priorStateLines = [];
+  if (priorState) {
+    priorStateLines.push(`Prior classification: intent=${priorState.conversation_intent}, quality=${priorState.inquiry_quality}, value=${priorState.business_value}`);
+    const collected = [
+      priorState.car_model && `product=${priorState.car_model}`,
+      priorState.qty_bucket && `qty=${priorState.qty_bucket}`,
+      priorState.destination_country && `destination=${priorState.destination_country}`,
+      priorState.company_name && `company=${priorState.company_name}`,
+    ].filter(Boolean);
+    if (collected.length > 0) {
+      priorStateLines.push(`Collected so far: ${collected.join(', ')}`);
+    }
+    priorStateLines.push('IMPORTANT: Do NOT downgrade intent or quality unless the customer EXPLICITLY contradicts prior business signals (e.g. "actually I only need 1 for personal use"). Job titles like "self employed", "mechanic", etc. are NOT contradictions.');
+  }
+
   const enhancedPrompt = `${systemPrompt}
 
 CURRENT CONTEXT:
-- ${missingFieldsText}`;
+- ${missingFieldsText}${priorStateLines.length > 0 ? '\n- ' + priorStateLines.join('\n- ') : ''}`;
 
   logger.info('claude.request.started', {
     message_count: messages.length,
@@ -556,6 +590,7 @@ CURRENT CONTEXT:
     latest_input_type: Array.isArray(latestUserContent) ? 'multimodal' : 'text',
     has_agent_config: Boolean(agentConfig),
     model: config.anthropic.model,
+    context_info: buildTraceContextInfo(contextInfo),
   });
 
 const response = await anthropic.messages.create({

@@ -86,7 +86,19 @@ function ContactItem({ contact, isSelected, onClick, t, tt }) {
   );
 }
 
-export default function ContactList({ contacts, selectedId, onSelect, onLoadMore, hasMore, loadingMore, activeTab, onTabChange }) {
+export default function ContactList({
+  contacts,
+  agents = [],
+  selectedId,
+  selectedAgentId = 'all',
+  onSelect,
+  onAgentChange,
+  onLoadMore,
+  hasMore,
+  loadingMore,
+  activeTab,
+  onTabChange,
+}) {
   const [search, setSearch] = useState('');
   const sentinelRef = useRef(null);
   const t = useTranslations('contacts');
@@ -117,9 +129,9 @@ export default function ContactList({ contacts, selectedId, onSelect, onLoadMore
     if (!search.trim()) return true;
     const s = search.toLowerCase();
     return (
-      contact.wa_id?.toLowerCase().includes(s) ||
-      contact.name?.toLowerCase().includes(s) ||
-      contact.company_name?.toLowerCase().includes(s)
+      (contact.wa_id || '').toLowerCase().includes(s) ||
+      (contact.name || '').toLowerCase().includes(s) ||
+      (contact.company_name || '').toLowerCase().includes(s)
     );
   });
 
@@ -139,6 +151,31 @@ export default function ContactList({ contacts, selectedId, onSelect, onLoadMore
             placeholder={t('searchPlaceholder')}
             className="w-full bg-background border border-border text-text-primary text-sm rounded-lg pl-9 pr-3 py-1.5 focus:outline-none focus:ring-1 focus:ring-accent-blue focus:border-accent-blue transition-colors placeholder:text-text-muted"
           />
+        </div>
+
+        <div className="mt-2">
+          <label className="block text-xs font-medium text-text-secondary mb-1">
+            {t('filterAgent')}
+          </label>
+          <div className="relative">
+            <select
+              value={selectedAgentId}
+              onChange={(e) => onAgentChange?.(e.target.value)}
+              className="w-full appearance-none bg-background border border-border text-text-primary text-sm rounded-lg px-3 py-1.5 pr-8 focus:outline-none focus:ring-1 focus:ring-accent-blue focus:border-accent-blue transition-colors"
+            >
+              <option value="all">{t('filterAllAgents')}</option>
+              {agents.map((agent) => (
+                <option key={agent.id} value={agent.id}>
+                  {agent.product_line}
+                </option>
+              ))}
+            </select>
+            <div className="absolute inset-y-0 right-0 flex items-center pr-2 pointer-events-none">
+              <svg className="w-4 h-4 text-text-muted" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+              </svg>
+            </div>
+          </div>
         </div>
 
         {/* Tab filter */}

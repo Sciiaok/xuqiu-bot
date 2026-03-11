@@ -1,5 +1,6 @@
 'use client';
 
+import { useEffect, useState } from 'react';
 import { useLocale } from 'next-intl';
 
 /**
@@ -9,6 +10,7 @@ import { useLocale } from 'next-intl';
 export default function ChatMessage({ role, content, timestamp, metadata }) {
   const isUser = role === 'user';
   const locale = useLocale();
+  const [failedUrls, setFailedUrls] = useState(new Set());
 
   // Format timestamp
   const formatTime = (ts) => {
@@ -24,60 +26,130 @@ export default function ChatMessage({ role, content, timestamp, metadata }) {
   // Detect media placeholder pattern: [image: foo.jpg], [video: foo.mp4], etc.
   const mediaMatch = content?.match(/^\[(\w+):\s*([^\]]+)\](.*)?$/s);
   const mediaType = metadata?.media_type || mediaMatch?.[1];
-  const mediaUrl = metadata?.media_url;
-  const mediaCaption = mediaMatch?.[3]?.trim() || '';
+  const mediaUrl = metadata?.media_url || (metadata?.wa_media_id ? `/api/media/whatsapp/${metadata.wa_media_id}` : null);
+  const mediaCaption = metadata?.caption || mediaMatch?.[3]?.trim() || '';
+  const mediaFilename = metadata?.filename || mediaMatch?.[2] || 'attachment';
 
-  const renderContent = () => {
-    if (mediaUrl && mediaType === 'image') {
+  useEffect(() => {
+    setFailedUrls(new Set());
+  }, [mediaUrl, mediaType, content]);
+
+  const handleMediaError = (url) => {
+    setFailedUrls((prev) => new Set([...prev, url]));
+  };
+
+  const renderMediaItem = ({ url, type, filename, caption, key }) => {
+    const isFailed = failedUrls.has(url);
+
+    if (url && type === 'image' && !isFailed) {
       return (
-        <div>
+        <div key={key}>
           <img
-            src={mediaUrl}
-            alt={metadata?.filename || 'image'}
+            src={url}
+            alt={filename || 'image'}
             className="block rounded-lg"
             style={{ maxWidth: '100%', maxHeight: '300px', width: 'auto', height: 'auto' }}
+            onError={() => handleMediaError(url)}
           />
-          {mediaCaption && (
-            <p className="text-text-primary text-sm mt-1 whitespace-pre-wrap break-words">{mediaCaption}</p>
+          {caption && (
+            <p className="text-text-primary text-sm mt-1 whitespace-pre-wrap break-words">{caption}</p>
           )}
         </div>
       );
     }
 
-    if (mediaUrl && mediaType === 'video') {
+    if (url && type === 'video' && !isFailed) {
       return (
-        <div>
+        <div key={key}>
           <video
-            src={mediaUrl}
+            src={url}
             controls
             className="max-w-full rounded-lg"
             style={{ maxHeight: '300px' }}
+            onError={() => handleMediaError(url)}
           />
-          {mediaCaption && (
-            <p className="text-text-primary text-sm mt-1 whitespace-pre-wrap break-words">{mediaCaption}</p>
+          {caption && (
+            <p className="text-text-primary text-sm mt-1 whitespace-pre-wrap break-words">{caption}</p>
           )}
         </div>
       );
     }
 
-    if (mediaMatch) {
-      // No URL stored — show a styled badge
-      const type = mediaMatch[1];
-      const name = mediaMatch[2];
-      const caption = mediaMatch[3]?.trim();
+    // Badge fallback for media without URL or failed loads
+    if (type) {
       return (
-        <div>
+        <div key={key}>
           <div className="flex items-center gap-2 px-2 py-1 rounded bg-black/10">
             <span className="text-text-muted text-lg">
               {type === 'image' ? '🖼️' : type === 'video' ? '🎥' : type === 'audio' ? '🎵' : '📎'}
             </span>
-            <span className="text-text-primary text-sm truncate">{name}</span>
+            <span className="text-text-primary text-sm truncate">{filename}</span>
           </div>
           {caption && (
             <p className="text-text-primary text-sm mt-1 whitespace-pre-wrap break-words">{caption}</p>
           )}
         </div>
       );
+    }
+
+    return null;
+  };
+
+  const renderContent = () => {
+    // Aggregated messages: render each sub-message individually
+    if (metadata?.aggregated_messages?.length > 0) {
+      return (
+        <div className="space-y-2">
+          {metadata.aggregated_messages.map((msg, idx) => {
+            const sub = msg.metadata || {};
+            const subUrl = sub.media_url || (sub.wa_media_id ? `/api/media/whatsapp/${sub.wa_media_id}` : null);
+            const subType = sub.media_type;
+
+            if (subType) {
+              return renderMediaItem({
+                url: subUrl,
+                type: subType,
+                filename: sub.filename || 'attachment',
+                caption: sub.caption || '',
+                key: idx,
+              });
+            }
+
+            // Plain text sub-message
+            return (
+              <p key={idx} className="text-text-primary text-sm whitespace-pre-wrap break-words leading-relaxed">
+                {msg.content}
+              </p>
+            );
+          })}
+        </div>
+      );
+    }
+
+    // Single media with URL
+    if (mediaUrl && (mediaType === 'image' || mediaType === 'video')) {
+      return renderMediaItem({
+        url: mediaUrl,
+        type: mediaType,
+        filename: mediaFilename,
+        caption: mediaCaption,
+        key: 'single',
+      });
+    }
+
+    // TODO: Inbound WhatsApp voice notes may carry metadata.media_type === 'audio'
+    // while content already contains the transcription. Do not route those
+    // messages into the generic attachment placeholder; preserve text rendering
+    // when no playable media URL is available.
+    // Single media placeholder without URL
+    if (mediaType || mediaMatch) {
+      return renderMediaItem({
+        url: null,
+        type: mediaType || mediaMatch?.[1] || 'attachment',
+        filename: mediaFilename,
+        caption: mediaCaption,
+        key: 'single',
+      });
     }
 
     return (
