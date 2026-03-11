@@ -127,6 +127,31 @@ test.describe('Inbox — Media Upload', () => {
     await expect(page.getByText('photo.jpg')).not.toBeVisible();
   });
 
+  test('renders inbound customer image messages from metadata', async ({ page }) => {
+    const imageMessage = {
+      id: 'msg-image-1',
+      role: 'user',
+      content: '[image: whatsapp-image-1.png] see catalog',
+      sent_at: new Date().toISOString(),
+      sent_by: 'customer',
+      conversation_id: MOCK_CONVERSATION.id,
+      metadata: {
+        media_type: 'image',
+        media_url: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4////fwAJ+wP9KobjigAAAABJRU5ErkJggg==',
+        filename: 'whatsapp-image-1.png',
+      },
+    };
+
+    await mockSupabase(page, {
+      conversations: [MOCK_CONVERSATION],
+      messages: [imageMessage],
+    });
+
+    await page.goto('/dashboard/inbox');
+    await expect(page.locator('img[alt=\"whatsapp-image-1.png\"]')).toBeVisible();
+    await expect(page.getByText('see catalog')).toBeVisible();
+  });
+
   test('send button is disabled when no text and no file', async ({ page }) => {
     const sendBtn = page.getByRole('button', { name: 'Send' });
     await expect(sendBtn).toBeDisabled();

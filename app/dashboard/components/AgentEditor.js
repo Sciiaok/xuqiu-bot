@@ -10,7 +10,9 @@ export default function AgentEditor({ agent, onSave, onCancel }) {
   const [outputSchema, setOutputSchema] = useState(
     agent?.output_schema ? JSON.stringify(agent.output_schema, null, 2) : '{}'
   );
-  const [waPhoneNumberId, setWaPhoneNumberId] = useState(agent?.wa_phone_number_id || '');
+  const [adContextMap, setAdContextMap] = useState(
+    agent?.ad_context_map ? JSON.stringify(agent.ad_context_map, null, 2) : '{}'
+  );
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState(null);
   const t = useTranslations('agents');
@@ -24,8 +26,10 @@ export default function AgentEditor({ agent, onSave, onCancel }) {
     }
 
     let parsedSchema;
+    let parsedAdContextMap;
     try {
       parsedSchema = JSON.parse(outputSchema);
+      parsedAdContextMap = JSON.parse(adContextMap);
     } catch {
       setError(t('jsonError'));
       return;
@@ -38,7 +42,7 @@ export default function AgentEditor({ agent, onSave, onCancel }) {
         productLine: productLine.trim(),
         systemPrompt: systemPrompt.trim(),
         outputSchema: parsedSchema,
-        waPhoneNumberId: waPhoneNumberId.trim() || null,
+        adContextMap: parsedAdContextMap,
       });
     } catch (err) {
       setError(err.message);
@@ -93,19 +97,6 @@ export default function AgentEditor({ agent, onSave, onCancel }) {
 
       <div>
         <label className="block text-sm font-medium text-text-secondary mb-1">
-          {t('waPhoneNumberId')}
-        </label>
-        <input
-          type="text"
-          value={waPhoneNumberId}
-          onChange={(e) => setWaPhoneNumberId(e.target.value)}
-          placeholder={t('waPhoneNumberIdPlaceholder')}
-          className="input w-full"
-        />
-      </div>
-
-      <div>
-        <label className="block text-sm font-medium text-text-secondary mb-1">
           {t('systemPrompt')}
         </label>
         <textarea
@@ -127,6 +118,19 @@ export default function AgentEditor({ agent, onSave, onCancel }) {
           rows={8}
           className="input w-full font-mono text-sm"
           placeholder="{}"
+        />
+      </div>
+
+      <div>
+        <label className="block text-sm font-medium text-text-secondary mb-1">
+          {t('adContextMap')}
+        </label>
+        <textarea
+          value={adContextMap}
+          onChange={(e) => setAdContextMap(e.target.value)}
+          rows={8}
+          className="input w-full font-mono text-sm"
+          placeholder={t('adContextMapPlaceholder')}
         />
       </div>
 

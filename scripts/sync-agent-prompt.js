@@ -1,17 +1,15 @@
 import supabase from '../lib/supabase.js';
 import { SYSTEM_PROMPT, JSON_SCHEMA } from '../src/claude.service.js';
 
-const PHONE_NUMBER_ID = '1007317245789266';
-
 async function syncAgentPrompt() {
   // List all agents
   const { data: allAgents } = await supabase
     .from('agents')
-    .select('id, name, product_line, wa_phone_number_id, is_active')
+    .select('id, name, product_line, is_active')
     .order('created_at', { ascending: true });
 
   console.log('Current agents in DB:');
-  allAgents?.forEach(a => console.log(`  ${a.id} | ${a.name} | product_line=${a.product_line} | phone=${a.wa_phone_number_id} | active=${a.is_active}`));
+  allAgents?.forEach(a => console.log(`  ${a.id} | ${a.name} | product_line=${a.product_line} | active=${a.is_active}`));
 
   // Check if vehicle agent exists
   let agent = allAgents?.find(a => a.product_line === 'vehicle');
@@ -23,7 +21,6 @@ async function syncAgentPrompt() {
       .update({
         system_prompt: SYSTEM_PROMPT,
         output_schema: JSON_SCHEMA,
-        wa_phone_number_id: PHONE_NUMBER_ID,
         updated_at: new Date().toISOString(),
       })
       .eq('id', agent.id)
@@ -39,7 +36,6 @@ async function syncAgentPrompt() {
       .insert({
         name: 'Vehicle Export Agent',
         product_line: 'vehicle',
-        wa_phone_number_id: PHONE_NUMBER_ID,
         system_prompt: SYSTEM_PROMPT,
         output_schema: JSON_SCHEMA,
         is_active: true,
@@ -54,11 +50,11 @@ async function syncAgentPrompt() {
   // Verify
   const { data: final } = await supabase
     .from('agents')
-    .select('id, name, product_line, wa_phone_number_id, is_active')
+    .select('id, name, product_line, is_active')
     .order('created_at', { ascending: true });
 
   console.log('\nFinal agents:');
-  final?.forEach(a => console.log(`  ${a.id} | ${a.name} | product_line=${a.product_line} | phone=${a.wa_phone_number_id} | active=${a.is_active}`));
+  final?.forEach(a => console.log(`  ${a.id} | ${a.name} | product_line=${a.product_line} | active=${a.is_active}`));
 }
 
 syncAgentPrompt();

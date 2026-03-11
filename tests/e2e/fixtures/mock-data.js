@@ -33,7 +33,6 @@ export const MOCK_AGENT = {
   product_line: 'auto',
   system_prompt: 'You are a vehicle export assistant.',
   output_schema: {},
-  wa_phone_number_id: '123456',
   is_active: true,
   created_at: new Date().toISOString(),
 };
@@ -46,7 +45,6 @@ export const MOCK_AGENTS_LIST = [
     product_line: 'parts',
     system_prompt: 'You are a parts agent.',
     output_schema: {},
-    wa_phone_number_id: '789012',
     is_active: true,
     created_at: new Date().toISOString(),
   },

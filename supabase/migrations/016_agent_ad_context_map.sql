@@ -1,0 +1,2 @@
+ALTER TABLE agents
+ADD COLUMN IF NOT EXISTS ad_context_map JSONB NOT NULL DEFAULT '{}'::jsonb;

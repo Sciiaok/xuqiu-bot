@@ -6,6 +6,7 @@
 import { sendMessage } from './whatsapp.service.js';
 import { updateLead, getLeadsByConversation } from '../lib/repositories/lead.repository.js';
 import { sendFeishuMessage } from './feishu.service.js';
+import { createTraceLogger } from '../lib/core-trace.js';
 
 const INQUIRY_QUALITY_LABEL = { GOOD: '优质', POOR: '低质' };
 const BUSINESS_VALUE_LABEL = { HIGH: '高', MEDIUM: '中', LOW: '低' };
@@ -45,7 +46,13 @@ function buildFeishuLeadMessage(lead, handoffSummary) {
 /**
  * Send FAQ resources to low-quality leads
  */
-export async function sendFAQResources(waId, phoneNumberId) {
+export async function sendFAQResources(waId, phoneNumberId, traceContext = {}) {
+  const logger = createTraceLogger({
+    component: 'routing',
+    trace_id: traceContext.traceId,
+    conversation_id: traceContext.conversationId,
+    wa_id: traceContext.waId || waId,
+  });
   const faqMessage = `Thank you for your interest in our vehicle export services!
 
 Here are some helpful resources:
@@ -61,10 +68,10 @@ We look forward to serving you!`;
 
   try {
     await sendMessage(waId, faqMessage, phoneNumberId);
-    console.log(`📚 FAQ resources sent to ${waId}`);
+    logger.info('routing.faq.sent');
     return { success: true };
   } catch (error) {
-    console.error('Error sending FAQ:', error);
+    logger.error('routing.faq.failed', { error: error.message });
     return { success: false, error: error.message };
   }
 }
@@ -74,16 +81,25 @@ We look forward to serving you!`;
  * @param {Object} lead - Lead object from database
  * @param {string} handoffSummary - Summary for sales team
  */
-export async function routeLeadToSales(lead, handoffSummary) {
+export async function routeLeadToSales(lead, handoffSummary, traceContext = {}) {
+  const logger = createTraceLogger({
+    component: 'routing',
+    trace_id: traceContext.traceId,
+    conversation_id: traceContext.conversationId || lead.conversation_id,
+    lead_id: lead.id,
+    wa_id: traceContext.waId || lead.contact?.wa_id,
+  });
   const message = buildFeishuLeadMessage(lead, handoffSummary);
   // Feishu uuid max 50 chars; lead.id(36) + '_' + timestamp(13) = 50
   const routeUuid = `${lead.id}_${Date.parse(lead.updated_at || '') || 0}`;
 
   sendFeishuMessage(message, true, process.env.FEISHU_CHAT_ID, routeUuid).catch(err =>
-    console.error('Feishu notification failed:', err.message)
+    logger.error('routing.feishu.failed', { error: err.message })
   );
 
-  console.log(`✅ Lead ${lead.id} routed to sales (HUMAN_NOW)`);
+  logger.info('routing.sales_routed', {
+    route_uuid: routeUuid,
+  });
   return { success: true };
 }
 
@@ -93,10 +109,10 @@ export async function routeLeadToSales(lead, handoffSummary) {
  * @param {Object} lead - Lead object
  * @param {string} handoffSummary - Optional summary
  */
-export async function executeLeadRouting(route, lead, handoffSummary) {
+export async function executeLeadRouting(route, lead, handoffSummary, traceContext = {}) {
   switch (route) {
     case 'HUMAN_NOW':
-      return await routeLeadToSales(lead, handoffSummary);
+      return await routeLeadToSales(lead, handoffSummary, traceContext);
 
     case 'FAQ_END':
       await updateLead(lead.id, { route: 'FAQ_END' });
@@ -106,7 +122,12 @@ export async function executeLeadRouting(route, lead, handoffSummary) {
       return { success: true, action: 'continue_conversation' };
 
     default:
-      console.log(`Unknown route: ${route}`);
+      createTraceLogger({
+        component: 'routing',
+        trace_id: traceContext.traceId,
+        conversation_id: traceContext.conversationId,
+        lead_id: lead?.id,
+      }).warn('routing.unknown_route', { route });
       return { success: false, reason: 'unknown_route' };
   }
 }
@@ -118,7 +139,13 @@ export async function executeLeadRouting(route, lead, handoffSummary) {
  * @param {string} waId - WhatsApp ID for FAQ delivery
  * @param {string} handoffSummary - Optional summary
  */
-export async function executeConversationRouting(route, conversationId, waId, handoffSummary, phoneNumberId) {
+export async function executeConversationRouting(route, conversationId, waId, handoffSummary, phoneNumberId, traceContext = {}) {
+  const logger = createTraceLogger({
+    component: 'routing',
+    trace_id: traceContext.traceId,
+    conversation_id: traceContext.conversationId || conversationId,
+    wa_id: traceContext.waId || waId,
+  });
   if (route === 'CONTINUE') {
     return { success: true, action: 'continue_conversation' };
   }
@@ -127,20 +154,23 @@ export async function executeConversationRouting(route, conversationId, waId, ha
   const leads = await getLeadsByConversation(conversationId, route);
 
   if (leads.length === 0) {
-    console.log('No leads to route');
+    logger.info('routing.no_leads_for_route', { route });
     return { success: true, action: 'no_leads' };
   }
 
-  console.log(`Routing ${leads.length} lead(s) to ${route}`);
+  logger.info('routing.execute', {
+    route,
+    leads_count: leads.length,
+  });
 
   const results = [];
   for (const lead of leads) {
-    const result = await executeLeadRouting(route, lead, handoffSummary);
+    const result = await executeLeadRouting(route, lead, handoffSummary, traceContext);
     results.push({ leadId: lead.id, leadKey: lead.lead_key, ...result });
   }
 
   if (route === 'FAQ_END') {
-    await sendFAQResources(waId, phoneNumberId);
+    await sendFAQResources(waId, phoneNumberId, traceContext);
   }
 
   return {

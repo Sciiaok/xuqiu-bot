@@ -527,14 +527,18 @@ function InboxContent() {
   }, [selectedConversationIds, supabase, fetchLeads]);
 
   const handleSendMessage = async (message) => {
-    if (sending || !selectedContact?.wa_id) return;
+    if (sending || !selectedConversationIds.length) return;
 
     setSending(true);
     try {
       const response = await fetch('/api/send-message', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ waId: selectedContact.wa_id, message }),
+        body: JSON.stringify({
+          conversationId: selectedConversationIds[0],
+          waId: selectedContact?.wa_id,
+          message,
+        }),
       });
 
       const data = await response.json();
@@ -596,12 +600,13 @@ function InboxContent() {
   };
 
   const handleSendMedia = async (file, caption) => {
-    if (!selectedContact?.wa_id) return;
+    if (!selectedConversationIds.length) return;
 
     setSending(true);
     try {
       const formData = new FormData();
-      formData.append('waId', selectedContact.wa_id);
+      formData.append('conversationId', selectedConversationIds[0]);
+      if (selectedContact?.wa_id) formData.append('waId', selectedContact.wa_id);
       formData.append('file', file);
       if (caption) formData.append('caption', caption);
 

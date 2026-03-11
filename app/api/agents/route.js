@@ -36,7 +36,7 @@ export async function POST(request) {
     }
 
     const body = await request.json();
-    const { name, productLine, systemPrompt, outputSchema, waPhoneNumberId } = body;
+    const { name, productLine, systemPrompt, outputSchema, adContextMap } = body;
 
     if (!name || !productLine || !systemPrompt) {
       return NextResponse.json(
@@ -50,15 +50,14 @@ export async function POST(request) {
       productLine,
       systemPrompt,
       outputSchema: outputSchema || {},
-      waPhoneNumberId,
+      adContextMap: adContextMap || {},
     });
 
     return NextResponse.json({ agent }, { status: 201 });
   } catch (error) {
-    // Handle unique constraint violations
     if (error.code === '23505') {
       return NextResponse.json(
-        { error: 'An agent with this product_line or phone number already exists' },
+        { error: 'An agent with this product_line already exists' },
         { status: 409 }
       );
     }

@@ -21,7 +21,6 @@ async function seedDefaultAgent() {
     .insert({
       name: 'Vehicle Export Agent',
       product_line: 'auto',
-      wa_phone_number_id: process.env.WA_PHONE_NUMBER_ID || null,
       system_prompt: SYSTEM_PROMPT,
       output_schema: JSON_SCHEMA,
       is_active: true,

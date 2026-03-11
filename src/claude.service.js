@@ -1,5 +1,10 @@
 import Anthropic from '@anthropic-ai/sdk';
 import { config } from './config.js';
+import {
+  downloadWhatsAppMediaBuffer,
+  isClaudeSupportedImageMimeType,
+} from './whatsapp-media.service.js';
+import { createTraceLogger } from '../lib/core-trace.js';
 
 const anthropic = new Anthropic({
   apiKey: config.anthropic.apiKey,
@@ -362,6 +367,45 @@ function normalizeAgentResponse(parsed) {
     }));
     delete parsed.customer_profile;
   }
+
+  // Case 3: Leads with non-standard fields (e.g., auto_parts agent)
+  // Map agent-specific field names to standard DB columns and preserve all fields in details
+  if (parsed.leads) {
+    const STANDARD_DB_FIELDS = new Set([
+      'brand', 'car_model', 'destination_country', 'destination_port',
+      'loading_port', 'international_commercial_term', 'company_name',
+      'timeline', 'color_quantity', 'qty_bucket', 'product_name',
+      'sku_description', 'buyer_type', 'details',
+    ]);
+
+    parsed.leads = parsed.leads.map(lead => {
+      // Detect if lead has non-standard fields that need mapping
+      const hasExtraFields = Object.keys(lead).some(k => !STANDARD_DB_FIELDS.has(k));
+      if (!hasExtraFields) return lead;
+
+      // Map known agent-specific fields to standard columns
+      const mapped = { ...lead };
+      if (lead.car_brand && !lead.brand) {
+        mapped.brand = lead.car_brand;
+      }
+      if (lead.part_name && !lead.product_name) {
+        mapped.product_name = lead.part_name;
+      }
+      if (lead.quantity && !lead.qty_bucket) {
+        mapped.qty_bucket = lead.quantity;
+      }
+
+      // Preserve ALL original fields in details JSONB
+      const allFields = cleanEmptyValues(lead);
+      delete allFields.details;
+      mapped.details = {
+        ...(lead.details || {}),
+        ...allFields,
+      };
+
+      return mapped;
+    });
+  }
 }
 
 /**
@@ -379,26 +423,116 @@ function cleanEmptyValues(obj) {
 
 /**
  * Get an intelligent response from Claude
- * @param {Array} conversationHistory - Array of {role, content} message objects
- * @param {string} userMessage - The latest user message
+ * @param {Array} conversationHistory - Array of {role, content, metadata} message objects
+ * @param {string|Object|Array} userMessage - The latest user message or multimodal message batch
  * @param {Object} contextInfo - Context information (missing_fields)
  * @returns {Promise<Object>} - Parsed JSON response
  */
-export async function getResponse(conversationHistory, userMessage, contextInfo = {}, agentConfig = null) {
-  // Sanitize conversation history - Claude only accepts 'role' and 'content'
-  const sanitizedHistory = conversationHistory.map(msg => ({
-    role: msg.role,
-    content: msg.content,
-  }));
+export async function getResponse(conversationHistory, userMessage, contextInfo = {}, agentConfig = null, traceContext = {}) {
+  const logger = createTraceLogger({
+    component: 'claude',
+    trace_id: traceContext.traceId,
+    conversation_id: traceContext.conversationId,
+    wa_id: traceContext.waId,
+  });
+  const historyMessages = Array.isArray(conversationHistory) ? conversationHistory : [];
+
+  async function buildClaudeContent(message) {
+    const text = typeof message?.content === 'string' ? message.content.trim() : '';
+    const metadata = message?.metadata || {};
+    const blocks = [];
+
+    if (text) {
+      blocks.push({ type: 'text', text });
+    }
+
+    if (
+      message?.role === 'user' &&
+      metadata.media_type === 'image' &&
+      metadata.wa_media_id
+    ) {
+      try {
+        const { buffer, mimeType } = await downloadWhatsAppMediaBuffer(metadata.wa_media_id);
+        if (buffer.length > 0 && isClaudeSupportedImageMimeType(mimeType)) {
+          blocks.push({
+            type: 'image',
+            source: {
+              type: 'base64',
+              media_type: mimeType,
+              data: buffer.toString('base64'),
+            },
+          });
+        }
+      } catch (error) {
+        logger.warn('claude.image_attachment.failed', {
+          wa_media_id: metadata.wa_media_id,
+          error: error.message,
+        });
+      }
+    }
+
+    if (blocks.length === 0) {
+      return '';
+    }
+
+    if (blocks.length === 1 && blocks[0].type === 'text') {
+      return blocks[0].text;
+    }
+
+    return blocks;
+  }
+
+  async function normalizeLatestUserMessage(input) {
+    if (typeof input === 'string') {
+      return input;
+    }
+
+    const items = Array.isArray(input) ? input : [input];
+    const blocks = [];
+
+    for (const item of items) {
+      const content = await buildClaudeContent({ role: 'user', ...item });
+      if (typeof content === 'string') {
+        if (content.trim()) {
+          blocks.push({ type: 'text', text: content });
+        }
+        continue;
+      }
+      blocks.push(...content);
+    }
+
+    if (blocks.length === 0) {
+      return '';
+    }
+
+    if (blocks.length === 1 && blocks[0].type === 'text') {
+      return blocks[0].text;
+    }
+
+    return blocks;
+  }
+
+  const sanitizedHistory = await Promise.all(
+    historyMessages.map(async (msg) => ({
+      role: msg.role,
+      content: await buildClaudeContent(msg),
+    }))
+  );
+  const latestUserContent = await normalizeLatestUserMessage(userMessage);
 
   // Build messages array with conversation history + new user message
   const messages = [
     ...sanitizedHistory,
     {
       role: 'user',
-      content: userMessage,
+      content: latestUserContent,
     },
-  ];
+  ].filter((message) => {
+    if (typeof message.content === 'string') {
+      return message.content.trim() !== '';
+    }
+    return Array.isArray(message.content) && message.content.length > 0;
+  });
 
   // Use agent config if provided, otherwise fall back to hardcoded defaults
   const systemPrompt = agentConfig?.system_prompt || SYSTEM_PROMPT;
@@ -416,7 +550,13 @@ export async function getResponse(conversationHistory, userMessage, contextInfo 
 CURRENT CONTEXT:
 - ${missingFieldsText}`;
 
-  console.log(`Calling Claude API with ${messages.length} messages...`);
+  logger.info('claude.request.started', {
+    message_count: messages.length,
+    history_count: sanitizedHistory.length,
+    latest_input_type: Array.isArray(latestUserContent) ? 'multimodal' : 'text',
+    has_agent_config: Boolean(agentConfig),
+    model: config.anthropic.model,
+  });
 
 const response = await anthropic.messages.create({
     model: config.anthropic.model,
@@ -456,12 +596,13 @@ const response = await anthropic.messages.create({
     });
   }
 
-  console.log('✓ Claude response received');
-  console.log('  Intent:', parsed.conversation_intent);
-  console.log('  Quality:', parsed.inquiry_quality);
-  console.log('  Value:', parsed.business_value);
-  console.log('  Route:', parsed.route);
-  console.log('  Leads count:', (parsed.leads || []).length);
+  logger.info('claude.request.completed', {
+    intent: parsed.conversation_intent,
+    inquiry_quality: parsed.inquiry_quality,
+    business_value: parsed.business_value,
+    route: parsed.route,
+    leads_count: (parsed.leads || []).length,
+  });
 
   return parsed;
 }

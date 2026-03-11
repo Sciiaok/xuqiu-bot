@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { sendMessage, sendMedia, validateMedia } from '../../../src/whatsapp.service.js';
 import { createClient } from '../../../lib/supabase-server.js';
-import { addOperatorMessage } from '../../../lib/session.js';
+import { addOperatorMessage, getSessionByConversationId } from '../../../lib/session.js';
 
 export async function POST(request) {
   try {
@@ -17,18 +17,19 @@ export async function POST(request) {
 
     const contentType = request.headers.get('content-type') || '';
 
-    let waId, message, mediaType, fileBuffer, mimeType, filename, caption;
+    let waId, conversationId, message, mediaType, fileBuffer, mimeType, filename, caption;
 
     if (contentType.includes('multipart/form-data')) {
       // Media upload
       const formData = await request.formData();
       waId = formData.get('waId');
+      conversationId = formData.get('conversationId');
       caption = formData.get('caption') || '';
       const file = formData.get('file');
 
-      if (!waId || !file) {
+      if (!conversationId || !file) {
         return NextResponse.json(
-          { error: 'Bad Request', message: 'waId and file are required for media' },
+          { error: 'Bad Request', message: 'conversationId and file are required for media' },
           { status: 400 }
         );
       }
@@ -50,11 +51,12 @@ export async function POST(request) {
       // Text message (existing behavior)
       const body = await request.json();
       waId = body.waId;
+      conversationId = body.conversationId;
       message = body.message;
 
-      if (!waId || typeof waId !== 'string') {
+      if (!conversationId || typeof conversationId !== 'string') {
         return NextResponse.json(
-          { error: 'Bad Request', message: 'waId is required and must be a string' },
+          { error: 'Bad Request', message: 'conversationId is required and must be a string' },
           { status: 400 }
         );
       }
@@ -70,9 +72,36 @@ export async function POST(request) {
     let whatsappResponse;
     let messageContent;
     let extraMetadata = {};
+    let conversationPhoneNumberId = null;
+
+    if (conversationId) {
+      const session = await getSessionByConversationId(conversationId);
+      if (waId && waId !== session.wa_id) {
+        return NextResponse.json(
+          { error: 'Bad Request', message: 'conversationId does not match waId' },
+          { status: 400 }
+        );
+      }
+      waId = session.wa_id;
+      conversationPhoneNumberId = session._conversation?.wa_phone_number_id || null;
+
+      if (mediaType) {
+        whatsappResponse = await sendMedia(waId, mediaType, fileBuffer, mimeType, filename, caption, conversationPhoneNumberId);
+      } else if (message) {
+        whatsappResponse = await sendMessage(waId, message, conversationPhoneNumberId);
+      }
+    }
 
     if (mediaType) {
-      whatsappResponse = await sendMedia(waId, mediaType, fileBuffer, mimeType, filename, caption);
+      whatsappResponse = whatsappResponse || await sendMedia(
+        waId,
+        mediaType,
+        fileBuffer,
+        mimeType,
+        filename,
+        caption,
+        conversationPhoneNumberId
+      );
       messageContent = caption
         ? `[${mediaType}: ${filename}] ${caption}`
         : `[${mediaType}: ${filename}]`;
@@ -96,24 +125,27 @@ export async function POST(request) {
         console.warn('Storage upload failed, media will show as placeholder:', storageErr.message);
       }
     } else {
-      whatsappResponse = await sendMessage(waId, message);
+      whatsappResponse = whatsappResponse || await sendMessage(waId, message, conversationPhoneNumberId);
       messageContent = message;
     }
 
     const updatedSession = await addOperatorMessage(
-      waId,
+      conversationId,
       messageContent,
       user.email || 'operator',
       extraMetadata
     );
 
-    console.log(`Operator ${mediaType || 'text'} message sent to ${waId} by ${user.email}`);
+    console.log(
+      `Operator ${mediaType || 'text'} message sent to ${waId} (conversation=${updatedSession.conversation_id}) by ${user.email}`
+    );
 
     return NextResponse.json({
       success: true,
       message: 'Message sent successfully',
       data: {
         waId,
+        conversationId: updatedSession.conversation_id,
         messageId: whatsappResponse.messages?.[0]?.id,
         session: updatedSession,
       },

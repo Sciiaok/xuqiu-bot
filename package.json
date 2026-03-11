@@ -8,6 +8,7 @@
     "build": "next build",
     "start": "next start -p 3002",
     "lint": "next lint",
+    "test:webhook-tdd": "node --experimental-loader ./tests/unit/loaders/next-server-loader.mjs --experimental-test-module-mocks --test tests/unit/webhook-image-ingest.test.js tests/unit/claude-multimodal-input.test.js tests/unit/conversation-context-shared-followup.test.js tests/unit/queue-processor-batch-metadata.test.js tests/unit/agent-router-clarification.test.js",
     "migrate:v2": "node scripts/migrate-sessions-to-v2.js",
     "deploy": "sh ./scripts/deploy.sh",
     "cron:start": "pm2 start ecosystem.config.cjs --only lead-sync-cron",

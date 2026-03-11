@@ -321,7 +321,6 @@ async function seedAgriMachineryAgent() {
     .insert({
       name: 'Agricultural Machinery Export Agent',
       product_line: 'agri_machinery',
-      wa_phone_number_id: '959843363876461',
       system_prompt: AGRI_SYSTEM_PROMPT,
       output_schema: AGRI_JSON_SCHEMA,
       is_active: true,

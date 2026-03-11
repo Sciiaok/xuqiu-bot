@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useTranslations } from 'next-intl';
 import AgentEditor from '../components/AgentEditor';
+import { countAgentAdContexts } from '../../../lib/referral-context.js';
 
 export default function AgentsPage() {
   const [agents, setAgents] = useState([]);
@@ -118,9 +119,9 @@ export default function AgentsPage() {
               </div>
               <div className="text-sm text-text-secondary mt-1">
                 {t('product', { line: agent.product_line })}
-                {agent.wa_phone_number_id && (
-                  <span className="ml-3">{t('wa', { id: agent.wa_phone_number_id })}</span>
-                )}
+                <span className="ml-3">
+                  {t('adMappings', { count: countAgentAdContexts(agent) })}
+                </span>
               </div>
               <div className="text-xs text-text-muted mt-1">
                 {t('prompt', { text: agent.system_prompt?.substring(0, 100) + '...' })}
