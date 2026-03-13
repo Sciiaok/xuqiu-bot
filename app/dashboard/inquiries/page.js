@@ -1,14 +1,35 @@
 // app/dashboard/inquiries/page.js
 'use client';
 
-import { useState, useEffect, useCallback, useMemo, useRef, useDeferredValue } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import Link from 'next/link';
 import { createClient } from '@/lib/supabase-browser';
-import { useTranslations } from 'next-intl';
+import { useTranslations, useLocale } from 'next-intl';
 import { getRelativeTime } from '@/lib/i18n-utils';
+import { getWaCountryLabel } from '@/lib/wa-country';
+import {
+  createDefaultInquiriesFilters,
+  hasActiveQuantityFilter,
+} from '@/lib/inquiries-filters';
 import EditModal from '../components/EditModal';
+import InquiriesFiltersPanel from '../components/InquiriesFiltersPanel';
 
 const PAGE_SIZE = 10;
+const SEARCH_DEBOUNCE_MS = 300;
+
+function useDebouncedValue(value, delay = SEARCH_DEBOUNCE_MS) {
+  const [debouncedValue, setDebouncedValue] = useState(value);
+
+  useEffect(() => {
+    const timeoutId = window.setTimeout(() => {
+      setDebouncedValue(value);
+    }, delay);
+
+    return () => window.clearTimeout(timeoutId);
+  }, [delay, value]);
+
+  return debouncedValue;
+}
 
 function qualityStyle(q) {
   switch (q?.toUpperCase()) {
@@ -146,11 +167,13 @@ function getLeadColumns(productLine, t) {
 
 function ConversationCard({ actionLoading, group, syncStatuses, onEdit, onApprove, onApproveAll, t, tt }) {
   const { meta, leads } = group;
+  const locale = useLocale();
   const intents = parseIntents(meta.conversation_intent);
   const allApproved = leads.every((lead) => lead.approved);
   const approvedCount = leads.filter((lead) => lead.approved).length;
   const unapprovedIds = leads.filter((lead) => !lead.approved).map((lead) => lead.id);
   const columns = getLeadColumns(meta.agent_product_line, t);
+  const phoneCountry = getWaCountryLabel(meta.wa_id, locale);
 
   return (
     <div className="card overflow-hidden">
@@ -166,6 +189,14 @@ function ConversationCard({ actionLoading, group, syncStatuses, onEdit, onApprov
                 <>
                   <span className="text-text-muted">·</span>
                   <span className="text-text-secondary truncate">{meta.company_name}</span>
+                </>
+              )}
+              {phoneCountry && (
+                <>
+                  <span className="text-text-muted">·</span>
+                  <span className="inline-flex items-center rounded-md bg-surface-hover px-2 py-0.5 text-xs font-medium text-text-secondary">
+                    {phoneCountry}
+                  </span>
                 </>
               )}
               <span className="text-text-muted ml-auto shrink-0 text-sm">
@@ -216,7 +247,11 @@ function ConversationCard({ actionLoading, group, syncStatuses, onEdit, onApprov
               </button>
             )}
             <Link
-              href={`/dashboard/inbox?wa_id=${encodeURIComponent(meta.wa_id)}`}
+              href={
+                meta.conversation_id
+                  ? `/dashboard/inbox?conversation_id=${encodeURIComponent(meta.conversation_id)}`
+                  : '/dashboard/inbox'
+              }
               className="btn btn-secondary text-xs px-2.5 py-1.5"
             >
               <svg className="w-3.5 h-3.5 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -332,10 +367,27 @@ function buildInquiriesSearchParams(filters, limit, cursor) {
   const params = new URLSearchParams();
   params.set('limit', String(limit));
 
-  if (filters.inquiryQuality !== 'all') params.set('inquiryQuality', filters.inquiryQuality);
-  if (filters.businessValue !== 'all') params.set('businessValue', filters.businessValue);
+  filters.inquiryQualities.forEach((value) => params.append('inquiryQuality', value));
+  filters.businessValues.forEach((value) => params.append('businessValue', value));
+  filters.routes.forEach((value) => params.append('route', value));
   if (filters.customer.trim()) params.set('customer', filters.customer.trim());
+  if (filters.waPrefix.trim()) params.set('waPrefix', filters.waPrefix.trim());
+  if (filters.country !== 'all') params.set('country', filters.country);
   if (filters.model !== 'all') params.set('model', filters.model);
+  if (filters.quantityMin.toString().trim()) params.set('quantityMin', filters.quantityMin.toString().trim());
+  if (filters.quantityMax.toString().trim()) params.set('quantityMax', filters.quantityMax.toString().trim());
+  if (filters.dateFrom) {
+    const dateFrom = new Date(`${filters.dateFrom}T00:00:00`);
+    if (!Number.isNaN(dateFrom.getTime())) {
+      params.set('dateFrom', dateFrom.toISOString());
+    }
+  }
+  if (filters.dateTo) {
+    const dateTo = new Date(`${filters.dateTo}T23:59:59.999`);
+    if (!Number.isNaN(dateTo.getTime())) {
+      params.set('dateTo', dateTo.toISOString());
+    }
+  }
   filters.agentIds.forEach((agentId) => params.append('agentIds', agentId));
 
   if (cursor?.cursorTs && cursor?.cursorId) {
@@ -371,14 +423,9 @@ export default function InquiriesPage() {
     totalLeads: 0,
     approvedCount: 0,
   });
-  const [filters, setFilters] = useState({
-    inquiryQuality: 'all',
-    businessValue: 'all',
-    customer: '',
-    model: 'all',
-    agentIds: [],
-  });
+  const [filters, setFilters] = useState(() => createDefaultInquiriesFilters());
   const [carModels, setCarModels] = useState([]);
+  const [countries, setCountries] = useState([]);
   const [agentOptions, setAgentOptions] = useState([]);
   const [editingLead, setEditingLead] = useState(null);
   const [isEditModalOpen, setIsEditModalOpen] = useState(false);
@@ -386,14 +433,15 @@ export default function InquiriesPage() {
 
   const supabase = useMemo(() => createClient(), []);
   const t = useTranslations('inquiries');
-  const tf = useTranslations('filters');
   const tt = useTranslations('time');
   const groupsRef = useRef([]);
   const requestVersionRef = useRef(0);
-  const deferredCustomer = useDeferredValue(filters.customer);
+  const hasLoadedOnceRef = useRef(false);
+  const debouncedCustomer = useDebouncedValue(filters.customer);
+  const debouncedWaPrefix = useDebouncedValue(filters.waPrefix);
   const queryFilters = useMemo(
-    () => ({ ...filters, customer: deferredCustomer }),
-    [filters, deferredCustomer]
+    () => ({ ...filters, customer: debouncedCustomer, waPrefix: debouncedWaPrefix }),
+    [filters, debouncedCustomer, debouncedWaPrefix]
   );
 
   useEffect(() => {
@@ -402,12 +450,21 @@ export default function InquiriesPage() {
 
   const fetchFilterOptions = useCallback(async () => {
     try {
-      const [{ data: modelsData, error: modelsError }, { data: agentsData, error: agentsError }] = await Promise.all([
+      const [
+        { data: modelsData, error: modelsError },
+        { data: countriesData, error: countriesError },
+        { data: agentsData, error: agentsError },
+      ] = await Promise.all([
         supabase
           .from('leads')
           .select('car_model')
           .not('car_model', 'is', null)
           .order('car_model', { ascending: true }),
+        supabase
+          .from('leads')
+          .select('destination_country')
+          .not('destination_country', 'is', null)
+          .order('destination_country', { ascending: true }),
         supabase
           .from('agents')
           .select('id, product_line')
@@ -415,9 +472,11 @@ export default function InquiriesPage() {
       ]);
 
       if (modelsError) throw modelsError;
+      if (countriesError) throw countriesError;
       if (agentsError) throw agentsError;
 
       setCarModels([...new Set((modelsData || []).map((row) => row.car_model).filter(Boolean))]);
+      setCountries([...new Set((countriesData || []).map((row) => row.destination_country).filter(Boolean))]);
       setAgentOptions((agentsData || []).filter((agent) => agent.id && agent.product_line));
     } catch (err) {
       console.error('Error fetching inquiry filter options:', err);
@@ -480,6 +539,7 @@ export default function InquiriesPage() {
         ? incomingGroups
         : mergeConversationGroups(groupsRef.current, incomingGroups);
 
+      hasLoadedOnceRef.current = true;
       groupsRef.current = nextGroups;
       setConversationGroups(nextGroups);
       setHasMore(Boolean(result.hasMore));
@@ -516,10 +576,6 @@ export default function InquiriesPage() {
   }, [fetchFilterOptions]);
 
   useEffect(() => {
-    setConversationGroups([]);
-    setSyncStatuses({});
-    setHasMore(false);
-    setNextCursor(null);
     fetchInquiries({ replace: true });
   }, [fetchInquiries]);
 
@@ -577,13 +633,7 @@ export default function InquiriesPage() {
   }
 
   function handleClearFilters() {
-    setFilters({
-      inquiryQuality: 'all',
-      businessValue: 'all',
-      customer: '',
-      model: 'all',
-      agentIds: [],
-    });
+    setFilters(createDefaultInquiriesFilters());
   }
 
   async function handleLoadMore() {
@@ -591,7 +641,10 @@ export default function InquiriesPage() {
     await fetchInquiries({ cursor: nextCursor });
   }
 
-  if (loading) {
+  const isInitialLoading = loading && !hasLoadedOnceRef.current;
+  const isRefreshing = loading && hasLoadedOnceRef.current;
+
+  if (isInitialLoading) {
     return (
       <div className="p-6">
         <div className="card p-8">
@@ -612,7 +665,7 @@ export default function InquiriesPage() {
             <svg className="w-6 h-6 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
             </svg>
-            <span>{error}</span>
+          <span>{error}</span>
           </div>
         </div>
       </div>
@@ -626,123 +679,42 @@ export default function InquiriesPage() {
     (sum, group) => sum + group.leads.filter((lead) => syncStatuses[lead.id] === 'success').length,
     0
   );
-  const hasActiveFilters = filters.inquiryQuality !== 'all'
-    || filters.businessValue !== 'all'
+  const hasActiveFilters = filters.inquiryQualities.length > 0
+    || filters.businessValues.length > 0
+    || filters.routes.length > 0
     || filters.customer.trim() !== ''
+    || filters.waPrefix.trim() !== ''
+    || filters.country !== 'all'
     || filters.model !== 'all'
-    || filters.agentIds.length > 0;
+    || filters.dateFrom !== ''
+    || filters.dateTo !== ''
+    || filters.agentIds.length > 0
+    || hasActiveQuantityFilter(filters);
   const remainingCount = Math.max(totalConversations - conversationGroups.length, 0);
 
   return (
     <div className="p-6 space-y-4">
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-semibold text-text-primary">{t('title')}</h1>
+        {isRefreshing && (
+          <div className="inline-flex items-center gap-2 rounded-full border border-accent-blue/20 bg-accent-blue/8 px-3 py-1.5 text-sm text-accent-blue">
+            <div className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-accent-blue/25 border-t-accent-blue" />
+            <span>{t('loading')}</span>
+          </div>
+        )}
       </div>
 
-      <div className="card p-4">
-        <div className="flex flex-wrap items-center gap-4">
-          <span className="text-sm font-medium text-text-secondary">{tf('label')}</span>
+      <InquiriesFiltersPanel
+        filters={filters}
+        countries={countries}
+        carModels={carModels}
+        agentOptions={agentOptions}
+        hasActiveFilters={hasActiveFilters}
+        onFilterChange={handleFilterChange}
+        onClearFilters={handleClearFilters}
+      />
 
-          <div className="relative">
-            <select
-              value={filters.inquiryQuality}
-              onChange={(e) => handleFilterChange({ inquiryQuality: e.target.value })}
-              className="appearance-none bg-surface border border-border text-text-primary text-sm rounded-lg px-3 py-1.5 pr-8 focus:outline-none focus:ring-1 focus:ring-accent-blue focus:border-accent-blue transition-colors"
-            >
-              <option value="all">{tf('allQuality')}</option>
-              <option value="PROOF">PROOF</option>
-              <option value="QUALIFY">QUALIFY</option>
-              <option value="GOOD">GOOD</option>
-              <option value="BAD">BAD</option>
-            </select>
-            <div className="absolute inset-y-0 right-0 flex items-center pr-2 pointer-events-none">
-              <svg className="w-4 h-4 text-text-muted" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-              </svg>
-            </div>
-          </div>
-
-          <div className="relative">
-            <select
-              value={filters.businessValue}
-              onChange={(e) => handleFilterChange({ businessValue: e.target.value })}
-              className="appearance-none bg-surface border border-border text-text-primary text-sm rounded-lg px-3 py-1.5 pr-8 focus:outline-none focus:ring-1 focus:ring-accent-blue focus:border-accent-blue transition-colors"
-            >
-              <option value="all">{tf('allValues')}</option>
-              <option value="HIGH">HIGH</option>
-              <option value="AVERAGE">AVERAGE</option>
-              <option value="LOW">LOW</option>
-            </select>
-            <div className="absolute inset-y-0 right-0 flex items-center pr-2 pointer-events-none">
-              <svg className="w-4 h-4 text-text-muted" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-              </svg>
-            </div>
-          </div>
-
-          <input
-            type="text"
-            value={filters.customer}
-            onChange={(e) => handleFilterChange({ customer: e.target.value })}
-            placeholder={tf('customerPlaceholder')}
-            className="bg-surface border border-border text-text-primary text-sm rounded-lg px-3 py-1.5 w-40 focus:outline-none focus:ring-1 focus:ring-accent-blue focus:border-accent-blue transition-colors placeholder:text-text-muted"
-          />
-
-          <div className="relative">
-            <select
-              value={filters.model}
-              onChange={(e) => handleFilterChange({ model: e.target.value })}
-              className="appearance-none bg-surface border border-border text-text-primary text-sm rounded-lg px-3 py-1.5 pr-8 focus:outline-none focus:ring-1 focus:ring-accent-blue focus:border-accent-blue transition-colors"
-            >
-              <option value="all">{tf('allModels')}</option>
-              {carModels.map((model) => (
-                <option key={model} value={model}>{model}</option>
-              ))}
-            </select>
-            <div className="absolute inset-y-0 right-0 flex items-center pr-2 pointer-events-none">
-              <svg className="w-4 h-4 text-text-muted" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-              </svg>
-            </div>
-          </div>
-
-          {agentOptions.length > 0 && (
-            <div className="flex items-center gap-2 flex-wrap">
-              <span className="text-sm text-text-secondary">{tf('agent')}</span>
-              <button
-                onClick={() => handleFilterChange({ agentIds: [] })}
-                className={`px-3 py-1.5 rounded-lg text-sm border transition-colors ${
-                  filters.agentIds.length === 0
-                    ? 'bg-accent-blue text-white border-accent-blue'
-                    : 'bg-surface border-border text-text-secondary hover:text-text-primary'
-                }`}
-              >
-                {tf('allAgents')}
-              </button>
-              {agentOptions.map((agent) => (
-                <button
-                  key={agent.id}
-                  onClick={() => {
-                    const nextAgentIds = filters.agentIds.includes(agent.id)
-                      ? filters.agentIds.filter((id) => id !== agent.id)
-                      : [...filters.agentIds, agent.id];
-                    handleFilterChange({ agentIds: nextAgentIds });
-                  }}
-                  className={`px-3 py-1.5 rounded-lg text-sm border transition-colors ${
-                    filters.agentIds.includes(agent.id)
-                      ? 'bg-accent-blue/10 text-accent-blue border-accent-blue/30'
-                      : 'bg-surface border-border text-text-secondary hover:text-text-primary'
-                  }`}
-                >
-                  {agent.product_line}
-                </button>
-              ))}
-            </div>
-          )}
-        </div>
-      </div>
-
-      <div className="card p-4">
+      <div className={`card p-4 transition-opacity ${isRefreshing ? 'opacity-70' : 'opacity-100'}`}>
         <div className="flex flex-wrap items-center gap-3">
           <span className="text-sm text-text-secondary">
             <span className="font-semibold text-text-primary">{totalConversations}</span> {t('conversationsLabel')}
@@ -777,7 +749,7 @@ export default function InquiriesPage() {
           </button>
         </div>
       ) : (
-        <div className="space-y-3">
+        <div className={`space-y-3 transition-opacity ${isRefreshing ? 'opacity-70' : 'opacity-100'}`}>
           {conversationGroups.map((group) => (
             <ConversationCard
               key={group.meta.conversation_id}
@@ -796,7 +768,7 @@ export default function InquiriesPage() {
             <div className="flex justify-center pt-2">
               <button
                 onClick={handleLoadMore}
-                disabled={loadingMore}
+                disabled={loadingMore || isRefreshing}
                 className="btn btn-secondary text-sm px-6 disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 {loadingMore

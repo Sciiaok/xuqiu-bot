@@ -38,6 +38,10 @@ test('queue processor preserves per-message metadata in aggregated storage paylo
             media_type: 'image',
             wa_media_id: 'media-1',
             media_url: '/api/media/media-1',
+            referral: {
+              source_type: 'ad',
+              source_id: 'meta-ad-42',
+            },
           },
         },
         {
@@ -163,6 +167,7 @@ test('queue processor preserves per-message metadata in aggregated storage paylo
     '[image: media-1.jpg] see this part\nNeed quote for this one'
   );
   assert.equal(calls.storedMessage.metadata.aggregated_messages.length, 2);
+  assert.equal(calls.storedMessage.metadata.meta_ad_id, 'meta-ad-42');
   assert.equal(calls.storedMessage.metadata.aggregated_messages[0].metadata.media_type, 'image');
   assert.equal(calls.storedMessage.metadata.aggregated_messages[0].metadata.media_url, '/api/media/media-1');
   assert.equal(calls.storedMessage.metadata.aggregated_messages[1].message_type, 'text');

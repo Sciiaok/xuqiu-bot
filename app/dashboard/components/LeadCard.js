@@ -104,6 +104,7 @@ export default function LeadCard({ lead, onEdit, onApprove, syncStatus }) {
   const {
     id,
     wa_id,
+    conversation_id,
     lead_data = {},
     inquiry_quality = 'GOOD',
     business_value = 'LOW',
@@ -250,7 +251,11 @@ export default function LeadCard({ lead, onEdit, onApprove, syncStatus }) {
           )}
 
           <Link
-            href={`/dashboard/inbox?wa_id=${encodeURIComponent(wa_id)}`}
+            href={
+              conversation_id
+                ? `/dashboard/inbox?wa_id=${encodeURIComponent(wa_id)}&conversation_id=${encodeURIComponent(conversation_id)}`
+                : `/dashboard/inbox?wa_id=${encodeURIComponent(wa_id)}`
+            }
             className="btn btn-secondary text-sm px-3 py-1.5"
             onClick={(e) => e.stopPropagation()}
           >

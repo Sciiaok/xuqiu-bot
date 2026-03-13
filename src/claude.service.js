@@ -579,10 +579,36 @@ export async function getResponse(conversationHistory, userMessage, contextInfo 
     priorStateLines.push('IMPORTANT: Do NOT downgrade intent or quality unless the customer EXPLICITLY contradicts prior business signals (e.g. "actually I only need 1 for personal use"). Job titles like "self employed", "mechanic", etc. are NOT contradictions.');
   }
 
-  const enhancedPrompt = `${systemPrompt}
+  const carRecommendation = contextInfo.car_recommendation || '';
 
-CURRENT CONTEXT:
-- ${missingFieldsText}${priorStateLines.length > 0 ? '\n- ' + priorStateLines.join('\n- ') : ''}`;
+  const dynamicContext = `CURRENT CONTEXT:
+- ${missingFieldsText}${priorStateLines.length > 0 ? '\n- ' + priorStateLines.join('\n- ') : ''}${carRecommendation ? '\n- ' + carRecommendation : ''}`;
+
+  // Split system prompt into static (cached) + dynamic (uncached) blocks
+  const systemBlocks = [
+    {
+      type: 'text',
+      text: systemPrompt,
+      cache_control: { type: 'ephemeral' },
+    },
+    {
+      type: 'text',
+      text: dynamicContext,
+    },
+  ];
+
+  // Cache conversation history: mark the last history message so all prior
+  // turns are served from cache on subsequent requests
+  if (sanitizedHistory.length > 0) {
+    const lastMsg = sanitizedHistory[sanitizedHistory.length - 1];
+    if (typeof lastMsg.content === 'string') {
+      lastMsg.content = [
+        { type: 'text', text: lastMsg.content, cache_control: { type: 'ephemeral' } },
+      ];
+    } else if (Array.isArray(lastMsg.content) && lastMsg.content.length > 0) {
+      lastMsg.content[lastMsg.content.length - 1].cache_control = { type: 'ephemeral' };
+    }
+  }
 
   logger.info('claude.request.started', {
     message_count: messages.length,
@@ -593,10 +619,10 @@ CURRENT CONTEXT:
     context_info: buildTraceContextInfo(contextInfo),
   });
 
-const response = await anthropic.messages.create({
+  const response = await anthropic.messages.create({
     model: config.anthropic.model,
     max_tokens: 4096,
-    system: enhancedPrompt,
+    system: systemBlocks,
     messages: messages,
     output_config: {
       format: {
@@ -637,6 +663,10 @@ const response = await anthropic.messages.create({
     business_value: parsed.business_value,
     route: parsed.route,
     leads_count: (parsed.leads || []).length,
+    input_tokens: response.usage?.input_tokens || 0,
+    output_tokens: response.usage?.output_tokens || 0,
+    cache_creation_input_tokens: response.usage?.cache_creation_input_tokens || 0,
+    cache_read_input_tokens: response.usage?.cache_read_input_tokens || 0,
   });
 
   return parsed;

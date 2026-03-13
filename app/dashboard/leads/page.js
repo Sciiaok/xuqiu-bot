@@ -64,6 +64,7 @@ export default function LeadsPage() {
       const transformedLeads = (data || []).map(lead => ({
         id: lead.id,
         wa_id: lead.contact?.wa_id,
+        conversation_id: lead.conversation_id || null,
         inquiry_quality: lead.inquiry_quality || 'GOOD',
         business_value: lead.business_value || 'LOW',
         conversation_intent: lead.conversation_intent,

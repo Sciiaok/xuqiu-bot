@@ -1,21 +1,63 @@
 'use client';
 
 import { useState, useEffect, useMemo, useCallback, useRef, Suspense } from 'react';
-import { useSearchParams } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { createClient } from '@/lib/supabase-browser';
 import { useTranslations } from 'next-intl';
 import ContactList from '../components/ContactList';
 import ChatLog from '../components/ChatLog';
 import ChatInput from '../components/ChatInput';
 import LeadsList from '../components/LeadsList';
+import {
+  buildConversationSelection,
+  buildInboxPathWithoutJumpParams,
+  buildJumpSelectionOptions,
+  shouldApplyJumpSelection,
+} from './selection';
 
 const CONVERSATIONS_PAGE_SIZE = 30;
 const MESSAGES_PAGE_SIZE = 50;
 const LEADS_PAGE_SIZE = 20;
 
+function getTimestamp(value) {
+  if (!value) return 0;
+  const timestamp = new Date(value).getTime();
+  return Number.isNaN(timestamp) ? 0 : timestamp;
+}
+
+function sortContactsByLastMessage(items) {
+  return [...items].sort((a, b) => getTimestamp(b.lastMessageAt) - getTimestamp(a.lastMessageAt));
+}
+
+function buildContactSummary({
+  contact,
+  conversationId = null,
+  lastMessageAt = null,
+  isHumanTakeover = false,
+}) {
+  if (!contact?.id) return null;
+
+  return {
+    id: contact.id,
+    wa_id: contact.wa_id,
+    company_name: contact.company_name,
+    name: contact.name,
+    conversationCount: 0,
+    latestConversationId: conversationId,
+    lastMessageAt,
+    lastMessage: null,
+    isHumanTakeover,
+  };
+}
+
 function InboxContent() {
   const searchParams = useSearchParams();
-  const initialWaId = searchParams.get('wa_id');
+  const router = useRouter();
+  const initialWaId = searchParams.get('wa_id')?.trim() || null;
+  const initialConversationId = searchParams.get('conversation_id')?.trim() || null;
+  const jumpSignature = initialWaId || initialConversationId
+    ? `${initialWaId || ''}:${initialConversationId || ''}`
+    : null;
   const t = useTranslations('inbox');
 
   const [contacts, setContacts] = useState([]);
@@ -56,6 +98,27 @@ function InboxContent() {
   const contactsRequestRef = useRef(0);
   const contactMapRef = useRef(new Map());
   const initialLoadDoneRef = useRef(false);
+  const appliedJumpSignatureRef = useRef(null);
+  const pendingJumpSignatureRef = useRef(null);
+
+  const mergeResolvedContact = useCallback((contact) => {
+    if (!contact?.id) return null;
+
+    const existing = contactMapRef.current.get(contact.id) || {};
+    const merged = {
+      ...existing,
+      ...contact,
+      conversationCount: Math.max(contact.conversationCount || 0, existing.conversationCount || 0),
+      latestConversationId: contact.latestConversationId || existing.latestConversationId || null,
+      lastMessageAt: contact.lastMessageAt || existing.lastMessageAt || null,
+      lastMessage: existing.lastMessage || contact.lastMessage || null,
+      isHumanTakeover: contact.isHumanTakeover ?? existing.isHumanTakeover ?? false,
+    };
+
+    contactMapRef.current.set(merged.id, merged);
+    setContacts(sortContactsByLastMessage(Array.from(contactMapRef.current.values())));
+    return merged;
+  }, []);
 
   const resetContactsState = useCallback(() => {
     contactMapRef.current.clear();
@@ -142,9 +205,7 @@ function InboxContent() {
         }
       }
 
-      const sorted = Array.from(contactMapRef.current.values()).sort((a, b) =>
-        new Date(b.lastMessageAt) - new Date(a.lastMessageAt)
-      );
+      const sorted = sortContactsByLastMessage(Array.from(contactMapRef.current.values()));
 
       // Fetch only one preview message per contact (latest conversation only)
       const latestConversationIds = sorted
@@ -290,9 +351,7 @@ function InboxContent() {
         }
       }
 
-      const sorted = Array.from(contactMapRef.current.values()).sort((a, b) =>
-        new Date(b.lastMessageAt) - new Date(a.lastMessageAt)
-      );
+      const sorted = sortContactsByLastMessage(Array.from(contactMapRef.current.values()));
       setContacts(sorted);
     } catch (err) {
       if (requestId === contactsRequestRef.current) {
@@ -412,10 +471,31 @@ function InboxContent() {
     }
   }, [supabase, selectedConversationIds, leadsOffset, leadsHasMore, leadsLoadingMore]);
 
-  const ensureConversationIds = useCallback(async (contactId) => {
+  const ensureConversationIds = useCallback(async (contactId, options = {}) => {
+    const { targetConversationId = null } = options;
     const cacheKey = `${contactId}:${selectedAgentId}`;
     const cached = conversationIdsCacheRef.current.get(cacheKey);
-    if (cached) return cached;
+    if (cached) {
+      if (!targetConversationId || cached.includes(targetConversationId)) {
+        return cached;
+      }
+
+      const { data: targetConversation, error: targetConversationError } = await supabase
+        .from('conversations')
+        .select('id')
+        .eq('id', targetConversationId)
+        .eq('contact_id', contactId)
+        .maybeSingle();
+
+      if (targetConversationError) {
+        console.error('Error fetching target conversation ID:', targetConversationError);
+        return cached;
+      }
+
+      return targetConversation?.id
+        ? [targetConversation.id, ...cached]
+        : cached;
+    }
 
     const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
 
@@ -439,10 +519,104 @@ function InboxContent() {
 
     const ids = (data || []).map((row) => row.id);
     conversationIdsCacheRef.current.set(cacheKey, ids);
-    return ids;
+    if (!targetConversationId || ids.includes(targetConversationId)) {
+      return ids;
+    }
+
+    const { data: targetConversation, error: targetConversationError } = await supabase
+      .from('conversations')
+      .select('id')
+      .eq('id', targetConversationId)
+      .eq('contact_id', contactId)
+      .maybeSingle();
+
+    if (targetConversationError) {
+      console.error('Error fetching target conversation ID:', targetConversationError);
+      return ids;
+    }
+
+    return targetConversation?.id
+      ? [targetConversation.id, ...ids]
+      : ids;
   }, [supabase, selectedAgentId]);
 
-  const handleSelectContact = useCallback(async (contact) => {
+  const resolveContactFromParams = useCallback(async ({ waId, conversationId }) => {
+    if (conversationId) {
+      const { data: conversationRow, error: conversationError } = await supabase
+        .from('conversations')
+        .select(`
+          id,
+          last_message_at,
+          is_human_takeover,
+          contact:contacts!inner (
+            id,
+            wa_id,
+            company_name,
+            name
+          )
+        `)
+        .eq('id', conversationId)
+        .maybeSingle();
+
+      if (conversationError) {
+        console.error('Error resolving conversation jump target:', conversationError);
+      } else {
+        const resolved = buildContactSummary({
+          contact: conversationRow?.contact,
+          conversationId: conversationRow?.id || conversationId,
+          lastMessageAt: conversationRow?.last_message_at || null,
+          isHumanTakeover: conversationRow?.is_human_takeover || false,
+        });
+
+        if (resolved) return mergeResolvedContact(resolved);
+      }
+    }
+
+    if (!waId) return null;
+
+    const { data: contactRow, error: contactError } = await supabase
+      .from('contacts')
+      .select('id, wa_id, company_name, name')
+      .eq('wa_id', waId)
+      .maybeSingle();
+
+    if (contactError) {
+      console.error('Error resolving wa_id jump target:', contactError);
+      return null;
+    }
+
+    if (!contactRow?.id) return null;
+
+    let query = supabase
+      .from('conversations')
+      .select('id, last_message_at, is_human_takeover')
+      .eq('contact_id', contactRow.id)
+      .order('last_message_at', { ascending: false })
+      .limit(1);
+
+    if (selectedAgentId !== 'all') {
+      query = query.eq('agent_id', selectedAgentId);
+    }
+
+    const { data: latestConversation, error: latestConversationError } = await query.maybeSingle();
+
+    if (latestConversationError) {
+      console.error('Error resolving latest conversation for wa_id jump:', latestConversationError);
+    }
+
+    return mergeResolvedContact(buildContactSummary({
+      contact: contactRow,
+      conversationId: latestConversation?.id || null,
+      lastMessageAt: latestConversation?.last_message_at || null,
+      isHumanTakeover: latestConversation?.is_human_takeover || false,
+    }));
+  }, [supabase, selectedAgentId, mergeResolvedContact]);
+
+  const handleSelectContact = useCallback(async (contact, options = {}) => {
+    const {
+      conversationId: targetConversationId = null,
+      focusConversation = false,
+    } = options;
     const requestId = ++selectionRequestRef.current;
 
     setSelectedContact(contact);
@@ -459,17 +633,31 @@ function InboxContent() {
     setLeadsOffset(0);
     setLeadsHasMore(false);
 
-    const conversationIds = await ensureConversationIds(contact.id);
+    const conversationIds = await ensureConversationIds(contact.id, { targetConversationId });
     if (selectionRequestRef.current !== requestId) return;
 
-    setSelectedConversationIds(conversationIds);
+    const { panelConversationIds } = buildConversationSelection(conversationIds, {
+      targetConversationId,
+      focusConversation,
+    });
+
+    setSelectedConversationIds(panelConversationIds);
+    setSelectedContact((prev) => (
+      prev?.id === contact.id
+        ? {
+            ...prev,
+            conversationCount: panelConversationIds.length || prev.conversationCount || 0,
+            latestConversationId: panelConversationIds[0] || prev.latestConversationId || null,
+          }
+        : prev
+    ));
 
     // Fetch takeover status of latest conversation
-    if (conversationIds.length > 0) {
+    if (panelConversationIds.length > 0) {
       const { data: conv } = await supabase
         .from('conversations')
         .select('is_human_takeover')
-        .eq('id', conversationIds[0])
+        .eq('id', panelConversationIds[0])
         .single();
       if (selectionRequestRef.current === requestId) {
         setIsHumanTakeover(conv?.is_human_takeover || false);
@@ -477,8 +665,8 @@ function InboxContent() {
     }
 
     const [messagesResult, leadsResult] = await Promise.all([
-      fetchMessages(conversationIds),
-      fetchLeads(conversationIds),
+      fetchMessages(panelConversationIds),
+      fetchLeads(panelConversationIds),
     ]);
 
     if (selectionRequestRef.current !== requestId) return;
@@ -493,6 +681,20 @@ function InboxContent() {
 
     setPanelLoading(false);
   }, [ensureConversationIds, fetchMessages, fetchLeads, supabase]);
+
+  const clearJumpParams = useCallback(() => {
+    if (!initialWaId && !initialConversationId) return;
+    router.replace(buildInboxPathWithoutJumpParams(searchParams.toString()), { scroll: false });
+  }, [initialConversationId, initialWaId, router, searchParams]);
+
+  const handleManualSelectContact = useCallback((contact) => {
+    if (jumpSignature) {
+      appliedJumpSignatureRef.current = jumpSignature;
+      clearJumpParams();
+    }
+
+    handleSelectContact(contact);
+  }, [clearJumpParams, handleSelectContact, jumpSignature]);
 
   useEffect(() => {
     fetchContacts(contactsTab);
@@ -547,20 +749,99 @@ function InboxContent() {
     setIsHumanTakeover(false);
   }, [contacts]);
 
-  // Auto-select contact: wa_id first, otherwise first contact in list
+  // URL params act as a one-time deep link, not a persistent selection lock.
   useEffect(() => {
-    if (!contacts.length) return;
-    if (selectedContact && contacts.some((c) => c.id === selectedContact.id)) return;
+    if (panelLoading) return;
 
-    const preferred = initialWaId
-      ? contacts.find((c) => c.wa_id === initialWaId)
-      : null;
+    let cancelled = false;
 
-    const nextContact = preferred || contacts[0];
-    if (nextContact) {
-      handleSelectContact(nextContact);
-    }
-  }, [contacts, initialWaId, selectedContact, handleSelectContact]);
+    const selectTarget = async () => {
+      if (!jumpSignature) {
+        if (!contacts.length) return;
+        if (selectedContact && contacts.some((contact) => contact.id === selectedContact.id)) return;
+        await handleSelectContact(contacts[0]);
+        return;
+      }
+
+      if (!shouldApplyJumpSelection({
+        jumpSignature,
+        appliedJumpSignature: appliedJumpSignatureRef.current,
+        pendingJumpSignature: pendingJumpSignatureRef.current,
+      })) {
+        return;
+      }
+
+      pendingJumpSignatureRef.current = jumpSignature;
+
+      let nextContact = null;
+      let resolvedFromParams = false;
+
+      if (initialConversationId) {
+        nextContact = contacts.find((contact) => contact.latestConversationId === initialConversationId) || null;
+      }
+
+      if (!nextContact && initialWaId) {
+        nextContact = contacts.find((contact) => contact.wa_id === initialWaId) || null;
+      }
+
+      if (!nextContact && (initialConversationId || initialWaId)) {
+        nextContact = await resolveContactFromParams({
+          waId: initialWaId,
+          conversationId: initialConversationId,
+        });
+        resolvedFromParams = Boolean(nextContact);
+      }
+
+      if (cancelled) {
+        if (pendingJumpSignatureRef.current === jumpSignature) {
+          pendingJumpSignatureRef.current = null;
+        }
+        return;
+      }
+
+      const fallbackContact = nextContact || contacts[0] || null;
+      if (fallbackContact) {
+        const selectionOptions = buildJumpSelectionOptions({
+          initialWaId,
+          initialConversationId,
+          resolvedFromParams,
+          contact: fallbackContact,
+        });
+
+        await handleSelectContact(fallbackContact, {
+          conversationId: selectionOptions.conversationId,
+          focusConversation: selectionOptions.focusConversation,
+        });
+
+        if (!cancelled) {
+          appliedJumpSignatureRef.current = jumpSignature;
+          pendingJumpSignatureRef.current = null;
+          clearJumpParams();
+        }
+      } else if (pendingJumpSignatureRef.current === jumpSignature) {
+        pendingJumpSignatureRef.current = null;
+      }
+    };
+
+    selectTarget();
+
+    return () => {
+      cancelled = true;
+      if (pendingJumpSignatureRef.current === jumpSignature) {
+        pendingJumpSignatureRef.current = null;
+      }
+    };
+  }, [
+    clearJumpParams,
+    contacts,
+    handleSelectContact,
+    initialConversationId,
+    initialWaId,
+    jumpSignature,
+    panelLoading,
+    resolveContactFromParams,
+    selectedContact,
+  ]);
 
   // Realtime subscription for selected contact's conversations
   useEffect(() => {
@@ -747,7 +1028,7 @@ function InboxContent() {
           agents={agents}
           selectedId={selectedContact?.id}
           selectedAgentId={selectedAgentId}
-          onSelect={handleSelectContact}
+          onSelect={handleManualSelectContact}
           onAgentChange={handleAgentChange}
           onLoadMore={loadMoreContacts}
           hasMore={contactsHasMore}
