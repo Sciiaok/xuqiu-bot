@@ -89,6 +89,7 @@ function ContactItem({ contact, isSelected, onClick, t, tt }) {
 export default function ContactList({
   contacts,
   agents = [],
+  loading = false,
   selectedId,
   selectedAgentId = 'all',
   onSelect,
@@ -201,7 +202,11 @@ export default function ContactList({
 
       {/* List */}
       <div className="flex-1 overflow-y-auto">
-        {filtered.length === 0 ? (
+        {loading && contacts.length === 0 ? (
+          <div className="flex h-full items-center justify-center">
+            <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-accent-blue"></div>
+          </div>
+        ) : filtered.length === 0 ? (
           <div className="p-4 text-center text-text-muted text-sm">
             {t('noContactsFound')}
           </div>

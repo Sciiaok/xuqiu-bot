@@ -5,6 +5,7 @@ import {
   buildInboxPathWithoutJumpParams,
   buildConversationSelection,
   buildJumpSelectionOptions,
+  replaceInboxPathWithoutJumpParams,
   shouldApplyJumpSelection,
 } from '../../app/dashboard/inbox/selection.js';
 
@@ -124,4 +125,24 @@ test('buildInboxPathWithoutJumpParams returns the base inbox path when no params
     buildInboxPathWithoutJumpParams('conversation_id=conv-001'),
     '/dashboard/inbox'
   );
+});
+
+test('replaceInboxPathWithoutJumpParams updates browser history in place', () => {
+  const calls = [];
+  const historyLike = {
+    state: { as: '/dashboard/inbox?conversation_id=conv-001' },
+    replaceState: (...args) => calls.push(args),
+  };
+
+  const nextPath = replaceInboxPathWithoutJumpParams(
+    historyLike,
+    '?conversation_id=conv-001&agent=agent-2&wa_id=8613800000001'
+  );
+
+  assert.equal(nextPath, '/dashboard/inbox?agent=agent-2');
+  assert.deepEqual(calls, [[
+    { as: '/dashboard/inbox?conversation_id=conv-001' },
+    '',
+    '/dashboard/inbox?agent=agent-2',
+  ]]);
 });

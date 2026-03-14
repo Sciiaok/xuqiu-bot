@@ -1,7 +1,6 @@
 'use client';
 
-import { useState, useEffect, useMemo, useCallback, useRef, Suspense } from 'react';
-import { useRouter, useSearchParams } from 'next/navigation';
+import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { createClient } from '@/lib/supabase-browser';
 import { useTranslations } from 'next-intl';
 import ContactList from '../components/ContactList';
@@ -10,14 +9,22 @@ import ChatInput from '../components/ChatInput';
 import LeadsList from '../components/LeadsList';
 import {
   buildConversationSelection,
-  buildInboxPathWithoutJumpParams,
   buildJumpSelectionOptions,
+  replaceInboxPathWithoutJumpParams,
   shouldApplyJumpSelection,
 } from './selection';
 
 const CONVERSATIONS_PAGE_SIZE = 30;
 const MESSAGES_PAGE_SIZE = 50;
 const LEADS_PAGE_SIZE = 20;
+
+function getJumpParamsFromSearch(searchString = '') {
+  const params = new URLSearchParams(searchString);
+  return {
+    waId: params.get('wa_id')?.trim() || null,
+    conversationId: params.get('conversation_id')?.trim() || null,
+  };
+}
 
 function getTimestamp(value) {
   if (!value) return 0;
@@ -51,10 +58,13 @@ function buildContactSummary({
 }
 
 function InboxContent() {
-  const searchParams = useSearchParams();
-  const router = useRouter();
-  const initialWaId = searchParams.get('wa_id')?.trim() || null;
-  const initialConversationId = searchParams.get('conversation_id')?.trim() || null;
+  const [jumpParams, setJumpParams] = useState({
+    waId: null,
+    conversationId: null,
+    ready: false,
+  });
+  const initialWaId = jumpParams.waId;
+  const initialConversationId = jumpParams.conversationId;
   const jumpSignature = initialWaId || initialConversationId
     ? `${initialWaId || ''}:${initialConversationId || ''}`
     : null;
@@ -68,6 +78,7 @@ function InboxContent() {
   const [agents, setAgents] = useState([]);
   const [loading, setLoading] = useState(true);
   const [panelLoading, setPanelLoading] = useState(false);
+  const [selectionInitializing, setSelectionInitializing] = useState(true);
   const [sending, setSending] = useState(false);
   const [realtimeStatus, setRealtimeStatus] = useState('connecting');
   const [isHumanTakeover, setIsHumanTakeover] = useState(false);
@@ -100,6 +111,8 @@ function InboxContent() {
   const initialLoadDoneRef = useRef(false);
   const appliedJumpSignatureRef = useRef(null);
   const pendingJumpSignatureRef = useRef(null);
+  const panelLoadingRef = useRef(false);
+  const selectedContactRef = useRef(null);
 
   const mergeResolvedContact = useCallback((contact) => {
     if (!contact?.id) return null;
@@ -619,10 +632,12 @@ function InboxContent() {
     } = options;
     const requestId = ++selectionRequestRef.current;
 
+    selectedContactRef.current = contact;
     setSelectedContact(contact);
     // Reset takeover state immediately on contact switch
     setIsHumanTakeover(false);
     setRealtimeStatus('connecting');
+    panelLoadingRef.current = true;
     setPanelLoading(true);
     setMessages([]);
     setLeads([]);
@@ -642,15 +657,17 @@ function InboxContent() {
     });
 
     setSelectedConversationIds(panelConversationIds);
-    setSelectedContact((prev) => (
-      prev?.id === contact.id
+    setSelectedContact((prev) => {
+      const next = prev?.id === contact.id
         ? {
             ...prev,
             conversationCount: panelConversationIds.length || prev.conversationCount || 0,
             latestConversationId: panelConversationIds[0] || prev.latestConversationId || null,
           }
-        : prev
-    ));
+        : prev;
+      selectedContactRef.current = next;
+      return next;
+    });
 
     // Fetch takeover status of latest conversation
     if (panelConversationIds.length > 0) {
@@ -679,13 +696,23 @@ function InboxContent() {
     setLeadsHasMore(leadsResult.hasMore);
     setLeadsOffset(LEADS_PAGE_SIZE);
 
+    panelLoadingRef.current = false;
     setPanelLoading(false);
   }, [ensureConversationIds, fetchMessages, fetchLeads, supabase]);
 
   const clearJumpParams = useCallback(() => {
     if (!initialWaId && !initialConversationId) return;
-    router.replace(buildInboxPathWithoutJumpParams(searchParams.toString()), { scroll: false });
-  }, [initialConversationId, initialWaId, router, searchParams]);
+    if (typeof window === 'undefined') return;
+
+    // Strip one-time jump params without triggering a second App Router navigation.
+    replaceInboxPathWithoutJumpParams(window.history, window.location.search);
+    setJumpParams((prev) => ({
+      ...prev,
+      waId: null,
+      conversationId: null,
+      ready: true,
+    }));
+  }, [initialConversationId, initialWaId]);
 
   const handleManualSelectContact = useCallback((contact) => {
     if (jumpSignature) {
@@ -693,8 +720,18 @@ function InboxContent() {
       clearJumpParams();
     }
 
+    setSelectionInitializing(false);
     handleSelectContact(contact);
   }, [clearJumpParams, handleSelectContact, jumpSignature]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+
+    setJumpParams({
+      ...getJumpParamsFromSearch(window.location.search),
+      ready: true,
+    });
+  }, []);
 
   useEffect(() => {
     fetchContacts(contactsTab);
@@ -721,27 +758,32 @@ function InboxContent() {
   const handleTabChange = useCallback((tab) => {
     conversationIdsCacheRef.current.clear();
     invalidateContactsRequest();
+    selectedContactRef.current = null;
     setSelectedContact(null);
     setSelectedConversationIds([]);
     setMessages([]);
     setLeads([]);
     setIsHumanTakeover(false);
+    setSelectionInitializing(true);
     setContactsTab(tab);
   }, [invalidateContactsRequest]);
 
   const handleAgentChange = useCallback((agentId) => {
     conversationIdsCacheRef.current.clear();
     invalidateContactsRequest();
+    selectedContactRef.current = null;
     setSelectedContact(null);
     setSelectedConversationIds([]);
     setMessages([]);
     setLeads([]);
     setIsHumanTakeover(false);
+    setSelectionInitializing(true);
     setSelectedAgentId(agentId);
   }, [invalidateContactsRequest]);
 
   useEffect(() => {
     if (contacts.length > 0) return;
+    selectedContactRef.current = null;
     setSelectedContact(null);
     setSelectedConversationIds([]);
     setMessages([]);
@@ -750,16 +792,32 @@ function InboxContent() {
   }, [contacts]);
 
   // URL params act as a one-time deep link, not a persistent selection lock.
+  // panelLoading and selectedContact are read from refs (not deps) so that
+  // handleSelectContact's own state changes don't cancel this effect mid-flight.
   useEffect(() => {
-    if (panelLoading) return;
+    if (!jumpParams.ready) return;
+    if (loading) return;
+    if (panelLoadingRef.current) return;
 
     let cancelled = false;
+    const finishSelectionInitialization = () => {
+      if (!cancelled) {
+        setSelectionInitializing(false);
+      }
+    };
 
     const selectTarget = async () => {
       if (!jumpSignature) {
-        if (!contacts.length) return;
-        if (selectedContact && contacts.some((contact) => contact.id === selectedContact.id)) return;
+        if (!contacts.length) {
+          finishSelectionInitialization();
+          return;
+        }
+        if (selectedContactRef.current && contacts.some((contact) => contact.id === selectedContactRef.current.id)) {
+          finishSelectionInitialization();
+          return;
+        }
         await handleSelectContact(contacts[0]);
+        finishSelectionInitialization();
         return;
       }
 
@@ -768,6 +826,7 @@ function InboxContent() {
         appliedJumpSignature: appliedJumpSignatureRef.current,
         pendingJumpSignature: pendingJumpSignatureRef.current,
       })) {
+        finishSelectionInitialization();
         return;
       }
 
@@ -817,9 +876,11 @@ function InboxContent() {
           appliedJumpSignatureRef.current = jumpSignature;
           pendingJumpSignatureRef.current = null;
           clearJumpParams();
+          finishSelectionInitialization();
         }
       } else if (pendingJumpSignatureRef.current === jumpSignature) {
         pendingJumpSignatureRef.current = null;
+        finishSelectionInitialization();
       }
     };
 
@@ -831,6 +892,7 @@ function InboxContent() {
         pendingJumpSignatureRef.current = null;
       }
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
     clearJumpParams,
     contacts,
@@ -838,9 +900,9 @@ function InboxContent() {
     initialConversationId,
     initialWaId,
     jumpSignature,
-    panelLoading,
+    jumpParams.ready,
+    loading,
     resolveContactFromParams,
-    selectedContact,
   ]);
 
   // Realtime subscription for selected contact's conversations
@@ -1001,14 +1063,6 @@ function InboxContent() {
 
   const [leadsExpanded, setLeadsExpanded] = useState(true);
 
-  if (loading) {
-    return (
-      <div className="h-full flex items-center justify-center">
-        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-accent-blue"></div>
-      </div>
-    );
-  }
-
   const displayName = selectedContact
     ? (selectedContact.name || selectedContact.company_name || selectedContact.wa_id)
     : '';
@@ -1019,6 +1073,7 @@ function InboxContent() {
         selectedContact.conversationCount > 1 ? t('conversations', { count: selectedContact.conversationCount }) : null,
       ].filter(Boolean).join(' · ')
     : '';
+  const showCenterLoading = (loading || selectionInitializing || panelLoading) && !selectedContact;
 
   return (
     <div className="h-[calc(100vh-0px)] flex">
@@ -1026,6 +1081,7 @@ function InboxContent() {
         <ContactList
           contacts={contacts}
           agents={agents}
+          loading={loading}
           selectedId={selectedContact?.id}
           selectedAgentId={selectedAgentId}
           onSelect={handleManualSelectContact}
@@ -1117,6 +1173,10 @@ function InboxContent() {
               disabled={sending || panelLoading}
             />
           </>
+        ) : showCenterLoading ? (
+          <div className="flex-1 flex items-center justify-center">
+            <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-accent-blue"></div>
+          </div>
         ) : (
           <div className="flex-1 flex flex-col items-center justify-center gap-3">
             <svg className="w-12 h-12 text-text-muted/50" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -1143,13 +1203,5 @@ function InboxContent() {
 }
 
 export default function InboxPage() {
-  return (
-    <Suspense fallback={
-      <div className="h-full flex items-center justify-center">
-        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-accent-blue"></div>
-      </div>
-    }>
-      <InboxContent />
-    </Suspense>
-  );
+  return <InboxContent />;
 }

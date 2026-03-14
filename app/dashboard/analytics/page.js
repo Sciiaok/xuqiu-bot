@@ -348,7 +348,7 @@ export default function AnalyticsPage() {
                 {humanNowList.map(lead => (
                   <tr
                     key={lead.id}
-                    onClick={() => router.push(`/dashboard/inbox?conversation=${lead.conversationId}`)}
+                    onClick={() => router.push(`/dashboard/inbox?conversation_id=${lead.conversationId}`)}
                     className="hover:bg-surface-hover cursor-pointer transition-colors"
                   >
                     <td className="px-5 py-3 text-text-primary font-medium whitespace-nowrap">{lead.contactName}</td>

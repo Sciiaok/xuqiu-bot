@@ -24,7 +24,7 @@ export async function mockSupabase(page, opts = {}) {
     const url = route.request().url();
 
     // Takeover-status check: select=is_human_takeover (uses .single())
-    if (url.includes('is_human_takeover')) {
+    if (url.includes('select=is_human_takeover')) {
       return route.fulfill({
         json: { is_human_takeover: opts.takeoverStatus ?? false },
         headers: {

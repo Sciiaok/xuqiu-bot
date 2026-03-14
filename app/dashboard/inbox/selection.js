@@ -72,3 +72,13 @@ export function buildInboxPathWithoutJumpParams(searchParamsString = '') {
   const nextQuery = nextParams.toString();
   return nextQuery ? `/dashboard/inbox?${nextQuery}` : '/dashboard/inbox';
 }
+
+export function replaceInboxPathWithoutJumpParams(historyLike, searchParamsString = '') {
+  const nextPath = buildInboxPathWithoutJumpParams(searchParamsString);
+
+  if (historyLike?.replaceState) {
+    historyLike.replaceState(historyLike.state ?? null, '', nextPath);
+  }
+
+  return nextPath;
+}
