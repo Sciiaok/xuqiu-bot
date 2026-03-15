@@ -35,7 +35,7 @@ function getInitials(contact) {
 function ContactItem({ contact, isSelected, onClick, t, tt }) {
   const lastMessage = contact.lastMessage;
   const preview = lastMessage?.content?.substring(0, 50) || t('noMessages');
-  const hasUnread = lastMessage?.role === 'user';
+  const hasUnread = lastMessage?.role === 'user' && contact.isHumanTakeover;
   const displayName = contact.name || contact.company_name || contact.wa_id;
   const subtitle = contact.name
     ? (contact.company_name ? `${contact.company_name} · ${contact.wa_id}` : contact.wa_id)

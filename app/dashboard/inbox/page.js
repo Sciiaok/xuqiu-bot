@@ -108,6 +108,7 @@ function InboxContent() {
   const selectionRequestRef = useRef(0);
   const contactsRequestRef = useRef(0);
   const contactMapRef = useRef(new Map());
+  const convToContactRef = useRef(new Map());
   const initialLoadDoneRef = useRef(false);
   const appliedJumpSignatureRef = useRef(null);
   const pendingJumpSignatureRef = useRef(null);
@@ -130,12 +131,41 @@ function InboxContent() {
     };
 
     contactMapRef.current.set(merged.id, merged);
+    if (merged.latestConversationId) {
+      convToContactRef.current.set(merged.latestConversationId, merged.id);
+    }
     setContacts(sortContactsByLastMessage(Array.from(contactMapRef.current.values())));
     return merged;
   }, []);
 
+  const updateContactPreview = useCallback((msg) => {
+    const contactId = convToContactRef.current.get(msg.conversation_id);
+    if (!contactId) return false;
+
+    const contact = contactMapRef.current.get(contactId);
+    if (!contact) return false;
+
+    // Timestamp guard: only update if newer
+    if (contact.lastMessageAt && msg.sent_at <= contact.lastMessageAt) return false;
+
+    contact.latestConversationId = msg.conversation_id;
+    contact.lastMessageAt = msg.sent_at;
+    contact.lastMessage = {
+      content: msg.content,
+      role: msg.role,
+      sent_at: msg.sent_at,
+      conversation_id: msg.conversation_id,
+    };
+
+    setContacts(sortContactsByLastMessage(
+      Array.from(contactMapRef.current.values())
+    ));
+    return true;
+  }, []);
+
   const resetContactsState = useCallback(() => {
     contactMapRef.current.clear();
+    convToContactRef.current.clear();
     setContacts([]);
     setContactsOffset(0);
     setContactsHasMore(false);
@@ -217,6 +247,7 @@ function InboxContent() {
             existing.isHumanTakeover = row.is_human_takeover || false;
           }
         }
+        convToContactRef.current.set(row.id, contact.id);
       }
 
       const sorted = sortContactsByLastMessage(Array.from(contactMapRef.current.values()));
@@ -333,6 +364,7 @@ function InboxContent() {
             existing.isHumanTakeover = row.is_human_takeover || false;
           }
         }
+        convToContactRef.current.set(row.id, contact.id);
       }
 
       // Fetch preview messages for new contacts only
@@ -532,6 +564,9 @@ function InboxContent() {
     }
 
     const ids = (data || []).map((row) => row.id);
+    for (const id of ids) {
+      convToContactRef.current.set(id, contactId);
+    }
     conversationIdsCacheRef.current.set(cacheKey, ids);
     if (!targetConversationId || ids.includes(targetConversationId)) {
       return ids;
@@ -935,6 +970,7 @@ function InboxContent() {
                 metadata: payload.new.metadata,
               }];
             });
+            updateContactPreview(payload.new);
           }
         )
         .on(
@@ -960,7 +996,86 @@ function InboxContent() {
     return () => {
       channels.forEach((channel) => supabase.removeChannel(channel));
     };
-  }, [selectedConversationIds, supabase, fetchLeads]);
+  }, [selectedConversationIds, supabase, fetchLeads, updateContactPreview]);
+
+  // Global conversations subscription for contact list preview sync
+  useEffect(() => {
+    const subscribeOptions = {
+      event: 'UPDATE',
+      schema: 'public',
+      table: 'conversations',
+    };
+    if (selectedAgentId !== 'all') {
+      subscribeOptions.filter = `agent_id=eq.${selectedAgentId}`;
+    }
+
+    const channel = supabase
+      .channel('inbox-conversations-sync')
+      .on('postgres_changes', subscribeOptions, async (payload) => {
+        const conv = payload.new;
+        if (selectedConversationIds.includes(conv.id)) return;
+
+        const contactId = convToContactRef.current.get(conv.id);
+
+        if (contactId && contactMapRef.current.has(contactId)) {
+          const { data: msgs } = await supabase
+            .from('messages')
+            .select('content, role, sent_at, conversation_id')
+            .eq('conversation_id', conv.id)
+            .order('sent_at', { ascending: false })
+            .limit(1);
+
+          if (msgs?.[0]) {
+            updateContactPreview(msgs[0]);
+          }
+
+          const contact = contactMapRef.current.get(contactId);
+          if (contact && contact.isHumanTakeover !== (conv.is_human_takeover || false)) {
+            contact.isHumanTakeover = conv.is_human_takeover || false;
+            setContacts(sortContactsByLastMessage(
+              Array.from(contactMapRef.current.values())
+            ));
+          }
+        } else {
+          const { data: convRow } = await supabase
+            .from('conversations')
+            .select(`
+              id, last_message_at, is_human_takeover,
+              contact:contacts!inner (id, wa_id, company_name, name)
+            `)
+            .eq('id', conv.id)
+            .maybeSingle();
+
+          if (!convRow?.contact?.id) return;
+
+          convToContactRef.current.set(conv.id, convRow.contact.id);
+
+          mergeResolvedContact({
+            id: convRow.contact.id,
+            wa_id: convRow.contact.wa_id,
+            company_name: convRow.contact.company_name,
+            name: convRow.contact.name,
+            conversationCount: 1,
+            latestConversationId: conv.id,
+            lastMessageAt: convRow.last_message_at,
+            lastMessage: null,
+            isHumanTakeover: convRow.is_human_takeover || false,
+          });
+
+          const { data: msgs } = await supabase
+            .from('messages')
+            .select('content, role, sent_at, conversation_id')
+            .eq('conversation_id', conv.id)
+            .order('sent_at', { ascending: false })
+            .limit(1);
+
+          if (msgs?.[0]) updateContactPreview(msgs[0]);
+        }
+      })
+      .subscribe();
+
+    return () => supabase.removeChannel(channel);
+  }, [supabase, selectedConversationIds, selectedAgentId, updateContactPreview, mergeResolvedContact]);
 
   const handleSendMessage = async (message) => {
     if (sending || !selectedConversationIds.length) return;
