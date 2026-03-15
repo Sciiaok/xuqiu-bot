@@ -113,6 +113,7 @@ function InboxContent() {
   const pendingJumpSignatureRef = useRef(null);
   const panelLoadingRef = useRef(false);
   const selectedContactRef = useRef(null);
+  const realtimeEpochRef = useRef(0);
 
   const mergeResolvedContact = useCallback((contact) => {
     if (!contact?.id) return null;
@@ -909,9 +910,10 @@ function InboxContent() {
   useEffect(() => {
     if (!selectedConversationIds.length) return;
 
+    const epoch = ++realtimeEpochRef.current;
     const channels = selectedConversationIds.map((convId, idx) => {
       return supabase
-        .channel(`inbox-realtime-${convId}`)
+        .channel(`inbox-realtime-${convId}-${epoch}`)
         .on(
           'postgres_changes',
           {
