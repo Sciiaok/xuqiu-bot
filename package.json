@@ -16,7 +16,8 @@
     "cron:logs": "pm2 logs lead-sync-cron",
     "queue:start": "pm2 start ecosystem.config.cjs --only queue-cron",
     "queue:stop": "pm2 stop queue-cron",
-    "queue:logs": "pm2 logs queue-cron"
+    "queue:logs": "pm2 logs queue-cron",
+    "test": "vitest run"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.74.0",
@@ -34,10 +35,16 @@
   "devDependencies": {
     "@playwright/test": "^1.58.2",
     "@tailwindcss/postcss": "^4.0.14",
+    "@testing-library/dom": "^10.4.1",
+    "@testing-library/jest-dom": "^6.9.1",
+    "@testing-library/react": "^16.3.2",
+    "@vitejs/plugin-react": "^6.0.1",
     "autoprefixer": "^10.4.21",
     "eslint": "^8",
     "eslint-config-next": "^16.1.6",
+    "jsdom": "^29.0.0",
     "postcss": "^8.5.3",
-    "tailwindcss": "^4.0.14"
+    "tailwindcss": "^4.0.14",
+    "vitest": "^4.1.0"
   }
 }

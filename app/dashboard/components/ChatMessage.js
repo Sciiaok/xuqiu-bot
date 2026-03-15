@@ -75,6 +75,23 @@ export default function ChatMessage({ role, content, timestamp, metadata }) {
       );
     }
 
+    if (url && type === 'audio' && !isFailed) {
+      return (
+        <div key={key}>
+          <audio
+            src={url}
+            controls
+            className="w-full max-w-[280px]"
+            style={{ height: '36px' }}
+            onError={() => handleMediaError(url)}
+          />
+          {caption && (
+            <p className="text-text-primary text-sm mt-1 whitespace-pre-wrap break-words">{caption}</p>
+          )}
+        </div>
+      );
+    }
+
     // Badge fallback for media without URL or failed loads
     if (type) {
       return (
@@ -137,10 +154,35 @@ export default function ChatMessage({ role, content, timestamp, metadata }) {
       });
     }
 
-    // TODO: Inbound WhatsApp voice notes may carry metadata.media_type === 'audio'
-    // while content already contains the transcription. Do not route those
-    // messages into the generic attachment placeholder; preserve text rendering
-    // when no playable media URL is available.
+    // Audio with playable URL: show player + transcription (content has Whisper text)
+    if (mediaType === 'audio' && mediaUrl) {
+      return (
+        <div className="space-y-1.5">
+          {renderMediaItem({
+            url: mediaUrl,
+            type: 'audio',
+            filename: mediaFilename,
+            caption: mediaCaption,
+            key: 'single',
+          })}
+          {content && !content.match(/^\[audio:/) && (
+            <p className="text-text-primary text-sm whitespace-pre-wrap break-words leading-relaxed">
+              {content}
+            </p>
+          )}
+        </div>
+      );
+    }
+
+    // Audio without playable URL: just show the transcription text
+    if (mediaType === 'audio' && !mediaUrl && content) {
+      return (
+        <p className="text-text-primary text-sm whitespace-pre-wrap break-words leading-relaxed">
+          {content}
+        </p>
+      );
+    }
+
     // Single media placeholder without URL
     if (mediaType || mediaMatch) {
       return renderMediaItem({
