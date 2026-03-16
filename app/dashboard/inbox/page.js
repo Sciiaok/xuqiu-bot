@@ -114,6 +114,7 @@ function InboxContent() {
   const pendingJumpSignatureRef = useRef(null);
   const panelLoadingRef = useRef(false);
   const selectedContactRef = useRef(null);
+  const selectedConvIdsRef = useRef([]);
   const realtimeEpochRef = useRef(0);
 
   const mergeResolvedContact = useCallback((contact) => {
@@ -138,24 +139,29 @@ function InboxContent() {
     return merged;
   }, []);
 
-  const updateContactPreview = useCallback((msg) => {
+  const updateContactPreview = useCallback((msg, extraUpdates) => {
     const contactId = convToContactRef.current.get(msg.conversation_id);
     if (!contactId) return false;
 
     const contact = contactMapRef.current.get(contactId);
     if (!contact) return false;
 
-    // Timestamp guard: only update if newer
-    if (contact.lastMessageAt && msg.sent_at <= contact.lastMessageAt) return false;
+    // Timestamp guard: only update if newer (use getTimestamp for robust comparison)
+    if (contact.lastMessageAt && getTimestamp(msg.sent_at) <= getTimestamp(contact.lastMessageAt)) return false;
 
-    contact.latestConversationId = msg.conversation_id;
-    contact.lastMessageAt = msg.sent_at;
-    contact.lastMessage = {
-      content: msg.content,
-      role: msg.role,
-      sent_at: msg.sent_at,
-      conversation_id: msg.conversation_id,
+    const updated = {
+      ...contact,
+      latestConversationId: msg.conversation_id,
+      lastMessageAt: msg.sent_at,
+      lastMessage: {
+        content: msg.content,
+        role: msg.role,
+        sent_at: msg.sent_at,
+        conversation_id: msg.conversation_id,
+      },
+      ...extraUpdates,
     };
+    contactMapRef.current.set(contactId, updated);
 
     setContacts(sortContactsByLastMessage(
       Array.from(contactMapRef.current.values())
@@ -941,6 +947,11 @@ function InboxContent() {
     resolveContactFromParams,
   ]);
 
+  // Keep ref in sync for use in conversations-sync handler (avoids re-subscriptions)
+  useEffect(() => {
+    selectedConvIdsRef.current = selectedConversationIds;
+  }, [selectedConversationIds]);
+
   // Realtime subscription for selected contact's conversations
   useEffect(() => {
     if (!selectedConversationIds.length) return;
@@ -999,7 +1010,9 @@ function InboxContent() {
   }, [selectedConversationIds, supabase, fetchLeads, updateContactPreview]);
 
   // Global conversations subscription for contact list preview sync
+  // Uses selectedConvIdsRef to avoid tearing down the channel on every contact switch.
   useEffect(() => {
+    const epoch = ++realtimeEpochRef.current;
     const subscribeOptions = {
       event: 'UPDATE',
       schema: 'public',
@@ -1009,35 +1022,48 @@ function InboxContent() {
       subscribeOptions.filter = `agent_id=eq.${selectedAgentId}`;
     }
 
+    const fetchLatestPreview = async (conversationId) => {
+      const { data: msgs, error } = await supabase
+        .from('messages')
+        .select('content, role, sent_at, conversation_id')
+        .eq('conversation_id', conversationId)
+        .order('sent_at', { ascending: false })
+        .limit(1);
+
+      if (error) console.error('Error fetching preview message:', error);
+      return msgs?.[0] || null;
+    };
+
     const channel = supabase
-      .channel('inbox-conversations-sync')
+      .channel(`inbox-conversations-sync-${epoch}`)
       .on('postgres_changes', subscribeOptions, async (payload) => {
         const conv = payload.new;
-        if (selectedConversationIds.includes(conv.id)) return;
+        // Read from ref to avoid stale closure
+        if (selectedConvIdsRef.current.includes(conv.id)) return;
 
         const contactId = convToContactRef.current.get(conv.id);
 
         if (contactId && contactMapRef.current.has(contactId)) {
-          const { data: msgs } = await supabase
-            .from('messages')
-            .select('content, role, sent_at, conversation_id')
-            .eq('conversation_id', conv.id)
-            .order('sent_at', { ascending: false })
-            .limit(1);
-
-          if (msgs?.[0]) {
-            updateContactPreview(msgs[0]);
-          }
-
+          const previewMsg = await fetchLatestPreview(conv.id);
+          // Batch isHumanTakeover into the same update to avoid double setContacts
+          const extraUpdates = {};
           const contact = contactMapRef.current.get(contactId);
           if (contact && contact.isHumanTakeover !== (conv.is_human_takeover || false)) {
-            contact.isHumanTakeover = conv.is_human_takeover || false;
+            extraUpdates.isHumanTakeover = conv.is_human_takeover || false;
+          }
+
+          if (previewMsg) {
+            updateContactPreview(previewMsg, extraUpdates);
+          } else if (Object.keys(extraUpdates).length > 0) {
+            // No new preview but isHumanTakeover changed — update directly
+            const updated = { ...contact, ...extraUpdates };
+            contactMapRef.current.set(contactId, updated);
             setContacts(sortContactsByLastMessage(
               Array.from(contactMapRef.current.values())
             ));
           }
         } else {
-          const { data: convRow } = await supabase
+          const { data: convRow, error: convError } = await supabase
             .from('conversations')
             .select(`
               id, last_message_at, is_human_takeover,
@@ -1046,6 +1072,10 @@ function InboxContent() {
             .eq('id', conv.id)
             .maybeSingle();
 
+          if (convError) {
+            console.error('Error fetching conversation for contact merge:', convError);
+            return;
+          }
           if (!convRow?.contact?.id) return;
 
           convToContactRef.current.set(conv.id, convRow.contact.id);
@@ -1062,20 +1092,14 @@ function InboxContent() {
             isHumanTakeover: convRow.is_human_takeover || false,
           });
 
-          const { data: msgs } = await supabase
-            .from('messages')
-            .select('content, role, sent_at, conversation_id')
-            .eq('conversation_id', conv.id)
-            .order('sent_at', { ascending: false })
-            .limit(1);
-
-          if (msgs?.[0]) updateContactPreview(msgs[0]);
+          const previewMsg = await fetchLatestPreview(conv.id);
+          if (previewMsg) updateContactPreview(previewMsg);
         }
       })
       .subscribe();
 
     return () => supabase.removeChannel(channel);
-  }, [supabase, selectedConversationIds, selectedAgentId, updateContactPreview, mergeResolvedContact]);
+  }, [supabase, selectedAgentId, updateContactPreview, mergeResolvedContact]);
 
   const handleSendMessage = async (message) => {
     if (sending || !selectedConversationIds.length) return;
