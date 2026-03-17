@@ -278,7 +278,8 @@
     "updateAgent": "Update Agent",
     "createAgent": "Create Agent",
     "validationError": "Name, product line, and system prompt are required",
-    "jsonError": "Output schema, qualification config, and ad context map must all be valid JSON"
+    "jsonError": "Output schema, qualification config, and ad context map must all be valid JSON",
+    "jsonFieldError": "{field} must be valid JSON"
   },
   "leadsPanel": {
     "title": "Leads ({count})",

@@ -278,7 +278,8 @@
     "updateAgent": "更新智能体",
     "createAgent": "创建智能体",
     "validationError": "名称、产品线和系统提示词为必填项",
-    "jsonError": "输出 Schema、询盘资格配置和广告映射都必须是有效 JSON"
+    "jsonError": "输出 Schema、询盘资格配置和广告映射都必须是有效 JSON",
+    "jsonFieldError": "{field} 必须是有效 JSON"
   },
   "leadsPanel": {
     "title": "线索 ({count})",

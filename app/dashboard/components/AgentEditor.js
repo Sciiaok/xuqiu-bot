@@ -3,6 +3,11 @@
 import { useState } from 'react';
 import { useTranslations } from 'next-intl';
 
+function parseJsonField(value) {
+  const trimmed = value.trim();
+  return trimmed ? JSON.parse(trimmed) : {};
+}
+
 export default function AgentEditor({ agent, onSave, onCancel }) {
   const [name, setName] = useState(agent?.name || '');
   const [productLine, setProductLine] = useState(agent?.product_line || '');
@@ -32,11 +37,23 @@ export default function AgentEditor({ agent, onSave, onCancel }) {
     let parsedQualificationConfig;
     let parsedAdContextMap;
     try {
-      parsedSchema = JSON.parse(outputSchema);
-      parsedQualificationConfig = JSON.parse(qualificationConfig);
-      parsedAdContextMap = JSON.parse(adContextMap);
+      parsedSchema = parseJsonField(outputSchema);
     } catch {
-      setError(t('jsonError'));
+      setError(t('jsonFieldError', { field: t('outputSchema') }));
+      return;
+    }
+
+    try {
+      parsedQualificationConfig = parseJsonField(qualificationConfig);
+    } catch {
+      setError(t('jsonFieldError', { field: t('qualificationConfig') }));
+      return;
+    }
+
+    try {
+      parsedAdContextMap = parseJsonField(adContextMap);
+    } catch {
+      setError(t('jsonFieldError', { field: t('adContextMap') }));
       return;
     }
 

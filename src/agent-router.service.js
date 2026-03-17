@@ -28,7 +28,7 @@ Strong routing signals for auto parts:
 - OEM / part numbers like 23221-0D010, 77020-02180
 - Spare part names like fuel pump, control board, door handle, bumper, sensor, headlamp
 - Vehicle model + year + part request, e.g. "Honda HRV 2000 door handle"
-- Image-led parts sourcing requests such as "I am looking for this part", "find this handle", "see photo"
+- Image-led parts sourcing requests such as "I am looking for this part", "find this handle"
 
 Strong routing signals for whole vehicles:
 - Requests for complete cars, units, shipping quotes, CIF/FOB for vehicles
