@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server';
+import { demoGuard } from '../../../../lib/demo-mode.js';
 import { processConversationQueue } from '../../../../lib/queue-processor.js';
 import { hasPendingMessages, releaseStaleLocks } from '../../../../lib/repositories/queue.repository.js';
 
@@ -7,6 +8,9 @@ import { hasPendingMessages, releaseStaleLocks } from '../../../../lib/repositor
  * Called after the aggregation window expires
  */
 export async function POST(request) {
+  const demoResponse = demoGuard({ status: 'ok' });
+  if (demoResponse) return demoResponse;
+
   try {
     const body = await request.json();
     const { conversationId } = body;

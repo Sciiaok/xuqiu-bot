@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server';
+import { demoGuard } from '../../../../lib/demo-mode.js';
 import { createClient } from '../../../../lib/supabase-server.js';
 import {
   findAgentById,
@@ -34,6 +35,9 @@ export async function GET(request, { params }) {
  * PUT /api/agents/[id] - Update agent
  */
 export async function PUT(request, { params }) {
+  const demoResponse = demoGuard({ agent: { id: 'demo' } });
+  if (demoResponse) return demoResponse;
+
   try {
     const supabase = await createClient();
     const { data: { user } } = await supabase.auth.getUser();
@@ -56,6 +60,9 @@ export async function PUT(request, { params }) {
  * DELETE /api/agents/[id] - Deactivate agent (soft delete)
  */
 export async function DELETE(request, { params }) {
+  const demoResponse = demoGuard({ agent: { id: 'demo' } });
+  if (demoResponse) return demoResponse;
+
   try {
     const supabase = await createClient();
     const { data: { user } } = await supabase.auth.getUser();

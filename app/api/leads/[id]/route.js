@@ -1,5 +1,6 @@
 // app/api/leads/[id]/route.js
 import { NextResponse } from 'next/server';
+import { demoGuard } from '@/lib/demo-mode';
 import { getLeadById, updateLeadFields } from '@/lib/repositories/lead.repository';
 
 export async function GET(request, { params }) {
@@ -25,6 +26,9 @@ export async function GET(request, { params }) {
 }
 
 export async function PATCH(request, { params }) {
+  const demoResponse = demoGuard({ success: true, lead: {} });
+  if (demoResponse) return demoResponse;
+
   try {
     const { id } = await params;
     const body = await request.json();

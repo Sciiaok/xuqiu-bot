@@ -36,3 +36,5 @@ next-env.d.ts
 .worktrees
 
 test-results
+
+tmp

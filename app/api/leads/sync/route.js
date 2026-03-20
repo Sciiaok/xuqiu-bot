@@ -1,11 +1,15 @@
 // app/api/leads/sync/route.js
 import { NextResponse } from 'next/server';
+import { demoGuard } from '../../../../lib/demo-mode.js';
 import supabase from '@/lib/supabase';
 import { getLeadsNeedingSync, getLeadById } from '@/lib/repositories/lead.repository';
 import { createSyncLog, updateSyncLog, hasSuccessfulSync } from '@/lib/repositories/sync-log.repository';
 import { syncLeadsToExternal, processSyncResults, expandLeadForSync } from '@/lib/services/external-sync';
 
 export async function POST(request) {
+  const demoResponse = demoGuard({ success: true, queued: 0, synced: 0, failed: 0, message: 'Demo mode' });
+  if (demoResponse) return demoResponse;
+
   try {
     const body = await request.json();
     const { leadIds, syncAll, syncFiltered, filters } = body;

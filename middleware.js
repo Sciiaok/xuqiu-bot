@@ -7,6 +7,16 @@ export async function middleware(request) {
     return NextResponse.next();
   }
 
+  // Demo mode: skip auth, redirect /login to /dashboard
+  if (process.env.DEMO_MODE === 'true') {
+    if (request.nextUrl.pathname === '/login') {
+      const url = request.nextUrl.clone();
+      url.pathname = '/dashboard';
+      return NextResponse.redirect(url);
+    }
+    return NextResponse.next();
+  }
+
   // --- Locale detection & cookie ---
   let response = NextResponse.next({ request });
   const localeCookie = request.cookies.get('NEXT_LOCALE')?.value;

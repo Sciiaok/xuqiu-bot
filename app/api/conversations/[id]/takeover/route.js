@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server';
+import { demoGuard } from '../../../../../lib/demo-mode.js';
 import { createClient } from '../../../../../lib/supabase-server.js';
 import {
   startHumanTakeover,
@@ -10,6 +11,9 @@ import {
  * POST /api/conversations/[id]/takeover - Start human takeover
  */
 export async function POST(request, { params }) {
+  const demoResponse = demoGuard({ success: true, conversation: {} });
+  if (demoResponse) return demoResponse;
+
   try {
     const supabase = await createClient();
     const { data: { user } } = await supabase.auth.getUser();
@@ -40,6 +44,9 @@ export async function POST(request, { params }) {
  * DELETE /api/conversations/[id]/takeover - End human takeover
  */
 export async function DELETE(request, { params }) {
+  const demoResponse = demoGuard({ success: true, conversation: {} });
+  if (demoResponse) return demoResponse;
+
   try {
     const supabase = await createClient();
     const { data: { user } } = await supabase.auth.getUser();

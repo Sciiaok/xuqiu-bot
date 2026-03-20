@@ -9,6 +9,7 @@ import { createTraceLogger } from '../lib/core-trace.js';
 
 const anthropic = new Anthropic({
   apiKey: config.anthropic.apiKey,
+  ...(config.anthropic.baseURL && { baseURL: config.anthropic.baseURL }),
 });
 
 const ROUTER_SYSTEM_PROMPT = `You are an inbox router for Revopanda.

@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server';
+import { demoGuard } from '../../../lib/demo-mode.js';
 import { config } from '../../../src/config.js';
 import { sendMessage, markAsRead } from '../../../src/whatsapp.service.js';
 import { transcribeWhatsAppAudio } from '../../../src/whisper.service.js';
@@ -149,6 +150,9 @@ async function buildQueuedMessage({
  * Messages are queued for aggregated processing
  */
 export async function POST(request) {
+  const demoResponse = demoGuard({ status: 'ok' });
+  if (demoResponse) return demoResponse;
+
   // Immediately acknowledge receipt to WhatsApp
   const responsePromise = NextResponse.json({ status: 'ok' }, { status: 200 });
 

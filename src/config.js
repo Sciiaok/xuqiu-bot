@@ -1,10 +1,15 @@
 // Next.js automatically loads .env.local - no need for dotenv
 
 export const config = {
-  // Claude API
+  // Claude API — prefer OpenRouter, fallback to Anthropic direct
   anthropic: {
-    apiKey: process.env.ANTHROPIC_API_KEY,
-    model: process.env.CLAUDE_MODEL || 'claude-sonnet-4-6',
+    apiKey: process.env.OPENROUTER_API_KEY || process.env.ANTHROPIC_API_KEY,
+    baseURL: process.env.OPENROUTER_API_KEY
+      ? (process.env.OPENROUTER_BASE_URL || 'https://openrouter.ai/api')
+      : undefined,
+    model: process.env.OPENROUTER_API_KEY
+      ? (process.env.OPENROUTER_MODEL || 'claude-sonnet-4-6')
+      : (process.env.CLAUDE_MODEL || 'claude-sonnet-4-6'),
   },
 
   // OpenAI Whisper

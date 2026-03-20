@@ -8,6 +8,7 @@ import { createTraceLogger } from '../lib/core-trace.js';
 
 const anthropic = new Anthropic({
   apiKey: config.anthropic.apiKey,
+  ...(config.anthropic.baseURL && { baseURL: config.anthropic.baseURL }),
 });
 
 const SYSTEM_PROMPT = `You are a B2B lead qualification assistant for a vehicle export company specializing in BYD/Changan/GSC and other vehicles worldwide.

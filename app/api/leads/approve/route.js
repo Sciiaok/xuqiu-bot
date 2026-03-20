@@ -1,9 +1,13 @@
 // app/api/leads/approve/route.js
 import { NextResponse } from 'next/server';
+import { demoGuard } from '../../../../lib/demo-mode.js';
 import supabase from '@/lib/supabase';
 import { batchApproveLeads } from '@/lib/repositories/lead.repository';
 
 export async function POST(request) {
+  const demoResponse = demoGuard({ success: true, approved: 0, message: 'Demo mode' });
+  if (demoResponse) return demoResponse;
+
   try {
     const body = await request.json();
     const { leadIds, approveAll, filters } = body;

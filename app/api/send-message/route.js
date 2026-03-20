@@ -1,9 +1,13 @@
 import { NextResponse } from 'next/server';
+import { demoGuard } from '../../../lib/demo-mode.js';
 import { sendMessage, sendMedia, validateMedia } from '../../../src/whatsapp.service.js';
 import { createClient } from '../../../lib/supabase-server.js';
 import { addOperatorMessage, getSessionByConversationId } from '../../../lib/session.js';
 
 export async function POST(request) {
+  const demoResponse = demoGuard({ success: true, message: 'Demo mode - message not sent' });
+  if (demoResponse) return demoResponse;
+
   try {
     const supabase = await createClient();
     const { data: { user } } = await supabase.auth.getUser();
