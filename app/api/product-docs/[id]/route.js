@@ -27,8 +27,8 @@ export async function DELETE(request, { params }) {
       return NextResponse.json({ error: 'Document not found' }, { status: 404 });
     }
 
-    // Delete from storage
-    await supabase.storage.from('product-docs').remove([doc.storage_path]);
+    // Delete from storage (use authClient for RLS)
+    await authClient.storage.from('product-docs').remove([doc.storage_path]);
 
     // Log delete operation before cascading delete removes the document
     await supabase.from('product_doc_operations').insert({

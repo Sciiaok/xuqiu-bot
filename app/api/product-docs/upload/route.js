@@ -49,8 +49,8 @@ export async function POST(request) {
     const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, '_');
     const storagePath = `${agent.product_line}/${Date.now()}_${safeName}`;
 
-    // Upload to Supabase Storage
-    const { error: uploadError } = await supabase.storage
+    // Upload to Supabase Storage using the authenticated client (RLS requires auth)
+    const { error: uploadError } = await authClient.storage
       .from('product-docs')
       .upload(storagePath, buffer, { contentType: 'application/pdf' });
 
@@ -89,14 +89,24 @@ export async function POST(request) {
       details: { filename: file.name },
     });
 
-    // Process PDF asynchronously (don't await — let it run in background)
-    processPdfDocument(buffer, doc.id, agentId, agent.product_line).catch(err => {
+    // Process PDF synchronously — Next.js terminates the execution context
+    // after the response is sent, so fire-and-forget won't complete.
+    let result;
+    try {
+      result = await processPdfDocument(buffer, doc.id, agentId, agent.product_line);
+    } catch (err) {
       console.error(`[product-docs] Failed to process ${file.name}:`, err.message);
-    });
+      return NextResponse.json({
+        document_id: doc.id,
+        status: 'error',
+        error: err.message,
+      });
+    }
 
     return NextResponse.json({
       document_id: doc.id,
-      status: 'processing',
+      status: 'ready',
+      ...result,
     });
   } catch (error) {
     console.error('[product-docs/upload] Error:', error);
