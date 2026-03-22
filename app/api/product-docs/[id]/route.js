@@ -19,7 +19,7 @@ export async function DELETE(request, { params }) {
     // Get document to find storage path
     const { data: doc, error: fetchError } = await supabase
       .from('product_documents')
-      .select('id, storage_path')
+      .select('id, agent_id, filename, storage_path')
       .eq('id', id)
       .single();
 
@@ -29,6 +29,15 @@ export async function DELETE(request, { params }) {
 
     // Delete from storage
     await supabase.storage.from('product-docs').remove([doc.storage_path]);
+
+    // Log delete operation before cascading delete removes the document
+    await supabase.from('product_doc_operations').insert({
+      document_id: id,
+      agent_id: doc.agent_id,
+      operation: 'delete',
+      operator: user.email,
+      details: { filename: doc.filename },
+    });
 
     // Delete from DB (cascades to product_specs and product_embeddings)
     const { error: deleteError } = await supabase

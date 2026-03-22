@@ -76,6 +76,24 @@ export async function processPdfDocument(pdfBuffer, documentId, agentId, product
       })
       .eq('id', documentId);
 
+    // Log parsed operation
+    const { data: docRow } = await supabase
+      .from('product_documents')
+      .select('filename')
+      .eq('id', documentId)
+      .single();
+    await supabase.from('product_doc_operations').insert({
+      document_id: documentId,
+      agent_id: agentId,
+      operation: 'parsed',
+      operator: 'system',
+      details: {
+        filename: docRow?.filename,
+        specs_count: specs.length,
+        chunks_count: chunks.length,
+      },
+    });
+
     return { specs_count: specs.length, chunks_count: chunks.length };
   } catch (error) {
     await supabase
@@ -86,6 +104,24 @@ export async function processPdfDocument(pdfBuffer, documentId, agentId, product
         updated_at: new Date().toISOString(),
       })
       .eq('id', documentId);
+
+    // Log error operation
+    const { data: docRow } = await supabase
+      .from('product_documents')
+      .select('filename')
+      .eq('id', documentId)
+      .single();
+    await supabase.from('product_doc_operations').insert({
+      document_id: documentId,
+      agent_id: agentId,
+      operation: 'error',
+      operator: 'system',
+      details: {
+        filename: docRow?.filename,
+        error_message: error.message,
+      },
+    }).catch(() => {}); // Don't let logging failure mask the original error
+
     throw error;
   }
 }

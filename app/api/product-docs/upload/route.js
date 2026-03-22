@@ -80,6 +80,15 @@ export async function POST(request) {
       );
     }
 
+    // Log upload operation
+    await supabase.from('product_doc_operations').insert({
+      document_id: doc.id,
+      agent_id: agentId,
+      operation: 'upload',
+      operator: user.email,
+      details: { filename: file.name },
+    });
+
     // Process PDF asynchronously (don't await — let it run in background)
     processPdfDocument(buffer, doc.id, agentId, agent.product_line).catch(err => {
       console.error(`[product-docs] Failed to process ${file.name}:`, err.message);
