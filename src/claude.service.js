@@ -5,6 +5,7 @@ import {
   isClaudeSupportedImageMimeType,
 } from './whatsapp-media.service.js';
 import { createTraceLogger } from '../lib/core-trace.js';
+import { buildProductTools, executeProductTool } from './product-search.service.js';
 
 const anthropic = new Anthropic({
   apiKey: config.anthropic.apiKey,
@@ -620,26 +621,124 @@ export async function getResponse(conversationHistory, userMessage, contextInfo 
     context_info: buildTraceContextInfo(contextInfo),
   });
 
-  const response = await anthropic.messages.create({
-    model: config.anthropic.model,
-    max_tokens: 4096,
-    system: systemBlocks,
-    messages: messages,
-    output_config: {
-      format: {
-        type: 'json_schema',
-        schema: outputSchema,
-      },
-    },
-  });
-
-  // Extract the JSON content
-  const content = response.content[0];
-  if (content.type !== 'text') {
-    throw new Error('Unexpected response type from Claude');
+  // Check if this agent has product knowledge tools
+  const agentId = agentConfig?.id;
+  let productTools = [];
+  if (agentId) {
+    try {
+      productTools = await buildProductTools(agentId);
+    } catch (e) {
+      logger.warn('claude.product_tools.failed', { error: e.message });
+    }
   }
 
-  const parsed = JSON.parse(content.text);
+  const hasProductTools = productTools.length > 0;
+  let parsed;
+
+  if (hasProductTools) {
+    // Tool-use mode: product tools + submit_response tool
+    // TODO: switch to programmatic tool calling (code_execution_20260120) when OpenRouter supports it
+    const submitResponseTool = {
+      name: 'submit_response',
+      description: 'Submit your final response. Call this after gathering any needed product information. You MUST call this tool as your final action.',
+      input_schema: outputSchema,
+      cache_control: { type: 'ephemeral' },
+    };
+    // Add cache_control to the last product tool so all tool definitions are cached together
+    const cachedProductTools = productTools.map((tool, i) =>
+      i === productTools.length - 1
+        ? { ...tool, cache_control: { type: 'ephemeral' } }
+        : tool
+    );
+    const allTools = [...cachedProductTools, submitResponseTool];
+
+    let response = await anthropic.messages.create({
+      model: config.anthropic.model,
+      max_tokens: 4096,
+      system: systemBlocks,
+      messages: messages,
+      tools: allTools,
+      tool_choice: { type: 'auto' },
+    });
+
+    // Tool-use loop (max 5 iterations to prevent runaway)
+    let iterations = 0;
+    while (iterations < 5) {
+      // If Claude stopped without calling any tool, force submit_response
+      if (response.stop_reason !== 'tool_use') {
+        logger.info('claude.tool_use.force_submit', { stop_reason: response.stop_reason });
+        messages.push({ role: 'assistant', content: response.content });
+        messages.push({ role: 'user', content: 'Please call submit_response with your structured response now.' });
+        response = await anthropic.messages.create({
+          model: config.anthropic.model,
+          max_tokens: 4096,
+          system: systemBlocks,
+          messages: messages,
+          tools: allTools,
+          tool_choice: { type: 'tool', name: 'submit_response' },
+        });
+      }
+      if (response.stop_reason !== 'tool_use') break;
+      iterations++;
+      const toolUse = response.content.find(c => c.type === 'tool_use');
+
+      // submit_response = final answer
+      if (toolUse.name === 'submit_response') {
+        parsed = toolUse.input;
+        logger.info('claude.tool_use.submit_response', { iterations });
+        break;
+      }
+
+      // Execute product tool
+      logger.info('claude.tool_use.call', {
+        tool: toolUse.name,
+        iteration: iterations,
+      });
+      const toolResult = await executeProductTool(toolUse.name, toolUse.input, agentId);
+      messages.push({ role: 'assistant', content: response.content });
+      messages.push({
+        role: 'user',
+        content: [{ type: 'tool_result', tool_use_id: toolUse.id, content: toolResult }],
+      });
+      response = await anthropic.messages.create({
+        model: config.anthropic.model,
+        max_tokens: 4096,
+        system: systemBlocks,
+        messages: messages,
+        tools: allTools,
+      });
+    }
+
+    // Fallback: if Claude ended without submit_response, extract text
+    if (!parsed) {
+      const textBlock = response.content.find(c => c.type === 'text');
+      if (textBlock) {
+        parsed = JSON.parse(textBlock.text);
+      } else {
+        throw new Error('Claude did not produce a response');
+      }
+    }
+  } else {
+    // Standard mode: json_schema output (no product tools)
+    const response = await anthropic.messages.create({
+      model: config.anthropic.model,
+      max_tokens: 4096,
+      system: systemBlocks,
+      messages: messages,
+      output_config: {
+        format: {
+          type: 'json_schema',
+          schema: outputSchema,
+        },
+      },
+    });
+
+    const content = response.content[0];
+    if (content.type !== 'text') {
+      throw new Error('Unexpected response type from Claude');
+    }
+    parsed = JSON.parse(content.text);
+  }
 
   // Normalize non-standard agent output to standard pipeline format
   if (agentConfig?.output_schema && Object.keys(agentConfig.output_schema).length > 0) {
@@ -664,10 +763,6 @@ export async function getResponse(conversationHistory, userMessage, contextInfo 
     business_value: parsed.business_value,
     route: parsed.route,
     leads_count: (parsed.leads || []).length,
-    input_tokens: response.usage?.input_tokens || 0,
-    output_tokens: response.usage?.output_tokens || 0,
-    cache_creation_input_tokens: response.usage?.cache_creation_input_tokens || 0,
-    cache_read_input_tokens: response.usage?.cache_read_input_tokens || 0,
   });
 
   return parsed;
