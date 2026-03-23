@@ -507,30 +507,199 @@ export async function* orchestrate(sessionId) {
 }
 
 /**
- * Resume orchestration after human approval.
+ * Resume orchestration after user feedback.
+ * @param {string} sessionId
+ * @param {string} userResponse
+ * @yields {{ event: string, data: Object }} SSE events
  */
-export async function* orchestrateAfterApproval(sessionId) {
+export async function* resumeAfterFeedback(sessionId, userResponse) {
   const session = await getSession(sessionId);
   if (!session) {
     yield { event: 'error', data: { message: `Session ${sessionId} not found` } };
     return;
   }
-  if (session.status !== 'awaiting_approval') {
-    yield { event: 'error', data: { message: `Session is not awaiting approval (status: ${session.status})` } };
+
+  const validStatuses = ['awaiting_feedback', 'awaiting_approval'];
+  if (!validStatuses.includes(session.status)) {
+    yield { event: 'error', data: { message: `Session is not awaiting feedback (status: ${session.status})` } };
     return;
   }
 
-  // Persist user approval as a message
-  const idx = await getNextMessageIndex(sessionId);
-  await addMessages(sessionId, [{
-    phase: null,
-    role: 'user',
-    content: '确认执行投放方案',
-    message_index: idx,
-  }]);
+  const state = session.orchestrator_state;
+  if (!state || !state.pending_tool_use_id) {
+    // Backward compat: old-style awaiting_approval sessions have no orchestrator_state
+    if (session.status === 'awaiting_approval') {
+      yield* orchestrate(sessionId);
+      return;
+    }
+    yield { event: 'error', data: { message: 'No pending feedback state found' } };
+    return;
+  }
 
-  await updateSession(sessionId, { status: 'running', current_phase: 'execution' });
-  yield* orchestrate(sessionId, { startPhase: 'execution', skipApproval: true });
+  const brief = await getBrief(session.brief_id);
+  if (!brief) {
+    yield { event: 'error', data: { message: `Brief ${session.brief_id} not found` } };
+    return;
+  }
+
+  // Restore state
+  let phaseResults = state.phase_results_snapshot || session.phase_results || {};
+  const messages = [...state.messages];
+
+  // Append tool_result with user response
+  messages.push({
+    role: 'user',
+    content: [{
+      type: 'tool_result',
+      tool_use_id: state.pending_tool_use_id,
+      content: JSON.stringify({ user_response: userResponse }),
+    }],
+  });
+
+  // Clear saved state and set running
+  await updateSession(sessionId, {
+    status: 'running',
+    orchestrator_state: null,
+  });
+
+  // Continue the tool-use loop (same logic as orchestrate)
+  const eventBuffer = [];
+
+  for (let iteration = 0; iteration < MAX_ORCHESTRATOR_ITERATIONS; iteration++) {
+    const response = await anthropic.messages.create({
+      model: config.anthropic.model,
+      max_tokens: 4096,
+      system: ORCHESTRATOR_SYSTEM_PROMPT,
+      messages,
+      tools: ORCHESTRATOR_TOOLS,
+      tool_choice: { type: 'auto' },
+    });
+
+    if (response.stop_reason !== 'tool_use') {
+      await updateSession(sessionId, { status: 'completed', current_phase: 'done' });
+      yield { event: 'done', data: { session_id: sessionId, phases_completed: Object.keys(phaseResults) } };
+      return;
+    }
+
+    const toolUseBlocks = response.content.filter(c => c.type === 'tool_use');
+    messages.push({ role: 'assistant', content: response.content });
+
+    const toolResults = [];
+    let shouldPause = false;
+    let shouldTerminate = false;
+    let terminateSummary = '';
+
+    for (const block of toolUseBlocks) {
+      const { id, name, input } = block;
+      let result;
+
+      switch (name) {
+        case 'run_phase': {
+          const phaseKey = input.phase;
+          const phaseDef = PHASES.find(p => p.key === phaseKey);
+          yield { event: 'phase_start', data: { phase: phaseKey, name: phaseDef?.name || phaseKey } };
+          const phaseStartTime = Date.now();
+          try {
+            const executor = getPhaseExecutor(phaseKey);
+            const phaseResult = await runWithHeartbeat(
+              phaseKey,
+              () => executor(sessionId, brief, phaseResults, input.instructions),
+              (evt) => eventBuffer.push(evt),
+            );
+            while (eventBuffer.length > 0) yield eventBuffer.shift();
+            phaseResults = { ...phaseResults, [phaseKey]: phaseResult };
+            await updateSession(sessionId, { phase_results: phaseResults, current_phase: phaseKey });
+            const duration = Math.round((Date.now() - phaseStartTime) / 1000);
+            const resultSummary = summarizePhaseResult(phaseKey, phaseResult);
+            yield { event: 'phase_complete', data: { phase: phaseKey, name: phaseDef?.name || phaseKey, result: phaseResult, duration, result_summary: resultSummary } };
+            result = { status: 'completed', result_summary: resultSummary, duration_s: duration };
+          } catch (err) {
+            while (eventBuffer.length > 0) yield eventBuffer.shift();
+            yield { event: 'phase_error', data: { phase: phaseKey, error: err.message } };
+            result = { status: 'error', error: err.message };
+          }
+          break;
+        }
+
+        case 'evaluate_output':
+          result = evaluateOutput(input.phase, phaseResults[input.phase]);
+          break;
+
+        case 'request_user_feedback': {
+          await updateSession(sessionId, {
+            status: 'awaiting_feedback',
+            orchestrator_state: {
+              messages: [...messages],
+              pending_tool_use_id: id,
+              phase_results_snapshot: phaseResults,
+            },
+          });
+          yield { event: 'feedback_required', data: { message: input.message, options: input.options, tool_use_id: id } };
+          shouldPause = true;
+          break;
+        }
+
+        case 'skip_phase':
+          yield { event: 'phase_skipped', data: { phase: input.phase, reason: input.reason } };
+          result = { skipped: true, phase: input.phase, reason: input.reason };
+          break;
+
+        case 'retry_phase': {
+          const phaseKey = input.phase;
+          const phaseDef = PHASES.find(p => p.key === phaseKey);
+          yield { event: 'phase_start', data: { phase: phaseKey, name: phaseDef?.name || phaseKey } };
+          const phaseStartTime = Date.now();
+          try {
+            const executor = getPhaseExecutor(phaseKey);
+            const phaseResult = await runWithHeartbeat(phaseKey, () => executor(sessionId, brief, phaseResults, input.feedback), (evt) => eventBuffer.push(evt));
+            while (eventBuffer.length > 0) yield eventBuffer.shift();
+            phaseResults = { ...phaseResults, [phaseKey]: phaseResult };
+            await updateSession(sessionId, { phase_results: phaseResults, current_phase: phaseKey });
+            const duration = Math.round((Date.now() - phaseStartTime) / 1000);
+            const resultSummary = summarizePhaseResult(phaseKey, phaseResult);
+            yield { event: 'phase_complete', data: { phase: phaseKey, name: phaseDef?.name || phaseKey, result: phaseResult, duration, result_summary: resultSummary } };
+            result = { status: 'completed', result_summary: resultSummary, duration_s: duration };
+          } catch (err) {
+            while (eventBuffer.length > 0) yield eventBuffer.shift();
+            yield { event: 'phase_error', data: { phase: phaseKey, error: err.message } };
+            result = { status: 'error', error: err.message };
+          }
+          break;
+        }
+
+        case 'submit_final':
+          await updateSession(sessionId, { status: 'completed', current_phase: 'done' });
+          shouldTerminate = true;
+          terminateSummary = input.summary;
+          result = { completed: true };
+          break;
+
+        default:
+          result = { error: `Unknown tool: ${name}` };
+      }
+
+      if (shouldPause) break;
+      toolResults.push({ type: 'tool_result', tool_use_id: id, content: JSON.stringify(result) });
+    }
+
+    if (shouldPause) return;
+    if (shouldTerminate) {
+      yield { event: 'done', data: { session_id: sessionId, phases_completed: Object.keys(phaseResults), summary: terminateSummary } };
+      return;
+    }
+    messages.push({ role: 'user', content: toolResults });
+  }
+
+  await updateSession(sessionId, { status: 'completed', current_phase: 'done' });
+  yield { event: 'done', data: { session_id: sessionId, phases_completed: Object.keys(phaseResults), summary: 'Force-terminated: max iterations' } };
+}
+
+/**
+ * Resume orchestration after human approval.
+ * @deprecated Use resumeAfterFeedback instead.
+ */
+export async function* orchestrateAfterApproval(sessionId) {
+  yield* resumeAfterFeedback(sessionId, '确认执行投放方案');
 }
 
 // ── User chat with orchestrator ────────────────────────────────────────

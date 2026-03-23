@@ -175,6 +175,7 @@ const orchUrl = pathToFileURL(resolve(process.cwd(), 'src/campaign-orchestrator.
 const {
   orchestrate,
   orchestrateAfterApproval,
+  resumeAfterFeedback,
   chatWithOrchestrator,
   detectStartPhase,
   summarizePhaseResult,
@@ -369,7 +370,7 @@ describe('Campaign Orchestrator (session-based)', () => {
       mockSession.status = 'completed';
       const events = await collectEvents(orchestrateAfterApproval('session-1'));
       assert.equal(events[0].event, 'error');
-      assert.ok(events[0].data.message.includes('not awaiting approval'));
+      assert.ok(events[0].data.message.includes('not awaiting feedback'));
     });
   });
 
@@ -451,5 +452,80 @@ describe('evaluateOutput', () => {
       platforms: [{ platform: 'meta', budget_allocation: 40, campaigns: [{}] }],
     });
     assert.ok(result.issues.some(i => i.includes('预算')));
+  });
+});
+
+describe('resumeAfterFeedback', () => {
+  it('resumes after feedback and completes execution', async () => {
+    mockSession.status = 'awaiting_feedback';
+    mockSession.phase_results = { research: MOCK_RESEARCH, strategy: MOCK_STRATEGY, creative: { creatives: {} } };
+    mockSession.orchestrator_state = {
+      messages: [
+        { role: 'user', content: 'Brief context...' },
+        { role: 'assistant', content: [{ type: 'tool_use', id: 'tu-feedback', name: 'request_user_feedback', input: { message: '确认执行？' } }] },
+      ],
+      pending_tool_use_id: 'tu-feedback',
+      phase_results_snapshot: { research: MOCK_RESEARCH, strategy: MOCK_STRATEGY, creative: { creatives: {} } },
+    };
+
+    toolCallQueue = [
+      { stop_reason: 'tool_use', content: [
+        { type: 'tool_use', id: 'tu-exec', name: 'run_phase', input: { phase: 'execution' } },
+      ]},
+      { stop_reason: 'tool_use', content: [
+        { type: 'tool_use', id: 'tu-done', name: 'submit_final', input: { summary: '投放完成' } },
+      ]},
+    ];
+
+    const { resumeAfterFeedback } = await import(orchUrl);
+    const events = await collectEvents(resumeAfterFeedback('session-1', '确认执行'));
+
+    const execStarts = findEvents(events, 'phase_start').filter(e => e.data.phase === 'execution');
+    assert.equal(execStarts.length, 1);
+
+    const done = findEvents(events, 'done');
+    assert.equal(done.length, 1);
+  });
+
+  it('rejects if session not in paused state', async () => {
+    mockSession.status = 'running';
+
+    const { resumeAfterFeedback } = await import(orchUrl);
+    const events = await collectEvents(resumeAfterFeedback('session-1', 'test'));
+
+    assert.equal(events[0].event, 'error');
+    assert.ok(events[0].data.message.includes('not awaiting feedback'));
+  });
+
+  it('rejects when orchestrator_state is null (already consumed)', async () => {
+    mockSession.status = 'awaiting_feedback';
+    mockSession.orchestrator_state = null;
+
+    const { resumeAfterFeedback } = await import(orchUrl);
+    const events = await collectEvents(resumeAfterFeedback('session-1', 'duplicate'));
+
+    assert.equal(events[0].event, 'error');
+    assert.ok(events[0].data.message.includes('No pending feedback'));
+  });
+
+  it('falls back to orchestrate for legacy awaiting_approval with no state', async () => {
+    mockSession.status = 'awaiting_approval';
+    mockSession.orchestrator_state = null;
+    mockSession.phase_results = { research: MOCK_RESEARCH, strategy: MOCK_STRATEGY, creative: { creatives: {} } };
+
+    toolCallQueue = [
+      { stop_reason: 'tool_use', content: [
+        { type: 'tool_use', id: 'tu1', name: 'run_phase', input: { phase: 'execution' } },
+      ]},
+      { stop_reason: 'tool_use', content: [
+        { type: 'tool_use', id: 'tu2', name: 'submit_final', input: { summary: 'done' } },
+      ]},
+    ];
+
+    const { resumeAfterFeedback } = await import(orchUrl);
+    const events = await collectEvents(resumeAfterFeedback('session-1', '确认'));
+
+    const done = findEvents(events, 'done');
+    assert.equal(done.length, 1);
   });
 });
