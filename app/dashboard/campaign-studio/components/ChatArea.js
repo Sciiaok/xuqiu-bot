@@ -250,11 +250,16 @@ export default function ChatArea({ briefId, sessionId, sessionStatus, onSessionU
       signal: controller.signal,
     });
 
+    let shouldStartOrchestration = false;
+
     await consumeSSE(res, (event, data) => {
       switch (event) {
         case 'delta':
           assistantText += data.text;
           updateLastAssistant(assistantText);
+          break;
+        case 'trigger_orchestration':
+          shouldStartOrchestration = true;
           break;
         case 'done':
           break;
@@ -263,6 +268,11 @@ export default function ChatArea({ briefId, sessionId, sessionStatus, onSessionU
           break;
       }
     });
+
+    // If chat agent triggered a pipeline restart, auto-start orchestration
+    if (shouldStartOrchestration) {
+      await runOrchestration();
+    }
   }
 
   // Run orchestration pipeline

@@ -550,28 +550,43 @@ export async function* orchestrateAfterApproval(sessionId) {
 
 // ── User chat with orchestrator ────────────────────────────────────────
 
-const ORCHESTRATOR_CHAT_SYSTEM = `你是数字投放主控 Agent。你可以回答用户关于投放方案的问题，帮助调整策略。
+const ORCHESTRATOR_CHAT_TOOLS = [
+  {
+    name: 'restart_pipeline',
+    description: '重新启动投放流程。当用户要求重跑、继续执行、重新生成素材、开始投放等操作性请求时调用。系统会自动从需要的阶段开始执行。',
+    input_schema: {
+      type: 'object',
+      required: ['reason'],
+      properties: {
+        reason: { type: 'string', description: '重跑原因，简短描述' },
+      },
+    },
+  },
+];
+
+const ORCHESTRATOR_CHAT_SYSTEM = `你是数字投放主控 Agent。你可以回答用户关于投放方案的问题，也可以触发系统操作。
 
 你能看到之前各阶段的执行结果。基于这些结果回答用户问题。
 
-重要：本系统是全自动化投放平台，所有阶段（市场调研、方案规划、素材生成、投放执行）都由系统自动完成。
+重要：本系统是全自动化投放平台。
+- 所有阶段（市场调研、方案规划、素材生成、投放执行）都由系统自动完成
 - 绝对不要让用户手动上传素材、手动创建广告、手动操作任何后台
 - 绝对不要让用户去联系投放团队或广告代理商
-- 如果用户想重新生成素材、调整方案、或重跑某个阶段，告诉他们系统会自动处理
-- 如果用户确认执行，告诉他们系统正在自动投放，无需手动操作
+- 当用户要求重跑流程、继续执行、重新生成素材、开始投放等操作时，调用 restart_pipeline 工具
+- 不要问用户素材是否上传成功、是否需要人工介入等问题 — 系统会自动处理一切
 
 回复规则：
 - 简洁专业，300字以内
 - 可以解释调研结果、方案细节、预算分配等
-- 如果用户要求修改方案，说明系统会自动重跑相关阶段`;
+- 用户要求任何执行/重跑操作时，先简短回应然后立即调用 restart_pipeline`;
 
 /**
  * Process a user chat message within an orchestrator session.
- * The orchestrator can answer questions about phase results, explain the plan, etc.
+ * Supports tool_use — can trigger pipeline restart via restart_pipeline tool.
  *
  * @param {string} sessionId
  * @param {string} message
- * @yields {{ event: string, data: Object }} SSE events (delta, done)
+ * @yields {{ event: string, data: Object }} SSE events (delta, done, trigger_orchestration)
  */
 export async function* chatWithOrchestrator(sessionId, message) {
   const session = await getSession(sessionId);
@@ -594,7 +609,7 @@ export async function* chatWithOrchestrator(sessionId, message) {
 
   // Build context from phase results
   const phaseContext = Object.entries(session.phase_results || {})
-    .map(([phase, result]) => `=== ${phase.toUpperCase()} 阶段结果 ===\n${JSON.stringify(result, null, 2)}`)
+    .map(([phase, result]) => `=== ${phase.toUpperCase()} 阶段结果 ===\n${JSON.stringify(summarizePhaseResult(phase, result), null, 2)}`)
     .join('\n\n');
 
   const systemPrompt = `${ORCHESTRATOR_CHAT_SYSTEM}\n\n当前状态: ${session.status}, 当前阶段: ${session.current_phase || '未开始'}\n\n${phaseContext || '暂无阶段结果'}`;
@@ -604,20 +619,28 @@ export async function* chatWithOrchestrator(sessionId, message) {
     { role: 'user', content: message },
   ];
 
-  // Stream response
-  const stream = anthropic.messages.stream({
+  // Use create (not stream) to support tool_use
+  const response = await anthropic.messages.create({
     model: config.anthropic.model,
     max_tokens: 2048,
     system: systemPrompt,
     messages,
+    tools: ORCHESTRATOR_CHAT_TOOLS,
+    tool_choice: { type: 'auto' },
   });
 
+  // Process response blocks
   let assistantText = '';
+  let shouldRestart = false;
+  let restartReason = '';
 
-  for await (const event of stream) {
-    if (event.type === 'content_block_delta' && event.delta?.type === 'text_delta') {
-      assistantText += event.delta.text;
-      yield { event: 'delta', data: { text: event.delta.text } };
+  for (const block of response.content || []) {
+    if (block.type === 'text') {
+      assistantText += block.text;
+      yield { event: 'delta', data: { text: block.text } };
+    } else if (block.type === 'tool_use' && block.name === 'restart_pipeline') {
+      shouldRestart = true;
+      restartReason = block.input?.reason || '用户请求重跑';
     }
   }
 
@@ -629,6 +652,11 @@ export async function* chatWithOrchestrator(sessionId, message) {
       content: assistantText,
       message_index: messageIndex++,
     }]);
+  }
+
+  if (shouldRestart) {
+    // Signal frontend to trigger orchestration pipeline
+    yield { event: 'trigger_orchestration', data: { reason: restartReason } };
   }
 
   yield { event: 'done', data: { session_id: sessionId } };
