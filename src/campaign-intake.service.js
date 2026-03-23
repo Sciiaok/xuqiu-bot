@@ -221,6 +221,7 @@ export async function* processIntakeMessage(
     const messagesToPersist = [];
     let latestBrief = brief.brief || {};
     let latestCompletion = brief.completion || {};
+    let briefCompleted = false;
 
     while (iterations < maxIterations) {
       iterations++;
@@ -322,6 +323,9 @@ export async function* processIntakeMessage(
                 completion_pct: toolResult.completion_pct,
               };
             }
+            if (currentToolName === 'save_brief') {
+              briefCompleted = true;
+            }
           }
           currentBlockType = null;
         }
@@ -410,7 +414,7 @@ export async function* processIntakeMessage(
     // Yield done
     yield {
       event: 'done',
-      data: { brief_id: briefId, status: 'ok' },
+      data: { brief_id: briefId, status: briefCompleted ? 'completed' : 'collecting' },
     };
   } catch (err) {
     yield {

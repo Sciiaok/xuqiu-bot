@@ -163,7 +163,7 @@ export default function CampaignIntakeDebug() {
 
   const filledFields = completion.filled || [];
   const missingFields = completion.missing || [];
-  const pct = completion.completion ?? 0;
+  const pct = completion.completion_pct ?? 0;
 
   return (
     <div className="h-screen flex flex-col bg-white">
