@@ -66,6 +66,7 @@ mock.module(orchRepoUrl, {
       if (updates.status) mockSession.status = updates.status;
       if (updates.phase_results) mockSession.phase_results = updates.phase_results;
       if (updates.current_phase !== undefined) mockSession.current_phase = updates.current_phase;
+      if (updates.orchestrator_state !== undefined) mockSession.orchestrator_state = updates.orchestrator_state;
       return mockSession;
     }),
     addMessages: mock.fn(async (sessionId, msgs) => {
@@ -142,12 +143,21 @@ mock.module(executionUrl, {
   },
 });
 
-// Mock Anthropic for chatWithOrchestrator
+// Mock Anthropic for chatWithOrchestrator and orchestrate agent loop
+let toolCallQueue = [];
+let apiCallCount = 0;
+
 mock.module(anthropicUrl, {
   defaultExport: class Anthropic {
     constructor() {
       this.messages = {
-        create: mock.fn(async () => ({ content: [{ text: 'test response' }] })),
+        create: mock.fn(async () => {
+          apiCallCount++;
+          if (toolCallQueue.length > 0) {
+            return toolCallQueue.shift();
+          }
+          return { stop_reason: 'end_turn', content: [{ type: 'text', text: '完成' }] };
+        }),
         stream: mock.fn(() => ({
           [Symbol.asyncIterator]: async function* () {
             yield { type: 'content_block_delta', delta: { type: 'text_delta', text: '方案分析如下...' } };
@@ -186,6 +196,8 @@ function findEvents(events, name) {
 // ── Tests ──────────────────────────────────────────────────────────────
 
 beforeEach(() => {
+  toolCallQueue = [];
+  apiCallCount = 0;
   sessionUpdates = [];
   persistedMessages = [];
   messageIndex = 0;
@@ -210,47 +222,111 @@ beforeEach(() => {
 });
 
 describe('Campaign Orchestrator (session-based)', () => {
-  describe('orchestrate — full pipeline', () => {
-    it('runs research → strategy → creative, pauses at execution for approval', async () => {
+  describe('orchestrate — intelligent agent', () => {
+    it('runs full flow with tool_use agent', async () => {
+      toolCallQueue = [
+        { stop_reason: 'tool_use', content: [{ type: 'tool_use', id: 'tu1', name: 'run_phase', input: { phase: 'research' } }] },
+        { stop_reason: 'tool_use', content: [{ type: 'tool_use', id: 'tu2', name: 'evaluate_output', input: { phase: 'research' } }] },
+        { stop_reason: 'tool_use', content: [{ type: 'tool_use', id: 'tu3', name: 'run_phase', input: { phase: 'strategy' } }] },
+        { stop_reason: 'tool_use', content: [{ type: 'tool_use', id: 'tu4', name: 'evaluate_output', input: { phase: 'strategy' } }] },
+        { stop_reason: 'tool_use', content: [{ type: 'tool_use', id: 'tu5', name: 'run_phase', input: { phase: 'creative' } }] },
+        { stop_reason: 'tool_use', content: [{ type: 'tool_use', id: 'tu6', name: 'request_user_feedback', input: { message: '方案已就绪，确认执行？', options: ['确认', '取消'] } }] },
+      ];
+
       const events = await collectEvents(orchestrate('session-1'));
 
+      const starts = findEvents(events, 'phase_start');
+      assert.equal(starts.length, 3);
+      assert.equal(starts[0].data.phase, 'research');
+      assert.equal(starts[1].data.phase, 'strategy');
+      assert.equal(starts[2].data.phase, 'creative');
+
+      const completes = findEvents(events, 'phase_complete');
+      assert.equal(completes.length, 3);
+
+      const feedback = findEvents(events, 'feedback_required');
+      assert.equal(feedback.length, 1);
+      assert.equal(feedback[0].data.message, '方案已就绪，确认执行？');
+
+      assert.ok(sessionUpdates.some(u => u.status === 'awaiting_feedback'));
+      assert.ok(sessionUpdates.some(u => u.orchestrator_state != null));
+    });
+
+    it('handles skip_phase', async () => {
+      toolCallQueue = [
+        { stop_reason: 'tool_use', content: [{ type: 'tool_use', id: 'tu1', name: 'skip_phase', input: { phase: 'research', reason: '预算太小' } }] },
+        { stop_reason: 'tool_use', content: [{ type: 'tool_use', id: 'tu2', name: 'run_phase', input: { phase: 'strategy' } }] },
+        { stop_reason: 'tool_use', content: [{ type: 'tool_use', id: 'tu3', name: 'submit_final', input: { summary: '完成' } }] },
+      ];
+
+      const events = await collectEvents(orchestrate('session-1'));
+
+      const skipped = findEvents(events, 'phase_skipped');
+      assert.equal(skipped.length, 1);
+      assert.equal(skipped[0].data.phase, 'research');
+      assert.equal(skipped[0].data.reason, '预算太小');
+
+      const phaseStarts = findEvents(events, 'phase_start');
+      assert.ok(!phaseStarts.some(s => s.data.phase === 'research'));
+    });
+
+    it('handles evaluate + retry_phase', async () => {
+      toolCallQueue = [
+        { stop_reason: 'tool_use', content: [{ type: 'tool_use', id: 'tu1', name: 'run_phase', input: { phase: 'research' } }] },
+        { stop_reason: 'tool_use', content: [{ type: 'tool_use', id: 'tu2', name: 'evaluate_output', input: { phase: 'research' } }] },
+        { stop_reason: 'tool_use', content: [{ type: 'tool_use', id: 'tu3', name: 'retry_phase', input: { phase: 'research', feedback: '需要更多竞品数据' } }] },
+        { stop_reason: 'tool_use', content: [{ type: 'tool_use', id: 'tu4', name: 'submit_final', input: { summary: '完成' } }] },
+      ];
+
+      const events = await collectEvents(orchestrate('session-1'));
+
+      const researchStarts = findEvents(events, 'phase_start').filter(e => e.data.phase === 'research');
+      assert.equal(researchStarts.length, 2);
+    });
+
+    it('force-terminates at MAX_ITERATIONS', async () => {
+      toolCallQueue = Array.from({ length: 26 }, (_, i) => ({
+        stop_reason: 'tool_use',
+        content: [{ type: 'tool_use', id: `tu${i}`, name: 'evaluate_output', input: { phase: 'research' } }],
+      }));
+
+      const events = await collectEvents(orchestrate('session-1'));
+      const done = findEvents(events, 'done');
+      assert.equal(done.length, 1);
+      assert.ok(done[0].data.summary.includes('max iterations'));
+    });
+
+    it('emits orchestration_start event', async () => {
+      toolCallQueue = [
+        { stop_reason: 'tool_use', content: [{ type: 'tool_use', id: 'tu1', name: 'submit_final', input: { summary: '完成' } }] },
+      ];
+
+      const events = await collectEvents(orchestrate('session-1'));
       const starts = findEvents(events, 'orchestration_start');
       assert.equal(starts.length, 1);
       assert.equal(starts[0].data.session_id, 'session-1');
-      assert.equal(starts[0].data.start_phase, 'research');
-
-      const phaseStarts = findEvents(events, 'phase_start');
-      assert.equal(phaseStarts.length, 3); // research, strategy, creative
-      assert.equal(phaseStarts[0].data.phase, 'research');
-      assert.equal(phaseStarts[1].data.phase, 'strategy');
-      assert.equal(phaseStarts[2].data.phase, 'creative');
-
-      const approvals = findEvents(events, 'approval_required');
-      assert.equal(approvals.length, 1);
-      assert.equal(approvals[0].data.phase, 'execution');
-
-      assert.equal(findEvents(events, 'done').length, 0);
+      assert.ok(starts[0].data.phases.length > 0);
     });
 
-    it('persists agent traces to orchestrator_messages', async () => {
-      await collectEvents(orchestrate('session-1'));
+    it('passes phase errors to Claude as tool_result without terminating', async () => {
+      const { conductResearch } = await import(researchUrl);
+      conductResearch.mock.mockImplementationOnce(async () => {
+        throw new Error('API rate limit');
+      });
 
-      // Should have trace messages for research, strategy, creative + approval message
-      const traceMessages = persistedMessages.filter(m => m.phase !== null);
-      assert.ok(traceMessages.length >= 3, `Expected >= 3 trace messages, got ${traceMessages.length}`);
+      toolCallQueue = [
+        { stop_reason: 'tool_use', content: [{ type: 'tool_use', id: 'tu1', name: 'run_phase', input: { phase: 'research' } }] },
+        { stop_reason: 'tool_use', content: [{ type: 'tool_use', id: 'tu2', name: 'request_user_feedback', input: { message: '调研失败，是否重试？' } }] },
+      ];
 
-      // Should have approval message (phase=null, user-facing)
-      const approvalMsg = persistedMessages.find(m => m.phase === null && m.role === 'assistant');
-      assert.ok(approvalMsg, 'Should persist approval preview as user-facing message');
-      assert.ok(approvalMsg.content.includes('投放方案'));
-    });
+      const events = await collectEvents(orchestrate('session-1'));
 
-    it('updates session status throughout pipeline', async () => {
-      await collectEvents(orchestrate('session-1'));
+      const errors = findEvents(events, 'phase_error');
+      assert.equal(errors.length, 1);
+      assert.ok(errors[0].data.error.includes('rate limit'));
 
-      // Should have set status to 'running' then 'awaiting_approval'
-      assert.ok(sessionUpdates.some(u => u.status === 'running'));
-      assert.ok(sessionUpdates.some(u => u.status === 'awaiting_approval'));
+      const feedback = findEvents(events, 'feedback_required');
+      assert.equal(feedback.length, 1);
     });
 
     it('emits error when session not found', async () => {
@@ -268,16 +344,6 @@ describe('Campaign Orchestrator (session-based)', () => {
     });
   });
 
-  describe('orchestrate — resume', () => {
-    it('skips completed phases', async () => {
-      mockSession.phase_results = { research: MOCK_RESEARCH };
-      const events = await collectEvents(orchestrate('session-1'));
-
-      const starts = findEvents(events, 'orchestration_start');
-      assert.equal(starts[0].data.start_phase, 'strategy');
-    });
-  });
-
   describe('orchestrateAfterApproval', () => {
     it('runs execution phase after approval', async () => {
       mockSession.status = 'awaiting_approval';
@@ -287,18 +353,16 @@ describe('Campaign Orchestrator (session-based)', () => {
         creative: { creatives: {} },
       };
 
+      // The new orchestrate() is agent-based. Need to queue tool calls.
+      toolCallQueue = [
+        { stop_reason: 'tool_use', content: [{ type: 'tool_use', id: 'tu1', name: 'run_phase', input: { phase: 'execution' } }] },
+        { stop_reason: 'tool_use', content: [{ type: 'tool_use', id: 'tu2', name: 'submit_final', input: { summary: '投放完成' } }] },
+      ];
+
       const events = await collectEvents(orchestrateAfterApproval('session-1'));
 
-      const phaseStarts = findEvents(events, 'phase_start');
-      assert.equal(phaseStarts.length, 1);
-      assert.equal(phaseStarts[0].data.phase, 'execution');
-
-      assert.equal(findEvents(events, 'done').length, 1);
-
-      // Should persist user approval message
-      const userApproval = persistedMessages.find(m => m.role === 'user' && m.phase === null);
-      assert.ok(userApproval, 'Should persist user approval');
-      assert.ok(userApproval.content.includes('确认执行'));
+      const done = findEvents(events, 'done');
+      assert.equal(done.length, 1);
     });
 
     it('rejects if not awaiting approval', async () => {
@@ -328,24 +392,6 @@ describe('Campaign Orchestrator (session-based)', () => {
 
       const assistantMsg = persistedMessages.find(m => m.role === 'assistant' && m.phase === null);
       assert.ok(assistantMsg, 'Should persist assistant response');
-    });
-  });
-
-  describe('phase error handling', () => {
-    it('emits phase_error and sets session to failed', async () => {
-      const { conductResearch } = await import(researchUrl);
-      conductResearch.mock.mockImplementationOnce(async () => {
-        throw new Error('API rate limit');
-      });
-
-      const events = await collectEvents(orchestrate('session-1'));
-
-      const errors = findEvents(events, 'phase_error');
-      assert.equal(errors.length, 1);
-      assert.equal(errors[0].data.phase, 'research');
-      assert.ok(errors[0].data.error.includes('rate limit'));
-
-      assert.ok(sessionUpdates.some(u => u.status === 'failed'));
     });
   });
 
