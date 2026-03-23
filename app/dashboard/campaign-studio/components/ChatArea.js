@@ -80,11 +80,15 @@ export default function ChatArea({ briefId, sessionId, sessionStatus, onSessionU
   }, []);
 
   // Auto scroll only when user is near the bottom
+  // Use 'instant' right after history loads, 'smooth' for new messages
+  const hasLoadedHistoryRef = useRef(false);
   useEffect(() => {
     if (isNearBottomRef.current) {
       const container = scrollContainerRef.current;
       if (!container) return;
-      container.scrollTo({ top: container.scrollHeight, behavior: 'smooth' });
+      const behavior = hasLoadedHistoryRef.current ? 'smooth' : 'instant';
+      container.scrollTo({ top: container.scrollHeight, behavior });
+      hasLoadedHistoryRef.current = true;
     }
   }, [messages]);
 
@@ -116,6 +120,7 @@ export default function ChatArea({ briefId, sessionId, sessionStatus, onSessionU
     let cancelled = false;
 
     async function loadHistory() {
+      hasLoadedHistoryRef.current = false;
       setIsHistoryLoading(true);
       setMessages([]);
       setBrief({});
