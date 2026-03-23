@@ -6,18 +6,23 @@ import { pathToFileURL } from 'node:url';
 const moduleUrl = pathToFileURL(resolve(process.cwd(), 'src/campaign-intake.service.js')).href;
 const configModuleUrl = pathToFileURL(resolve(process.cwd(), 'src/config.js')).href;
 const supabaseModuleUrl = pathToFileURL(resolve(process.cwd(), 'lib/supabase.js')).href;
-const repoModuleUrl = pathToFileURL(resolve(process.cwd(), 'lib/repositories/campaign-brief.repository.js')).href;
+const briefRepoUrl = pathToFileURL(resolve(process.cwd(), 'lib/repositories/campaign-brief.repository.js')).href;
+const orchRepoUrl = pathToFileURL(resolve(process.cwd(), 'lib/repositories/orchestrator.repository.js')).href;
 
 // ── Mock state holders ──────────────────────────────────────────────────
 const mockRepo = {
+  // brief repo
   getBrief: mock.fn(async () => null),
+  updateBriefFields: mock.fn(async () => ({ brief: {} })),
+  updateCompletion: mock.fn(async () => ({})),
+  updateBrief: mock.fn(async () => ({})),
+  // orchestrator repo
+  createSession: mock.fn(async () => ({ id: 'session-1' })),
+  getLatestSession: mock.fn(async () => ({ id: 'session-1' })),
   getMessagesForClaude: mock.fn(async () => []),
   getNextMessageIndex: mock.fn(async () => 0),
   addMessage: mock.fn(async () => ({})),
   addMessages: mock.fn(async () => []),
-  updateBriefFields: mock.fn(async () => ({ brief: {} })),
-  updateCompletion: mock.fn(async () => ({})),
-  updateBrief: mock.fn(async () => ({})),
 };
 
 // ── Mock config ─────────────────────────────────────────────────────────
@@ -39,9 +44,24 @@ mock.module(supabaseModuleUrl, {
   },
 });
 
-// ── Mock repository ─────────────────────────────────────────────────────
-mock.module(repoModuleUrl, {
-  namedExports: mockRepo,
+// ── Mock repositories ───────────────────────────────────────────────────
+mock.module(briefRepoUrl, {
+  namedExports: {
+    getBrief: mockRepo.getBrief,
+    updateBriefFields: mockRepo.updateBriefFields,
+    updateCompletion: mockRepo.updateCompletion,
+    updateBrief: mockRepo.updateBrief,
+  },
+});
+mock.module(orchRepoUrl, {
+  namedExports: {
+    createSession: mockRepo.createSession,
+    getLatestSession: mockRepo.getLatestSession,
+    getMessagesForClaude: mockRepo.getMessagesForClaude,
+    getNextMessageIndex: mockRepo.getNextMessageIndex,
+    addMessage: mockRepo.addMessage,
+    addMessages: mockRepo.addMessages,
+  },
 });
 
 // ── Mock Anthropic SDK ──────────────────────────────────────────────────

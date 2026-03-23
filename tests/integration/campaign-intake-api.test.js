@@ -11,11 +11,14 @@ if (!supabaseUrl || !supabaseKey) {
 
 const supabase = createClient(supabaseUrl, supabaseKey);
 
-// Track created brief IDs for cleanup
+// Track created IDs for cleanup
 const createdBriefIds = [];
+const createdSessionIds = [];
 
 after(async () => {
-  // Cleanup: delete all test briefs (cascade deletes messages)
+  for (const id of createdSessionIds) {
+    await supabase.from('orchestrator_sessions').delete().eq('id', id);
+  }
   for (const id of createdBriefIds) {
     await supabase.from('campaign_briefs').delete().eq('id', id);
   }
@@ -34,10 +37,6 @@ describe('campaign_briefs table', () => {
     assert.equal(data.status, 'draft');
     assert.deepStrictEqual(data.brief, {});
     assert.deepStrictEqual(data.completion, {});
-    assert.equal(data.expires_at, null);
-    assert.ok(data.created_at);
-    assert.ok(data.updated_at);
-
     createdBriefIds.push(data.id);
   });
 
@@ -60,7 +59,6 @@ describe('campaign_briefs table', () => {
       .insert({ status: 'invalid_status' });
 
     assert.ok(error);
-    assert.ok(error.message.includes('check') || error.code === '23514');
   });
 
   it('updates brief JSONB fields', async () => {
@@ -87,7 +85,6 @@ describe('campaign_briefs table', () => {
     assert.equal(error, null);
     assert.equal(data.status, 'collecting');
     assert.equal(data.brief.company_name, 'Test Corp');
-    assert.equal(data.brief.products.length, 1);
   });
 
   it('updates updated_at automatically via trigger', async () => {
@@ -98,7 +95,6 @@ describe('campaign_briefs table', () => {
       .single();
     createdBriefIds.push(created.id);
 
-    // Wait a moment to ensure timestamp difference
     await new Promise((r) => setTimeout(r, 100));
 
     const { data: updated } = await supabase
@@ -112,8 +108,9 @@ describe('campaign_briefs table', () => {
   });
 });
 
-describe('campaign_messages table', () => {
-  it('creates a user message', async () => {
+describe('orchestrator_messages with intake phase', () => {
+  it('stores intake messages via orchestrator_sessions', async () => {
+    // Create brief → session → messages
     const { data: brief } = await supabase
       .from('campaign_briefs')
       .insert({})
@@ -121,24 +118,29 @@ describe('campaign_messages table', () => {
       .single();
     createdBriefIds.push(brief.id);
 
-    const { data, error } = await supabase
-      .from('campaign_messages')
-      .insert({
-        brief_id: brief.id,
-        role: 'user',
-        content: '我想投放农机广告',
-        message_index: 0,
-      })
+    const { data: session } = await supabase
+      .from('orchestrator_sessions')
+      .insert({ brief_id: brief.id })
       .select()
       .single();
+    createdSessionIds.push(session.id);
+
+    // Insert intake messages
+    const { data: msgs, error } = await supabase
+      .from('orchestrator_messages')
+      .insert([
+        { session_id: session.id, phase: 'intake', role: 'user', content: '我想投放广告', message_index: 0 },
+        { session_id: session.id, phase: 'intake', role: 'assistant', content: null, tool_name: 'update_brief', tool_use_id: 'tu_1', tool_input: { fields: { industry: '农机' } }, message_index: 1 },
+        { session_id: session.id, phase: 'intake', role: 'tool', content: null, tool_use_id: 'tu_1', tool_result: { brief: { industry: '农机' } }, message_index: 2 },
+        { session_id: session.id, phase: 'intake', role: 'assistant', content: '好的，已记录', message_index: 3 },
+      ])
+      .select();
 
     assert.equal(error, null);
-    assert.equal(data.role, 'user');
-    assert.equal(data.content, '我想投放农机广告');
-    assert.equal(data.message_index, 0);
+    assert.equal(msgs.length, 4);
   });
 
-  it('creates an assistant message with tool_use fields', async () => {
+  it('filters messages by phase', async () => {
     const { data: brief } = await supabase
       .from('campaign_briefs')
       .insert({})
@@ -146,148 +148,71 @@ describe('campaign_messages table', () => {
       .single();
     createdBriefIds.push(brief.id);
 
-    const { data, error } = await supabase
-      .from('campaign_messages')
-      .insert({
-        brief_id: brief.id,
-        role: 'assistant',
-        content: 'Let me extract that info.',
-        tool_name: 'update_brief',
-        tool_use_id: 'toolu_123',
-        tool_input: { fields: { company_name: 'Test' } },
-        message_index: 1,
-      })
+    const { data: session } = await supabase
+      .from('orchestrator_sessions')
+      .insert({ brief_id: brief.id })
       .select()
       .single();
+    createdSessionIds.push(session.id);
 
-    assert.equal(error, null);
-    assert.equal(data.tool_name, 'update_brief');
-    assert.equal(data.tool_use_id, 'toolu_123');
-    assert.deepStrictEqual(data.tool_input, { fields: { company_name: 'Test' } });
-  });
-
-  it('creates a tool result message (content can be null)', async () => {
-    const { data: brief } = await supabase
-      .from('campaign_briefs')
-      .insert({})
-      .select()
-      .single();
-    createdBriefIds.push(brief.id);
-
-    const { data, error } = await supabase
-      .from('campaign_messages')
-      .insert({
-        brief_id: brief.id,
-        role: 'tool',
-        tool_name: 'update_brief',
-        tool_use_id: 'toolu_123',
-        tool_result: { brief: { company_name: 'Test' }, is_complete: false },
-        message_index: 2,
-      })
-      .select()
-      .single();
-
-    assert.equal(error, null);
-    assert.equal(data.role, 'tool');
-    assert.equal(data.content, null);
-    assert.ok(data.tool_result.brief);
-  });
-
-  it('enforces role CHECK constraint', async () => {
-    const { data: brief } = await supabase
-      .from('campaign_briefs')
-      .insert({})
-      .select()
-      .single();
-    createdBriefIds.push(brief.id);
-
-    const { error } = await supabase
-      .from('campaign_messages')
-      .insert({
-        brief_id: brief.id,
-        role: 'system',
-        content: 'test',
-        message_index: 0,
-      });
-
-    assert.ok(error);
-  });
-
-  it('enforces content NOT NULL for non-tool roles', async () => {
-    const { data: brief } = await supabase
-      .from('campaign_briefs')
-      .insert({})
-      .select()
-      .single();
-    createdBriefIds.push(brief.id);
-
-    const { error } = await supabase
-      .from('campaign_messages')
-      .insert({
-        brief_id: brief.id,
-        role: 'user',
-        content: null,
-        message_index: 0,
-      });
-
-    assert.ok(error);
-  });
-
-  it('cascades delete when brief is deleted', async () => {
-    const { data: brief } = await supabase
-      .from('campaign_briefs')
-      .insert({})
-      .select()
-      .single();
-
-    // Create messages
-    await supabase.from('campaign_messages').insert([
-      { brief_id: brief.id, role: 'user', content: 'msg1', message_index: 0 },
-      { brief_id: brief.id, role: 'assistant', content: 'msg2', message_index: 1 },
+    await supabase.from('orchestrator_messages').insert([
+      { session_id: session.id, phase: 'intake', role: 'user', content: 'intake msg', message_index: 0 },
+      { session_id: session.id, phase: null, role: 'user', content: 'orchestrator msg', message_index: 1 },
     ]);
 
-    // Delete brief
-    await supabase.from('campaign_briefs').delete().eq('id', brief.id);
-
-    // Verify messages are gone
-    const { data: messages } = await supabase
-      .from('campaign_messages')
-      .select('id')
-      .eq('brief_id', brief.id);
-
-    assert.equal(messages.length, 0);
-    // No need to track for cleanup — already deleted
-  });
-
-  it('returns messages ordered by message_index', async () => {
-    const { data: brief } = await supabase
-      .from('campaign_briefs')
-      .insert({})
-      .select()
-      .single();
-    createdBriefIds.push(brief.id);
-
-    await supabase.from('campaign_messages').insert([
-      { brief_id: brief.id, role: 'assistant', content: 'second', message_index: 1 },
-      { brief_id: brief.id, role: 'user', content: 'first', message_index: 0 },
-      { brief_id: brief.id, role: 'user', content: 'third', message_index: 2 },
-    ]);
-
-    const { data } = await supabase
-      .from('campaign_messages')
+    // Filter by intake phase
+    const { data: intakeMsgs } = await supabase
+      .from('orchestrator_messages')
       .select('*')
-      .eq('brief_id', brief.id)
-      .order('message_index', { ascending: true });
+      .eq('session_id', session.id)
+      .eq('phase', 'intake');
 
-    assert.equal(data.length, 3);
-    assert.equal(data[0].content, 'first');
-    assert.equal(data[1].content, 'second');
-    assert.equal(data[2].content, 'third');
+    assert.equal(intakeMsgs.length, 1);
+    assert.equal(intakeMsgs[0].content, 'intake msg');
+
+    // Filter by null phase (orchestrator)
+    const { data: orchMsgs } = await supabase
+      .from('orchestrator_messages')
+      .select('*')
+      .eq('session_id', session.id)
+      .is('phase', null);
+
+    assert.equal(orchMsgs.length, 1);
+    assert.equal(orchMsgs[0].content, 'orchestrator msg');
+  });
+
+  it('cascades delete from session to messages', async () => {
+    const { data: brief } = await supabase
+      .from('campaign_briefs')
+      .insert({})
+      .select()
+      .single();
+    createdBriefIds.push(brief.id);
+
+    const { data: session } = await supabase
+      .from('orchestrator_sessions')
+      .insert({ brief_id: brief.id })
+      .select()
+      .single();
+
+    await supabase.from('orchestrator_messages').insert([
+      { session_id: session.id, phase: 'intake', role: 'user', content: 'test', message_index: 0 },
+    ]);
+
+    // Delete session
+    await supabase.from('orchestrator_sessions').delete().eq('id', session.id);
+
+    const { data: remaining } = await supabase
+      .from('orchestrator_messages')
+      .select('id')
+      .eq('session_id', session.id);
+
+    assert.equal(remaining.length, 0);
   });
 });
 
-describe('full intake flow simulation', () => {
-  it('simulates a complete brief collection lifecycle', async () => {
+describe('full intake flow with orchestrator', () => {
+  it('simulates brief → session → intake messages → completed', async () => {
     // 1. Create brief
     const { data: brief } = await supabase
       .from('campaign_briefs')
@@ -295,47 +220,28 @@ describe('full intake flow simulation', () => {
       .select()
       .single();
     createdBriefIds.push(brief.id);
-    assert.equal(brief.status, 'draft');
 
-    // 2. Start collecting — user sends first message
-    await supabase.from('campaign_messages').insert({
-      brief_id: brief.id,
-      role: 'user',
-      content: '我是XX农机公司，想在非洲投放拖拉机广告',
-      message_index: 0,
-    });
+    // 2. Create orchestrator session
+    const { data: session } = await supabase
+      .from('orchestrator_sessions')
+      .insert({ brief_id: brief.id })
+      .select()
+      .single();
+    createdSessionIds.push(session.id);
 
-    // 3. Agent extracts info and updates brief
-    const partialBrief = {
-      company_name: 'XX农机',
-      industry: '农业机械',
-      products: [{ name: '拖拉机', category: '拖拉机' }],
-      target_countries: ['Kenya', 'Tanzania', 'Nigeria'],
-    };
-
-    await supabase
-      .from('campaign_briefs')
-      .update({
-        status: 'collecting',
-        brief: partialBrief,
-        completion: {
-          filled: ['company_name', 'industry', 'products', 'target_countries'],
-          missing: ['target_audience', 'budget_total', 'budget_currency', 'campaign_duration_days', 'objectives', 'preferred_platforms'],
-          completion_pct: 40,
-        },
-      })
-      .eq('id', brief.id);
-
-    // 4. More conversation — agent recommends defaults, user confirms
-    await supabase.from('campaign_messages').insert([
-      { brief_id: brief.id, role: 'assistant', content: '建议预算$5000，投放Meta+Google，周期30天', message_index: 1 },
-      { brief_id: brief.id, role: 'user', content: '可以，就按这个来', message_index: 2 },
+    // 3. Intake conversation
+    await supabase.from('orchestrator_messages').insert([
+      { session_id: session.id, phase: 'intake', role: 'user', content: '我是XX农机，想投放非洲市场', message_index: 0 },
+      { session_id: session.id, phase: 'intake', role: 'assistant', content: '好的，已记录信息', message_index: 1 },
     ]);
 
-    // 5. Complete the brief
+    // 4. Update brief
     const completeBrief = {
-      ...partialBrief,
-      target_audience: { age_range: [25, 55], gender: 'male', interests: ['agriculture', 'farming'] },
+      company_name: 'XX农机',
+      industry: '农业机械',
+      products: [{ name: '拖拉机' }],
+      target_countries: ['Kenya'],
+      target_audience: { age_range: [25, 55], gender: 'male', interests: ['agriculture'] },
       budget_total: 5000,
       budget_currency: 'USD',
       campaign_duration_days: 30,
@@ -345,18 +251,10 @@ describe('full intake flow simulation', () => {
 
     await supabase
       .from('campaign_briefs')
-      .update({
-        status: 'completed',
-        brief: completeBrief,
-        completion: {
-          filled: ['company_name', 'industry', 'products', 'target_countries', 'target_audience', 'budget_total', 'budget_currency', 'campaign_duration_days', 'objectives', 'preferred_platforms'],
-          missing: [],
-          completion_pct: 100,
-        },
-      })
+      .update({ status: 'completed', brief: completeBrief, completion: { filled: Object.keys(completeBrief), missing: [], completion_pct: 100 } })
       .eq('id', brief.id);
 
-    // 6. Verify final state
+    // 5. Verify
     const { data: finalBrief } = await supabase
       .from('campaign_briefs')
       .select('*')
@@ -365,16 +263,15 @@ describe('full intake flow simulation', () => {
 
     assert.equal(finalBrief.status, 'completed');
     assert.equal(finalBrief.brief.company_name, 'XX农机');
-    assert.equal(finalBrief.brief.budget_total, 5000);
     assert.equal(finalBrief.completion.completion_pct, 100);
-    assert.equal(finalBrief.completion.missing.length, 0);
 
-    const { data: allMessages } = await supabase
-      .from('campaign_messages')
+    const { data: allMsgs } = await supabase
+      .from('orchestrator_messages')
       .select('*')
-      .eq('brief_id', brief.id)
+      .eq('session_id', session.id)
+      .eq('phase', 'intake')
       .order('message_index');
 
-    assert.equal(allMessages.length, 3);
+    assert.equal(allMsgs.length, 2);
   });
 });

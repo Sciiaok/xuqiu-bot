@@ -5,11 +5,15 @@ import {
   updateBriefFields,
   updateCompletion,
   updateBrief,
+} from '../lib/repositories/campaign-brief.repository.js';
+import {
+  createSession,
+  getLatestSession,
   addMessage,
   addMessages,
   getMessagesForClaude,
   getNextMessageIndex,
-} from '../lib/repositories/campaign-brief.repository.js';
+} from '../lib/repositories/orchestrator.repository.js';
 
 const anthropic = new Anthropic({
   apiKey: config.anthropic.apiKey,
@@ -193,14 +197,22 @@ export async function* processIntakeMessage(
       return;
     }
 
-    // 2. Load history
-    const history = await getMessagesForClaude(briefId);
+    // 2. Resolve orchestrator session (create if not exists)
+    let session = await getLatestSession(briefId);
+    if (!session) {
+      session = await createSession(briefId);
+    }
+    const sessionId = session.id;
 
-    // 3. Get next message_index
-    let messageIndex = await getNextMessageIndex(briefId);
+    // 3. Load history
+    const history = await getMessagesForClaude(sessionId, { phase: 'intake' });
 
-    // 4. Store user message in DB
-    await addMessage(briefId, {
+    // 4. Get next message_index
+    let messageIndex = await getNextMessageIndex(sessionId);
+
+    // 5. Store user message in DB
+    await addMessage(sessionId, {
+      phase: 'intake',
       role: 'user',
       content: message,
       message_index: messageIndex++,
@@ -400,7 +412,8 @@ export async function* processIntakeMessage(
 
     // 7. Persist all collected messages
     if (messagesToPersist.length > 0) {
-      await addMessages(briefId, messagesToPersist);
+      const withPhase = messagesToPersist.map(m => ({ ...m, phase: 'intake' }));
+      await addMessages(sessionId, withPhase);
     }
 
     // Yield brief update
