@@ -142,18 +142,47 @@ export default function ChatArea({ briefId, sessionId, sessionStatus, onSessionU
 
           setCurrentPhase(orchData.current_phase);
 
-          const displayMsgs = orchData.messages
-            .filter(m => m.role !== 'tool')
+          // Reconstruct structured cards from phase_results + chat messages
+          const phaseResults = orchData.phase_results || {};
+          const reconstructed = [];
+
+          // Add phase result cards in order
+          if (phaseResults.research) {
+            reconstructed.push({ id: nextMsgId(), type: 'research_complete', report: phaseResults.research, duration: null });
+          }
+          if (phaseResults.strategy) {
+            reconstructed.push({ id: nextMsgId(), type: 'strategy_complete', plan: phaseResults.strategy });
+          }
+          if (phaseResults.creative) {
+            reconstructed.push({
+              id: nextMsgId(),
+              type: 'creative_complete',
+              creatives: phaseResults.creative?.assets || phaseResults.creative?.creatives || phaseResults.creative || [],
+            });
+          }
+          if (phaseResults.execution) {
+            reconstructed.push({ id: nextMsgId(), type: 'execution_complete', result: phaseResults.execution });
+          }
+
+          // Add user chat messages (phase=null, non-tool)
+          const chatMsgs = orchData.messages
+            .filter(m => m.phase === null && m.role !== 'tool')
             .map(m => {
               if (m.role === 'user') return { id: nextMsgId(), type: 'user', content: m.content };
-              if (m.tool_name === 'execution_preview') {
-                return { id: nextMsgId(), type: 'execution_approval', plan: m.tool_result };
-              }
-              if (m.tool_name) return { id: nextMsgId(), type: 'tool_call', tool: m.tool_name, content: m.content || '' };
               return { id: nextMsgId(), type: 'assistant', content: m.content };
             });
 
-          setMessages(displayMsgs);
+          // Show status-specific UI
+          if (orchData.status === 'awaiting_approval' || orchData.status === 'awaiting_feedback') {
+            reconstructed.push({
+              id: nextMsgId(),
+              type: 'feedback_required',
+              message: '方案已就绪，确认执行投放？',
+              options: ['确认执行', '取消'],
+            });
+          }
+
+          setMessages([...reconstructed, ...chatMsgs]);
         }
       } catch (err) {
         if (!cancelled) console.error('Failed to load history:', err);

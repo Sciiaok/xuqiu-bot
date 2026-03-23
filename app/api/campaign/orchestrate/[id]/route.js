@@ -83,6 +83,7 @@ export async function GET(request, { params }) {
     status: session.status,
     current_phase: session.current_phase,
     phase_results_keys: Object.keys(session.phase_results || {}),
+    phase_results: session.phase_results || {},
     messages: messages.map(m => ({
       id: m.id,
       phase: m.phase,
