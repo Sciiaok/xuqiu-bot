@@ -183,16 +183,24 @@ export async function conductResearch(brief, instructions) {
     const submitBlock = toolUseBlocks.find(t => t.name === 'submit_report');
     if (submitBlock) {
       const report = submitBlock.input;
-      if (report && report.market_overview) return report;
-      // Claude submitted empty/invalid report — continue loop to force a retry
-      console.warn('[research] submit_report received empty/invalid input, retrying...');
+      if (report && Object.keys(report).length > 0) return report;
+      console.warn('[research] submit_report received empty input, retrying...');
     }
 
-    // Execute all non-submit tools
+    // Execute all non-submit tools (skip submit_report — it's handled above)
     messages.push({ role: 'assistant', content: response.content });
 
     const toolResults = [];
     for (const toolUse of toolUseBlocks) {
+      if (toolUse.name === 'submit_report') {
+        // Return acknowledgment for submit_report so Claude doesn't get confused
+        toolResults.push({
+          type: 'tool_result',
+          tool_use_id: toolUse.id,
+          content: JSON.stringify({ status: 'rejected', reason: 'Report was empty or missing required fields. Please gather more data and try again.' }),
+        });
+        continue;
+      }
       const result = await executeTool(toolUse.name, toolUse.input);
       toolResults.push({
         type: 'tool_result',
@@ -215,7 +223,7 @@ export async function conductResearch(brief, instructions) {
 
   // Final check: Claude may have called submit_report in the last response
   const finalSubmit = response.content.find(c => c.type === 'tool_use' && c.name === 'submit_report');
-  if (finalSubmit?.input?.market_overview) {
+  if (finalSubmit?.input && Object.keys(finalSubmit.input).length > 0) {
     return finalSubmit.input;
   }
 
