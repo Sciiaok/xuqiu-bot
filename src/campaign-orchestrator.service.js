@@ -1,0 +1,649 @@
+import Anthropic from '@anthropic-ai/sdk';
+import { config } from './config.js';
+import { getBrief } from '../lib/repositories/campaign-brief.repository.js';
+
+import {
+  createSession,
+  getSession,
+  updateSession,
+  addMessages,
+  getMessagesForClaude,
+  getNextMessageIndex,
+} from '../lib/repositories/orchestrator.repository.js';
+import supabase from '../lib/supabase.js';
+import { conductResearch } from './research-agent.service.js';
+import { generateMediaPlan } from './strategy-agent.service.js';
+import { generateFromDocument } from './aigc.service.js';
+import { executeMediaPlan, previewExecution, uploadMedia } from './execution-agent.service.js';
+
+const anthropic = new Anthropic({
+  apiKey: config.anthropic.apiKey,
+  ...(config.anthropic.baseURL && { baseURL: config.anthropic.baseURL }),
+});
+
+const HEARTBEAT_INTERVAL_MS = 2000;
+
+// ── Phase definitions ──────────────────────────────────────────────────
+
+const PHASES = [
+  { key: 'research',  name: '市场调研', description: 'Analyzing market, competitors, and trends' },
+  { key: 'strategy',  name: '方案规划', description: 'Generating media plan with budget allocation' },
+  { key: 'creative',  name: '素材生成', description: 'Generating ad creatives from product docs' },
+  { key: 'execution', name: '投放执行', description: 'Creating campaigns on Meta Ads', needsApproval: true },
+];
+
+// ── Helper: run a Promise with heartbeat yields ────────────────────────
+
+function runWithHeartbeat(phaseKey, workFn, yieldEvent) {
+  return new Promise((resolve, reject) => {
+    const startTime = Date.now();
+    let settled = false;
+
+    const timer = setInterval(() => {
+      if (settled) return;
+      const elapsed = ((Date.now() - startTime) / 1000).toFixed(0);
+      yieldEvent({ event: 'heartbeat', data: { phase: phaseKey, elapsed_s: Number(elapsed) } });
+    }, HEARTBEAT_INTERVAL_MS);
+
+    workFn()
+      .then(result => { settled = true; clearInterval(timer); resolve(result); })
+      .catch(err => { settled = true; clearInterval(timer); reject(err); });
+  });
+}
+
+// ── Agent wrappers that persist tool_use conversations ─────────────────
+
+/**
+ * Wrap an agent call to persist its Claude tool_use conversation.
+ */
+async function runAgentWithTrace(sessionId, phaseKey, agentFn, agentArgs) {
+  // Patch the agent to capture messages (agents return results, not messages)
+  // We persist the inputs/outputs as trace messages after the agent completes
+  const startIndex = await getNextMessageIndex(sessionId);
+  const startTime = new Date().toISOString();
+
+  const result = await agentFn(...agentArgs);
+
+  // Persist a summary trace (the full tool_use loop is inside the agent)
+  await addMessages(sessionId, [
+    {
+      phase: phaseKey,
+      role: 'user',
+      content: `[Agent ${phaseKey}] Started at ${startTime}\nInput: ${JSON.stringify(agentArgs[0]).slice(0, 500)}`,
+      message_index: startIndex,
+    },
+    {
+      phase: phaseKey,
+      role: 'assistant',
+      content: `[Agent ${phaseKey}] Completed\nResult keys: ${Object.keys(result || {}).join(', ')}`,
+      tool_result: result,
+      message_index: startIndex + 1,
+    },
+  ]);
+
+  return result;
+}
+
+// ── Phase executors ────────────────────────────────────────────────────
+
+async function runResearch(sessionId, brief) {
+  return runAgentWithTrace(sessionId, 'research', conductResearch, [brief.brief || {}]);
+}
+
+async function runStrategy(sessionId, brief, phaseResults) {
+  return runAgentWithTrace(sessionId, 'strategy', generateMediaPlan, [brief.brief || {}, phaseResults.research]);
+}
+
+async function runCreative(sessionId, brief, phaseResults) {
+  const mediaPlan = phaseResults.strategy;
+  const briefData = brief.brief || {};
+  const metaPlatform = mediaPlan?.platforms?.find(p => p.platform === 'meta');
+  if (!metaPlatform) return { creatives: {}, skipped: true };
+
+  // Format products as human-readable text for extractProductInfo
+  const productText = formatProductsAsText(briefData);
+
+  const creatives = {};
+  for (const campaign of metaPlatform.campaigns || []) {
+    for (const adSet of campaign.ad_sets || []) {
+      for (const ad of adSet.ads || []) {
+        if (ad.format === 'image' && ad.media_requirements?.suggested_content) {
+          try {
+            const result = await generateFromDocument({
+              pdfText: productText,
+              userPrompt: ad.media_requirements.suggested_content,
+              format: ad.media_requirements.specs?.split(',')[0]?.trim() || '1080x1080',
+              authClient: supabase, // For RLS-protected storage uploads
+            });
+            creatives[ad.name] = { url: result.url, storage_path: result.storage_path, asset_id: result.id };
+          } catch (err) {
+            creatives[ad.name] = { error: err.message };
+          }
+        }
+      }
+    }
+  }
+
+  // Persist creative generation trace
+  const idx = await getNextMessageIndex(sessionId);
+  await addMessages(sessionId, [{
+    phase: 'creative',
+    role: 'assistant',
+    content: `Generated ${Object.keys(creatives).length} creatives`,
+    tool_result: { creatives },
+    message_index: idx,
+  }]);
+
+  return { creatives };
+}
+
+async function runExecution(sessionId, brief, phaseResults) {
+  const mediaPlan = phaseResults.strategy;
+  const creativeResults = phaseResults.creative?.creatives || {};
+
+  const metaCreatives = {};
+  for (const [adName, creative] of Object.entries(creativeResults)) {
+    if (creative.error || !creative.storage_path) continue;
+    try {
+      // Fetch actual image from Supabase storage
+      const { data: imageData, error: downloadError } = await supabase.storage
+        .from(config.aigc.storageBucket)
+        .download(creative.storage_path);
+
+      if (downloadError) throw new Error(`Storage download failed: ${downloadError.message}`);
+
+      const imageBuffer = Buffer.from(await imageData.arrayBuffer());
+      const { image_hash } = await uploadMedia(imageBuffer, `${adName}.png`);
+      metaCreatives[adName] = { image_hash };
+    } catch (err) {
+      metaCreatives[adName] = { error: err.message };
+    }
+  }
+
+  return runAgentWithTrace(sessionId, 'execution', executeMediaPlan, [
+    mediaPlan,
+    metaCreatives,
+    { link_url: brief.brief?.existing_landing_pages?.[0] || brief.brief?.website || 'https://revopanda.com' },
+  ]);
+}
+
+// ── Orchestrator Agent Tools ──────────────────────────────────────────
+
+const ORCHESTRATOR_TOOLS = [
+  {
+    name: 'run_phase',
+    description: '执行指定的投放流程阶段。返回阶段结果摘要。',
+    input_schema: {
+      type: 'object',
+      required: ['phase'],
+      properties: {
+        phase: { type: 'string', enum: ['research', 'strategy', 'creative', 'execution'] },
+        instructions: { type: 'string', description: '给该阶段 agent 的额外指令（可选）' },
+      },
+    },
+  },
+  {
+    name: 'evaluate_output',
+    description: '评估某阶段输出的质量和完整性。返回评分和问题列表。',
+    input_schema: {
+      type: 'object',
+      required: ['phase'],
+      properties: {
+        phase: { type: 'string' },
+        criteria: { type: 'string', description: '评估侧重点（可选）' },
+      },
+    },
+  },
+  {
+    name: 'request_user_feedback',
+    description: '暂停流程，向用户提问或展示中间结果请求确认。用户回应后流程继续。',
+    input_schema: {
+      type: 'object',
+      required: ['message'],
+      properties: {
+        message: { type: 'string' },
+        options: { type: 'array', items: { type: 'string' }, description: '给用户的选项按钮（可选）' },
+      },
+    },
+  },
+  {
+    name: 'skip_phase',
+    description: '跳过某个阶段并记录原因。',
+    input_schema: {
+      type: 'object',
+      required: ['phase', 'reason'],
+      properties: {
+        phase: { type: 'string' },
+        reason: { type: 'string' },
+      },
+    },
+  },
+  {
+    name: 'retry_phase',
+    description: '带修改指令重跑某阶段（仅 research/strategy）。之前的结果会被覆盖。',
+    input_schema: {
+      type: 'object',
+      required: ['phase', 'feedback'],
+      properties: {
+        phase: { type: 'string', enum: ['research', 'strategy'] },
+        feedback: { type: 'string', description: '对上次结果的修改要求' },
+      },
+    },
+  },
+  {
+    name: 'submit_final',
+    description: '标记编排完成，提交最终结果摘要。',
+    input_schema: {
+      type: 'object',
+      required: ['summary'],
+      properties: {
+        summary: { type: 'string' },
+        skipped_phases: { type: 'array', items: { type: 'string' } },
+      },
+    },
+  },
+];
+
+const ORCHESTRATOR_SYSTEM_PROMPT = `你是数字广告投放主控 Agent。你的任务是根据 Campaign Brief 编排投放流程。
+
+可用工具：
+- run_phase: 执行某个阶段 (research/strategy/creative/execution)
+- evaluate_output: 评估阶段输出质量
+- request_user_feedback: 向用户提问或确认
+- skip_phase: 跳过某阶段
+- retry_phase: 带反馈重跑某阶段（仅 research/strategy）
+- submit_final: 标记编排完成
+
+标准流程: research → strategy → creative → execution
+可根据 brief 灵活调整：
+- 预算很小（<$200）→ 可跳过 research
+- 用户已有素材 → 跳过 creative
+- research 数据不足 → retry 并给出更具体指令
+- 阶段出错 → 告诉用户并询问是否重试
+
+规则：
+- execution 前必须调用 request_user_feedback 获得用户确认
+- 每个阶段完成后用 evaluate_output 评估质量
+- evaluate_output 返回 score < 50 时，用 retry_phase 重试（仅 research/strategy）
+- evaluate_output 返回 score >= 50 时，继续下一步
+- 每个阶段最多 retry 一次，避免无限循环
+- 出错时向用户说明，不要静默失败
+- retry_phase 仅支持 research 和 strategy；creative/execution 出错用 request_user_feedback 通知用户`;
+
+const MAX_ORCHESTRATOR_ITERATIONS = 25;
+
+// ── Deterministic evaluation ──────────────────────────────────────────
+
+function evaluateOutput(phase, result) {
+  const issues = [];
+
+  switch (phase) {
+    case 'research':
+      if (!result?.recommendations?.length) issues.push('缺少建议 (recommendations)');
+      if (!result?.platform_recommendations?.length) issues.push('缺少平台推荐 (platform_recommendations)');
+      if (!result?.competitor_ads?.summary) issues.push('缺少竞品广告分析 (competitor_ads)');
+      break;
+    case 'strategy':
+      if (!result?.platforms?.length) issues.push('缺少平台方案 (platforms)');
+      else {
+        const totalAlloc = result.platforms.reduce((s, p) => s + (p.budget_allocation || 0), 0);
+        if (Math.abs(totalAlloc - 100) > 5) issues.push(`预算分配总和 ${totalAlloc}%，偏离 100%`);
+        const hasCampaigns = result.platforms.some(p => p.campaigns?.length > 0);
+        if (!hasCampaigns) issues.push('缺少广告系列 (campaigns)');
+      }
+      break;
+    case 'creative': {
+      const creatives = result?.creatives || {};
+      const errors = Object.values(creatives).filter(c => c.error);
+      if (errors.length) issues.push(`${errors.length} 个素材生成失败`);
+      break;
+    }
+    case 'execution':
+      if (result?.status !== 'completed') issues.push(`执行状态: ${result?.status || 'unknown'}`);
+      if (result?.errors?.length) issues.push(`${result.errors.length} 个执行错误`);
+      break;
+  }
+
+  const score = Math.max(0, 100 - issues.length * 25);
+  return { score, issues, suggestions: issues.map(i => `修复: ${i}`) };
+}
+
+// ── Main orchestrator generator ────────────────────────────────────────
+
+/**
+ * Orchestrate the full campaign pipeline.
+ *
+ * @param {string} sessionId - Orchestrator session UUID
+ * @param {Object} [options]
+ * @param {string} [options.startPhase] - Resume from this phase
+ * @param {boolean} [options.skipApproval] - Skip approval gate (after approval)
+ * @yields {{ event: string, data: Object }}
+ */
+export async function* orchestrate(sessionId, options = {}) {
+  const session = await getSession(sessionId);
+  if (!session) {
+    yield { event: 'error', data: { message: `Session ${sessionId} not found` } };
+    return;
+  }
+
+  const brief = await getBrief(session.brief_id);
+  if (!brief) {
+    yield { event: 'error', data: { message: `Brief ${session.brief_id} not found` } };
+    return;
+  }
+
+  // Validate brief is ready
+  const briefData = brief.brief || {};
+  if (!briefData.company_name || !briefData.industry) {
+    yield { event: 'error', data: { message: 'Brief is incomplete — finish intake first' } };
+    return;
+  }
+
+  let phaseResults = session.phase_results || {};
+
+  const startPhase = options.startPhase || detectStartPhase(session);
+  const startIndex = PHASES.findIndex(p => p.key === startPhase);
+  if (startIndex < 0) {
+    yield { event: 'error', data: { message: `Unknown phase: ${startPhase}` } };
+    return;
+  }
+
+  await updateSession(sessionId, { status: 'running', current_phase: startPhase });
+
+  yield {
+    event: 'orchestration_start',
+    data: {
+      session_id: sessionId,
+      brief_id: session.brief_id,
+      start_phase: startPhase,
+      total_phases: PHASES.length - startIndex,
+      phases: PHASES.slice(startIndex).map(p => ({ key: p.key, name: p.name })),
+    },
+  };
+
+  const eventBuffer = [];
+  const yieldEvent = (evt) => eventBuffer.push(evt);
+
+  for (let i = startIndex; i < PHASES.length; i++) {
+    const phase = PHASES[i];
+
+    // ── Approval gate ──────────────────────────────────────────
+    if (phase.needsApproval && !options.skipApproval) {
+      const plan = phaseResults.strategy || {};
+      const preview = previewExecution(plan);
+      await updateSession(sessionId, { status: 'awaiting_approval', current_phase: phase.key });
+
+      // Persist approval request as a structured message
+      const idx = await getNextMessageIndex(sessionId);
+      await addMessages(sessionId, [{
+        phase: null,
+        role: 'assistant',
+        content: '投放方案已生成，请审核后确认执行。',
+        tool_name: 'execution_preview',
+        tool_result: plan,
+        message_index: idx,
+      }]);
+
+      yield {
+        event: 'approval_required',
+        data: {
+          phase: phase.key,
+          name: phase.name,
+          plan,
+          entity_counts: preview.entity_counts,
+        },
+      };
+      return;
+    }
+
+    // ── Run phase ──────────────────────────────────────────────
+    yield {
+      event: 'phase_start',
+      data: { phase: phase.key, name: phase.name, description: phase.description },
+    };
+
+    const phaseStartTime = Date.now();
+    try {
+      const executor = getPhaseExecutor(phase.key);
+      const workPromise = runWithHeartbeat(
+        phase.key,
+        () => executor(sessionId, brief, phaseResults),
+        yieldEvent,
+      );
+
+      let result;
+      let done = false;
+      workPromise
+        .then(r => { result = r; done = true; })
+        .catch(e => { result = e; done = true; });
+
+      while (!done) {
+        while (eventBuffer.length > 0) yield eventBuffer.shift();
+        await sleep(200);
+      }
+      while (eventBuffer.length > 0) yield eventBuffer.shift();
+
+      if (result instanceof Error) throw result;
+
+      // Persist phase result
+      phaseResults = { ...phaseResults, [phase.key]: result };
+      await updateSession(sessionId, { phase_results: phaseResults, current_phase: phase.key });
+
+      const duration = Math.round((Date.now() - phaseStartTime) / 1000);
+      yield {
+        event: 'phase_complete',
+        data: {
+          phase: phase.key,
+          name: phase.name,
+          result,
+          duration,
+          result_summary: summarizePhaseResult(phase.key, result),
+        },
+      };
+    } catch (err) {
+      await updateSession(sessionId, { status: 'failed', current_phase: phase.key });
+      yield {
+        event: 'phase_error',
+        data: { phase: phase.key, name: phase.name, error: err.message, can_retry: true },
+      };
+      return;
+    }
+  }
+
+  await updateSession(sessionId, { status: 'completed', current_phase: 'done' });
+  yield { event: 'done', data: { session_id: sessionId, phases_completed: Object.keys(phaseResults) } };
+}
+
+/**
+ * Resume orchestration after human approval.
+ */
+export async function* orchestrateAfterApproval(sessionId) {
+  const session = await getSession(sessionId);
+  if (!session) {
+    yield { event: 'error', data: { message: `Session ${sessionId} not found` } };
+    return;
+  }
+  if (session.status !== 'awaiting_approval') {
+    yield { event: 'error', data: { message: `Session is not awaiting approval (status: ${session.status})` } };
+    return;
+  }
+
+  // Persist user approval as a message
+  const idx = await getNextMessageIndex(sessionId);
+  await addMessages(sessionId, [{
+    phase: null,
+    role: 'user',
+    content: '确认执行投放方案',
+    message_index: idx,
+  }]);
+
+  await updateSession(sessionId, { status: 'running', current_phase: 'execution' });
+  yield* orchestrate(sessionId, { startPhase: 'execution', skipApproval: true });
+}
+
+// ── User chat with orchestrator ────────────────────────────────────────
+
+const ORCHESTRATOR_CHAT_SYSTEM = `你是数字投放主控 Agent。你可以回答用户关于投放方案的问题，帮助调整策略。
+
+你能看到之前各阶段的执行结果。基于这些结果回答用户问题。
+
+回复规则：
+- 简洁专业，300字以内
+- 可以解释调研结果、方案细节、预算分配等
+- 如果用户要求修改方案，说明需要重跑哪个阶段`;
+
+/**
+ * Process a user chat message within an orchestrator session.
+ * The orchestrator can answer questions about phase results, explain the plan, etc.
+ *
+ * @param {string} sessionId
+ * @param {string} message
+ * @yields {{ event: string, data: Object }} SSE events (delta, done)
+ */
+export async function* chatWithOrchestrator(sessionId, message) {
+  const session = await getSession(sessionId);
+  if (!session) {
+    yield { event: 'error', data: { message: `Session ${sessionId} not found` } };
+    return;
+  }
+
+  // Load user conversation history (phase=null)
+  const history = await getMessagesForClaude(sessionId, { phase: null });
+  let messageIndex = await getNextMessageIndex(sessionId);
+
+  // Store user message
+  await addMessages(sessionId, [{
+    phase: null,
+    role: 'user',
+    content: message,
+    message_index: messageIndex++,
+  }]);
+
+  // Build context from phase results
+  const phaseContext = Object.entries(session.phase_results || {})
+    .map(([phase, result]) => `=== ${phase.toUpperCase()} 阶段结果 ===\n${JSON.stringify(result, null, 2)}`)
+    .join('\n\n');
+
+  const systemPrompt = `${ORCHESTRATOR_CHAT_SYSTEM}\n\n当前状态: ${session.status}, 当前阶段: ${session.current_phase || '未开始'}\n\n${phaseContext || '暂无阶段结果'}`;
+
+  const messages = [
+    ...history,
+    { role: 'user', content: message },
+  ];
+
+  // Stream response
+  const stream = anthropic.messages.stream({
+    model: config.anthropic.model,
+    max_tokens: 2048,
+    system: systemPrompt,
+    messages,
+  });
+
+  let assistantText = '';
+
+  for await (const event of stream) {
+    if (event.type === 'content_block_delta' && event.delta?.type === 'text_delta') {
+      assistantText += event.delta.text;
+      yield { event: 'delta', data: { text: event.delta.text } };
+    }
+  }
+
+  // Persist assistant response
+  if (assistantText) {
+    await addMessages(sessionId, [{
+      phase: null,
+      role: 'assistant',
+      content: assistantText,
+      message_index: messageIndex++,
+    }]);
+  }
+
+  yield { event: 'done', data: { session_id: sessionId } };
+}
+
+// ── Utilities ──────────────────────────────────────────────────────────
+
+function getPhaseExecutor(phaseKey) {
+  const executors = { research: runResearch, strategy: runStrategy, creative: runCreative, execution: runExecution };
+  const fn = executors[phaseKey];
+  if (!fn) throw new Error(`No executor for phase: ${phaseKey}`);
+  return fn;
+}
+
+function detectStartPhase(session) {
+  const results = session.phase_results || {};
+  for (const phase of PHASES) {
+    if (!results[phase.key]) return phase.key;
+  }
+  return PHASES[0].key;
+}
+
+function summarizePhaseResult(phaseKey, result) {
+  switch (phaseKey) {
+    case 'research':
+      return {
+        recommendations_count: result?.recommendations?.length || 0,
+        platforms_scored: result?.platform_recommendations?.length || 0,
+        has_competitor_data: Boolean(result?.competitor_ads?.summary),
+      };
+    case 'strategy': {
+      const platforms = result?.platforms || [];
+      return {
+        platforms: platforms.map(p => p.platform),
+        total_campaigns: platforms.reduce((s, p) => s + (p.campaigns?.length || 0), 0),
+        total_budget: result?.total_budget,
+        currency: result?.currency,
+      };
+    }
+    case 'creative':
+      return {
+        creatives_generated: Object.keys(result?.creatives || {}).length,
+        skipped: result?.skipped || false,
+      };
+    case 'execution':
+      return {
+        status: result?.status,
+        campaigns_created: result?.campaigns?.length || 0,
+        errors: result?.errors?.length || 0,
+      };
+    default:
+      return {};
+  }
+}
+
+function sleep(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+/**
+ * Format brief products as human-readable text for extractProductInfo.
+ * Converts structured product data into a natural document-like format.
+ */
+function formatProductsAsText(briefData) {
+  const lines = [];
+  if (briefData.company_name) lines.push(`Company: ${briefData.company_name}`);
+  if (briefData.industry) lines.push(`Industry: ${briefData.industry}`);
+  lines.push('');
+
+  for (const product of briefData.products || []) {
+    lines.push(`Product: ${product.model || product.name || 'Unknown'}`);
+    if (product.category) lines.push(`Category: ${product.category}`);
+    if (product.key_specs) {
+      lines.push('Specifications:');
+      for (const [k, v] of Object.entries(product.key_specs)) {
+        lines.push(`  - ${k}: ${v}`);
+      }
+    }
+    if (product.selling_points?.length) {
+      lines.push('Selling Points:');
+      for (const sp of product.selling_points) {
+        lines.push(`  - ${sp}`);
+      }
+    }
+    lines.push('');
+  }
+
+  return lines.join('\n');
+}
+
+export { PHASES, detectStartPhase, summarizePhaseResult, formatProductsAsText, evaluateOutput };
