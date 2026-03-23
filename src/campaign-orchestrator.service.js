@@ -308,54 +308,18 @@ function evaluateOutput(phase, result) {
   return { score, issues, suggestions: issues.map(i => `修复: ${i}`) };
 }
 
-// ── Main orchestrator generator ────────────────────────────────────────
+// ── Shared tool-use loop ───────────────────────────────────────────────
 
 /**
- * Orchestrate the full campaign pipeline using a Claude tool_use agent loop.
- *
- * @param {string} sessionId - Orchestrator session UUID
+ * Shared tool-use loop for orchestrate() and resumeAfterFeedback().
+ * @param {string} sessionId
+ * @param {Object} brief - The full brief object from DB
+ * @param {Array} messages - Claude messages array (mutated in place)
+ * @param {Object} initialPhaseResults - Starting phase results
  * @yields {{ event: string, data: Object }}
  */
-export async function* orchestrate(sessionId) {
-  const session = await getSession(sessionId);
-  if (!session) {
-    yield { event: 'error', data: { message: `Session ${sessionId} not found` } };
-    return;
-  }
-
-  const brief = await getBrief(session.brief_id);
-  if (!brief) {
-    yield { event: 'error', data: { message: `Brief ${session.brief_id} not found` } };
-    return;
-  }
-
-  const briefData = brief.brief || {};
-  if (!briefData.company_name || !briefData.industry) {
-    yield { event: 'error', data: { message: 'Brief is incomplete — finish intake first' } };
-    return;
-  }
-
-  let phaseResults = session.phase_results || {};
-  await updateSession(sessionId, { status: 'running', current_phase: 'orchestrating' });
-
-  yield {
-    event: 'orchestration_start',
-    data: {
-      session_id: sessionId,
-      brief_id: session.brief_id,
-      phases: PHASES.map(p => ({ key: p.key, name: p.name })),
-    },
-  };
-
-  const existingResults = Object.keys(phaseResults).length > 0
-    ? `\n\n已完成阶段结果:\n${Object.entries(phaseResults).map(([k, v]) => `${k}: ${JSON.stringify(summarizePhaseResult(k, v))}`).join('\n')}`
-    : '';
-
-  const messages = [{
-    role: 'user',
-    content: `请根据以下 Campaign Brief 编排投放流程。\n\nCAMPAIGN BRIEF:\n${JSON.stringify(briefData, null, 2)}${existingResults}`,
-  }];
-
+async function* runToolUseLoop(sessionId, brief, messages, initialPhaseResults) {
+  let phaseResults = { ...initialPhaseResults };
   const eventBuffer = [];
 
   for (let iteration = 0; iteration < MAX_ORCHESTRATOR_ITERATIONS; iteration++) {
@@ -387,16 +351,18 @@ export async function* orchestrate(sessionId) {
       let result;
 
       switch (name) {
-        case 'run_phase': {
+        case 'run_phase':
+        case 'retry_phase': {
           const phaseKey = input.phase;
           const phaseDef = PHASES.find(p => p.key === phaseKey);
           yield { event: 'phase_start', data: { phase: phaseKey, name: phaseDef?.name || phaseKey } };
           const phaseStartTime = Date.now();
           try {
             const executor = getPhaseExecutor(phaseKey);
+            const instructions = name === 'retry_phase' ? input.feedback : input.instructions;
             const phaseResult = await runWithHeartbeat(
               phaseKey,
-              () => executor(sessionId, brief, phaseResults, input.instructions),
+              () => executor(sessionId, brief, phaseResults, instructions),
               (evt) => eventBuffer.push(evt),
             );
             while (eventBuffer.length > 0) yield eventBuffer.shift();
@@ -404,10 +370,7 @@ export async function* orchestrate(sessionId) {
             await updateSession(sessionId, { phase_results: phaseResults, current_phase: phaseKey });
             const duration = Math.round((Date.now() - phaseStartTime) / 1000);
             const resultSummary = summarizePhaseResult(phaseKey, phaseResult);
-            yield {
-              event: 'phase_complete',
-              data: { phase: phaseKey, name: phaseDef?.name || phaseKey, result: phaseResult, duration, result_summary: resultSummary },
-            };
+            yield { event: 'phase_complete', data: { phase: phaseKey, name: phaseDef?.name || phaseKey, result: phaseResult, duration, result_summary: resultSummary } };
             result = { status: 'completed', result_summary: resultSummary, duration_s: duration };
           } catch (err) {
             while (eventBuffer.length > 0) yield eventBuffer.shift();
@@ -417,10 +380,9 @@ export async function* orchestrate(sessionId) {
           break;
         }
 
-        case 'evaluate_output': {
+        case 'evaluate_output':
           result = evaluateOutput(input.phase, phaseResults[input.phase]);
           break;
-        }
 
         case 'request_user_feedback': {
           await updateSession(sessionId, {
@@ -431,58 +393,22 @@ export async function* orchestrate(sessionId) {
               phase_results_snapshot: phaseResults,
             },
           });
-          yield {
-            event: 'feedback_required',
-            data: { message: input.message, options: input.options, tool_use_id: id },
-          };
+          yield { event: 'feedback_required', data: { message: input.message, options: input.options, tool_use_id: id } };
           shouldPause = true;
-          result = null;
           break;
         }
 
-        case 'skip_phase': {
+        case 'skip_phase':
           yield { event: 'phase_skipped', data: { phase: input.phase, reason: input.reason } };
           result = { skipped: true, phase: input.phase, reason: input.reason };
           break;
-        }
 
-        case 'retry_phase': {
-          const phaseKey = input.phase;
-          const phaseDef = PHASES.find(p => p.key === phaseKey);
-          yield { event: 'phase_start', data: { phase: phaseKey, name: phaseDef?.name || phaseKey } };
-          const phaseStartTime = Date.now();
-          try {
-            const executor = getPhaseExecutor(phaseKey);
-            const phaseResult = await runWithHeartbeat(
-              phaseKey,
-              () => executor(sessionId, brief, phaseResults, input.feedback),
-              (evt) => eventBuffer.push(evt),
-            );
-            while (eventBuffer.length > 0) yield eventBuffer.shift();
-            phaseResults = { ...phaseResults, [phaseKey]: phaseResult };
-            await updateSession(sessionId, { phase_results: phaseResults, current_phase: phaseKey });
-            const duration = Math.round((Date.now() - phaseStartTime) / 1000);
-            const resultSummary = summarizePhaseResult(phaseKey, phaseResult);
-            yield {
-              event: 'phase_complete',
-              data: { phase: phaseKey, name: phaseDef?.name || phaseKey, result: phaseResult, duration, result_summary: resultSummary },
-            };
-            result = { status: 'completed', result_summary: resultSummary, duration_s: duration };
-          } catch (err) {
-            while (eventBuffer.length > 0) yield eventBuffer.shift();
-            yield { event: 'phase_error', data: { phase: phaseKey, error: err.message } };
-            result = { status: 'error', error: err.message };
-          }
-          break;
-        }
-
-        case 'submit_final': {
+        case 'submit_final':
           await updateSession(sessionId, { status: 'completed', current_phase: 'done' });
           shouldTerminate = true;
           terminateSummary = input.summary;
           result = { completed: true };
           break;
-        }
 
         default:
           result = { error: `Unknown tool: ${name}` };
@@ -497,13 +423,62 @@ export async function* orchestrate(sessionId) {
       yield { event: 'done', data: { session_id: sessionId, phases_completed: Object.keys(phaseResults), summary: terminateSummary } };
       return;
     }
-
     messages.push({ role: 'user', content: toolResults });
   }
 
-  // MAX_ITERATIONS reached
   await updateSession(sessionId, { status: 'completed', current_phase: 'done' });
   yield { event: 'done', data: { session_id: sessionId, phases_completed: Object.keys(phaseResults), summary: 'Force-terminated: max iterations reached' } };
+}
+
+// ── Main orchestrator generator ────────────────────────────────────────
+
+/**
+ * Orchestrate the full campaign pipeline using a Claude tool_use agent loop.
+ *
+ * @param {string} sessionId - Orchestrator session UUID
+ * @yields {{ event: string, data: Object }}
+ */
+export async function* orchestrate(sessionId) {
+  const session = await getSession(sessionId);
+  if (!session) {
+    yield { event: 'error', data: { message: `Session ${sessionId} not found` } };
+    return;
+  }
+
+  const brief = await getBrief(session.brief_id);
+  if (!brief) {
+    yield { event: 'error', data: { message: `Brief ${session.brief_id} not found` } };
+    return;
+  }
+
+  const briefData = brief.brief || {};
+  if (!briefData.company_name || !briefData.industry) {
+    yield { event: 'error', data: { message: 'Brief is incomplete — finish intake first' } };
+    return;
+  }
+
+  const phaseResults = session.phase_results || {};
+  await updateSession(sessionId, { status: 'running', current_phase: 'orchestrating' });
+
+  yield {
+    event: 'orchestration_start',
+    data: {
+      session_id: sessionId,
+      brief_id: session.brief_id,
+      phases: PHASES.map(p => ({ key: p.key, name: p.name })),
+    },
+  };
+
+  const existingResults = Object.keys(phaseResults).length > 0
+    ? `\n\n已完成阶段结果:\n${Object.entries(phaseResults).map(([k, v]) => `${k}: ${JSON.stringify(summarizePhaseResult(k, v))}`).join('\n')}`
+    : '';
+
+  const messages = [{
+    role: 'user',
+    content: `请根据以下 Campaign Brief 编排投放流程。\n\nCAMPAIGN BRIEF:\n${JSON.stringify(briefData, null, 2)}${existingResults}`,
+  }];
+
+  yield* runToolUseLoop(sessionId, brief, messages, phaseResults);
 }
 
 /**
@@ -562,136 +537,7 @@ export async function* resumeAfterFeedback(sessionId, userResponse) {
     orchestrator_state: null,
   });
 
-  // Continue the tool-use loop (same logic as orchestrate)
-  const eventBuffer = [];
-
-  for (let iteration = 0; iteration < MAX_ORCHESTRATOR_ITERATIONS; iteration++) {
-    const response = await anthropic.messages.create({
-      model: config.anthropic.model,
-      max_tokens: 4096,
-      system: ORCHESTRATOR_SYSTEM_PROMPT,
-      messages,
-      tools: ORCHESTRATOR_TOOLS,
-      tool_choice: { type: 'auto' },
-    });
-
-    if (response.stop_reason !== 'tool_use') {
-      await updateSession(sessionId, { status: 'completed', current_phase: 'done' });
-      yield { event: 'done', data: { session_id: sessionId, phases_completed: Object.keys(phaseResults) } };
-      return;
-    }
-
-    const toolUseBlocks = response.content.filter(c => c.type === 'tool_use');
-    messages.push({ role: 'assistant', content: response.content });
-
-    const toolResults = [];
-    let shouldPause = false;
-    let shouldTerminate = false;
-    let terminateSummary = '';
-
-    for (const block of toolUseBlocks) {
-      const { id, name, input } = block;
-      let result;
-
-      switch (name) {
-        case 'run_phase': {
-          const phaseKey = input.phase;
-          const phaseDef = PHASES.find(p => p.key === phaseKey);
-          yield { event: 'phase_start', data: { phase: phaseKey, name: phaseDef?.name || phaseKey } };
-          const phaseStartTime = Date.now();
-          try {
-            const executor = getPhaseExecutor(phaseKey);
-            const phaseResult = await runWithHeartbeat(
-              phaseKey,
-              () => executor(sessionId, brief, phaseResults, input.instructions),
-              (evt) => eventBuffer.push(evt),
-            );
-            while (eventBuffer.length > 0) yield eventBuffer.shift();
-            phaseResults = { ...phaseResults, [phaseKey]: phaseResult };
-            await updateSession(sessionId, { phase_results: phaseResults, current_phase: phaseKey });
-            const duration = Math.round((Date.now() - phaseStartTime) / 1000);
-            const resultSummary = summarizePhaseResult(phaseKey, phaseResult);
-            yield { event: 'phase_complete', data: { phase: phaseKey, name: phaseDef?.name || phaseKey, result: phaseResult, duration, result_summary: resultSummary } };
-            result = { status: 'completed', result_summary: resultSummary, duration_s: duration };
-          } catch (err) {
-            while (eventBuffer.length > 0) yield eventBuffer.shift();
-            yield { event: 'phase_error', data: { phase: phaseKey, error: err.message } };
-            result = { status: 'error', error: err.message };
-          }
-          break;
-        }
-
-        case 'evaluate_output':
-          result = evaluateOutput(input.phase, phaseResults[input.phase]);
-          break;
-
-        case 'request_user_feedback': {
-          await updateSession(sessionId, {
-            status: 'awaiting_feedback',
-            orchestrator_state: {
-              messages: [...messages],
-              pending_tool_use_id: id,
-              phase_results_snapshot: phaseResults,
-            },
-          });
-          yield { event: 'feedback_required', data: { message: input.message, options: input.options, tool_use_id: id } };
-          shouldPause = true;
-          break;
-        }
-
-        case 'skip_phase':
-          yield { event: 'phase_skipped', data: { phase: input.phase, reason: input.reason } };
-          result = { skipped: true, phase: input.phase, reason: input.reason };
-          break;
-
-        case 'retry_phase': {
-          const phaseKey = input.phase;
-          const phaseDef = PHASES.find(p => p.key === phaseKey);
-          yield { event: 'phase_start', data: { phase: phaseKey, name: phaseDef?.name || phaseKey } };
-          const phaseStartTime = Date.now();
-          try {
-            const executor = getPhaseExecutor(phaseKey);
-            const phaseResult = await runWithHeartbeat(phaseKey, () => executor(sessionId, brief, phaseResults, input.feedback), (evt) => eventBuffer.push(evt));
-            while (eventBuffer.length > 0) yield eventBuffer.shift();
-            phaseResults = { ...phaseResults, [phaseKey]: phaseResult };
-            await updateSession(sessionId, { phase_results: phaseResults, current_phase: phaseKey });
-            const duration = Math.round((Date.now() - phaseStartTime) / 1000);
-            const resultSummary = summarizePhaseResult(phaseKey, phaseResult);
-            yield { event: 'phase_complete', data: { phase: phaseKey, name: phaseDef?.name || phaseKey, result: phaseResult, duration, result_summary: resultSummary } };
-            result = { status: 'completed', result_summary: resultSummary, duration_s: duration };
-          } catch (err) {
-            while (eventBuffer.length > 0) yield eventBuffer.shift();
-            yield { event: 'phase_error', data: { phase: phaseKey, error: err.message } };
-            result = { status: 'error', error: err.message };
-          }
-          break;
-        }
-
-        case 'submit_final':
-          await updateSession(sessionId, { status: 'completed', current_phase: 'done' });
-          shouldTerminate = true;
-          terminateSummary = input.summary;
-          result = { completed: true };
-          break;
-
-        default:
-          result = { error: `Unknown tool: ${name}` };
-      }
-
-      if (shouldPause) break;
-      toolResults.push({ type: 'tool_result', tool_use_id: id, content: JSON.stringify(result) });
-    }
-
-    if (shouldPause) return;
-    if (shouldTerminate) {
-      yield { event: 'done', data: { session_id: sessionId, phases_completed: Object.keys(phaseResults), summary: terminateSummary } };
-      return;
-    }
-    messages.push({ role: 'user', content: toolResults });
-  }
-
-  await updateSession(sessionId, { status: 'completed', current_phase: 'done' });
-  yield { event: 'done', data: { session_id: sessionId, phases_completed: Object.keys(phaseResults), summary: 'Force-terminated: max iterations' } };
+  yield* runToolUseLoop(sessionId, brief, messages, phaseResults);
 }
 
 /**
