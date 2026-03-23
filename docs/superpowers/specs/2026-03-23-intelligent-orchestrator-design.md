@@ -276,7 +276,21 @@ ALTER TABLE orchestrator_sessions
   ADD COLUMN orchestrator_state jsonb DEFAULT NULL;
 ```
 
-Stores the Claude messages array for pause-resume.
+Stores the Claude messages array for pause-resume. Migration file: `supabase/migrations/2026-03-23-orchestrator-state.sql` (must be created as part of implementation).
+
+### Message Array Contract
+
+The `orchestrator_state.messages` array contains the **complete** orchestrator-level Claude conversation, including all prior assistant turns (with tool_use blocks) and user turns (with tool_result blocks). Tool results for `run_phase` and `evaluate_output` contain only summaries (not full phase data). Full phase outputs live in `session.phase_results`.
+
+On resume, `resumeAfterFeedback` restores `phaseResults` from `orchestrator_state.phase_results_snapshot` (the exact in-memory state at pause time), appends the user's feedback as a `tool_result` for `pending_tool_use_id`, and continues the Claude API loop.
+
+### Heartbeat in Tool-Use Loop
+
+The existing `runWithHeartbeat` + event buffer pattern is preserved inside `run_phase` tool handling. When `run_phase` calls a phase executor, it wraps the call with `runWithHeartbeat` and collects heartbeat events into a buffer. After the executor completes, buffered heartbeats are yielded before the tool result is returned to Claude.
+
+### orchestrate() Options Disposition
+
+The rewritten `orchestrate()` **removes** `options.startPhase` and `options.skipApproval`. The agent decides which phases to run based on `session.phase_results` (already-completed phases are visible in its context). The API route query param `?start_phase=` becomes a no-op and should be removed from the route. `orchestrateAfterApproval` is preserved as a thin wrapper over `resumeAfterFeedback`.
 
 ## API Changes
 
