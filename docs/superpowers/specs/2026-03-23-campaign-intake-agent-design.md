@@ -53,14 +53,27 @@ CREATE TABLE campaign_messages (
   role text NOT NULL CHECK (role IN ('user', 'assistant', 'tool')),
   content text,
   tool_name text,
+  tool_use_id text,            -- Claude tool_use protocol ID, links tool_use to tool_result
   tool_input jsonb,
   tool_result jsonb,
-  message_index integer NOT NULL DEFAULT 0,
+  message_index integer NOT NULL,
   created_at timestamptz DEFAULT now(),
 
   CHECK (role = 'tool' OR content IS NOT NULL)
 );
 ```
+
+**消息存储与 Claude API 重建：**
+
+Claude Messages API 中 tool 调用分布在两种 role 里：
+- `assistant` 消息包含 `tool_use` content block（含 `tool_use_id`）
+- `user` 消息包含 `tool_result` content block（引用 `tool_use_id`）
+
+存储策略：每个 tool 交互存为两行：
+1. `role: 'assistant'`, `tool_name`, `tool_use_id`, `tool_input` — 对应 Claude 的 tool_use block
+2. `role: 'tool'`, `tool_name`, `tool_use_id`, `tool_result` — 对应 Claude 的 tool_result block
+
+重建 Claude 消息数组时，按 `message_index` 排序，将相邻的 assistant tool_use blocks 合并到同一个 assistant 消息中，tool rows 转为 `{ role: 'user', content: [{ type: 'tool_result', tool_use_id, content }] }`。
 
 ### Indexes & RLS
 
@@ -77,7 +90,19 @@ CREATE POLICY "campaign_briefs_auth_all" ON campaign_briefs
 ALTER TABLE campaign_messages ENABLE ROW LEVEL SECURITY;
 CREATE POLICY "campaign_messages_auth_all" ON campaign_messages
   FOR ALL TO authenticated, anon USING (true) WITH CHECK (true);
+
+-- updated_at 自动更新
+CREATE OR REPLACE FUNCTION update_campaign_briefs_updated_at()
+RETURNS TRIGGER AS $$
+BEGIN NEW.updated_at = now(); RETURN NEW; END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER trg_campaign_briefs_updated_at
+  BEFORE UPDATE ON campaign_briefs
+  FOR EACH ROW EXECUTE FUNCTION update_campaign_briefs_updated_at();
 ```
+
+> **RLS 说明：** Phase 1 为内部使用，RLS 策略设为 permissive（与现有 product 表一致）。API route handler 中通过 Supabase service_role key 访问，不暴露给外部。未来对外开放时需要收紧 RLS 策略。
 
 ---
 
@@ -138,6 +163,13 @@ GET  /api/campaign/intake/:id      -- 获取会话状态 + brief 草稿 + comple
 { event: "error", data: { message: "..." } }
 ```
 
+### 错误处理
+
+- Claude API 失败（网络/限流/上下文超长）→ 发送 `error` 事件 → 关闭 stream
+- 错误发生前，已执行的 tool 结果和 brief 状态已持久化到 DB
+- 客户端可以用相同消息重新请求（brief 状态从 DB 恢复，不会丢失进度）
+- 不支持 `Last-Event-ID` 断点续传（Phase 1 简化）
+
 ### 请求格式
 
 ```typescript
@@ -175,9 +207,10 @@ GET  /api/campaign/intake/:id      -- 获取会话状态 + brief 草稿 + comple
 
 ```
 src/
-  campaign-intake.service.js    -- 核心：Claude 调用 + tool 执行 + SSE 输出
+  campaign-intake.service.js         -- 核心：Claude 调用 + tool 执行 + SSE 输出
 lib/
-  campaign-brief.repository.js  -- DB 操作：briefs + messages 的 CRUD
+  repositories/
+    campaign-brief.repository.js     -- DB 操作：briefs + messages 的 CRUD
 app/api/campaign/intake/
   route.js                      -- POST 创建会话
   [id]/
@@ -190,10 +223,11 @@ app/api/campaign/intake/
 
 | Tool | Input | Output | 用途 |
 |------|-------|--------|------|
-| `extract_business_profile` | `{ conversation_text }` | `Partial<CampaignBrief>` | 从对话中提取结构化字段 |
-| `validate_completeness` | `{ current_brief }` | `{ is_complete, filled[], missing[], completion_pct }` | 校验完成度，返回缺失项 |
-| `parse_attachment` | `{ attachment_url, type }` | `{ extracted_text, products? }` | 解析上传的 PDF/图片 |
+| `update_brief` | `{ fields: Partial<CampaignBrief> }` | `{ brief, is_complete, filled[], missing[], completion_pct }` | Claude 提取到字段后写入 brief，同时返回完成度 |
+| `parse_attachment` | `{ attachment_url, type }` | `{ extracted_text, products? }` | 解析上传的 PDF/图片（Phase 2，初始实现跳过） |
 | `save_brief` | `{ brief }` | `{ saved: true, brief_id }` | 保存最终 brief，标记完成 |
+
+> 合并了原来的 `extract_business_profile` 和 `validate_completeness`。Claude 已经有完整对话上下文，不需要把对话文本回传给自己。`update_brief` 接受 Claude 提取的字段，写入 DB 后返回完成度状态。
 
 ### Claude 调用流程
 
@@ -206,8 +240,7 @@ app/api/campaign/intake/
    - 引导策略：checklist 驱动，不机械逐条提问
 3. Claude streaming call (tools + stream)
 4. Tool-use 循环：
-   - extract_business_profile -> 更新 brief
-   - validate_completeness -> 更新 completion
+   - update_brief -> 写入提取的字段，返回完成度
    - parse_attachment -> 提取产品信息
    - save_brief -> 标记 completed，终止循环
 5. 存储本轮所有 messages (user + tool + assistant)
@@ -219,13 +252,29 @@ app/api/campaign/intake/
 - **Tool 调用由 Claude 自主决定** — 不强制每轮都调，早期对话可能只是了解背景
 - **`save_brief` 是终止信号** — Claude 调了这个 tool 表示采集完成，主控收到 `done` 事件后进入下一阶段
 - **推荐逻辑在 system prompt 中** — 不需要单独的 tool，Claude 根据已有上下文直接推荐缺失字段的默认值
-- **每轮更新 brief** — `extract_business_profile` 的结果 merge 到 `campaign_briefs.brief`
+- **每轮更新 brief** — `update_brief` 的结果 merge 到 `campaign_briefs.brief`
 
 ---
 
 ## CampaignBrief Schema
 
 ```typescript
+interface ProductInfo {
+  name: string
+  category?: string          // e.g. "拖拉机", "收割机", "SUV"
+  model?: string
+  description?: string
+  price_range?: string       // e.g. "$5,000-$10,000"
+  images?: string[]          // URLs
+}
+
+interface Attachment {
+  type: 'pdf' | 'image' | 'video'
+  url: string
+  filename?: string
+  extracted_content?: string  // parse_attachment 提取后填充
+}
+
 interface CampaignBrief {
   // 基础信息
   company_name: string
