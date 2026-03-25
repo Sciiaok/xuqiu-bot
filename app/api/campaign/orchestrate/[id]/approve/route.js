@@ -19,5 +19,5 @@ export async function POST(request, { params }) {
     return Response.json({ error: 'Session not found' }, { status: 404 });
   }
 
-  return streamSSE(resumeAfterFeedback(session.id, '确认执行投放方案'));
+  return streamSSE(resumeAfterFeedback(session.id, '确认执行投放方案'), { heartbeatIntervalMs: 5000 });
 }

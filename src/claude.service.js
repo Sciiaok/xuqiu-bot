@@ -709,13 +709,25 @@ export async function getResponse(conversationHistory, userMessage, contextInfo 
       });
     }
 
-    // Fallback: if Claude ended without submit_response, extract text
+    // Fallback: if Claude exhausted tool iterations without submit_response, force it
     if (!parsed) {
-      const textBlock = response.content.find(c => c.type === 'text');
-      if (textBlock) {
-        parsed = JSON.parse(textBlock.text);
+      logger.warn('claude.tool_use.force_submit_after_loop', { iterations });
+      messages.push({ role: 'assistant', content: response.content });
+      messages.push({ role: 'user', content: 'Please call submit_response with your structured response now.' });
+      response = await anthropic.messages.create({
+        model: config.anthropic.model,
+        max_tokens: 4096,
+        system: systemBlocks,
+        messages: messages,
+        tools: allTools,
+        tool_choice: { type: 'tool', name: 'submit_response' },
+      });
+      const submitTool = response.content.find(c => c.type === 'tool_use' && c.name === 'submit_response');
+      if (submitTool) {
+        parsed = submitTool.input;
+        logger.info('claude.tool_use.submit_response', { iterations, forced: true });
       } else {
-        throw new Error('Claude did not produce a response');
+        throw new Error('Claude did not produce a response after forced submit_response');
       }
     }
   } else {

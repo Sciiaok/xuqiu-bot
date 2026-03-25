@@ -1,4 +1,5 @@
 import OpenAI from 'openai';
+import { read, utils } from 'xlsx';
 import { config } from './config.js';
 import supabase from '../lib/supabase.js';
 
@@ -124,6 +125,217 @@ export async function processPdfDocument(pdfBuffer, documentId, agentId, product
 
     throw error;
   }
+}
+
+/**
+ * Process an Excel (.xlsx) file and store results.
+ * Uses xlsx to read cells, gpt-4o-mini to extract structured data.
+ * Price goes into product_specs (queryable) but NOT into vector embeddings.
+ * @param {Buffer} excelBuffer - Raw Excel file buffer
+ * @param {string} documentId - product_documents record ID
+ * @param {string} agentId - Agent ID
+ * @param {string} productLine - Agent product_line
+ */
+export async function processExcelDocument(excelBuffer, documentId, agentId, productLine) {
+  try {
+    await supabase
+      .from('product_documents')
+      .update({ status: 'processing', updated_at: new Date().toISOString() })
+      .eq('id', documentId);
+
+    // Step 1: Read Excel cells into raw text
+    const rawText = parseExcel(excelBuffer);
+
+    // Step 2: Use gpt-4o-mini to extract structured content
+    const extracted = await extractExcelContent(rawText, productLine);
+
+    // Step 3: Normalize specs with gpt-4o-mini (same as PDF flow)
+    // raw_specs includes price info for structured DB
+    const specs = [];
+    if (extracted.raw_specs && Object.keys(extracted.raw_specs).length > 0) {
+      const normalized = await normalizeSpecFields(extracted.raw_specs, productLine);
+      if (normalized && normalized.model) {
+        specs.push(normalized);
+      }
+    }
+
+    // Step 4: Store structured specs (includes price)
+    if (specs.length > 0) {
+      const specRows = specs.map(spec => ({
+        document_id: documentId,
+        agent_id: agentId,
+        model: spec.model || 'Unknown',
+        brand: spec.brand || null,
+        product_line: productLine,
+        specs: spec,
+      }));
+      await supabase.from('product_specs').insert(specRows);
+    }
+
+    // Step 5: Build markdown from extracted text content for embedding
+    // Exclude price from text that goes into vector DB
+    const markdownParts = [];
+    if (extracted.company_info) markdownParts.push(extracted.company_info);
+    if (extracted.product_intro) markdownParts.push(extracted.product_intro);
+    if (extracted.selling_points) markdownParts.push(extracted.selling_points);
+    if (extracted.features) markdownParts.push(extracted.features);
+    if (extracted.notes) markdownParts.push(extracted.notes);
+    const markdown = markdownParts.join('\n\n');
+
+    // Step 6: Generate chunks and embeddings (specs without price fields)
+    const specsForEmbedding = specs.map(spec => {
+      const filtered = {};
+      for (const [key, value] of Object.entries(spec)) {
+        if (!/price|cost|exw|fob|cif|total_amount/i.test(key)) {
+          filtered[key] = value;
+        }
+      }
+      return filtered;
+    });
+    const chunks = createChunks(markdown, specsForEmbedding);
+    if (chunks.length > 0) {
+      const embeddings = await generateEmbeddings(chunks.map(c => c.text));
+      const embeddingRows = chunks.map((chunk, i) => ({
+        document_id: documentId,
+        agent_id: agentId,
+        chunk_text: chunk.text,
+        chunk_index: i,
+        embedding: embeddings[i],
+        metadata: chunk.metadata,
+      }));
+      await supabase.from('product_embeddings').insert(embeddingRows);
+    }
+
+    // Step 7: Update status to ready
+    await supabase
+      .from('product_documents')
+      .update({
+        status: 'ready',
+        page_count: 1,
+        updated_at: new Date().toISOString(),
+      })
+      .eq('id', documentId);
+
+    // Log parsed operation
+    const { data: docRow } = await supabase
+      .from('product_documents')
+      .select('filename')
+      .eq('id', documentId)
+      .single();
+    await supabase.from('product_doc_operations').insert({
+      document_id: documentId,
+      agent_id: agentId,
+      operation: 'parsed',
+      operator: 'system',
+      details: {
+        filename: docRow?.filename,
+        specs_count: specs.length,
+        chunks_count: chunks.length,
+      },
+    });
+
+    return { specs_count: specs.length, chunks_count: chunks.length };
+  } catch (error) {
+    await supabase
+      .from('product_documents')
+      .update({
+        status: 'error',
+        error_message: error.message,
+        updated_at: new Date().toISOString(),
+      })
+      .eq('id', documentId);
+
+    const { data: docRow } = await supabase
+      .from('product_documents')
+      .select('filename')
+      .eq('id', documentId)
+      .single();
+    await supabase.from('product_doc_operations').insert({
+      document_id: documentId,
+      agent_id: agentId,
+      operation: 'error',
+      operator: 'system',
+      details: {
+        filename: docRow?.filename,
+        error_message: error.message,
+      },
+    }).catch(() => {});
+
+    throw error;
+  }
+}
+
+/**
+ * Read Excel buffer into plain text representation of all non-empty cells.
+ * Uses SheetJS (xlsx) for binary format parsing only.
+ */
+export function parseExcel(excelBuffer) {
+  let workbook;
+  try {
+    workbook = read(excelBuffer, { type: 'buffer' });
+  } catch (err) {
+    throw new Error(`Failed to parse Excel file: ${err.message}. File may be corrupted or not a valid Excel workbook.`);
+  }
+  const parts = [];
+
+  for (const sheetName of workbook.SheetNames) {
+    const sheet = workbook.Sheets[sheetName];
+    const range = utils.decode_range(sheet['!ref'] || 'A1');
+
+    for (let r = range.s.r; r <= range.e.r; r++) {
+      const rowCells = [];
+      for (let c = range.s.c; c <= range.e.c; c++) {
+        const addr = utils.encode_cell({ r, c });
+        const cell = sheet[addr];
+        if (cell && cell.v != null) {
+          rowCells.push(String(cell.v));
+        }
+      }
+      if (rowCells.length > 0) {
+        parts.push(rowCells.join(' | '));
+      }
+    }
+  }
+
+  return parts.join('\n');
+}
+
+/**
+ * Use gpt-4o-mini to intelligently extract structured content from raw Excel text.
+ * Extracts everything including price (price exclusion from vectors is handled at embedding time).
+ */
+export async function extractExcelContent(rawText, productLine) {
+  const response = await openai.chat.completions.create({
+    model: process.env.OPENROUTER_API_KEY ? 'openai/gpt-4o-mini' : 'gpt-4o-mini',
+    temperature: 0,
+    response_format: { type: 'json_object' },
+    messages: [
+      {
+        role: 'system',
+        content: `You are a product document parser. Extract structured content from a raw Excel quote/spec sheet.
+
+Return a JSON object with these fields:
+- "company_info": string - Company name, address, contact info (as readable text)
+- "product_intro": string - Product introduction/description text
+- "selling_points": string - Selling points / advantages listed as text
+- "features": string - Included features / recommended features as text
+- "notes": string - Any other relevant notes (validity dates, disclaimers, etc.)
+- "raw_specs": object - Key-value pairs of ALL technical specifications AND pricing info
+
+For raw_specs, include:
+- All technical parameters (engine type, power, speed, dimensions, weight, tyre sizes, PTO, hydraulics, etc.)
+- Price / cost info (Basic Price, EXW price, etc.) with their values
+- Use the original field names from the document (will be normalized later)
+- Product line: ${productLine}`,
+      },
+      {
+        role: 'user',
+        content: rawText,
+      },
+    ],
+  });
+
+  return JSON.parse(response.choices[0].message.content);
 }
 
 /**

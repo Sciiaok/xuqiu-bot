@@ -14,7 +14,8 @@ import supabase from '../lib/supabase.js';
 import { conductResearch } from './research-agent.service.js';
 import { generateMediaPlan } from './strategy-agent.service.js';
 import { generateFromDocument } from './aigc.service.js';
-import { executeMediaPlan, previewExecution, uploadMedia } from './execution-agent.service.js';
+import { executeMediaPlan, previewExecution, uploadMedia, activateCampaigns } from './execution-agent.service.js';
+import { collectReferences } from './reference-collector.service.js';
 
 const anthropic = new Anthropic({
   apiKey: config.anthropic.apiKey,
@@ -26,10 +27,11 @@ const HEARTBEAT_INTERVAL_MS = 2000;
 // ── Phase definitions ──────────────────────────────────────────────────
 
 const PHASES = [
-  { key: 'research',  name: '市场调研', description: 'Analyzing market, competitors, and trends' },
-  { key: 'strategy',  name: '方案规划', description: 'Generating media plan with budget allocation' },
-  { key: 'creative',  name: '素材生成', description: 'Generating ad creatives from product docs' },
-  { key: 'execution', name: '投放执行', description: 'Creating campaigns on Meta Ads', needsApproval: true },
+  { key: 'research',           name: '市场调研', description: 'Analyzing market, competitors, and trends' },
+  { key: 'strategy',           name: '方案规划', description: 'Generating media plan with budget allocation' },
+  { key: 'creative_reference', name: '素材参考', description: 'Collecting reference materials for creative' },
+  { key: 'creative',           name: '素材生成', description: 'Generating ad creatives from product docs' },
+  { key: 'execution',          name: '投放执行', description: 'Creating campaigns on Meta Ads', needsApproval: true },
 ];
 
 // ── Helper: run a Promise with heartbeat yields ────────────────────────
@@ -94,33 +96,80 @@ async function runStrategy(sessionId, brief, phaseResults, instructions) {
   return runAgentWithTrace(sessionId, 'strategy', generateMediaPlan, [brief.brief || {}, phaseResults.research, instructions]);
 }
 
+async function runCreativeReference(sessionId, brief, phaseResults, _instructions) {
+  const briefData = brief.brief || {};
+  const researchReport = phaseResults.research || {};
+
+  const references = await collectReferences({ researchReport, brief: briefData });
+
+  // Persist trace
+  const idx = await getNextMessageIndex(sessionId);
+  await addMessages(sessionId, [{
+    phase: 'creative_reference',
+    role: 'assistant',
+    content: `Collected ${references.length} reference materials`,
+    tool_result: { references },
+    message_index: idx,
+  }]);
+
+  return { references };
+}
+
 async function runCreative(sessionId, brief, phaseResults, _instructions) {
   const mediaPlan = phaseResults.strategy;
   const briefData = brief.brief || {};
+  const referenceImages = phaseResults.creative_reference?.selected_references || [];
   const metaPlatform = mediaPlan?.platforms?.find(p => p.platform === 'meta');
   if (!metaPlatform) return { creatives: {}, skipped: true };
 
   // Format products as human-readable text for extractProductInfo
   const productText = formatProductsAsText(briefData);
 
-  const creatives = {};
+  // Detect target language from ad name/country hints
+  const COUNTRY_LANG = {
+    PT: 'Portuguese', SW: 'Swahili', AM: 'Amharic', AR: 'Arabic', FR: 'French', ES: 'Spanish',
+  };
+
+  // Collect all image ads for parallel generation
+  const adJobs = [];
   for (const campaign of metaPlatform.campaigns || []) {
     for (const adSet of campaign.ad_sets || []) {
       for (const ad of adSet.ads || []) {
         if (ad.format === 'image' && ad.media_requirements?.suggested_content) {
-          try {
-            const result = await generateFromDocument({
-              pdfText: productText,
-              userPrompt: ad.media_requirements.suggested_content,
-              format: ad.media_requirements.specs?.split(',')[0]?.trim() || '1080x1080',
-              authClient: supabase, // For RLS-protected storage uploads
-            });
-            creatives[ad.name] = { url: result.url, storage_path: result.storage_path, asset_id: result.id };
-          } catch (err) {
-            creatives[ad.name] = { error: err.message };
-          }
+          const productMatch = (ad.name || '').match(/[A-Z]{2,}[_-]?\d+/i);
+          const targetProduct = productMatch ? productMatch[0].replace('_', '-') : undefined;
+          const langSuffix = (ad.name || '').match(/_([A-Z]{2})$/)?.[1];
+          const language = COUNTRY_LANG[langSuffix] || undefined;
+          adJobs.push({ ad, targetProduct, language });
         }
       }
+    }
+  }
+
+  // Generate all creatives in parallel
+  const results = await Promise.allSettled(
+    adJobs.map(({ ad, targetProduct, language }) =>
+      generateFromDocument({
+        pdfText: productText,
+        userPrompt: ad.media_requirements.suggested_content,
+        targetProduct,
+        language,
+        website: briefData.website,
+        referenceImages,
+        authClient: supabase,
+      }).then(result => ({ name: ad.name, result }))
+    )
+  );
+
+  const creatives = {};
+  for (const r of results) {
+    if (r.status === 'fulfilled') {
+      const { name, result } = r.value;
+      creatives[name] = { url: result.url, storage_path: result.storage_path, asset_id: result.id };
+    } else {
+      // Extract ad name from the error context — fallback to index
+      const job = adJobs[results.indexOf(r)];
+      creatives[job.ad.name] = { error: r.reason?.message || 'Unknown error' };
     }
   }
 
@@ -172,25 +221,13 @@ async function runExecution(sessionId, brief, phaseResults, _instructions) {
 const ORCHESTRATOR_TOOLS = [
   {
     name: 'run_phase',
-    description: '执行指定的投放流程阶段。返回阶段结果摘要。',
+    description: '执行指定的投放流程阶段。返回阶段结果摘要。creative_reference 会搜集竞品广告和网站产品图作为素材参考，应在 creative 前执行。',
     input_schema: {
       type: 'object',
       required: ['phase'],
       properties: {
-        phase: { type: 'string', enum: ['research', 'strategy', 'creative', 'execution'] },
+        phase: { type: 'string', enum: ['research', 'strategy', 'creative_reference', 'creative', 'execution'] },
         instructions: { type: 'string', description: '给该阶段 agent 的额外指令（可选）' },
-      },
-    },
-  },
-  {
-    name: 'evaluate_output',
-    description: '评估某阶段输出的质量和完整性。返回评分和问题列表。',
-    input_schema: {
-      type: 'object',
-      required: ['phase'],
-      properties: {
-        phase: { type: 'string' },
-        criteria: { type: 'string', description: '评估侧重点（可选）' },
       },
     },
   },
@@ -231,6 +268,34 @@ const ORCHESTRATOR_TOOLS = [
     },
   },
   {
+    name: 'preview_execution',
+    description: '预览投放方案的实际执行计划（广告系列、广告组、预算分配），不会真正创建广告。适合在 request_user_feedback 前调用，给用户展示具体会创建什么。',
+    input_schema: {
+      type: 'object',
+      properties: {},
+    },
+  },
+  {
+    name: 'read_phase_detail',
+    description: '读取某阶段结果的特定字段，用于深入分析。比如查看 research 的具体 recommendations，或 strategy 的某个 campaign 细节。',
+    input_schema: {
+      type: 'object',
+      required: ['phase', 'field'],
+      properties: {
+        phase: { type: 'string', enum: ['research', 'strategy', 'creative_reference', 'creative', 'execution'] },
+        field: { type: 'string', description: '要查看的字段路径，如 "recommendations", "platforms[0].campaigns", "competitor_ads.summary"' },
+      },
+    },
+  },
+  {
+    name: 'activate_campaigns',
+    description: '将所有 PAUSED 状态的广告系列激活为 ACTIVE，广告开始正式投放。必须在 execution 完成且用户确认后才能调用。',
+    input_schema: {
+      type: 'object',
+      properties: {},
+    },
+  },
+  {
     name: 'submit_final',
     description: '标记编排完成，提交最终结果摘要。',
     input_schema: {
@@ -244,31 +309,33 @@ const ORCHESTRATOR_TOOLS = [
   },
 ];
 
-const ORCHESTRATOR_SYSTEM_PROMPT = `你是数字广告投放主控 Agent。你的任务是根据 Campaign Brief 编排投放流程。
+const ORCHESTRATOR_SYSTEM_PROMPT = `你是数字广告投放主控 Agent。你的任务是根据 Campaign Brief 智能编排投放流程。
 
-可用工具：
-- run_phase: 执行某个阶段 (research/strategy/creative/execution)
-- evaluate_output: 评估阶段输出质量
-- request_user_feedback: 向用户提问或确认
-- skip_phase: 跳过某阶段
-- retry_phase: 带反馈重跑某阶段（仅 research/strategy）
-- submit_final: 标记编排完成
+## 标准流程
+research → strategy → creative_reference → (用户确认参考素材) → creative → execution
+你可以根据 brief 灵活调整顺序、跳过阶段、或重试。
 
-标准流程: research → strategy → creative → execution
-可根据 brief 灵活调整：
-- 预算很小（<$200）→ 可跳过 research
-- 用户已有素材 → 跳过 creative
+## 灵活调整示例
+- 预算很小（<$200）→ 可跳过 research，直接做 strategy
+- 用户已有素材 → 跳过 creative_reference 和 creative
 - research 数据不足 → retry 并给出更具体指令
 - 阶段出错 → 告诉用户并询问是否重试
 
-规则：
-- execution 前必须调用 request_user_feedback 获得用户确认
-- 每个阶段完成后用 evaluate_output 评估质量
-- evaluate_output 返回 score < 50 时，用 retry_phase 重试（仅 research/strategy）
-- evaluate_output 返回 score >= 50 时，继续下一步
-- 每个阶段最多 retry 一次，避免无限循环
-- 出错时向用户说明，不要静默失败
-- retry_phase 仅支持 research 和 strategy；creative/execution 出错用 request_user_feedback 通知用户`;
+## 素材参考流程
+- creative_reference 阶段会自动搜集竞品广告截图和客户网站产品图
+- 搜集完成后，必须用 request_user_feedback 展示参考素材给用户，让用户选择想要参考的素材或上传自己的素材
+- 用户确认后再运行 creative 阶段
+
+## 指导原则
+- run_phase 返回结果中包含 quality.score 和 quality.issues，据此判断是否需要 retry
+- quality.score 很低且 issues 明确时，用 retry_phase 并给出针对性反馈（仅 research/strategy 支持 retry）
+- 每个阶段最多 retry 一次
+- execution 创建的广告是 PAUSED 状态，需要用户确认后调用 activate_campaigns 激活
+- execution 完成后，用 request_user_feedback 展示结果并询问用户是否激活投放
+- 用户确认激活后，调用 activate_campaigns 将所有广告系列设为 ACTIVE
+- 可用 preview_execution 先预览投放方案给用户看，再决定是否执行
+- 出错时主动告知用户，不要静默失败
+- creative/execution 出错时用 request_user_feedback 通知用户，由用户决定下一步`;
 
 const MAX_ORCHESTRATOR_ITERATIONS = 25;
 
@@ -291,6 +358,9 @@ function evaluateOutput(phase, result) {
         const hasCampaigns = result.platforms.some(p => p.campaigns?.length > 0);
         if (!hasCampaigns) issues.push('缺少广告系列 (campaigns)');
       }
+      break;
+    case 'creative_reference':
+      if (!result?.references?.length) issues.push('未搜集到参考素材');
       break;
     case 'creative': {
       const creatives = result?.creatives || {};
@@ -371,7 +441,8 @@ async function* runToolUseLoop(sessionId, brief, messages, initialPhaseResults) 
             const duration = Math.round((Date.now() - phaseStartTime) / 1000);
             const resultSummary = summarizePhaseResult(phaseKey, phaseResult);
             yield { event: 'phase_complete', data: { phase: phaseKey, name: phaseDef?.name || phaseKey, result: phaseResult, duration, result_summary: resultSummary } };
-            result = { status: 'completed', result_summary: resultSummary, duration_s: duration };
+            const evaluation = evaluateOutput(phaseKey, phaseResult);
+            result = { status: 'completed', result_summary: resultSummary, duration_s: duration, quality: evaluation };
           } catch (err) {
             while (eventBuffer.length > 0) yield eventBuffer.shift();
             yield { event: 'phase_error', data: { phase: phaseKey, error: err.message } };
@@ -379,10 +450,6 @@ async function* runToolUseLoop(sessionId, brief, messages, initialPhaseResults) 
           }
           break;
         }
-
-        case 'evaluate_output':
-          result = evaluateOutput(input.phase, phaseResults[input.phase]);
-          break;
 
         case 'request_user_feedback': {
           await updateSession(sessionId, {
@@ -398,10 +465,43 @@ async function* runToolUseLoop(sessionId, brief, messages, initialPhaseResults) 
           break;
         }
 
+        case 'preview_execution': {
+          const strategyResult = phaseResults.strategy;
+          if (!strategyResult) {
+            result = { error: 'strategy 阶段尚未完成，无法预览' };
+          } else {
+            result = previewExecution(strategyResult);
+          }
+          break;
+        }
+
+        case 'read_phase_detail': {
+          const phaseData = phaseResults[input.phase];
+          if (!phaseData) {
+            result = { error: `${input.phase} 阶段尚未完成` };
+          } else {
+            const value = getNestedField(phaseData, input.field);
+            result = value !== undefined ? { field: input.field, value } : { error: `字段 "${input.field}" 不存在` };
+          }
+          break;
+        }
+
         case 'skip_phase':
           yield { event: 'phase_skipped', data: { phase: input.phase, reason: input.reason } };
           result = { skipped: true, phase: input.phase, reason: input.reason };
           break;
+
+        case 'activate_campaigns': {
+          const execResult = phaseResults.execution;
+          if (!execResult) {
+            result = { error: 'execution 阶段尚未完成，无法激活' };
+          } else {
+            const activation = await activateCampaigns(execResult);
+            yield { event: 'campaigns_activated', data: activation };
+            result = activation;
+          }
+          break;
+        }
 
         case 'submit_final':
           await updateSession(sessionId, { status: 'completed', current_phase: 'done' });
@@ -664,8 +764,12 @@ export async function* chatWithOrchestrator(sessionId, message) {
 
 // ── Utilities ──────────────────────────────────────────────────────────
 
+function getNestedField(obj, path) {
+  return path.replace(/\[(\d+)\]/g, '.$1').split('.').reduce((o, k) => o?.[k], obj);
+}
+
 function getPhaseExecutor(phaseKey) {
-  const executors = { research: runResearch, strategy: runStrategy, creative: runCreative, execution: runExecution };
+  const executors = { research: runResearch, strategy: runStrategy, creative_reference: runCreativeReference, creative: runCreative, execution: runExecution };
   const fn = executors[phaseKey];
   if (!fn) throw new Error(`No executor for phase: ${phaseKey}`);
   return fn;
@@ -696,6 +800,11 @@ function summarizePhaseResult(phaseKey, result) {
         currency: result?.currency,
       };
     }
+    case 'creative_reference':
+      return {
+        references_count: result?.references?.length || 0,
+        sources: [...new Set((result?.references || []).map(r => r.source))],
+      };
     case 'creative':
       return {
         creatives_generated: Object.keys(result?.creatives || {}).length,

@@ -9,6 +9,7 @@ import CreativeCard from './cards/CreativeCard';
 import ExecutionCard from './cards/ExecutionCard';
 import ThinkingCard from './cards/ThinkingCard';
 import FeedbackCard from './cards/FeedbackCard';
+import CreativeReferenceCard from './cards/CreativeReferenceCard';
 
 function MarkdownContent({ children }) {
   return (
@@ -37,7 +38,7 @@ function MarkdownContent({ children }) {
   );
 }
 
-export default function MessageBubble({ message, onApprove, onReject, onFeedbackRespond }) {
+export default function MessageBubble({ message, onApprove, onReject, onFeedbackRespond, onStartOrchestration, isLoading }) {
   const { type } = message;
 
   // User message
@@ -69,7 +70,12 @@ export default function MessageBubble({ message, onApprove, onReject, onFeedback
 
         {/* Brief card */}
         {type === 'brief_update' && (
-          <BriefCard brief={message.brief} completion={message.completion} />
+          <BriefCard
+            brief={message.brief}
+            completion={message.completion}
+            onConfirm={message.completion?.completion_pct >= 100 ? onStartOrchestration : undefined}
+            isLoading={isLoading}
+          />
         )}
 
         {/* Research card */}
@@ -85,6 +91,11 @@ export default function MessageBubble({ message, onApprove, onReject, onFeedback
         {/* Strategy card - complete */}
         {type === 'strategy_complete' && (
           <StrategyCard plan={message.plan} />
+        )}
+
+        {/* Creative reference card */}
+        {type === 'creative_reference_complete' && (
+          <CreativeReferenceCard references={message.references} />
         )}
 
         {/* Creative card */}

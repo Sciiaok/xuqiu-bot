@@ -63,6 +63,7 @@ export default function ChatArea({ briefId, sessionId, sessionStatus, onSessionU
     intake: t('phases.intake'),
     research: t('phases.research'),
     strategy: t('phases.strategy'),
+    creative_reference: t('phases.creativeReference'),
     creative: t('phases.creative'),
     execution: t('phases.execution'),
   };
@@ -107,6 +108,9 @@ export default function ChatArea({ briefId, sessionId, sessionStatus, onSessionU
   }, [briefId]);
 
   // Load existing messages when session changes
+  const isLoadingRef = useRef(false);
+  useEffect(() => { isLoadingRef.current = isLoading; }, [isLoading]);
+
   useEffect(() => {
     if (!briefId) {
       setMessages([]);
@@ -116,6 +120,9 @@ export default function ChatArea({ briefId, sessionId, sessionStatus, onSessionU
       setIsHistoryLoading(false);
       return;
     }
+
+    // Skip history reload if orchestration is actively streaming
+    if (isLoadingRef.current) return;
 
     let cancelled = false;
 
@@ -147,29 +154,39 @@ export default function ChatArea({ briefId, sessionId, sessionStatus, onSessionU
 
           setCurrentPhase(orchData.current_phase);
 
-          // Reconstruct structured cards from phase_results + chat messages
+          // Reconstruct messages from phase_results, messages, and tool_result
           const phaseResults = orchData.phase_results || {};
           const reconstructed = [];
 
-          // Add phase result cards in order
-          if (phaseResults.research) {
-            reconstructed.push({ id: nextMsgId(), type: 'research_complete', report: phaseResults.research, duration: null });
-          }
-          if (phaseResults.strategy) {
-            reconstructed.push({ id: nextMsgId(), type: 'strategy_complete', plan: phaseResults.strategy });
-          }
-          if (phaseResults.creative) {
-            reconstructed.push({
+          // 1. Show intake conversation (user + assistant messages only)
+          const intakeMsgs = orchData.messages
+            .filter(m => m.phase === 'intake' && (m.role === 'user' || (m.role === 'assistant' && m.content)))
+            .map(m => ({
               id: nextMsgId(),
-              type: 'creative_complete',
-              creatives: phaseResults.creative?.assets || phaseResults.creative?.creatives || phaseResults.creative || [],
-            });
-          }
-          if (phaseResults.execution) {
-            reconstructed.push({ id: nextMsgId(), type: 'execution_complete', result: phaseResults.execution });
+              type: m.role === 'user' ? 'user' : 'assistant',
+              content: m.content,
+            }));
+          reconstructed.push(...intakeMsgs);
+
+          // 2. Add phase result cards in order
+          //    Try phase_results first, fall back to tool_result in messages
+          const phaseCards = [
+            { phase: 'research',           build: r => ({ type: 'research_complete', report: r, duration: null }) },
+            { phase: 'strategy',           build: r => ({ type: 'strategy_complete', plan: r }) },
+            { phase: 'creative_reference', build: r => r?.references?.length ? { type: 'creative_reference_complete', references: r.references } : null },
+            { phase: 'creative',           build: r => ({ type: 'creative_complete', creatives: r?.assets || r?.creatives || r || [] }) },
+            { phase: 'execution',          build: r => ({ type: 'execution_complete', result: r }) },
+          ];
+          for (const { phase, build } of phaseCards) {
+            const result = phaseResults[phase]
+              || orchData.messages.find(m => m.phase === phase && m.tool_result && Object.keys(m.tool_result).length > 0)?.tool_result;
+            if (result) {
+              const msg = build(result);
+              if (msg) reconstructed.push({ id: nextMsgId(), ...msg });
+            }
           }
 
-          // Add user chat messages (phase=null, non-tool)
+          // 3. Add user chat messages (phase=null, non-tool)
           const chatMsgs = orchData.messages
             .filter(m => m.phase === null && m.role !== 'tool')
             .map(m => {
@@ -182,8 +199,8 @@ export default function ChatArea({ briefId, sessionId, sessionStatus, onSessionU
             reconstructed.push({
               id: nextMsgId(),
               type: 'feedback_required',
-              message: '方案已就绪，确认执行投放？',
-              options: ['确认执行', '取消'],
+              message: t('planReadyConfirm'),
+              options: [t('confirmExecute'), t('cancel')],
             });
           }
 
@@ -254,8 +271,6 @@ export default function ChatArea({ briefId, sessionId, sessionStatus, onSessionU
         case 'done':
           if (data.status === 'completed') {
             onSessionUpdate?.();
-            // Auto-start orchestration after brief is completed
-            autoStartOrchestration();
           }
           break;
         case 'error':
@@ -366,6 +381,12 @@ export default function ChatArea({ briefId, sessionId, sessionStatus, onSessionU
           if (data.phase === 'strategy') {
             setMessages(prev => prev.filter(m => m.type !== 'strategy_progress'));
             addMessage({ type: 'strategy_complete', plan: data.result });
+          }
+          if (data.phase === 'creative_reference') {
+            addMessage({
+              type: 'creative_reference_complete',
+              references: data.result?.references || [],
+            });
           }
           if (data.phase === 'creative') {
             setMessages(prev => prev.filter(m => m.type !== 'creative_progress'));
@@ -510,6 +531,7 @@ export default function ChatArea({ briefId, sessionId, sessionStatus, onSessionU
                 type: `${data.phase}_complete`,
                 ...(data.phase === 'research' ? { report: data.result, duration: data.duration } : {}),
                 ...(data.phase === 'strategy' ? { plan: data.result } : {}),
+                ...(data.phase === 'creative_reference' ? { references: data.result?.references || [] } : {}),
                 ...(data.phase === 'creative' ? { creatives: data.result?.assets || data.result?.creatives || data.result || [] } : {}),
               });
             }
@@ -600,12 +622,6 @@ export default function ChatArea({ briefId, sessionId, sessionStatus, onSessionU
     }
   }
 
-  // Auto-start orchestration after brief completion (called from SSE done handler)
-  function autoStartOrchestration() {
-    // Small delay to allow session status to update
-    setTimeout(() => handleStartOrchestration(), 500);
-  }
-
   function handleKeyDown(e) {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
@@ -655,6 +671,8 @@ export default function ChatArea({ briefId, sessionId, sessionStatus, onSessionU
               onApprove={handleApprove}
               onReject={handleReject}
               onFeedbackRespond={handleFeedbackRespond}
+              onStartOrchestration={handleStartOrchestration}
+              isLoading={isLoading}
             />
           ))}
 
@@ -671,18 +689,6 @@ export default function ChatArea({ briefId, sessionId, sessionStatus, onSessionU
                 </div>
               </div>
             </div>
-          )}
-
-          {sessionStatus === 'brief_completed' && !isLoading && (
-            <button
-              onClick={handleStartOrchestration}
-              className="w-full bg-indigo-600 text-white py-3 rounded-xl text-sm font-medium hover:bg-indigo-700 transition-colors flex items-center justify-center gap-2"
-            >
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                <path d="M13 10V3L4 14h7v7l9-11h-7z"/>
-              </svg>
-              {t('startPlan')}
-            </button>
           )}
 
           <div ref={messagesEndRef} />

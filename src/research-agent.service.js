@@ -114,21 +114,16 @@ const RESEARCH_TOOLS = [
 
 const RESEARCH_SYSTEM_PROMPT = `You are a digital advertising market research analyst.
 
-Your job: analyze a campaign brief, gather external data using tools, and produce a structured research report.
+Your job: analyze a campaign brief and pre-fetched external data, then produce a structured research report by calling submit_report.
 
-Workflow:
-1. Read the brief carefully
-2. Call search_meta_ad_library to find competitor ads (if relevant)
-3. Call search_google_trends to check keyword interest (if relevant)
-4. Synthesize all data (external + your training knowledge) into a comprehensive report
-5. Call submit_report with the final structured report
+The user message includes pre-fetched Meta Ad Library and Google Trends data. Synthesize this with your training knowledge to produce a comprehensive report.
 
 Rules:
-- Always try external tools first — they provide real-time data
-- If a tool returns null (API key not configured), supplement with your training knowledge
+- Analyze all provided external data carefully — it is real-time data
+- If external data is unavailable or empty, supplement with your training knowledge
 - Be specific with numbers, benchmarks, and actionable insights
 - Focus on the target markets and platforms relevant to the brief
-- You MUST call submit_report as your final action`;
+- You MUST call submit_report with all required fields filled`;
 
 // ── Tool execution ─────────────────────────────────────────────────────
 
@@ -152,96 +147,70 @@ async function executeTool(toolName, toolInput) {
  * @param {Object} brief - CampaignBrief object
  * @returns {Promise<Object>} Research report
  */
+const RESEARCH_MODEL = 'anthropic/claude-haiku-4.5';
+
 export async function conductResearch(brief, instructions) {
   const systemPrompt = instructions
     ? `${RESEARCH_SYSTEM_PROMPT}\n\n═══ 额外指令 ═══\n${instructions}`
     : RESEARCH_SYSTEM_PROMPT;
 
+  // Pre-fetch external data in parallel (skip tool_use loop)
+  // brief.products can be a string or array depending on how intake saved it
+  const productsArr = Array.isArray(brief.products) ? brief.products : [];
+  const productsStr = typeof brief.products === 'string' ? brief.products : '';
+  const productNames = productsArr.map(p => p.model || p.name).filter(Boolean);
+  const searchTerms = [brief.industry, ...productNames, productsStr].filter(Boolean).join(' ').trim();
+  const countries = brief.target_countries || [];
+  const keywords = [brief.industry, ...productNames, productsStr].filter(Boolean).slice(0, 3);
+
+  const [adLibraryResult, trendsResult] = await Promise.all([
+    fetchMetaAdLibrary({ search_terms: searchTerms, countries }).catch(err => ({ available: false, error: err.message })),
+    fetchGoogleTrends({ keywords }).catch(err => ({ available: false, error: err.message })),
+  ]);
+
+  const rawAds = adLibraryResult?.ads || [];
+
+  // Single LLM call with pre-fetched data — force submit_report
   const messages = [{
     role: 'user',
-    content: `Conduct market research for this campaign brief and submit your report.\n\nCAMPAIGN BRIEF:\n${JSON.stringify(brief, null, 2)}`,
+    content: `Conduct market research for this campaign brief and submit your report via submit_report.
+
+CAMPAIGN BRIEF:
+${JSON.stringify(brief, null, 2)}
+
+EXTERNAL DATA (pre-fetched):
+
+=== Meta Ad Library Results ===
+${JSON.stringify(adLibraryResult, null, 2)}
+
+=== Google Trends Results ===
+${JSON.stringify(trendsResult, null, 2)}
+
+Analyze the brief and external data above, then call submit_report with your complete research report.`,
   }];
 
-  let response = await anthropic.messages.create({
-    model: config.anthropic.model,
-    max_tokens: 4096,
-    system: systemPrompt,
-    messages,
-    tools: RESEARCH_TOOLS,
-    tool_choice: { type: 'auto' },
-  });
+  const model = config.anthropic.baseURL ? RESEARCH_MODEL : 'claude-haiku-4-5-20251001';
 
-  // Tool-use loop
-  let iterations = 0;
-  while (iterations < MAX_TOOL_ITERATIONS) {
-    if (response.stop_reason !== 'tool_use') break;
-    iterations++;
-
-    const toolUseBlocks = response.content.filter(c => c.type === 'tool_use');
-
-    // Check for submit_report
-    const submitBlock = toolUseBlocks.find(t => t.name === 'submit_report');
-    if (submitBlock) {
-      const report = submitBlock.input;
-      if (report && Object.keys(report).length > 0) return report;
-      console.warn('[research] submit_report received empty input, retrying...');
-    }
-
-    // Execute all non-submit tools (skip submit_report — it's handled above)
-    messages.push({ role: 'assistant', content: response.content });
-
-    const toolResults = [];
-    for (const toolUse of toolUseBlocks) {
-      if (toolUse.name === 'submit_report') {
-        // Return acknowledgment for submit_report so Claude doesn't get confused
-        toolResults.push({
-          type: 'tool_result',
-          tool_use_id: toolUse.id,
-          content: JSON.stringify({ status: 'rejected', reason: 'Report was empty or missing required fields. Please gather more data and try again.' }),
-        });
-        continue;
-      }
-      const result = await executeTool(toolUse.name, toolUse.input);
-      toolResults.push({
-        type: 'tool_result',
-        tool_use_id: toolUse.id,
-        content: JSON.stringify(result),
-      });
-    }
-
-    messages.push({ role: 'user', content: toolResults });
-
-    response = await anthropic.messages.create({
-      model: config.anthropic.model,
-      max_tokens: 4096,
-      system: systemPrompt,
-      messages,
-      tools: RESEARCH_TOOLS,
-      tool_choice: { type: 'auto' },
-    });
-  }
-
-  // Final check: Claude may have called submit_report in the last response
-  const finalSubmit = response.content.find(c => c.type === 'tool_use' && c.name === 'submit_report');
-  if (finalSubmit?.input && Object.keys(finalSubmit.input).length > 0) {
-    return finalSubmit.input;
-  }
-
-  // Force submit_report if Claude didn't call it or submitted empty
-  messages.push({ role: 'assistant', content: response.content });
-  messages.push({ role: 'user', content: 'You MUST now call submit_report with a complete research report. Include market_overview, competitor_ads, keyword_trends, audience_insights, platform_recommendations, benchmark_metrics, and recommendations. Do NOT submit empty fields.' });
-
-  response = await anthropic.messages.create({
-    model: config.anthropic.model,
-    max_tokens: 4096,
+  const response = await anthropic.messages.create({
+    model,
+    max_tokens: 8192,
     system: systemPrompt,
     messages,
     tools: RESEARCH_TOOLS,
     tool_choice: { type: 'tool', name: 'submit_report' },
   });
 
-  const forced = response.content.find(c => c.type === 'tool_use' && c.name === 'submit_report');
-  if (forced) return forced.input;
+  const submitBlock = response.content.find(c => c.type === 'tool_use' && c.name === 'submit_report');
+  if (submitBlock?.input && Object.keys(submitBlock.input).length > 0) {
+    submitBlock.input.competitor_ads_raw = rawAds;
+    return submitBlock.input;
+  }
+
+  // Log response for debugging
+  const textBlock = response.content.find(c => c.type === 'text');
+  console.error('[research] No valid submit_report. stop_reason:', response.stop_reason,
+    'content_types:', response.content.map(c => c.type),
+    'text_preview:', textBlock?.text?.slice(0, 200));
 
   throw new Error('Research agent did not produce a report');
 }
@@ -262,7 +231,7 @@ export async function fetchMetaAdLibrary({ search_terms, countries }) {
     ad_type: 'ALL',
     search_terms: search_terms || '',
     ad_reached_countries: JSON.stringify(isoCodes.slice(0, 5)),
-    fields: 'id,ad_creative_bodies,ad_creative_link_titles,ad_creative_link_captions,page_name,spend,impressions,ad_delivery_start_time',
+    fields: 'id,ad_creative_bodies,ad_creative_link_titles,ad_creative_link_captions,page_name,spend,impressions,ad_delivery_start_time,ad_snapshot_url',
     limit: '25',
   });
 
@@ -284,6 +253,7 @@ export async function fetchMetaAdLibrary({ search_terms, countries }) {
       titles: ad.ad_creative_link_titles || [],
       captions: ad.ad_creative_link_captions || [],
       start_date: ad.ad_delivery_start_time,
+      snapshot_url: ad.ad_snapshot_url || null,
     })),
   };
 }

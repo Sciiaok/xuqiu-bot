@@ -105,7 +105,7 @@ const STRATEGY_TOOLS = [
                               required: ['name', 'format', 'primary_text', 'headline', 'description', 'cta'],
                               properties: {
                                 name: { type: 'string' },
-                                format: { type: 'string', enum: ['video', 'image', 'carousel', 'slideshow'] },
+                                format: { type: 'string', enum: ['image'], description: 'Only image format is currently supported for auto-generation' },
                                 primary_text: { type: 'string' },
                                 headline: { type: 'string' },
                                 description: { type: 'string' },
@@ -324,7 +324,7 @@ ${JSON.stringify(researchReport, null, 2)}`,
 
   let response = await anthropic.messages.create({
     model: config.anthropic.model,
-    max_tokens: 8192,
+    max_tokens: 16384,
     system: systemPrompt,
     messages,
     tools: STRATEGY_TOOLS,
@@ -363,7 +363,7 @@ ${JSON.stringify(researchReport, null, 2)}`,
 
     response = await anthropic.messages.create({
       model: config.anthropic.model,
-      max_tokens: 8192,
+      max_tokens: 16384,
       system: systemPrompt,
       messages,
       tools: STRATEGY_TOOLS,
@@ -380,11 +380,11 @@ ${JSON.stringify(researchReport, null, 2)}`,
 
   // Force submit
   messages.push({ role: 'assistant', content: response.content });
-  messages.push({ role: 'user', content: 'Please call submit_media_plan with the complete media plan now.' });
+  messages.push({ role: 'user', content: 'Please call submit_media_plan now. Remember: the top-level fields are summary, total_budget, currency, duration_days, and platforms (an array of platform objects). Do NOT nest them inside a wrapper object.' });
 
   response = await anthropic.messages.create({
     model: config.anthropic.model,
-    max_tokens: 8192,
+    max_tokens: 16384,
     system: systemPrompt,
     messages,
     tools: STRATEGY_TOOLS,
@@ -404,13 +404,23 @@ ${JSON.stringify(researchReport, null, 2)}`,
  * Basic validation of MediaPlan structure.
  */
 function validateMediaPlan(plan) {
-  if (!plan.summary) throw new Error('MediaPlan missing summary');
-  if (!plan.platforms || !Array.isArray(plan.platforms)) throw new Error('MediaPlan missing platforms array');
+  if (!plan.platforms && plan.platform) plan.platforms = Array.isArray(plan.platform) ? plan.platform : [plan.platform];
+  if (!plan.platforms || !Array.isArray(plan.platforms)) {
+    console.error('[strategy] MediaPlan validation failed. Actual keys:', Object.keys(plan), 'Input:', JSON.stringify(plan).slice(0, 500));
+    throw new Error('MediaPlan missing platforms array');
+  }
   if (plan.platforms.length === 0) throw new Error('MediaPlan has no platforms');
 
   for (const platform of plan.platforms) {
     if (!platform.platform) throw new Error('Platform entry missing platform name');
     if (!Array.isArray(platform.campaigns)) throw new Error(`Platform ${platform.platform} missing campaigns array`);
+  }
+
+  // Auto-generate summary if missing (model sometimes omits it in large plans)
+  if (!plan.summary) {
+    const platformNames = plan.platforms.map(p => p.platform).join(', ');
+    const totalCampaigns = plan.platforms.reduce((s, p) => s + (p.campaigns?.length || 0), 0);
+    plan.summary = `${platformNames} campaign plan: ${totalCampaigns} campaigns, $${plan.total_budget || '?'} ${plan.currency || 'USD'} over ${plan.duration_days || '?'} days`;
   }
 }
 

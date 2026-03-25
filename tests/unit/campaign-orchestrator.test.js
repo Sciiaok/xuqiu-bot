@@ -140,6 +140,7 @@ mock.module(executionUrl, {
       entity_counts: { campaigns: 1, ad_sets: 1, ads: 1 },
     })),
     uploadMedia: mock.fn(async () => ({ image_hash: 'hash123' })),
+    activateCampaigns: mock.fn(async () => ({ activated: ['camp_001'], errors: [] })),
   },
 });
 

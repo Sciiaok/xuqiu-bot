@@ -1,5 +1,5 @@
 import { resumeAfterFeedback } from '../../../../../../src/campaign-orchestrator.service.js';
-import { getSession, getLatestSession } from '../../../../../../lib/repositories/orchestrator.repository.js';
+import { getSession, getLatestSession, updateSessionIfStatus } from '../../../../../../lib/repositories/orchestrator.repository.js';
 import { streamSSE } from '../../../../../../lib/sse.js';
 
 /**
@@ -29,5 +29,11 @@ export async function POST(request, { params }) {
     return Response.json({ error: 'Session not found' }, { status: 404 });
   }
 
-  return streamSSE(resumeAfterFeedback(session.id, body.response));
+  const sessionId = session.id;
+  return streamSSE(resumeAfterFeedback(sessionId, body.response), {
+    heartbeatIntervalMs: 5000,
+    onAbort: async () => {
+      await updateSessionIfStatus(sessionId, 'running', { status: 'interrupted' });
+    },
+  });
 }

@@ -42,7 +42,8 @@ export default function ProductDocUploader({ agents, onUploaded }) {
     e.preventDefault();
     setDragOver(false);
     const file = e.dataTransfer.files[0];
-    if (file?.type === 'application/pdf') {
+    const allowed = ['application/pdf', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'];
+    if (file && allowed.includes(file.type)) {
       handleUpload(file);
     }
   };
@@ -67,13 +68,13 @@ export default function ProductDocUploader({ agents, onUploaded }) {
           disabled={uploading || !selectedAgentId}
           className="btn btn-primary disabled:opacity-50 whitespace-nowrap"
         >
-          {uploading ? t('uploading') : t('uploadPdf')}
+          {uploading ? t('uploading') : t('uploadDoc')}
         </button>
 
         <input
           ref={fileInputRef}
           type="file"
-          accept="application/pdf"
+          accept="application/pdf,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
           className="hidden"
           onChange={(e) => handleUpload(e.target.files[0])}
         />

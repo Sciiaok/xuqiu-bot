@@ -3,6 +3,7 @@ import {
   createSession,
   getSession,
   getLatestSession,
+  updateSessionIfStatus,
   getMessages,
 } from '../../../../../lib/repositories/orchestrator.repository.js';
 import { getBrief } from '../../../../../lib/repositories/campaign-brief.repository.js';
@@ -35,6 +36,9 @@ export async function POST(request, { params }) {
     session = await getLatestSession(id);
     if (!session || session.status === 'completed' || session.status === 'failed') {
       session = await createSession(id);
+    } else if (session.status === 'running') {
+      const { data } = await updateSessionIfStatus(session.id, 'running', { status: 'interrupted' });
+      session = data || await getSession(session.id);
     }
   }
 
@@ -43,8 +47,14 @@ export async function POST(request, { params }) {
     return streamSSE(chatWithOrchestrator(session.id, body.message));
   }
 
-  // Pipeline mode: run orchestration
-  return streamSSE(orchestrate(session.id));
+  // Pipeline mode: run orchestration (heartbeat keeps connection alive during long phases)
+  const sessionId = session.id;
+  return streamSSE(orchestrate(sessionId), {
+    heartbeatIntervalMs: 5000,
+    onAbort: async () => {
+      await updateSessionIfStatus(sessionId, 'running', { status: 'interrupted' });
+    },
+  });
 }
 
 /**
