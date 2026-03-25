@@ -21,6 +21,7 @@
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.74.0",
+    "@larksuiteoapi/node-sdk": "^1.59.0",
     "@opendataloader/pdf": "^2.0.2",
     "@supabase/ssr": "^0.5.2",
     "@supabase/supabase-js": "^2.45.4",
@@ -31,7 +32,10 @@
     "p-limit": "^7.3.0",
     "react": "^18",
     "react-dom": "^18",
-    "recharts": "^3.8.0"
+    "react-markdown": "^10.1.0",
+    "recharts": "^3.8.0",
+    "remark-gfm": "^4.0.1",
+    "xlsx": "^0.18.5"
   },
   "devDependencies": {
     "@playwright/test": "^1.58.2",

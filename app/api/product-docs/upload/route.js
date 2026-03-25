@@ -2,7 +2,12 @@ import { NextResponse } from 'next/server';
 import { demoGuard } from '../../../../lib/demo-mode.js';
 import { createClient } from '../../../../lib/supabase-server.js';
 import supabase from '../../../../lib/supabase.js';
-import { processPdfDocument } from '../../../../src/product-knowledge.service.js';
+import { processPdfDocument, processExcelDocument } from '../../../../src/product-knowledge.service.js';
+
+const ALLOWED_TYPES = {
+  'application/pdf': 'pdf',
+  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': 'xlsx',
+};
 
 export async function POST(request) {
   const demoResponse = demoGuard({ success: true, message: 'Demo mode' });
@@ -27,9 +32,10 @@ export async function POST(request) {
     }
 
     // Validate file type
-    if (file.type !== 'application/pdf') {
+    const fileFormat = ALLOWED_TYPES[file.type];
+    if (!fileFormat) {
       return NextResponse.json(
-        { error: 'Only PDF files are supported' },
+        { error: 'Only PDF and Excel (.xlsx) files are supported' },
         { status: 400 }
       );
     }
@@ -52,7 +58,7 @@ export async function POST(request) {
     // Upload to Supabase Storage using the authenticated client (RLS requires auth)
     const { error: uploadError } = await authClient.storage
       .from('product-docs')
-      .upload(storagePath, buffer, { contentType: 'application/pdf' });
+      .upload(storagePath, buffer, { contentType: file.type });
 
     if (uploadError) {
       return NextResponse.json(
@@ -89,11 +95,13 @@ export async function POST(request) {
       details: { filename: file.name },
     });
 
-    // Process PDF synchronously — Next.js terminates the execution context
+    // Process document synchronously — Next.js terminates the execution context
     // after the response is sent, so fire-and-forget won't complete.
     let result;
     try {
-      result = await processPdfDocument(buffer, doc.id, agentId, agent.product_line);
+      result = fileFormat === 'xlsx'
+        ? await processExcelDocument(buffer, doc.id, agentId, agent.product_line)
+        : await processPdfDocument(buffer, doc.id, agentId, agent.product_line);
     } catch (err) {
       console.error(`[product-docs] Failed to process ${file.name}:`, err.message);
       return NextResponse.json({

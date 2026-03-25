@@ -374,10 +374,11 @@
   "productDocs": {
     "title": "产品文档",
     "uploadPdf": "上传 PDF",
+    "uploadDoc": "上传 PDF / Excel",
     "uploading": "上传中...",
     "selectAgent": "选择 Agent",
     "allAgents": "全部 Agent",
-    "dropOrClick": "拖拽 PDF 到此处或点击选择文件",
+    "dropOrClick": "拖拽 PDF 或 Excel (.xlsx) 到此处，或点击选择文件",
     "processing": "处理中",
     "ready": "就绪",
     "error": "错误",
@@ -413,5 +414,44 @@
     "noCompany": "（无公司）",
     "unknown": "未知",
     "noMessages": "暂无消息"
+  },
+  "campaignStudio": {
+    "tabs": {
+      "assistant": "✦ AI 投放助手",
+      "plans": "广告计划列表",
+      "aigc": "AI 素材生产",
+      "attribution": "深度归因分析"
+    },
+    "comingSoon": "开发中",
+    "searchPlaceholder": "搜索会话...",
+    "newSession": "新会话",
+    "noSessions": "暂无会话，点击 + 新建",
+    "noMatches": "无匹配结果",
+    "selectOrCreate": "选择一个会话或新建会话开始",
+    "loadingConversation": "正在加载会话内容...",
+    "startPlan": "开始生成投放方案",
+    "inputPlaceholder": "输入消息...",
+    "planReadyConfirm": "方案已就绪，确认执行投放？",
+    "confirmExecute": "确认执行",
+    "cancel": "取消",
+    "executionCancelled": "已取消本次投放执行。您可以修改方案后重新提交。",
+    "phaseFailed": "失败",
+    "phases": {
+      "intake": "需求采集",
+      "research": "市场调研",
+      "strategy": "方案规划",
+      "creativeReference": "素材参考",
+      "creative": "素材生成",
+      "execution": "投放执行"
+    },
+    "statuses": {
+      "draft": "草稿",
+      "intake": "需求采集中",
+      "running": "进行中",
+      "briefCompleted": "需求已完成",
+      "awaitingApproval": "待审批",
+      "completed": "已完成",
+      "failed": "失败"
+    }
   }
 }

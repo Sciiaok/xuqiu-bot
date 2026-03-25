@@ -374,10 +374,11 @@
   "productDocs": {
     "title": "Product Docs",
     "uploadPdf": "Upload PDF",
+    "uploadDoc": "Upload PDF / Excel",
     "uploading": "Uploading...",
     "selectAgent": "Select Agent",
     "allAgents": "All Agents",
-    "dropOrClick": "Drop PDF here or click to browse",
+    "dropOrClick": "Drop PDF or Excel (.xlsx) here, or click to browse",
     "processing": "Processing",
     "ready": "Ready",
     "error": "Error",
@@ -413,5 +414,44 @@
     "noCompany": "(No company)",
     "unknown": "Unknown",
     "noMessages": "No messages"
+  },
+  "campaignStudio": {
+    "tabs": {
+      "assistant": "✦ AI Campaign Assistant",
+      "plans": "Campaign Plans",
+      "aigc": "AI Creative Production",
+      "attribution": "Attribution Analysis"
+    },
+    "comingSoon": "Coming soon",
+    "searchPlaceholder": "Search sessions...",
+    "newSession": "New session",
+    "noSessions": "No sessions yet. Click + to create one",
+    "noMatches": "No matching sessions",
+    "selectOrCreate": "Select a session or create a new one to begin",
+    "loadingConversation": "Loading session content...",
+    "startPlan": "Generate campaign plan",
+    "inputPlaceholder": "Type your message...",
+    "planReadyConfirm": "Plan is ready. Confirm to execute?",
+    "confirmExecute": "Confirm",
+    "cancel": "Cancel",
+    "executionCancelled": "Campaign execution was canceled. You can revise the plan and submit again.",
+    "phaseFailed": "failed",
+    "phases": {
+      "intake": "Requirements Intake",
+      "research": "Market Research",
+      "strategy": "Strategy Planning",
+      "creativeReference": "Creative References",
+      "creative": "Creative Production",
+      "execution": "Campaign Execution"
+    },
+    "statuses": {
+      "draft": "Draft",
+      "intake": "Collecting requirements",
+      "running": "Running",
+      "briefCompleted": "Brief completed",
+      "awaitingApproval": "Awaiting approval",
+      "completed": "Completed",
+      "failed": "Failed"
+    }
   }
 }

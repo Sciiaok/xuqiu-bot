@@ -37,6 +37,27 @@ export const config = {
     webhookNurture: process.env.N8N_WEBHOOK_NURTURE || '',
   },
 
+  // Meta Marketing API — ad campaign execution
+  meta: {
+    accessToken: process.env.META_SYSTEM_TOKEN || process.env.META_ACCESS_TOKEN,
+    adAccountId: process.env.META_AD_ACCOUNT_ID,
+    pageId: process.env.META_PAGE_ID,
+    apiVersion: process.env.META_API_VERSION || 'v21.0',
+  },
+
+  // SerpAPI — Google Trends fallback
+  serpapi: {
+    apiKey: process.env.SERPAPI_KEY,
+  },
+
+  // AIGC — image/video generation via OpenRouter
+  aigc: {
+    apiKey: process.env.OPENROUTER_API_KEY,
+    baseURL: process.env.OPENROUTER_BASE_URL || 'https://openrouter.ai/api',
+    imageModel: process.env.AIGC_IMAGE_MODEL || 'google/gemini-3.1-flash-image-preview',
+    storageBucket: 'aigc-assets',
+  },
+
   // Message Queue (aggregation for rapid messages)
   queue: {
     aggregationWindowMs: parseInt(process.env.QUEUE_AGGREGATION_MS) || 2000, // Wait 2s for more messages

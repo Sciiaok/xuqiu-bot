@@ -50,6 +50,11 @@ const icons = {
       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
     </svg>
   ),
+  campaign: (
+    <svg className="w-5 h-5 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
+    </svg>
+  ),
 };
 
 export default function Sidebar() {
@@ -63,6 +68,7 @@ export default function Sidebar() {
   const navItems = [
     { href: '/dashboard/analytics', label: t('analytics'), icon: 'analytics' },
     { href: '/dashboard/ads', label: t('ads'), icon: 'ads' },
+    { href: '/dashboard/campaign-studio', label: 'Campaign Studio', icon: 'campaign' },
     { href: '/dashboard/inquiries', label: t('inquiries'), icon: 'inquiry' },
     { href: '/dashboard/leads', label: t('leads'), icon: 'chart' },
     { href: '/dashboard/inbox', label: t('inbox'), icon: 'chat' },
@@ -71,9 +77,12 @@ export default function Sidebar() {
     { href: '/dashboard/docs', label: t('docs'), icon: 'docs' },
   ];
 
-  // Auto-collapse on inbox; restore localStorage preference on other pages
+  // Auto-collapse on inbox and campaign studio; restore localStorage preference on other pages
   useEffect(() => {
-    if (pathname.startsWith('/dashboard/inbox')) {
+    if (
+      pathname.startsWith('/dashboard/inbox') ||
+      pathname.startsWith('/dashboard/campaign-studio')
+    ) {
       setCollapsed(true);
     } else {
       const saved = localStorage.getItem('sidebar-collapsed');
