@@ -27,7 +27,8 @@
 |--------|------|
 | Instagram Reels/Stories | Content Publishing API 限制，需额外权限和视频能力 |
 | 自动回复评论/DM | 属于互动响应系统，是独立的下一阶段产品 |
-| 多品牌支持 | 先跑通 FitVille，数据模型预留 brand_id 但代码不做多租户 |
+| 多品牌支持 | 先跑通 FitVille，数据模型使用现有 `agent_id` 体系但代码不做多租户 |
+| Instagram Carousel | Content Publishing API 的 carousel 发布流程复杂（多容器+合并），MVP 只做单图 |
 | 视频内容生成 | 需 HeyGen/Creatify 集成，复杂度翻倍 |
 | A/B 测试 | 每日发帖量 1-2 条，无统计意义，用 Slow Loop 周维度对比替代 |
 | Boost Post 付费推广 | 飞轮是有机引擎，付费走现有 campaign-orchestrator |
@@ -98,7 +99,7 @@
 ```sql
 CREATE TABLE content_strategy (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  brand_id text NOT NULL,
+  agent_id uuid NOT NULL,  -- 与现有 agents 表一致
   platform text NOT NULL,
   version int NOT NULL,
 
@@ -115,8 +116,8 @@ CREATE TABLE content_strategy (
   updated_at timestamptz DEFAULT now()
 );
 
-CREATE UNIQUE INDEX idx_strategy_brand_platform_version
-  ON content_strategy(brand_id, platform, version);
+CREATE UNIQUE INDEX idx_strategy_agent_platform_version
+  ON content_strategy(agent_id, platform, version);
 ```
 
 **字段说明：**
@@ -145,7 +146,7 @@ CREATE UNIQUE INDEX idx_strategy_brand_platform_version
   {
     "frequency": { "facebook": 5, "instagram": 4 },
     "best_times": { "facebook": ["08:00","12:30","20:00"], "instagram": ["07:00","18:00"] },
-    "format_mix": { "image": 0.5, "carousel": 0.3, "text_only": 0.2 }
+    "format_mix": { "image": 0.6, "text_only": 0.2, "link": 0.2 }
   }
   ```
 - `performance_baselines`：表现基线，用于判断好坏
@@ -165,7 +166,7 @@ CREATE UNIQUE INDEX idx_strategy_brand_platform_version
 ```sql
 CREATE TABLE organic_posts (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  brand_id text NOT NULL,
+  agent_id uuid NOT NULL,
   platform text NOT NULL,
   platform_post_id text,
 
@@ -176,6 +177,7 @@ CREATE TABLE organic_posts (
   cta_type text,
   cta_url text,
 
+  original_caption text,        -- AI 原始生成的文案（人审修改前）
   decision_reasoning text,
   risk_level text DEFAULT 'low',
   risk_factors text[],
@@ -189,12 +191,13 @@ CREATE TABLE organic_posts (
   created_at timestamptz DEFAULT now()
 );
 
-CREATE INDEX idx_posts_brand_status ON organic_posts(brand_id, status);
-CREATE INDEX idx_posts_published ON organic_posts(brand_id, published_at DESC);
+CREATE INDEX idx_posts_agent_status ON organic_posts(agent_id, status);
+CREATE INDEX idx_posts_published ON organic_posts(agent_id, published_at DESC);
 ```
 
 **字段说明：**
 
+- `original_caption`：AI 原始生成的文案。人审修改后 `caption` 更新为修改版，`original_caption` 保留原版。Slow Loop 对比两者的 diff 来学习人审偏好
 - `decision_reasoning`：agent 选这个内容的理由，渐进放权的审计依据
 - `risk_level`：`low` | `medium` | `high`，决定是否需要人审
 - `risk_factors`：`["contains_price", "medical_claim", "competitor_mention"]`
@@ -244,7 +247,7 @@ CREATE UNIQUE INDEX idx_perf_post ON post_performance(post_id);
   ```json
   { "positive": 0.6, "neutral": 0.3, "negative": 0.1, "purchase_intent": 0.25 }
   ```
-- `measured_at`：最后拉取时间，会持续更新（24h、72h、7d）
+- `measured_at`：最后拉取时间，使用 UPSERT 语义（`INSERT ... ON CONFLICT (post_id) DO UPDATE`）持续覆盖为最新快照。只保留最新指标，不做时序追踪——Slow Loop 的周聚合基于发布后 7 天的最终快照即可
 
 ### 与现有表的关系
 
@@ -266,7 +269,9 @@ post_performance (新)         ──► 反馈数据
 
 ### 触发
 
-Cron Job，每天执行 2 次（早 8 点、晚 8 点 EST）
+Cron Job，每天执行 2 次（早 8 点、晚 8 点 EST）。
+
+**频率控制逻辑：** Cron 每天触发 2 次 = 每周 14 次，但 `posting_rules.frequency` 目标为 FB 5 条 + IG 4 条 = 9 条/周。Content Agent 在 Step 2 选题前先检查本周已发帖数，如果目标平台已达本周频率上限则跳过本次执行（只执行 Step 1 反馈采集）。这样 Cron 频率 > 发帖频率，保证不漏发且有弹性。
 
 ### 执行流程
 
@@ -277,11 +282,18 @@ Cron Job，每天执行 2 次（早 8 点、晚 8 点 EST）
 │   GET /{page_id}/posts?fields=insights.metric(post_impressions,post_engaged_users,...)
 │   GET /{post_id}/comments?fields=message,created_time
 │
-├── Shopify API: 查询过去 24h 带 UTM 标记的订单
-│   GET /orders.json?created_at_min=...
-│   匹配: utm_source=organic_{platform}&utm_content={post_id}
+├── Shopify API: 查询过去 24h 订单的 UTM 归因
+│   GET /admin/api/2024-01/orders.json?created_at_min=...&status=any
+│   归因逻辑（Shopify 不支持直接按 UTM 过滤，需客户端匹配）：
+│   1. 遍历订单的 `landing_site` 和 `referring_site` 字段
+│   2. 解析 URL 参数提取 utm_source / utm_content
+│   3. 匹配 utm_content={post_id} → 关联到 organic_posts
+│   4. 补充归因：如果无 UTM 匹配，检查订单创建时间是否在
+│      某帖子发布后 7 天内 + referring_site 含 facebook.com/instagram.com
+│      → 标记为"时间窗口归因"（弱归因，仅供参考）
+│   注意：这是全新集成，需要 Shopify Private App token 或 Custom App
 │
-└── 写入 post_performance 表
+└── 写入 post_performance 表（UPSERT 语义）
 ```
 
 #### Step 2: 选题决策（Think）
@@ -301,7 +313,7 @@ Cron Job，每天执行 2 次（早 8 点、晚 8 点 EST）
   "content_pillar": "foot_health_education",
   "topic": "扁平足vs高弓足：如何判断自己的足型",
   "reasoning": "过去7天教育类内容只发了1条，低于策略权重0.35。扁平足话题在Google Trends上升12%。",
-  "format": "carousel",
+  "format": "image",
   "cta_type": "learn_more",
   "target_time": "2026-03-28T08:00:00Z",
   "risk_level": "low",
@@ -400,9 +412,10 @@ Cron Job，每周一凌晨 3:00 EST 执行
 
 #### Step 2: 竞品对标（Benchmark）
 
-复用现有 `research-agent`：
+竞品内容抓取（不复用 `conductResearch()` 全流程，直接调用其内部的 `fetchMetaAdLibrary()` 函数）：
 - Meta Ad Library：竞品过去 7 天新广告（文案主题、视觉风格、CTA 类型）
 - 竞品主页公开帖子（Graph API 可读公开 Page）
+- 原因：`conductResearch(brief)` 需要完整 brief 对象且产出大量无关内容（市场规模、平台推荐等），周度竞品扫描只需广告和帖子数据
 
 #### Step 3: 规律提炼（Learn）
 
@@ -434,7 +447,7 @@ Cron Job，每周一凌晨 3:00 EST 执行
   ],
   "posting_rules_update": {
     "best_times": { "facebook": ["08:00", "20:00"] },
-    "format_mix": { "carousel": 0.4, "image": 0.4, "text_only": 0.2 }
+    "format_mix": { "image": 0.6, "text_only": 0.2, "link": 0.2 }
   },
   "new_patterns": [
     "carousel 格式互动率是单图的 1.7 倍（0.031 vs 0.018）",
@@ -487,11 +500,11 @@ Week 12:  trust≈0.70  approval=full_auto
 ### Strategy Agent Tool 定义
 
 ```
-aggregate_weekly_performance(brand_id) — 聚合周数据
-fetch_competitor_content(keywords[])   — 竞品内容抓取
+aggregate_weekly_performance(agent_id) — 聚合周数据
+fetch_competitor_content(keywords[])   — 竞品内容抓取（直接调 fetchMetaAdLibrary）
 search_trends(keywords[])             — Google Trends
-get_current_strategy(brand_id)         — 读取当前策略版本
-get_product_catalog_summary(brand_id)  — 产品线概要
+get_current_strategy(agent_id)         — 读取当前策略版本
+get_product_catalog_summary(agent_id)  — 产品线概要
 submit_strategy_update(strategy)       — 提交新策略（forced）
 calculate_trust_delta(approval_stats)  — 计算 trust 变化
 ```
@@ -545,9 +558,9 @@ calculate_trust_delta(approval_stats)  — 计算 trust 变化
 | 现有服务 | 飞轮中的用途 | 集成方式 |
 |---------|-------------|---------|
 | `src/llm-client.js` | Content Agent / Strategy Agent 的 LLM 调用 | 直接复用 |
-| `src/research-agent.service.js` | 冷启动竞品分析 + Slow Loop 周度竞品对标 | 复用 `conductResearch()` |
+| `src/research-agent.service.js` | 冷启动竞品分析 + Slow Loop 周度竞品对标 | 冷启动复用 `conductResearch()`；周度扫描直接调内部 `fetchMetaAdLibrary()` |
 | `src/product-knowledge.service.js` | Content Agent 选题时搜索产品知识 | 直接复用 |
-| `src/product-search.service.js` | 语义搜索产品信息 | 复用 `semanticSearch()` |
+| `src/product-search.service.js` | 语义搜索产品信息 | 复用 `searchProducts(query, agentId, topK)` |
 | `src/aigc.service.js` | Content Agent 生成配图 | 复用 `generateAdImage()` |
 | `src/campaign-intake.service.js` | 冷启动读取 brief 提取品牌信息 | 只读 |
 
@@ -575,7 +588,8 @@ lib/repositories/
 app/api/flywheel/
 ├── strategy/route.js               GET 当前策略 / POST 手动触发 Slow Loop
 ├── posts/route.js                  GET 帖子列表 / POST 审核操作
-└── dashboard/route.js              GET 表现看板数据
+├── dashboard/route.js              GET 表现看板数据
+└── emergency-stop/route.js         POST 紧急停止
 
 app/dashboard/campaign-studio/components/
 ├── ContentQueue.js                 待审帖子列表
@@ -597,14 +611,37 @@ Meta Graph API（追加权限）:
 ├── instagram_manage_insights — IG 数据分析
 └── read_insights             — Page Insights
 
-Shopify API:
+Shopify API（全新集成，需新增配置）:
 ├── read_orders               — 读取订单（UTM 归因）
 └── read_analytics            — 读取流量来源数据
+需新增环境变量:
+├── SHOPIFY_STORE_DOMAIN       — e.g. fitville.myshopify.com
+├── SHOPIFY_ACCESS_TOKEN       — Private/Custom App token
+└── SHOPIFY_API_VERSION        — e.g. 2024-01
 
 已有可复用:
 ├── META_ACCESS_TOKEN          — 现有 system token
-├── SERPAPI_KEY                — Google Trends
+├── SERPAPI_KEY                — Google Trends（~$50/月，约 60 次/月调用量可承受）
 └── Supabase                   — 数据库
+```
+
+### RLS 策略
+
+3 张新表需要添加 RLS 策略，与现有表保持一致：
+
+```sql
+ALTER TABLE content_strategy ENABLE ROW LEVEL SECURITY;
+ALTER TABLE organic_posts ENABLE ROW LEVEL SECURITY;
+ALTER TABLE post_performance ENABLE ROW LEVEL SECURITY;
+
+-- 服务端通过 service_role key 访问，跳过 RLS
+-- 如需前端直接访问，需按 agent_id 或 auth.uid() 添加 policy
+CREATE POLICY "service_role_all" ON content_strategy FOR ALL
+  USING (true) WITH CHECK (true);
+CREATE POLICY "service_role_all" ON organic_posts FOR ALL
+  USING (true) WITH CHECK (true);
+CREATE POLICY "service_role_all" ON post_performance FOR ALL
+  USING (true) WITH CHECK (true);
 ```
 
 ### Cron 调度
@@ -614,6 +651,22 @@ Fast Loop:     '0 13,1 * * *'   UTC (= 08:00, 20:00 EST)
 Slow Loop:     '0 8 * * 1'      UTC (= 03:00 EST 每周一)
 Feedback Cron: '0 */6 * * *'    每 6 小时拉取 Insights 更新
 ```
+
+**注意：** UTC 固定 cron 在美国夏令时（EDT, 3月-11月）期间会偏移 1 小时（变成 09:00/21:00 EDT）。MVP 阶段可接受，后续可改用 timezone-aware scheduler。
+
+**Feedback Cron 职责边界：** Feedback Cron 是独立进程，只负责拉取 Meta Insights 和 Shopify 订单数据并 UPSERT 到 `post_performance`。Fast Loop Step 1 不再重复拉取，只从 `post_performance` 表读取已有数据。避免两个进程并发写入同一行。
+
+### 紧急停止
+
+```
+POST /api/flywheel/emergency-stop
+```
+
+功能：
+- 将当前 `content_strategy.approval_mode` 设为 `manual`
+- 取消所有 `status='approved'` 且未发布的排期帖子（改为 `pending_review`）
+- 返回被暂停的帖子数量
+- UI 上在 FlywheelDashboard 提供一键触发按钮
 
 ---
 
