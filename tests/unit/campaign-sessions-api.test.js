@@ -6,6 +6,7 @@ import { pathToFileURL } from 'node:url';
 // ── Mock setup ─────────────────────────────────────────────────────────
 
 const supabaseUrl = pathToFileURL(resolve(process.cwd(), 'lib/supabase.js')).href;
+const supabaseServerUrl = pathToFileURL(resolve(process.cwd(), 'lib/supabase-server.js')).href;
 
 let mockBriefs = [];
 let mockSessions = [];
@@ -47,6 +48,17 @@ const mockSupabase = {
 };
 
 mock.module(supabaseUrl, { defaultExport: mockSupabase });
+
+// Mock supabase-server.js — createClient returns a client with a fake authenticated user
+mock.module(supabaseServerUrl, {
+  namedExports: {
+    createClient: async () => ({
+      auth: {
+        getUser: async () => ({ data: { user: { id: 'test-user' } }, error: null }),
+      },
+    }),
+  },
+});
 
 // ── Import after mocks ────────────────────────────────────────────────
 

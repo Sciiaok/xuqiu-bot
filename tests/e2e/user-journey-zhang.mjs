@@ -53,7 +53,10 @@ async function main() {
   console.log('   ✅ 登录成功\n');
 
   // Mock chat SSE only
-  await page.route('**/api/campaign/intake/*/chat*', route => {
+  await page.route('**/api/campaign/orchestrate/*', route => {
+    if (route.request().method() !== 'POST') {
+      return route.continue();
+    }
     const body = chatResponses[chatRound] || chatResponses[chatResponses.length - 1];
     chatRound++;
     return route.fulfill({ headers: { 'Content-Type': 'text/event-stream' }, body: body.join('') });

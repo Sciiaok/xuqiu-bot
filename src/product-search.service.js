@@ -1,14 +1,5 @@
-import OpenAI from 'openai';
-import { config } from './config.js';
+import { openai, openaiModel, MODELS } from './llm-client.js';
 import supabase from '../lib/supabase.js';
-
-const openai = new OpenAI({
-  apiKey: process.env.OPENROUTER_API_KEY || config.openai.apiKey,
-  baseURL: process.env.OPENROUTER_API_KEY
-    ? (process.env.OPENROUTER_BASE_URL || 'https://openrouter.ai/api') + '/v1'
-    : undefined,
-  timeout: 60000,
-});
 
 /**
  * Semantic search: embed query, then find similar chunks via pgvector.
@@ -20,7 +11,7 @@ const openai = new OpenAI({
 export async function searchProducts(query, agentId, topK = 3) {
   // Generate embedding for the query
   const response = await openai.embeddings.create({
-    model: process.env.OPENROUTER_API_KEY ? 'openai/text-embedding-3-small' : 'text-embedding-3-small',
+    model: openaiModel(MODELS.EMBEDDING),
     input: query,
   });
   const embedding = response.data[0].embedding;

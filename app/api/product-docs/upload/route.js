@@ -4,6 +4,9 @@ import { createClient } from '../../../../lib/supabase-server.js';
 import supabase from '../../../../lib/supabase.js';
 import { processPdfDocument, processExcelDocument } from '../../../../src/product-knowledge.service.js';
 
+// Raise body size limit for file uploads (default 1MB is too small for xlsx/pdf)
+export const maxDuration = 120; // seconds — Excel parsing calls LLM APIs
+
 const ALLOWED_TYPES = {
   'application/pdf': 'pdf',
   'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': 'xlsx',

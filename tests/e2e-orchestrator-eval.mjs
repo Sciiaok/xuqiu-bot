@@ -11,8 +11,8 @@
  * Requires: .env.local with API keys
  */
 
-import { readFileSync } from 'fs';
-import { resolve } from 'path';
+import { readFileSync, existsSync } from 'fs';
+import { resolve, extname } from 'path';
 
 // ── Load env ───────────────────────────────────────────────────────────
 
@@ -35,6 +35,29 @@ const { createBrief, updateBrief, getBrief } = await import('../lib/repositories
 const { createSession, getSession } = await import('../lib/repositories/orchestrator.repository.js');
 const { orchestrate, resumeAfterFeedback } = await import('../src/campaign-orchestrator.service.js');
 const { config } = await import('../src/config.js');
+const supabase = (await import('../lib/supabase.js')).default;
+
+// ── Product image upload helper ─────────────────────────────────────
+const PRODUCT_IMAGE_PATH = process.argv[2] || null;
+
+async function uploadProductImage(filePath) {
+  if (!filePath || !existsSync(filePath)) return [];
+  const buffer = readFileSync(filePath);
+  const ext = extname(filePath).slice(1) || 'png';
+  const contentType = `image/${ext === 'jpg' ? 'jpeg' : ext}`;
+  const storagePath = `eval/${Date.now()}_product.${ext}`;
+
+  const { error } = await supabase.storage
+    .from('chat-uploads')
+    .upload(storagePath, buffer, { contentType, upsert: false });
+  if (error) {
+    console.warn('  [upload] Failed:', error.message);
+    return [];
+  }
+  const { data } = supabase.storage.from('chat-uploads').getPublicUrl(storagePath);
+  console.log(`  Product image uploaded: ${data.publicUrl}`);
+  return [{ url: data.publicUrl, filename: filePath.split('/').pop() }];
+}
 
 // ── Test Brief: supply-chain boss selling agricultural machinery to Africa ──
 
@@ -68,6 +91,8 @@ const BOSS_BRIEF = {
   preferred_platforms: ['meta'],
   website: 'https://hualimachinery.com',
   existing_landing_pages: ['https://hualimachinery.com/tractors'],
+  competitors: 'Mahindra, John Deere (local dealers), TAFE tractors',
+  existing_creatives: 'Product photos of HL-504 and HL-1200, factory video tour',
 };
 
 // ── Evaluation state ────────────────────────────────────────────────
@@ -105,6 +130,10 @@ async function consumeEvents(generator, label) {
       case 'orchestration_start':
         console.log(`  [${ts()}s] Orchestration started — session ${evt.data.session_id}`);
         console.log(`  [${ts()}s] Phases: ${evt.data.phases.map(p => p.name).join(' → ')}`);
+        break;
+
+      case 'orchestration_resumed':
+        console.log(`  [${ts()}s] Orchestration resumed from checkpoint (iteration ${evt.data.iteration}) — session ${evt.data.session_id}`);
         break;
 
       case 'phase_start':
@@ -173,13 +202,20 @@ async function run() {
   console.log(`  Model: ${config.anthropic.model}`);
   console.log(`  Ad Account: ${config.meta.adAccountId}`);
 
+  // Upload product image if provided via CLI arg
+  const productImages = await uploadProductImage(PRODUCT_IMAGE_PATH);
+  const briefData = productImages.length
+    ? { ...BOSS_BRIEF, product_images: productImages }
+    : BOSS_BRIEF;
+
   const brief = await createBrief();
   await updateBrief(brief.id, {
     status: 'completed',
-    brief: BOSS_BRIEF,
-    completion: { filled: Object.keys(BOSS_BRIEF), missing: [], completion_pct: 100 },
+    brief: briefData,
+    completion: { filled: Object.keys(briefData), missing: [], completion_pct: 100 },
   });
   console.log(`  Brief: ${brief.id}`);
+  if (productImages.length) console.log(`  Product images: ${productImages.length}`);
 
   const session = await createSession(brief.id);
   console.log(`  Session: ${session.id}`);
@@ -240,16 +276,64 @@ async function run() {
     console.log(`      ${phase}: ${timing.duration_s?.toFixed(1) || '?'}s`);
   }
 
-  // ── 2. Creative Quality ─────────────────────────────────────────
-  console.log('\n  --- 2. Creative Quality ---');
+  // ── 2. Creative Plan Quality (v2) ──────────────────────────────
+  console.log('\n  --- 2. Creative Plan Quality (v2) ---');
+
+  const creativePlanResult = evalState.phaseResults.creative_plan || finalSession?.phase_results?.creative_plan;
+  const hasCreativePlan = evalState.phasesCompleted.includes('creative_plan') || creativePlanResult != null;
+
+  if (creativePlanResult) {
+    const tasks = creativePlanResult.creative_tasks || [];
+    const refs = creativePlanResult.references || [];
+    console.log(`  Creative tasks: ${tasks.length}`);
+    console.log(`  References collected: ${refs.length}`);
+
+    // 2.1 Has creative tasks
+    const hasTasksPass = tasks.length > 0;
+    scores['2.1 creative_tasks_generated'] = { value: tasks.length, pass: hasTasksPass };
+
+    // 2.2 All tasks have image prompts
+    const promptCount = tasks.filter(t => t.image_prompt).length;
+    const promptPass = tasks.length > 0 && promptCount === tasks.length;
+    scores['2.2 image_prompts_complete'] = { value: `${promptCount}/${tasks.length}`, pass: promptPass };
+
+    // 2.3 Tasks have localized copy
+    const copyCount = tasks.filter(t => t.copy?.headline && t.copy?.language).length;
+    const copyPass = tasks.length > 0 && copyCount === tasks.length;
+    scores['2.3 localized_copy'] = { value: `${copyCount}/${tasks.length}`, pass: copyPass };
+
+    // 2.4 Strategy categories diversity
+    const categories = [...new Set(tasks.map(t => t.strategy_category))];
+    console.log(`  Strategy categories: ${categories.join(', ')}`);
+    scores['2.4 strategy_categories'] = { value: categories.join(', '), pass: categories.length >= 1 };
+
+    // 2.5 Tasks linked to ads
+    const linkedCount = tasks.filter(t => t.linked_ads?.length > 0).length;
+    scores['2.5 ads_linked'] = { value: `${linkedCount}/${tasks.length}`, pass: linkedCount > 0 };
+
+    // Print task details
+    for (const task of tasks.slice(0, 5)) {
+      console.log(`    [${task.task_id}] ${task.strategy_category} | ${task.target_market} | ${task.dimensions} | ${task.copy?.language}`);
+      console.log(`       ${task.concept?.slice(0, 80)}...`);
+    }
+    if (tasks.length > 5) console.log(`    ... and ${tasks.length - 5} more tasks`);
+  } else {
+    console.log(`  Creative plan phase: ${hasCreativePlan ? 'completed but no data' : 'not reached'}`);
+    scores['2.1 creative_tasks_generated'] = { value: 'N/A', pass: false };
+    scores['2.2 image_prompts_complete'] = { value: 'N/A', pass: false };
+    scores['2.3 localized_copy'] = { value: 'N/A', pass: false };
+  }
+
+  // ── 3. Creative Quality ─────────────────────────────────────────
+  console.log('\n  --- 3. Creative Quality ---');
 
   const creativeResult = evalState.phaseResults.creative || finalSession?.phase_results?.creative;
   const strategyResult = evalState.phaseResults.strategy || finalSession?.phase_results?.strategy;
 
   if (creativeResult?.skipped) {
     console.log('  Creative phase was skipped (no creatives generated)');
-    scores['2.1 meta_format_compliance'] = { value: 'skipped', pass: null, note: 'Creative skipped — evaluate from strategy ad specs' };
-    scores['2.2 creative_quality'] = { value: 'skipped', pass: null };
+    scores['3.1 meta_format_compliance'] = { value: 'skipped', pass: null, note: 'Creative skipped — evaluate from strategy ad specs' };
+    scores['3.2 creative_quality'] = { value: 'skipped', pass: null };
 
     // Evaluate ad specs from strategy instead
     if (strategyResult) {
@@ -270,7 +354,7 @@ async function run() {
         console.log(`  Strategy defines ${totalAds} ads, formats: ${[...formats].join(', ')}`);
         console.log(`  Ads with media specs: ${adsWithSpecs}/${totalAds}`);
         const specRate = totalAds > 0 ? adsWithSpecs / totalAds : 0;
-        scores['2.1 meta_format_compliance'] = { value: `${(specRate * 100).toFixed(0)}%`, pass: specRate >= 0.9, note: 'Based on strategy ad specs' };
+        scores['3.1 meta_format_compliance'] = { value: `${(specRate * 100).toFixed(0)}%`, pass: specRate >= 0.9, note: 'Based on strategy ad specs' };
       }
     }
   } else if (creativeResult?.creatives) {
@@ -287,16 +371,16 @@ async function run() {
     }
 
     const successRate = total > 0 ? successes / total : 0;
-    scores['2.1 meta_format_compliance'] = { value: `${(successRate * 100).toFixed(0)}%`, pass: successRate >= 0.9 };
-    scores['2.2 creative_quality'] = { value: `${successes}/${total} generated`, pass: failures.length === 0 };
+    scores['3.1 meta_format_compliance'] = { value: `${(successRate * 100).toFixed(0)}%`, pass: successRate >= 0.9 };
+    scores['3.2 creative_quality'] = { value: `${successes}/${total} generated`, pass: failures.length === 0 };
   } else {
     console.log('  No creative results found');
-    scores['2.1 meta_format_compliance'] = { value: 'N/A', pass: false };
-    scores['2.2 creative_quality'] = { value: 'N/A', pass: false };
+    scores['3.1 meta_format_compliance'] = { value: 'N/A', pass: false };
+    scores['3.2 creative_quality'] = { value: 'N/A', pass: false };
   }
 
-  // ── 3. Execution Plan ───────────────────────────────────────────
-  console.log('\n  --- 3. Execution Plan ---');
+  // ── 4. Execution Plan ───────────────────────────────────────────
+  console.log('\n  --- 4. Execution Plan ---');
 
   const executionResult = evalState.phaseResults.execution || finalSession?.phase_results?.execution;
   const reachedExecution = evalState.phasesCompleted.includes('execution') ||
@@ -315,12 +399,12 @@ async function run() {
 
   const executionPass = reachedExecution || attemptedExecution || awaitingApproval;
 
-  scores['3.1 reached_execution'] = {
+  scores['4.1 reached_execution'] = {
     value: executionCompleted ? 'completed' : (reachedExecution ? 'reached' : (awaitingApproval ? 'awaiting approval' : (attemptedExecution ? 'attempted' : 'not reached'))),
     pass: executionPass,
   };
 
-  console.log(`  Reached execution: ${executionPass ? 'YES' : 'NO'} (${scores['3.1 reached_execution'].value})`);
+  console.log(`  Reached execution: ${executionPass ? 'YES' : 'NO'} (${scores['4.1 reached_execution'].value})`);
   console.log(`  Final session status: ${finalSession?.status}`);
   console.log(`  Final phase: ${finalSession?.current_phase}`);
 

@@ -1,3 +1,4 @@
+import { createClient } from '../../../../../../lib/supabase-server.js';
 import { resumeAfterFeedback } from '../../../../../../src/campaign-orchestrator.service.js';
 import { getSession, getLatestSession, updateSessionIfStatus } from '../../../../../../lib/repositories/orchestrator.repository.js';
 import { streamSSE } from '../../../../../../lib/sse.js';
@@ -10,6 +11,12 @@ import { streamSSE } from '../../../../../../lib/sse.js';
  * Returns: SSE stream
  */
 export async function POST(request, { params }) {
+  const supabase = await createClient();
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) {
+    return Response.json({ error: 'Unauthorized' }, { status: 401 });
+  }
+
   const { id } = await params;
 
   let body;

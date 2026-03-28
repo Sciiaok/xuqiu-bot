@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useMemo } from 'react';
 
 function PlanPreview({ plan }) {
   if (!plan || !plan.platforms) return <div className="text-[13px] text-gray-500">No plan data</div>;
@@ -98,6 +98,49 @@ function PlanPreview({ plan }) {
   );
 }
 
+const ERROR_HINTS = {
+  'follow_up_action_url': { summary: '跳转链接无效', fix: '请在 Brief 中提供有效的网站 URL（以 https:// 开头），系统将用它作为表单感谢页跳转地址。' },
+  'privacy_policy': { summary: '隐私政策链接无效', fix: '请提供有效的隐私政策页面 URL。' },
+  'No image_hash': { summary: '广告图片缺失', fix: '素材生成阶段未完成，请在对话中要求重新生成素材。' },
+  'audience too small': { summary: '受众范围过小', fix: '可尝试扩大目标国家范围或放宽年龄限制。' },
+  'daily budget': { summary: '日预算不足', fix: 'Meta 要求每个广告组最低 $1/天预算。' },
+};
+
+function ExecutionErrors({ errors }) {
+  const matched = useMemo(() => {
+    const errMsgs = errors.map(e => typeof e === 'string' ? e : (e.message || e.error || JSON.stringify(e)));
+    const counts = {};
+    for (const msg of errMsgs) {
+      counts[msg] = (counts[msg] || 0) + 1;
+    }
+    return Object.entries(counts).map(([msg, count]) => {
+      const hint = Object.entries(ERROR_HINTS).find(([key]) => msg.toLowerCase().includes(key.toLowerCase()));
+      return { msg, count, hint: hint?.[1] };
+    });
+  }, [errors]);
+
+  return (
+    <div className="text-xs bg-red-50 border border-red-200 rounded-lg p-3 mt-2 space-y-2">
+      <div className="font-medium text-red-700">{errors.length} 个错误</div>
+      {matched.map(({ msg, count, hint }, i) => (
+        <div key={i} className="border-t border-red-100 pt-2 first:border-0 first:pt-0">
+          {hint ? (
+            <>
+              <div className="text-red-600 font-medium">{hint.summary}{count > 1 ? ` (×${count})` : ''}</div>
+              <div className="text-red-500 mt-0.5">{hint.fix}</div>
+            </>
+          ) : (
+            <div className="text-red-600">{msg}{count > 1 ? ` (×${count})` : ''}</div>
+          )}
+        </div>
+      ))}
+      <div className="border-t border-red-100 pt-2 text-gray-600">
+        修复后，在对话中输入"重新执行投放"即可重试。
+      </div>
+    </div>
+  );
+}
+
 export default function ExecutionCard({ plan, result, status, onApprove, onReject }) {
   const [expanded, setExpanded] = useState(false);
 
@@ -175,9 +218,7 @@ export default function ExecutionCard({ plan, result, status, onApprove, onRejec
           </div>
         )}
         {errors.length > 0 && (
-          <div className="text-xs text-red-600 bg-red-50 border border-red-200 rounded-lg p-2 mt-2">
-            {errors.length} 个错误：{errors.map(e => e.message || e).join('; ')}
-          </div>
+          <ExecutionErrors errors={errors} />
         )}
       </div>
 

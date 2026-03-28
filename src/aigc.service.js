@@ -1,24 +1,19 @@
-import Anthropic from '@anthropic-ai/sdk';
+import { anthropic, MODELS } from './llm-client.js';
 import { config } from './config.js';
 import supabase from '../lib/supabase.js';
 
-const anthropic = new Anthropic({
-  apiKey: config.anthropic.apiKey,
-  ...(config.anthropic.baseURL && { baseURL: config.anthropic.baseURL }),
-});
-
 const OPENROUTER_CHAT_URL = `${config.aigc.baseURL}/v1/chat/completions`;
 const FETCH_TIMEOUT = 120_000;
+const BEST_OF_N = parseInt(process.env.AIGC_BEST_OF_N, 10) || 1;
+const SCORE_THRESHOLD = 6;     // Minimum acceptable fidelity score (1-10)
 
 /**
  * Extract product information from PDF text content.
  * Uses OpenRouter-configured Anthropic SDK.
  */
 export async function extractProductInfo(pdfText) {
-  if (!config.anthropic.apiKey) throw new Error('API key is not configured');
-
   const response = await anthropic.messages.create({
-    model: config.anthropic.model,
+    model: MODELS.SONNET,
     max_tokens: 4096,
     messages: [{
       role: 'user',
@@ -45,11 +40,9 @@ ${pdfText.slice(0, 12000)}`,
  * Generate an ad image via OpenRouter image-capable models.
  * Returns { imageBuffer, model, prompt }.
  */
-const IMAGE_MODEL_FALLBACKS = [
-  'google/gemini-3.1-flash-image-preview',
-  'google/gemini-2.0-flash-exp:free',
-  'openai/gpt-image-1',
-];
+const IMAGE_MODEL_FALLBACKS = process.env.MIXAI_API_KEY
+  ? ['gemini-3.1-flash-image-preview', 'gemini-2.5-flash-image', 'gemini-2.5-flash-image-preview']
+  : ['google/gemini-3.1-flash-image-preview', 'google/gemini-2.0-flash-exp:free', 'openai/gpt-image-1'];
 
 export async function generateAdImage({ prompt, model, referenceImages }) {
   if (!config.aigc.apiKey) throw new Error('OPENROUTER_API_KEY is not configured');
@@ -69,9 +62,12 @@ export async function generateAdImage({ prompt, model, referenceImages }) {
   }
 
   // Try models in order until one succeeds
+  // Set AIGC_NO_FALLBACK=1 to disable model fallback chain (faster failures in testing)
   const modelsToTry = model
     ? [model]
-    : [config.aigc.imageModel, ...IMAGE_MODEL_FALLBACKS.filter(m => m !== config.aigc.imageModel)];
+    : process.env.AIGC_NO_FALLBACK
+      ? [config.aigc.imageModel]
+      : [config.aigc.imageModel, ...IMAGE_MODEL_FALLBACKS.filter(m => m !== config.aigc.imageModel)];
 
   let lastError;
   for (const currentModel of modelsToTry) {
@@ -117,7 +113,7 @@ async function callImageModel(model, content) {
 }
 
 /**
- * Extract base64 image data from various OpenRouter response formats.
+ * Extract base64 image data from various response formats.
  */
 export function extractBase64Image(message) {
   // Format 1: message.images[] (GPT-5-image)
@@ -128,7 +124,7 @@ export function extractBase64Image(message) {
     return url;
   }
 
-  // Format 2: message.content[] multimodal (Gemini)
+  // Format 2: message.content[] multimodal (OpenRouter Gemini)
   if (Array.isArray(message.content)) {
     for (const part of message.content) {
       if (part.type === 'image_url') {
@@ -137,6 +133,15 @@ export function extractBase64Image(message) {
         return url;
       }
     }
+  }
+
+  // Format 3: markdown ![image](data:...) in text (MixAI Gemini)
+  const text = typeof message.content === 'string' ? message.content
+    : Array.isArray(message.content) ? message.content.filter(p => p.type === 'text').map(p => p.text).join('')
+    : '';
+  if (text) {
+    const match = text.match(/!\[.*?\]\((data:image\/[^;]+;base64,([A-Za-z0-9+/=\s]+))\)/);
+    if (match?.[2]) return match[2].replace(/\s/g, '');
   }
 
   return null;
@@ -180,7 +185,20 @@ export function buildAdPrompt({ productInfo, userPrompt, format, targetProduct, 
     : '- Include a WhatsApp CTA button at the bottom';
 
   const refInstruction = referenceImages?.length
-    ? `- Reference the provided competitor/product images for visual style, layout, and color palette. Adapt their best design patterns while creating original content for our product.`
+    ? `## Product Fidelity (CRITICAL — highest priority)
+- The provided reference images show the EXACT product. You MUST preserve:
+  - Product shape, proportions, and silhouette — do NOT alter the body shape
+  - Exact colors, paint finish, and material textures
+  - Brand logos, badges, and nameplate positions
+  - Key design details (grille pattern, wheel design, light signatures, etc.)
+- Do NOT hallucinate, invent, or modify any product feature not visible in the reference
+- Do NOT blend features from other products or brands
+- The product in the generated image must be immediately recognizable as the same product shown in the reference
+
+## Scene & Composition
+- Place the product in a contextually appropriate scene/background
+- The product should be the dominant visual element (60-70% of frame)
+- Adapt the lighting and environment from the reference style, but keep the product appearance identical`
     : '';
 
   return `Generate a professional ad image (1080x1080 square, exactly 1080 pixels wide and 1080 pixels tall) for ${company}.
@@ -191,15 +209,111 @@ Selling points: ${sellingPoints}
 
 ${userPrompt}
 
+${refInstruction}
+
 Requirements:
 - Image MUST be exactly 1080x1080 pixels (square format for Facebook/Instagram feed)
 - Professional, clean design suitable for Facebook/Instagram ads
 - Include product name and key specs as text overlay
 ${langInstruction}
 ${ctaLine}
-${refInstruction}
 - Do NOT include any phone numbers or contact details in the image
-- High quality, photorealistic style`;
+- Photorealistic, commercial photography quality, studio-grade lighting`;
+}
+
+/**
+ * Score a generated image against reference images using a vision model.
+ * Returns { score: 1-10, reason: string }.
+ */
+async function scoreImageFidelity(generatedB64, referenceImages) {
+  if (!referenceImages?.length) return { score: 8, reason: 'No reference to compare' };
+
+  try {
+    const response = await anthropic.messages.create({
+      model: MODELS.HAIKU,
+      max_tokens: 256,
+      messages: [{
+        role: 'user',
+        content: [
+          // Reference images first
+          ...referenceImages.slice(0, 2).map(ref => ({
+            type: 'image',
+            source: { type: 'url', url: typeof ref === 'string' ? ref : ref.url },
+          })),
+          // Generated image
+          {
+            type: 'image',
+            source: { type: 'base64', media_type: 'image/png', data: generatedB64 },
+          },
+          {
+            type: 'text',
+            text: `The first image(s) are reference photos of the REAL product. The last image is an AI-generated ad.
+
+Score the generated ad image on product fidelity (1-10):
+- 10: Product is pixel-perfect match to reference (shape, color, details all correct)
+- 7-9: Product is clearly recognizable, minor differences in angle/lighting
+- 4-6: Product is somewhat recognizable but has noticeable errors (wrong shape, wrong color, missing details)
+- 1-3: Product is unrecognizable or completely different from reference
+
+Reply ONLY with JSON: {"score": <number>, "reason": "<one sentence>"}`,
+          },
+        ],
+      }],
+    });
+
+    const text = response.content?.[0]?.text || '';
+    const match = text.match(/\{[\s\S]*\}/);
+    if (match) {
+      const parsed = JSON.parse(match[0]);
+      return { score: Number(parsed.score) || 5, reason: parsed.reason || '' };
+    }
+    return { score: 5, reason: 'Could not parse score' };
+  } catch (err) {
+    console.warn('[aigc] Vision scoring failed:', err.message);
+    return { score: 5, reason: `Scoring error: ${err.message}` };
+  }
+}
+
+/**
+ * Generate N candidate images and pick the best one by vision model scoring.
+ * Falls back to first successful candidate if scoring fails.
+ */
+export async function generateAdImageBestOfN({ prompt, model, referenceImages, n = BEST_OF_N }) {
+  if (!referenceImages?.length || n <= 1) {
+    // No references to score against — single generation
+    return generateAdImage({ prompt, model, referenceImages });
+  }
+
+  // Generate N candidates in parallel
+  const candidates = await Promise.allSettled(
+    Array.from({ length: n }, () => generateAdImage({ prompt, model, referenceImages })),
+  );
+
+  const successful = candidates
+    .filter(c => c.status === 'fulfilled')
+    .map(c => c.value);
+
+  if (successful.length === 0) {
+    const firstErr = candidates.find(c => c.status === 'rejected');
+    throw firstErr?.reason || new Error('All candidate generations failed');
+  }
+
+  if (successful.length === 1) return successful[0];
+
+  // Score each candidate against references
+  const scored = await Promise.all(
+    successful.map(async (candidate) => {
+      const b64 = candidate.imageBuffer.toString('base64');
+      const { score, reason } = await scoreImageFidelity(b64, referenceImages);
+      return { ...candidate, score, scoreReason: reason };
+    }),
+  );
+
+  scored.sort((a, b) => b.score - a.score);
+  const best = scored[0];
+  console.log(`[aigc] Best-of-${n}: picked score=${best.score} (${best.scoreReason}), all scores: [${scored.map(s => s.score).join(', ')}]`);
+
+  return best;
 }
 
 /**
@@ -265,7 +379,7 @@ export async function generateFromDocument({ pdfText, userPrompt, model, sourceF
     referenceImages,
   });
 
-  const { imageBuffer, model: usedModel } = await generateAdImage({ prompt, model, referenceImages });
+  const { imageBuffer, model: usedModel } = await generateAdImageBestOfN({ prompt, model, referenceImages });
 
   const asset = await saveGeneratedAsset({
     imageBuffer,

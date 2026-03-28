@@ -1,5 +1,4 @@
-import Anthropic from '@anthropic-ai/sdk';
-import { config } from './config.js';
+import { anthropic, MODELS } from './llm-client.js';
 import {
   getBrief,
   updateBriefFields,
@@ -13,25 +12,32 @@ import {
   addMessages,
   getMessagesForClaude,
   getNextMessageIndex,
+  attachmentsToContentBlocks,
+  updateSession,
 } from '../lib/repositories/orchestrator.repository.js';
 
-const anthropic = new Anthropic({
-  apiKey: config.anthropic.apiKey,
-  ...(config.anthropic.baseURL && { baseURL: config.anthropic.baseURL }),
-});
-
-const REQUIRED_FIELDS = [
+// Core fields: must have these to proceed to orchestration
+const CORE_FIELDS = [
   'company_name',
   'industry',
   'products',
   'target_countries',
-  'target_audience',
   'budget_total',
   'budget_currency',
+];
+
+// Optional fields: nice-to-have, can be inferred by downstream agents
+const OPTIONAL_FIELDS = [
+  'target_audience',
   'campaign_duration_days',
   'objectives',
   'preferred_platforms',
+  'competitors',
+  'existing_landing_pages',
+  'existing_creatives',
 ];
+
+const REQUIRED_FIELDS = [...CORE_FIELDS, ...OPTIONAL_FIELDS];
 
 // ── Tool Definitions ────────────────────────────────────────────────────
 
@@ -40,7 +46,7 @@ export function getIntakeTools() {
     {
       name: 'update_brief',
       description:
-        "Update the campaign brief with newly extracted fields from the conversation. Call this whenever you learn new information about the client's requirements. Returns current completion status.",
+        "Update the campaign brief with newly extracted fields from the conversation. Call this whenever you learn new information about the client's requirements. Returns current completion status. Set show_summary=true when the user explicitly asks to see the current brief status or a summary of collected info.",
       input_schema: {
         type: 'object',
         properties: {
@@ -49,6 +55,10 @@ export function getIntakeTools() {
             description:
               'Partial CampaignBrief fields to merge into the existing brief',
           },
+          show_summary: {
+            type: 'boolean',
+            description: 'Set to true to display the brief summary card to the user (only when user asks to see current status)',
+          },
         },
         required: ['fields'],
       },
@@ -56,7 +66,7 @@ export function getIntakeTools() {
     {
       name: 'save_brief',
       description:
-        'Save the final completed brief and mark the session as complete. Only call this when all required fields are filled and the client has confirmed the brief.',
+        'Save the brief and mark the session as complete. Call this when: (1) core_complete=true and user confirms to proceed, OR (2) all fields are filled, OR (3) user explicitly says to skip. Minimum: company_name + industry. Prefer saving early once core fields are ready — optional fields can be inferred by downstream agents.',
       input_schema: {
         type: 'object',
         properties: {
@@ -81,6 +91,30 @@ export function getIntakeTools() {
         required: ['attachment_url', 'type'],
       },
     },
+    {
+      name: 'web_search',
+      description:
+        '联网搜索信息。当用户要求搜索竞品、市场数据、行业资讯，或你需要主动调研公司官网和产品页时调用。返回搜索摘要和候选链接。',
+      input_schema: {
+        type: 'object',
+        properties: {
+          query: { type: 'string', description: '搜索关键词' },
+        },
+        required: ['query'],
+      },
+    },
+    {
+      name: 'read_webpage',
+      description:
+        '读取指定网页内容。当用户提供了网址，或你已通过搜索拿到官网/产品页 URL 并需要阅读正文时调用。返回网页标题和正文摘要。',
+      input_schema: {
+        type: 'object',
+        properties: {
+          url: { type: 'string', description: '要读取的网页 URL' },
+        },
+        required: ['url'],
+      },
+    },
   ];
 }
 
@@ -89,34 +123,86 @@ export function getIntakeTools() {
 export function buildIntakeSystemPrompt() {
   return `你是一位专业的投放需求顾问（Campaign Requirements Consultant），帮助客户定义数字广告投放需求。
 
-═══ 你的职责 ═══
-通过自然的多轮对话，收集客户的广告投放需求，形成完整的 Campaign Brief。
+═══ 你的职责（严格边界）═══
+你的**唯一任务**是收集客户的广告投放需求，形成 Campaign Brief，然后调用 save_brief 交接给下游 Agent。
 
-═══ CampaignBrief 字段说明 ═══
+**你绝对不能做以下事情：**
+- ❌ 输出投放策略、媒体方案、预算分配
+- ❌ 生成广告素材、创意文案、Midjourney Prompt
+- ❌ 制定排期计划、A/B 测试方案
+- ❌ 输出账户结构、受众定向详细设置
+这些都是下游 Agent（策略、素材、执行）的工作。如果用户要求做这些，告知他们"信息收集完成后，系统会自动进入方案规划阶段"，然后尽快 save_brief。
+
+═══ CampaignBrief 字段说明（6 大类） ═══
+
+**1. 市场与业务目标 (Market & Business Objectives)**
 - company_name: 公司名称
 - industry: 所属行业
-- products: 推广的产品或服务
-- target_countries: 目标投放国家/地区
-- target_audience: 目标受众描述
+- target_countries: 目标投放国家/地区（具体到国家或城市群）
+- objectives: 投放目标（品牌认知 Brand Awareness / 销量转化 Conversion / 线索获取 Lead Generation）
+- kpi_targets: 期望的具体 KPI 指标（如 CPL、CPC、品牌搜索指数增幅）
+
+**2. 产品与定价策略 (Product & Pricing)**
+- products: 推广的产品或服务（含型号、核心卖点 USP、对标竞品）
+- product_pricing: 产品定价及细分市场定位
+
+**3. 目标受众画像 (Audience Profiling)**
+- target_audience: 目标受众描述（年龄、性别、职业、收入、行为特征、触媒习惯）
+
+**4. 竞争环境与差异化 (Competitive Landscape)**
+- competitors: 主要竞争对手及其在目标市场的现状
+- differentiation: 品牌差异化策略/破局点
+
+**5. 现有数字资产与资源 (Digital Assets & Resources)**
+- existing_landing_pages: 已有的落地页/官网（是否本地化、是否有询价表单）
+- existing_creatives: 已有的广告素材（TVC、产品图、视频等）
+- website: 公司官网
+- crm_system: CRM 系统（如 Salesforce、HubSpot）
+
+**6. 预算与合规 (Budget & Compliance)**
 - budget_total: 总预算金额
 - budget_currency: 预算货币（如 USD、CNY）
 - campaign_duration_days: 投放周期（天数）
-- objectives: 投放目标（如品牌曝光、获取线索、促进转化）
-- preferred_platforms: 偏好投放平台（如 Google Ads、Meta、TikTok）
+- preferred_platforms: 偏好投放平台（如 Google Ads、Meta、TikTok、LinkedIn）
+- compliance_notes: 当地法律合规要求（如 GDPR、广告法限制、油耗披露标准）
+
+═══ 主动调研策略（最重要！）═══
+当用户提到公司名或品牌名时，你必须立即主动行动：
+1. 调用 web_search 搜索「{company_name} official website」和「{company_name} {industry} products」
+2. 从搜索结果中确认官网 URL、产品页、行业定位和目标市场线索；必要时调用 read_webpage 阅读具体页面
+3. 从搜索结果和网页内容中自动提取并推理以下字段：
+   - industry（从官网描述推断）
+   - products（从产品页提取型号、品类、卖点）
+   - website（官网 URL）
+   - competitors（搜索同行业竞品）
+   - target_countries（如果官网有多语言版本或提到出口市场）
+4. 把推理出的信息用 update_brief 保存，同时在回复中清晰展示你发现了什么，请用户确认或修正
+5. 基于调研结果，推理用户可能的投放目标（如 B2B 机械企业 → Lead Generation，跨境电商 → Conversion）
+
+═══ 智能追问策略 ═══
+不要机械地按清单逐项提问。根据已知信息进行推理和关联追问：
+- 已知行业 + 产品 → 推理目标受众画像，询问用户确认
+- 已知目标国家 → 推荐平台组合（如中东 → Meta + Google，东南亚 → Meta + TikTok）
+- 已知预算 + 周期 → 评估是否合理，给出专业建议
+- 已知竞品 → 分析差异化策略，引导用户思考破局点
+- 如果用户只给了模糊描述（如"做外贸的"），追问具体品类和目标市场
+
+每次回复最多追问 2-3 个最关键的缺失信息，优先问能触发更多推理的字段（如 company_name → 可以推理出一半的字段）。
 
 ═══ 对话策略 ═══
-1. 使用清单驱动的多轮对话，不要机械式逐个提问
-2. 每次获取到新信息时，立即调用 update_brief 保存
-3. 根据上下文主动推荐缺失字段的值（如根据行业推荐合适的投放平台）
-4. 推荐值需要客户确认后才算收集完成
-5. 所有必填字段收集完毕且客户确认后，调用 save_brief 完成
+1. 每次获取到新信息时，立即调用 update_brief 保存
+2. update_brief 返回值中包含 core_complete 字段。**当 core_complete=true 时**，立即调用 save_brief 保存并告知用户"需求已记录，正在进入方案规划阶段"。不要再追问可选字段。
+3. 如果用户的第一条消息就包含了足够的核心信息（公司名、产品、目标市场、预算），在一次 web_search 调研后直接 update_brief → save_brief，不要多余追问
+4. 如果用户说"继续"、"下一步"、"开始"等推进性指令，只要 company_name 和 industry 已填，立即 save_brief
+5. 当用户要求做策划、生成素材、制定排期等下游工作时，先完成 save_brief，然后回复"已进入方案规划阶段，系统正在为您生成投放方案"
+6. 你有联网搜索和网页读取能力。用于调研公司和产品信息补充 brief 字段，不要用于输出策略分析
+7. 每条回复控制在200字以内。你的目标是尽快收集完信息并交接，不是展示专业知识
 
 ═══ 回复要求 ═══
-- 每条回复控制在300字以内
-- 语气专业但友好
-- 可以同时询问多个相关字段，避免一问一答
+- 每条回复控制在200字以内，简洁直接
 - 用中文回复
-- 使用 Markdown 格式化回复：用 **加粗** 强调重点，用表格展示结构化信息（如 Brief 摘要），用列表展示选项`;
+- 只围绕 brief 缺失字段追问，不输出分析、建议、方案
+- 当核心字段齐全时，回复格式固定为："需求已记录完毕，正在为您进入投放规划阶段。" + 调用 save_brief`;
 }
 
 // ── SSE Filtering ───────────────────────────────────────────────────────
@@ -146,17 +232,24 @@ async function executeUpdateBrief(briefId, input) {
     return true;
   });
   const missing = REQUIRED_FIELDS.filter((f) => !filled.includes(f));
-  const completion_pct = (filled.length / REQUIRED_FIELDS.length) * 100;
+  const completion_pct = Math.round((filled.length / REQUIRED_FIELDS.length) * 100);
   const is_complete = missing.length === 0;
 
-  const completion = { filled, missing, completion_pct };
+  const coreFilled = CORE_FIELDS.filter(f => filled.includes(f));
+  const coreMissing = CORE_FIELDS.filter(f => !filled.includes(f));
+  const core_complete = coreMissing.length === 0;
+
+  const completion = { filled, missing, completion_pct, core_complete };
   await updateCompletion(briefId, completion);
 
   return {
     brief: briefData,
     is_complete,
+    core_complete,
     filled,
     missing,
+    core_missing: coreMissing,
+    optional_missing: OPTIONAL_FIELDS.filter(f => !filled.includes(f)),
     completion_pct,
   };
 }
@@ -170,6 +263,150 @@ async function executeParseAttachment(_briefId, _input) {
   return { extracted_text: 'Attachment parsing not yet implemented' };
 }
 
+function extractTextBlocks(content = []) {
+  return content
+    .filter((block) => block?.type === 'text' && typeof block.text === 'string')
+    .map((block) => block.text.trim())
+    .filter(Boolean)
+    .join('\n')
+    .trim();
+}
+
+function stripCodeFence(text = '') {
+  return text
+    .replace(/^```(?:json)?\s*/i, '')
+    .replace(/\s*```$/, '')
+    .trim();
+}
+
+function tryParseJson(text = '') {
+  if (!text) return null;
+  try {
+    return JSON.parse(stripCodeFence(text));
+  } catch {
+    return null;
+  }
+}
+
+function extractUrls(text = '') {
+  const matches = text.match(/https?:\/\/[^\s<>()"]+/g) || [];
+  return [...new Set(matches)];
+}
+
+function extractNativeSearchResults(content = []) {
+  const results = [];
+
+  for (const block of content) {
+    if (block?.type !== 'web_search_tool_result' || !Array.isArray(block.content)) continue;
+    for (const item of block.content) {
+      if (item?.type !== 'web_search_result' || !item.url) continue;
+      results.push({
+        title: item.title || item.url,
+        url: item.url,
+      });
+    }
+  }
+
+  return results.filter((item, index, arr) => arr.findIndex((x) => x.url === item.url) === index);
+}
+
+function extractNativeFetchDocument(content = []) {
+  for (const block of content) {
+    if (block?.type !== 'web_fetch_tool_result') continue;
+    const result = block.content;
+    if (result?.type !== 'web_fetch_result') continue;
+    const doc = result.content;
+    const source = doc?.source;
+    const data = source?.type === 'text' ? source.data : '';
+
+    return {
+      url: result.url,
+      title: doc?.title || null,
+      content: typeof data === 'string' ? data : '',
+    };
+  }
+
+  return null;
+}
+
+async function executeWebSearch(_briefId, input) {
+  try {
+    const response = await anthropic.messages.create({
+      model: MODELS.SONNET,
+      max_tokens: 900,
+      messages: [
+        {
+          role: 'user',
+          content:
+            `你必须使用 web_search 搜索这个查询：${input.query}\n` +
+            '返回一个 JSON 对象，且只返回 JSON，不要写额外说明。格式：' +
+            '{"query":"原查询","summary":"200字内中文摘要","results":[{"title":"标题","url":"https://..."}]}\n' +
+            'results 最多 5 条，优先保留官网、产品页、权威资料链接。',
+        },
+      ],
+      tools: [{ type: 'web_search_20250305', name: 'web_search', max_uses: 2 }],
+    });
+
+    const text = extractTextBlocks(response.content);
+    const parsed = tryParseJson(text);
+    const nativeResults = extractNativeSearchResults(response.content);
+    const parsedResults = Array.isArray(parsed?.results)
+      ? parsed.results
+        .filter((item) => item?.url)
+        .map((item) => ({ title: item.title || item.url, url: item.url }))
+      : [];
+    const mergedResults = [...nativeResults, ...parsedResults]
+      .filter((item, index, arr) => arr.findIndex((x) => x.url === item.url) === index)
+      .slice(0, 5);
+
+    return {
+      query: input.query,
+      summary: (parsed?.summary || text || '').slice(0, 2000),
+      results: mergedResults.length ? mergedResults : extractUrls(text).slice(0, 5).map((url) => ({ title: url, url })),
+    };
+  } catch (err) {
+    return { error: `Search error: ${err.message}`, results: [] };
+  }
+}
+
+async function executeReadWebpage(_briefId, input) {
+  try {
+    const hostname = new URL(input.url).hostname;
+    const response = await anthropic.messages.create({
+      model: MODELS.SONNET,
+      max_tokens: 1400,
+      messages: [
+        {
+          role: 'user',
+          content:
+            `你必须使用 web_fetch 读取这个网页：${input.url}\n` +
+            '返回一个 JSON 对象，且只返回 JSON，不要写额外说明。格式：' +
+            '{"url":"页面URL","title":"页面标题","content":"保留关键信息的正文摘要，最多3000字"}',
+        },
+      ],
+      tools: [{
+        type: 'web_fetch_20250910',
+        name: 'web_fetch',
+        max_uses: 1,
+        allowed_domains: [hostname],
+        max_content_tokens: 12000,
+      }],
+    });
+
+    const text = extractTextBlocks(response.content);
+    const parsed = tryParseJson(text);
+    const nativeDoc = extractNativeFetchDocument(response.content);
+
+    return {
+      url: parsed?.url || nativeDoc?.url || input.url,
+      title: parsed?.title || nativeDoc?.title || null,
+      content: (parsed?.content || nativeDoc?.content || text || '').slice(0, 6000),
+    };
+  } catch (err) {
+    return { error: `Read error: ${err.message}`, content: '' };
+  }
+}
+
 async function executeTool(briefId, toolName, toolInput) {
   switch (toolName) {
     case 'update_brief':
@@ -178,6 +415,10 @@ async function executeTool(briefId, toolName, toolInput) {
       return executeSaveBrief(briefId, toolInput);
     case 'parse_attachment':
       return executeParseAttachment(briefId, toolInput);
+    case 'web_search':
+      return executeWebSearch(briefId, toolInput);
+    case 'read_webpage':
+      return executeReadWebpage(briefId, toolInput);
     default:
       return { error: `Unknown tool: ${toolName}` };
   }
@@ -188,8 +429,9 @@ async function executeTool(briefId, toolName, toolInput) {
 export async function* processIntakeMessage(
   briefId,
   message,
-  { streamLevel = 'text' } = {},
+  { streamLevel = 'events', attachments } = {},
 ) {
+  let sessionId = null;
   try {
     // 1. Load brief from DB
     const brief = await getBrief(briefId);
@@ -201,9 +443,12 @@ export async function* processIntakeMessage(
     // 2. Resolve orchestrator session (create if not exists)
     let session = await getLatestSession(briefId);
     if (!session) {
-      session = await createSession(briefId);
+      session = await createSession(briefId, { status: 'intake', current_phase: 'intake' });
     }
-    const sessionId = session.id;
+    sessionId = session.id;
+    if (session.status !== 'intake' || session.current_phase !== 'intake') {
+      session = await updateSession(sessionId, { status: 'intake', current_phase: 'intake' });
+    }
 
     // 3. Load history
     const history = await getMessagesForClaude(sessionId, { phase: 'intake' });
@@ -217,30 +462,89 @@ export async function* processIntakeMessage(
       role: 'user',
       content: message,
       message_index: messageIndex++,
+      attachments: attachments?.length ? attachments : undefined,
     });
 
-    // 5. Build Claude request messages
+    // 5a. Persist uploaded image URLs to brief.product_images
+    if (attachments?.length) {
+      const newImages = attachments
+        .filter(a => a.content_type?.startsWith('image/'))
+        .map(a => ({ url: a.url, filename: a.filename }));
+      if (newImages.length) {
+        const existing = brief.brief?.product_images || [];
+        await updateBriefFields(briefId, {
+          product_images: [...existing, ...newImages],
+        });
+      }
+    }
+
+    // 5b. Build Claude request messages (multimodal if attachments exist)
+    let userContent;
+    if (attachments?.length) {
+      const imageBlocks = await attachmentsToContentBlocks(attachments);
+      userContent = [
+        ...imageBlocks,
+        { type: 'text', text: message },
+      ];
+    } else {
+      userContent = message;
+    }
+
     const messages = [
       ...history,
-      { role: 'user', content: message },
+      { role: 'user', content: userContent },
     ];
 
     // 6. Process streaming response with tool-use loop
     const tools = getIntakeTools();
     const systemPrompt = buildIntakeSystemPrompt();
     let iterations = 0;
-    const maxIterations = 5;
-    // Collect all messages to persist after the loop
-    const messagesToPersist = [];
+    const maxIterations = 12;
     let latestBrief = brief.brief || {};
     let latestCompletion = brief.completion || {};
     let briefCompleted = false;
+    let userRequestedSummary = false;
+
+    async function persistStreamTurn(assistantText, toolUseBlocks) {
+      const rows = [];
+      if (assistantText) {
+        rows.push({
+          phase: 'intake',
+          role: 'assistant',
+          content: assistantText,
+          message_index: messageIndex++,
+        });
+      }
+      for (const block of toolUseBlocks) {
+        rows.push({
+          phase: 'intake',
+          role: 'assistant',
+          content: null,
+          tool_use_id: block.id,
+          tool_name: block.name,
+          tool_input: block.input,
+          message_index: messageIndex++,
+        });
+        rows.push({
+          phase: 'intake',
+          role: 'tool',
+          content: null,
+          tool_use_id: block.id,
+          tool_result: block.result,
+          message_index: messageIndex++,
+        });
+      }
+      if (rows.length > 0) {
+        await addMessages(sessionId, rows);
+      }
+    }
 
     while (iterations < maxIterations) {
       iterations++;
+      console.log(`[intake] session=${sessionId} iter=${iterations}/${maxIterations} messages=${messages.length}`);
 
       const stream = anthropic.messages.stream({
-        model: config.anthropic.model,
+        model: MODELS.SONNET,
         max_tokens: 4096,
         system: systemPrompt,
         messages,
@@ -255,127 +559,160 @@ export async function* processIntakeMessage(
       let currentToolUseId = '';
       let assistantText = '';
 
-      for await (const event of stream) {
-        if (event.type === 'content_block_start') {
-          const block = event.content_block;
-          if (block.type === 'tool_use') {
-            currentBlockType = 'tool_use';
-            currentToolName = block.name;
-            currentToolUseId = block.id;
-            currentToolInput = '';
-          } else if (block.type === 'text') {
-            currentBlockType = 'text';
-          } else if (block.type === 'thinking') {
-            currentBlockType = 'thinking';
+      let finalMessage;
+      try {
+        for await (const event of stream) {
+          if (event.type === 'content_block_start') {
+            const block = event.content_block;
+            if (block.type === 'tool_use') {
+              currentBlockType = 'tool_use';
+              currentToolName = block.name;
+              currentToolUseId = block.id;
+              currentToolInput = '';
+            } else if (block.type === 'text') {
+              currentBlockType = 'text';
+            } else if (block.type === 'thinking') {
+              currentBlockType = 'thinking';
+            }
+          } else if (event.type === 'content_block_delta') {
+            const delta = event.delta;
+            if (delta.type === 'text_delta') {
+              assistantText += delta.text;
+              if (shouldEmit('delta', streamLevel)) {
+                yield { event: 'delta', data: { text: delta.text } };
+              }
+            } else if (delta.type === 'thinking_delta') {
+              if (shouldEmit('thinking', streamLevel)) {
+                yield { event: 'thinking', data: { text: delta.thinking } };
+              }
+            } else if (delta.type === 'input_json_delta') {
+              currentToolInput += delta.partial_json;
+            }
+          } else if (event.type === 'content_block_stop') {
+            if (currentBlockType === 'tool_use') {
+              let parsedInput = {};
+              try {
+                parsedInput = JSON.parse(currentToolInput);
+              } catch {
+                // empty or malformed input
+              }
+
+              if (shouldEmit('tool_call', streamLevel)) {
+                yield {
+                  event: 'tool_call',
+                  data: {
+                    tool: currentToolName,
+                    tool_use_id: currentToolUseId,
+                    input: parsedInput,
+                  },
+                };
+              }
+
+              const toolStart = Date.now();
+              const toolResult = await executeTool(
+                briefId,
+                currentToolName,
+                parsedInput,
+              );
+              console.log(`[intake] session=${sessionId} tool=${currentToolName} ${Date.now() - toolStart}ms${toolResult.error ? ' ERROR=' + toolResult.error : ''}`);
+
+              toolUseBlocks.push({
+                id: currentToolUseId,
+                name: currentToolName,
+                input: parsedInput,
+                result: toolResult,
+              });
+
+              if (shouldEmit('tool_result', streamLevel)) {
+                yield {
+                  event: 'tool_result',
+                  data: {
+                    tool: currentToolName,
+                    tool_use_id: currentToolUseId,
+                    result: toolResult,
+                  },
+                };
+              }
+
+              if (currentToolName === 'update_brief' && toolResult.brief) {
+                latestBrief = toolResult.brief;
+                latestCompletion = {
+                  filled: toolResult.filled,
+                  missing: toolResult.missing,
+                  completion_pct: toolResult.completion_pct,
+                };
+                if (parsedInput.show_summary) {
+                  userRequestedSummary = true;
+                }
+              }
+              if (currentToolName === 'save_brief') {
+                briefCompleted = true;
+                // Immediately persist session status so it survives stream errors
+                await updateSession(sessionId, { status: 'brief_completed' });
+              }
+            }
+            currentBlockType = null;
           }
-        } else if (event.type === 'content_block_delta') {
-          const delta = event.delta;
-          if (delta.type === 'text_delta') {
-            assistantText += delta.text;
-            if (shouldEmit('delta', streamLevel)) {
-              yield { event: 'delta', data: { text: delta.text } };
+        }
+
+        finalMessage = await stream.finalMessage();
+      } catch (streamErr) {
+        console.error(`[intake] session=${sessionId} iter=${iterations} stream error:`, streamErr.message, `assistantText=${assistantText.length}chars tools=${toolUseBlocks.map(t => t.name).join(',') || 'none'}`);
+
+        // Retry once with fallback stream (MixAI → Anthropic direct)
+        if (stream._fallbackStream && assistantText.length === 0 && toolUseBlocks.length === 0) {
+          console.warn(`[intake] session=${sessionId} retrying with fallback stream`);
+          const fallbackStream = stream._fallbackStream();
+          try {
+            for await (const event of fallbackStream) {
+              if (event.type === 'content_block_start') {
+                const block = event.content_block;
+                if (block.type === 'tool_use') {
+                  currentBlockType = 'tool_use';
+                  currentToolName = block.name;
+                  currentToolUseId = block.id;
+                  currentToolInput = '';
+                } else if (block.type === 'text') {
+                  currentBlockType = 'text';
+                }
+              } else if (event.type === 'content_block_delta') {
+                const delta = event.delta;
+                if (delta.type === 'text_delta') {
+                  assistantText += delta.text;
+                  yield { type: 'delta', data: delta.text };
+                } else if (delta.type === 'input_json_delta') {
+                  currentToolInput += delta.partial_json;
+                }
+              } else if (event.type === 'content_block_stop') {
+                if (currentBlockType === 'tool_use') {
+                  let parsedInput;
+                  try { parsedInput = JSON.parse(currentToolInput); } catch { parsedInput = {}; }
+                  const toolResult = await executeTool(briefId, currentToolName, parsedInput);
+                  toolUseBlocks.push({ id: currentToolUseId, name: currentToolName, input: parsedInput, result: toolResult });
+                  if (currentToolName === 'update_brief' && toolResult && !toolResult.error) {
+                    yield { type: 'brief_update', data: toolResult };
+                  }
+                }
+                currentBlockType = null;
+              }
             }
-          } else if (delta.type === 'thinking_delta') {
-            if (shouldEmit('thinking', streamLevel)) {
-              yield { event: 'thinking', data: { text: delta.thinking } };
-            }
-          } else if (delta.type === 'input_json_delta') {
-            currentToolInput += delta.partial_json;
+            finalMessage = await fallbackStream.finalMessage();
+            // Skip the throw — fallback succeeded
+          } catch (fallbackErr) {
+            console.error(`[intake] session=${sessionId} fallback also failed:`, fallbackErr.message);
+            await persistStreamTurn(assistantText, toolUseBlocks);
+            throw fallbackErr;
           }
-        } else if (event.type === 'content_block_stop') {
-          if (currentBlockType === 'tool_use') {
-            let parsedInput = {};
-            try {
-              parsedInput = JSON.parse(currentToolInput);
-            } catch {
-              // empty or malformed input
-            }
-
-            if (shouldEmit('tool_call', streamLevel)) {
-              yield {
-                event: 'tool_call',
-                data: {
-                  tool: currentToolName,
-                  tool_use_id: currentToolUseId,
-                  input: parsedInput,
-                },
-              };
-            }
-
-            // Execute the tool once and cache the result
-            const toolResult = await executeTool(
-              briefId,
-              currentToolName,
-              parsedInput,
-            );
-
-            toolUseBlocks.push({
-              id: currentToolUseId,
-              name: currentToolName,
-              input: parsedInput,
-              result: toolResult,
-            });
-
-            if (shouldEmit('tool_result', streamLevel)) {
-              yield {
-                event: 'tool_result',
-                data: {
-                  tool: currentToolName,
-                  tool_use_id: currentToolUseId,
-                  result: toolResult,
-                },
-              };
-            }
-
-            // Track latest brief state
-            if (currentToolName === 'update_brief' && toolResult.brief) {
-              latestBrief = toolResult.brief;
-              latestCompletion = {
-                filled: toolResult.filled,
-                missing: toolResult.missing,
-                completion_pct: toolResult.completion_pct,
-              };
-            }
-            if (currentToolName === 'save_brief') {
-              briefCompleted = true;
-            }
-          }
-          currentBlockType = null;
+        } else {
+          await persistStreamTurn(assistantText, toolUseBlocks);
+          throw streamErr;
         }
       }
 
-      // Get final message from the stream
-      const finalMessage = await stream.finalMessage();
       const stopReason = finalMessage.stop_reason;
       const hasToolUse = toolUseBlocks.length > 0;
-
-      // Persist assistant text message
-      if (assistantText) {
-        messagesToPersist.push({
-          role: 'assistant',
-          content: assistantText,
-          message_index: messageIndex++,
-        });
-      }
-
-      // Persist tool_use + tool_result messages (using cached results)
-      for (const block of toolUseBlocks) {
-        messagesToPersist.push({
-          role: 'assistant',
-          content: null,
-          tool_use_id: block.id,
-          tool_name: block.name,
-          tool_input: block.input,
-          message_index: messageIndex++,
-        });
-        messagesToPersist.push({
-          role: 'tool',
-          content: null,
-          tool_use_id: block.id,
-          tool_result: block.result,
-          message_index: messageIndex++,
-        });
-      }
+      console.log(`[intake] session=${sessionId} iter=${iterations} stop_reason=${stopReason} tools=${toolUseBlocks.map(t => t.name).join(',') || 'none'} textLen=${assistantText.length}`);
+      await persistStreamTurn(assistantText, toolUseBlocks);
 
       // If Claude stopped due to tool_use, feed cached results back and continue
       if (stopReason === 'tool_use' && hasToolUse) {
@@ -408,20 +745,26 @@ export async function* processIntakeMessage(
       }
 
       // No more tool calls — we're done
+      console.log(`[intake] session=${sessionId} loop done after ${iterations} iterations, finalTextLen=${assistantText.length}`);
       break;
     }
 
-    // 7. Persist all collected messages
-    if (messagesToPersist.length > 0) {
-      const withPhase = messagesToPersist.map(m => ({ ...m, phase: 'intake' }));
-      await addMessages(sessionId, withPhase);
+    if (iterations >= maxIterations) {
+      console.warn(`[intake] session=${sessionId} hit maxIterations=${maxIterations}`);
     }
+
+    const briefStatus = briefCompleted ? 'brief_completed' : 'intake';
+    await updateSession(sessionId, { status: briefStatus, current_phase: 'intake' });
 
     // Yield brief update
     if (shouldEmit('brief_update', streamLevel)) {
       yield {
         event: 'brief_update',
-        data: { brief: latestBrief, completion: latestCompletion },
+        data: {
+          brief: latestBrief,
+          completion: latestCompletion,
+          show_card: briefCompleted || userRequestedSummary,
+        },
       };
     }
 
@@ -431,6 +774,7 @@ export async function* processIntakeMessage(
       data: { brief_id: briefId, status: briefCompleted ? 'completed' : 'collecting' },
     };
   } catch (err) {
+    console.error(`[intake] session=${sessionId} fatal error:`, err.message, err.stack?.split('\n').slice(0, 3).join(' | '));
     yield {
       event: 'error',
       data: { message: err.message || 'Unknown error' },

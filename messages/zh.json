@@ -407,6 +407,15 @@
     "close": "关闭",
     "model": "型号"
   },
+  "productAssets": {
+    "title": "产品素材",
+    "uploadAsset": "上传素材",
+    "uploading": "上传中...",
+    "dropOrClick": "拖拽图片到此处，或点击选择文件（支持 JPG / PNG / WebP / GIF）",
+    "noModels": "暂无型号（请先上传产品文档）",
+    "delete": "删除",
+    "confirmDelete": "确定删除 {filename}？"
+  },
   "conversationList": {
     "title": "对话",
     "searchPlaceholder": "搜索...",
@@ -431,6 +440,7 @@
     "loadingConversation": "正在加载会话内容...",
     "startPlan": "开始生成投放方案",
     "inputPlaceholder": "输入消息...",
+    "uploadImage": "上传图片",
     "planReadyConfirm": "方案已就绪，确认执行投放？",
     "confirmExecute": "确认执行",
     "cancel": "取消",
@@ -440,7 +450,7 @@
       "intake": "需求采集",
       "research": "市场调研",
       "strategy": "方案规划",
-      "creativeReference": "素材参考",
+      "creativePlan": "素材策划",
       "creative": "素材生成",
       "execution": "投放执行"
     },
@@ -450,6 +460,8 @@
       "running": "进行中",
       "briefCompleted": "需求已完成",
       "awaitingApproval": "待审批",
+      "awaitingFeedback": "待确认",
+      "interrupted": "已中断",
       "completed": "已完成",
       "failed": "失败"
     }

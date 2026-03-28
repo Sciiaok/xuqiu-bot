@@ -1,16 +1,10 @@
-import Anthropic from '@anthropic-ai/sdk';
-import { config } from './config.js';
+import { anthropic, MODELS } from './llm-client.js';
 import { buildRoutingCandidate } from './agent-runtime.service.js';
 import {
   formatReferralContextForPrompt,
   resolveAgentAdContext,
 } from '../lib/referral-context.js';
 import { createTraceLogger } from '../lib/core-trace.js';
-
-const anthropic = new Anthropic({
-  apiKey: config.anthropic.apiKey,
-  ...(config.anthropic.baseURL && { baseURL: config.anthropic.baseURL }),
-});
 
 const ROUTER_SYSTEM_PROMPT = `You are an inbox router for Revopanda.
 
@@ -134,7 +128,7 @@ export async function routeConversationWithClaudeToolUse({
   });
 
   const response = await anthropic.messages.create({
-    model: config.anthropic.model,
+    model: MODELS.SONNET,
     max_tokens: 1024,
     system: ROUTER_SYSTEM_PROMPT,
     messages: [

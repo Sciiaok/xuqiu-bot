@@ -1,4 +1,4 @@
-import Anthropic from '@anthropic-ai/sdk';
+import { anthropic, MODELS } from './llm-client.js';
 import { config } from './config.js';
 import {
   downloadWhatsAppMediaBuffer,
@@ -6,11 +6,6 @@ import {
 } from './whatsapp-media.service.js';
 import { createTraceLogger } from '../lib/core-trace.js';
 import { buildProductTools, executeProductTool } from './product-search.service.js';
-
-const anthropic = new Anthropic({
-  apiKey: config.anthropic.apiKey,
-  ...(config.anthropic.baseURL && { baseURL: config.anthropic.baseURL }),
-});
 
 const SYSTEM_PROMPT = `You are a B2B lead qualification assistant for a vehicle export company specializing in BYD/Changan/GSC and other vehicles worldwide.
 
@@ -617,7 +612,7 @@ export async function getResponse(conversationHistory, userMessage, contextInfo 
     history_count: sanitizedHistory.length,
     latest_input_type: Array.isArray(latestUserContent) ? 'multimodal' : 'text',
     has_agent_config: Boolean(agentConfig),
-    model: config.anthropic.model,
+    model: MODELS.SONNET,
     context_info: buildTraceContextInfo(contextInfo),
   });
 
@@ -653,7 +648,7 @@ export async function getResponse(conversationHistory, userMessage, contextInfo 
     const allTools = [...cachedProductTools, submitResponseTool];
 
     let response = await anthropic.messages.create({
-      model: config.anthropic.model,
+      model: MODELS.SONNET,
       max_tokens: 4096,
       system: systemBlocks,
       messages: messages,
@@ -670,7 +665,7 @@ export async function getResponse(conversationHistory, userMessage, contextInfo 
         messages.push({ role: 'assistant', content: response.content });
         messages.push({ role: 'user', content: 'Please call submit_response with your structured response now.' });
         response = await anthropic.messages.create({
-          model: config.anthropic.model,
+          model: MODELS.SONNET,
           max_tokens: 4096,
           system: systemBlocks,
           messages: messages,
@@ -701,7 +696,7 @@ export async function getResponse(conversationHistory, userMessage, contextInfo 
         content: [{ type: 'tool_result', tool_use_id: toolUse.id, content: toolResult }],
       });
       response = await anthropic.messages.create({
-        model: config.anthropic.model,
+        model: MODELS.SONNET,
         max_tokens: 4096,
         system: systemBlocks,
         messages: messages,
@@ -715,7 +710,7 @@ export async function getResponse(conversationHistory, userMessage, contextInfo 
       messages.push({ role: 'assistant', content: response.content });
       messages.push({ role: 'user', content: 'Please call submit_response with your structured response now.' });
       response = await anthropic.messages.create({
-        model: config.anthropic.model,
+        model: MODELS.SONNET,
         max_tokens: 4096,
         system: systemBlocks,
         messages: messages,
@@ -733,7 +728,7 @@ export async function getResponse(conversationHistory, userMessage, contextInfo 
   } else {
     // Standard mode: json_schema output (no product tools)
     const response = await anthropic.messages.create({
-      model: config.anthropic.model,
+      model: MODELS.SONNET,
       max_tokens: 4096,
       system: systemBlocks,
       messages: messages,

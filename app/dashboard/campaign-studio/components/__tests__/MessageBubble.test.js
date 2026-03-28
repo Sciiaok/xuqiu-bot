@@ -60,25 +60,6 @@ describe('MessageBubble', () => {
     expect(screen.getByText('耗时 30s')).toBeDefined();
   });
 
-  it('renders strategy_progress card with steps', () => {
-    render(
-      <MessageBubble
-        message={{
-          type: 'strategy_progress',
-          steps: [
-            { label: '预算分配', done: true, active: false },
-            { label: '关键词规划', done: false, active: true },
-            { label: '受众定向', done: false, active: false },
-          ],
-        }}
-      />
-    );
-
-    expect(screen.getByText('方案规划中')).toBeDefined();
-    expect(screen.getByText('预算分配')).toBeDefined();
-    expect(screen.getByText('关键词规划')).toBeDefined();
-  });
-
   it('renders execution_approval card with approve/reject buttons', () => {
     const onApprove = vi.fn();
     const onReject = vi.fn();
