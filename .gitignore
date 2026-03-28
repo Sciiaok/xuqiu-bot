@@ -40,4 +40,4 @@ test-results
 tmp
 
 .agents
-.superpowers
+.superpowers.claude/worktrees/
