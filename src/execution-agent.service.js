@@ -223,10 +223,10 @@ export async function createLeadForm({ name, questions, headline, description, p
 // ── Batch helpers ────────────────────────────────────────────────────
 
 const OBJECTIVE_MAP = {
-  lead_gen: 'OUTCOME_LEADS',
+  lead_gen: 'OUTCOME_LEADS', leads: 'OUTCOME_LEADS',
   traffic: 'OUTCOME_TRAFFIC',
-  brand_awareness: 'OUTCOME_AWARENESS',
-  conversions: 'OUTCOME_SALES',
+  brand_awareness: 'OUTCOME_AWARENESS', awareness: 'OUTCOME_AWARENESS',
+  conversions: 'OUTCOME_SALES', sales: 'OUTCOME_SALES',
   engagement: 'OUTCOME_ENGAGEMENT',
 };
 
@@ -295,6 +295,8 @@ export async function createFullCampaign(input, options = {}) {
   const onProgress = options.onProgress;
   const accountId = `act_${config.meta?.adAccountId}`;
   const pageId = config.meta?.pageId;
+  const metaObjective = OBJECTIVE_MAP[input.objective] || input.objective;
+  const isLeadGen = metaObjective === 'OUTCOME_LEADS';
   const errors = [];
   const adSetResults = [];
 
@@ -304,7 +306,7 @@ export async function createFullCampaign(input, options = {}) {
     const campaignRes = await callTool('create_campaign', {
       account_id: accountId,
       name: input.name,
-      objective: OBJECTIVE_MAP[input.objective] || input.objective,
+      objective: metaObjective,
       status: 'PAUSED',
       special_ad_categories: [],
       bid_strategy: 'LOWEST_COST_WITHOUT_CAP',
@@ -326,12 +328,12 @@ export async function createFullCampaign(input, options = {}) {
         campaign_id: campaignId,
         name: adSet.name,
         status: 'PAUSED',
-        optimization_goal: input.objective === 'lead_gen' ? 'LEAD_GENERATION' : 'LINK_CLICKS',
+        optimization_goal: isLeadGen ? 'LEAD_GENERATION' : 'LINK_CLICKS',
         billing_event: 'IMPRESSIONS',
         targeting: buildBatchTargeting(adSet.targeting),
       };
 
-      if (input.objective === 'lead_gen') {
+      if (isLeadGen && pageId) {
         adSetParams.promoted_object = { page_id: pageId };
         adSetParams.destination_type = 'ON_AD';
       }
@@ -368,7 +370,7 @@ export async function createFullCampaign(input, options = {}) {
           },
         };
 
-        if (input.objective === 'lead_gen' && ad.lead_gen_form_id) {
+        if (isLeadGen && ad.lead_gen_form_id) {
           creativeParams.call_to_action.value.lead_gen_form_id = ad.lead_gen_form_id;
         }
 
@@ -396,6 +398,116 @@ export async function createFullCampaign(input, options = {}) {
   return { status, campaign_id: campaignId, ad_sets: adSetResults, errors };
 }
 
+// ── Batch execution (direct MCP calls, no Claude agent) ─────────────
+
+/**
+ * Execute a media plan using direct MCP tool calls (no Claude agent).
+ * Images are uploaded first, then campaigns/adsets/ads are created.
+ *
+ * @param {Object} plan - MediaPlan from generateMediaPlan()
+ * @param {Object} creatives - Map of ad name → { url, image_hash }
+ * @param {Object} [options]
+ * @param {string} [options.link_url] - Default landing page URL
+ * @param {Function} [options.onProgress]
+ * @param {Object} [options.accountAssets]
+ * @returns {Promise<Object>} Execution results
+ */
+export async function executeMediaPlanBatch(plan, creatives = {}, options = {}) {
+  const onProgress = options.onProgress;
+  const metaPlatform = plan.platforms?.find(p => p.platform === 'meta');
+  if (!metaPlatform) {
+    return { status: 'skipped', reason: 'No Meta platform in plan', campaigns: [], errors: [] };
+  }
+
+  onProgress?.({ step: 'batch_start' });
+
+  // 1. Upload images that have URLs but no hash
+  const needsUpload = Object.entries(creatives)
+    .filter(([, c]) => c.url && !c.image_hash)
+    .map(([name, c]) => ({ name, url: c.url }));
+
+  const uploadedHashes = needsUpload.length > 0
+    ? await uploadImages(needsUpload, { onProgress })
+    : {};
+
+  // 2. Merge pre-existing hashes with newly uploaded
+  const allHashes = { ...uploadedHashes };
+  for (const [name, c] of Object.entries(creatives)) {
+    if (c.image_hash) allHashes[name] = c.image_hash;
+  }
+
+  const duration_days = plan.duration_days || 30;
+  const link_url = options.link_url || 'https://revopanda.com';
+
+  // 3. Create lead forms if any campaign uses lead_gen
+  const campaigns = metaPlatform.campaigns || [];
+  const hasLeadGen = campaigns.some(c => {
+    const obj = OBJECTIVE_MAP[c.objective] || c.objective;
+    return obj === 'OUTCOME_LEADS';
+  });
+
+  let lead_gen_form_id = null;
+  if (hasLeadGen) {
+    try {
+      const formResult = await createLeadForm({
+        name: `${metaPlatform.campaigns[0]?.name || 'Campaign'} Lead Form`,
+        questions: [{ type: 'FULL_NAME' }, { type: 'EMAIL' }, { type: 'PHONE' }],
+      });
+      lead_gen_form_id = formResult.form_id;
+    } catch (err) {
+      // Non-fatal: continue without lead form
+    }
+  }
+
+  // 4. Create each campaign
+  const allCampaignResults = [];
+  const allErrors = [];
+
+  for (const campaign of campaigns) {
+    // Enrich ads with image_hashes and lead_gen_form_id
+    const enrichedAdSets = (campaign.ad_sets || []).map(adSet => ({
+      ...adSet,
+      ads: (adSet.ads || []).map(ad => ({
+        ...ad,
+        image_hash: allHashes[ad.name] || ad.image_hash,
+        link_url: ad.link_url || link_url,
+        lead_gen_form_id: lead_gen_form_id || ad.lead_gen_form_id,
+      })),
+    }));
+
+    const result = await createFullCampaign(
+      { ...campaign, duration_days, link_url, lead_gen_form_id, ad_sets: enrichedAdSets },
+      { onProgress },
+    );
+
+    if (result.campaign_id) {
+      allCampaignResults.push({
+        id: result.campaign_id,
+        name: campaign.name,
+        ad_sets: result.ad_sets,
+      });
+    }
+    allErrors.push(...result.errors);
+  }
+
+  onProgress?.({ step: 'batch_done' });
+
+  const status = allErrors.length === 0
+    ? 'completed'
+    : allCampaignResults.length === 0
+      ? 'failed'
+      : 'partial';
+
+  return {
+    status,
+    platform: 'meta',
+    campaigns: allCampaignResults,
+    errors: allErrors,
+  };
+}
+
+export const executeMediaPlan = executeMediaPlanBatch;
+
 // ── Main execution via Claude agent + MCP tools ─────────────────────
 
 /**
@@ -408,7 +520,7 @@ export async function createFullCampaign(input, options = {}) {
  * @param {string} [options.link_url] - Default landing page URL
  * @returns {Promise<Object>} Execution results
  */
-export async function executeMediaPlan(plan, creatives = {}, options = {}) {
+export async function executeMediaPlanMCP(plan, creatives = {}, options = {}) {
   const onProgress = options.onProgress;
   const metaPlatform = plan.platforms?.find(p => p.platform === 'meta');
   if (!metaPlatform) {

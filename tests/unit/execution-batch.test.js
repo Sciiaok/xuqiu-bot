@@ -42,15 +42,31 @@ mock.module(llmModuleUrl, {
   },
 });
 
+// ── Fetch mock for createLeadForm (uses direct HTTP, not MCP) ────────
+const originalFetch = globalThis.fetch;
+let fetchCalls = [];
+globalThis.fetch = async (url, options) => {
+  const urlStr = typeof url === 'string' ? url : url.toString();
+  fetchCalls.push({ url: urlStr, options });
+  if (urlStr.includes('fields=access_token')) {
+    return { json: async () => ({ access_token: 'page-token-test' }) };
+  }
+  if (urlStr.includes('/leadgen_forms')) {
+    return { json: async () => ({ id: 'form_test_001' }) };
+  }
+  return { json: async () => ({}) };
+};
+
 // ── Import module under test ──────────────────────────────────────────
 const moduleUrl = pathToFileURL(resolve(process.cwd(), 'src/execution-agent.service.js')).href;
-const { uploadImages, createFullCampaign } = await import(moduleUrl);
+const { uploadImages, createFullCampaign, executeMediaPlanBatch } = await import(moduleUrl);
 
 // ── Helper to get callTool mock fn ────────────────────────────────────
 const { callTool } = await import(mcpModuleUrl);
 
 beforeEach(() => {
   mcpCalls = [];
+  fetchCalls = [];
   callTool.mock.resetCalls();
 });
 
@@ -315,5 +331,138 @@ describe('createFullCampaign', () => {
     assert.ok(result.ad_sets[0].ads.some(a => a.name === 'Ad With Image'));
     // First ad should be recorded as error
     assert.ok(result.errors.some(e => e.name === 'Ad No Image'));
+  });
+});
+
+// ── executeMediaPlanBatch tests ───────────────────────────────────────
+describe('executeMediaPlanBatch', () => {
+  const PLAN = {
+    duration_days: 14,
+    platforms: [{
+      platform: 'meta',
+      budget_allocation: 100,
+      budget_amount: 1000,
+      campaigns: [{
+        name: 'Traffic Campaign',
+        objective: 'traffic',
+        daily_budget: 50,
+        ad_sets: [{
+          name: 'NG Set',
+          targeting: { countries: ['NG'], age_range: [25, 55] },
+          ads: [
+            { name: 'Ad Hero', format: 'image', primary_text: 'Click now', headline: 'Buy', cta: 'Learn More' },
+          ],
+        }],
+      }],
+    }],
+  };
+
+  const LEAD_GEN_PLAN = {
+    duration_days: 30,
+    platforms: [{
+      platform: 'meta',
+      campaigns: [{
+        name: 'Lead Campaign',
+        objective: 'lead_gen',
+        daily_budget: 30,
+        ad_sets: [{
+          name: 'SEA Set',
+          targeting: { countries: ['MY'], age_range: [25, 55] },
+          ads: [
+            { name: 'Lead Ad', format: 'image', primary_text: 'Sign up', headline: 'Get info', cta: 'Sign Up' },
+          ],
+        }],
+      }],
+    }],
+  };
+
+  it('returns completed with all campaigns created', async () => {
+    const creatives = { 'Ad Hero': { image_hash: 'pre_hash_hero' } };
+    const result = await executeMediaPlanBatch(PLAN, creatives);
+
+    assert.equal(result.status, 'completed');
+    assert.equal(result.platform, 'meta');
+    assert.equal(result.campaigns.length, 1);
+    assert.equal(result.errors.length, 0);
+  });
+
+  it('uploads images before creating campaigns (verify MCP call order)', async () => {
+    const creatives = { 'Ad Hero': { url: 'https://cdn.example.com/hero.jpg' } };
+    const toolCallOrder = [];
+    callTool.mock.mockImplementation(async (name, args) => {
+      toolCallOrder.push(name);
+      mcpCalls.push({ name, args });
+      switch (name) {
+        case 'upload_ad_image': return { image_hash: 'uploaded_hash' };
+        case 'create_campaign': return { id: 'camp_1' };
+        case 'create_adset': return { id: 'adset_1' };
+        case 'create_ad_creative': return { id: 'creative_1' };
+        case 'create_ad': return { id: 'ad_1' };
+        default: throw new Error(`Unknown tool: ${name}`);
+      }
+    });
+
+    await executeMediaPlanBatch(PLAN, creatives);
+
+    // Restore default
+    callTool.mock.mockImplementation(async (name, args) => {
+      mcpCalls.push({ name, args });
+      switch (name) {
+        case 'upload_ad_image': return { image_hash: `hash_${args.image_url.split('/').pop()}` };
+        case 'create_campaign': return { id: `camp_${mcpCalls.length}` };
+        case 'create_adset': return { id: `adset_${mcpCalls.length}` };
+        case 'create_ad_creative': return { id: `creative_${mcpCalls.length}` };
+        case 'create_ad': return { id: `ad_${mcpCalls.length}` };
+        default: throw new Error(`Unknown tool: ${name}`);
+      }
+    });
+
+    const uploadIdx = toolCallOrder.indexOf('upload_ad_image');
+    const campaignIdx = toolCallOrder.indexOf('create_campaign');
+    assert.ok(uploadIdx >= 0, 'upload_ad_image should be called');
+    assert.ok(campaignIdx > uploadIdx, 'create_campaign must come after upload_ad_image');
+  });
+
+  it('creates lead forms for lead_gen campaigns (check fetch calls for /leadgen_forms)', async () => {
+    const creatives = { 'Lead Ad': { image_hash: 'hash_lead' } };
+    await executeMediaPlanBatch(LEAD_GEN_PLAN, creatives);
+
+    const leadFormCall = fetchCalls.find(c => c.url.includes('/leadgen_forms'));
+    assert.ok(leadFormCall, 'should call /leadgen_forms endpoint');
+  });
+
+  it('skips when no Meta platform in plan', async () => {
+    const plan = { platforms: [{ platform: 'google', campaigns: [] }] };
+    const result = await executeMediaPlanBatch(plan);
+    assert.equal(result.status, 'skipped');
+    assert.ok(result.reason);
+  });
+
+  it('reports onProgress for all phases (batch_start, upload_image, create_campaign, batch_done)', async () => {
+    const events = [];
+    const creatives = { 'Ad Hero': { url: 'https://cdn.example.com/hero.jpg' } };
+    await executeMediaPlanBatch(PLAN, creatives, { onProgress: e => events.push(e) });
+
+    const steps = events.map(e => e.step);
+    assert.ok(steps.includes('batch_start'), 'should emit batch_start');
+    assert.ok(steps.includes('upload_image'), 'should emit upload_image');
+    assert.ok(steps.includes('create_campaign'), 'should emit create_campaign');
+    assert.ok(steps.includes('batch_done'), 'should emit batch_done');
+  });
+
+  it('handles creatives passed as image_hash directly (no URL) — should NOT upload', async () => {
+    const creatives = { 'Ad Hero': { image_hash: 'existing_hash_abc' } };
+    await executeMediaPlanBatch(PLAN, creatives);
+
+    const uploadCalls = callTool.mock.calls.filter(c => c.arguments[0] === 'upload_ad_image');
+    assert.equal(uploadCalls.length, 0, 'should NOT call upload_ad_image when image_hash is pre-set');
+  });
+
+  it('returns partial when some ads have no matching creative', async () => {
+    // No creatives provided at all — ad will have no image_hash
+    const result = await executeMediaPlanBatch(PLAN, {});
+
+    assert.equal(result.status, 'partial', 'should be partial when some ads are missing image_hash');
+    assert.ok(result.errors.some(e => e.error.includes('image_hash')));
   });
 });

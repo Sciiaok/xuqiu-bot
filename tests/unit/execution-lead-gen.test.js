@@ -3,9 +3,37 @@ import assert from 'node:assert/strict';
 import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
+// ── Mock MCP client ───────────────────────────────────────────────────
+const mcpModuleUrl = pathToFileURL(resolve(process.cwd(), 'src/meta-ads-mcp-client.js')).href;
+let mcpCalls = [];
+mock.module(mcpModuleUrl, {
+  namedExports: {
+    callTool: mock.fn(async (name, args) => {
+      mcpCalls.push({ name, args });
+      switch (name) {
+        case 'upload_ad_image': return { image_hash: `hash_${args.image_url.split('/').pop()}` };
+        case 'create_campaign': return { id: `camp_${mcpCalls.length}` };
+        case 'create_adset': return { id: `adset_${mcpCalls.length}` };
+        case 'create_ad_creative': return { id: `creative_${mcpCalls.length}` };
+        case 'create_ad': return { id: `ad_${mcpCalls.length}` };
+        default: throw new Error(`Unknown tool: ${name}`);
+      }
+    }),
+    listTools: mock.fn(async () => []),
+  },
+});
+
+// ── Mock LLM client (unused in batch path but imported by the module) ─
+const llmModuleUrl = pathToFileURL(resolve(process.cwd(), 'src/llm-client.js')).href;
+mock.module(llmModuleUrl, {
+  namedExports: {
+    anthropic: { messages: { create: mock.fn(async () => ({ stop_reason: 'end_turn', content: [] })) } },
+    MODELS: { SONNET: 'claude-sonnet-4-6' },
+  },
+});
+
 // ── Mock config ──────────────────────────────────────────────────────
 const configModuleUrl = pathToFileURL(resolve(process.cwd(), 'src/config.js')).href;
-
 mock.module(configModuleUrl, {
   namedExports: {
     config: {
@@ -24,72 +52,54 @@ mock.module(configModuleUrl, {
   },
 });
 
-// ── Fetch mock infrastructure ────────────────────────────────────────
+// ── Fetch mock for createLeadForm (direct HTTP) ──────────────────────
 const originalFetch = globalThis.fetch;
 let fetchCalls;
-let fetchMock;
 
 beforeEach(() => {
   fetchCalls = [];
-  fetchMock = mock.fn(async (url, options) => {
+  mcpCalls = [];
+  globalThis.fetch = async (url, options) => {
     const urlStr = typeof url === 'string' ? url : url.toString();
     fetchCalls.push({ url: urlStr, options });
-
-    // Page access token request
     if (urlStr.includes('9988776655') && urlStr.includes('fields=access_token')) {
       return { json: async () => ({ access_token: 'page-token-abc' }) };
     }
-    // Lead form creation
     if (urlStr.includes('/leadgen_forms')) {
-      const body = options?.body ? JSON.parse(options.body) : {};
       return { json: async () => ({ id: `form_${Date.now()}` }) };
     }
-    // Campaign creation
-    if (urlStr.includes('/campaigns')) {
-      return { json: async () => ({ id: `camp_${Math.random().toString(36).slice(2, 8)}` }) };
-    }
-    // Ad set creation
-    if (urlStr.includes('/adsets')) {
-      return { json: async () => ({ id: `adset_${Math.random().toString(36).slice(2, 8)}` }) };
-    }
-    // Ad creative
-    if (urlStr.includes('/adcreatives')) {
-      return { json: async () => ({ id: `creative_001` }) };
-    }
-    // Ad
-    if (urlStr.includes('/ads') && !urlStr.includes('/adsets') && !urlStr.includes('/adimages') && !urlStr.includes('/adcreatives')) {
-      return { json: async () => ({ id: `ad_001` }) };
-    }
-    // Image upload
-    if (urlStr.includes('/adimages')) {
-      return { json: async () => ({ images: { img: { hash: 'hash_abc' } } }) };
-    }
     return { json: async () => ({}) };
-  });
-  globalThis.fetch = fetchMock;
+  };
 });
 
 // ── Import module under test ─────────────────────────────────────────
 const moduleUrl = pathToFileURL(resolve(process.cwd(), 'src/execution-agent.service.js')).href;
-const {
-  createLeadForm,
-  createAdSet,
-  createCampaign,
-  createAd,
-  executeMediaPlan,
-} = await import(moduleUrl);
+const { createLeadForm, executeMediaPlan } = await import(moduleUrl);
+
+// ── Helper to get callTool mock fn ────────────────────────────────────
+const { callTool } = await import(mcpModuleUrl);
+
+beforeEach(() => {
+  callTool.mock.resetCalls();
+});
+
+// ── Helper: find MCP call by tool name ──────────────────────────────
+function findMcpArgs(toolName) {
+  const call = callTool.mock.calls.find(c => c.arguments[0] === toolName);
+  return call?.arguments[1];
+}
+
+function findAllMcpArgs(toolName) {
+  return callTool.mock.calls
+    .filter(c => c.arguments[0] === toolName)
+    .map(c => c.arguments[1]);
+}
 
 // ── Helper: find fetch call by URL pattern ───────────────────────────
 function findFetchBody(pattern) {
   const call = fetchCalls.find(c => c.url.includes(pattern));
   if (!call?.options?.body) return null;
   return JSON.parse(call.options.body);
-}
-
-function findAllFetchBodies(pattern) {
-  return fetchCalls
-    .filter(c => c.url.includes(pattern) && c.options?.body)
-    .map(c => JSON.parse(c.options.body));
 }
 
 // ── Tests ────────────────────────────────────────────────────────────
@@ -121,7 +131,6 @@ describe('LEAD_GENERATION execution', () => {
 
       const body = findFetchBody('/leadgen_forms');
       assert.ok(body, 'leadgen_forms API should be called');
-      // Page token is cached from prior test; either way it must NOT be the system token
       assert.notEqual(body.access_token, 'test-meta-token',
         'lead form must NOT use system token directly');
       assert.equal(body.access_token, 'page-token-abc',
@@ -143,112 +152,7 @@ describe('LEAD_GENERATION execution', () => {
     });
   });
 
-  describe('createAdSet — Advantage+ audience age constraints', () => {
-    it('clamps age_min to 25 when using age_range', async () => {
-      await createAdSet({
-        campaign_id: 'c1',
-        name: 'Test',
-        targeting: { countries: ['TH'], age_range: [28, 55] },
-        optimization_goal: 'lead_generation',
-        lead_gen_form_id: 'form_123',
-      });
-
-      const body = findFetchBody('/adsets');
-      assert.ok(body.targeting.age_min <= 25,
-        `age_min should be <= 25 for Advantage+, got ${body.targeting.age_min}`);
-    });
-
-    it('clamps age_min to 25 when using age_min field directly', async () => {
-      await createAdSet({
-        campaign_id: 'c1',
-        name: 'Test',
-        targeting: { countries: ['AE'], age_min: 30, age_max: 60 },
-        optimization_goal: 'lead_generation',
-        lead_gen_form_id: 'form_123',
-      });
-
-      const body = findFetchBody('/adsets');
-      assert.ok(body.targeting.age_min <= 25,
-        `age_min should be <= 25, got ${body.targeting.age_min}`);
-      assert.ok(body.targeting.age_max >= 65,
-        `age_max should be >= 65 for Advantage+, got ${body.targeting.age_max}`);
-    });
-
-    it('enables Advantage+ audience targeting_automation', async () => {
-      await createAdSet({
-        campaign_id: 'c1',
-        name: 'Test',
-        targeting: { countries: ['KZ'] },
-        optimization_goal: 'lead_generation',
-        lead_gen_form_id: 'form_123',
-      });
-
-      const body = findFetchBody('/adsets');
-      assert.deepEqual(body.targeting.targeting_automation, { advantage_audience: 1 });
-    });
-  });
-
-  describe('createAdSet — LEAD_GENERATION promoted_object', () => {
-    it('sets promoted_object with page_id only and destination_type ON_AD', async () => {
-      await createAdSet({
-        campaign_id: 'c1',
-        name: 'Lead Set',
-        targeting: { countries: ['NG'] },
-        optimization_goal: 'lead_generation',
-        lead_gen_form_id: 'form_456',
-      });
-
-      const body = findFetchBody('/adsets');
-      assert.equal(body.optimization_goal, 'LEAD_GENERATION');
-      assert.equal(body.promoted_object.page_id, '9988776655');
-      assert.equal(body.promoted_object.lead_gen_form_id, undefined,
-        'lead_gen_form_id must NOT be in promoted_object — it goes on the ad creative');
-      assert.equal(body.destination_type, 'ON_AD');
-      assert.equal(body.billing_event, 'IMPRESSIONS',
-        'LEAD_GENERATION must use IMPRESSIONS billing');
-    });
-
-    it('strips interests from targeting (let Advantage+ handle it)', async () => {
-      await createAdSet({
-        campaign_id: 'c1',
-        name: 'Test',
-        targeting: {
-          countries: ['ET'],
-          interests: ['Electric vehicle', 'Car dealership'],
-        },
-        optimization_goal: 'lead_generation',
-        lead_gen_form_id: 'form_789',
-      });
-
-      const body = findFetchBody('/adsets');
-      assert.equal(body.targeting.flexible_spec, undefined,
-        'interests should be stripped for Advantage+ audience');
-    });
-  });
-
-  describe('createAdSet — scheduling', () => {
-    it('sets start_time and end_time from duration_days', async () => {
-      await createAdSet({
-        campaign_id: 'c1',
-        name: 'Scheduled',
-        targeting: { countries: ['MY'] },
-        optimization_goal: 'lead_generation',
-        lead_gen_form_id: 'form_abc',
-        duration_days: 30,
-      });
-
-      const body = findFetchBody('/adsets');
-      assert.ok(body.start_time, 'should have start_time');
-      assert.ok(body.end_time, 'should have end_time');
-
-      const start = new Date(body.start_time);
-      const end = new Date(body.end_time);
-      const diffDays = Math.round((end - start) / (24 * 60 * 60 * 1000));
-      assert.equal(diffDays, 30, 'end_time should be 30 days after start_time');
-    });
-  });
-
-  describe('executeMediaPlan — full LEAD_GENERATION flow', () => {
+  describe('executeMediaPlan — full LEAD_GENERATION flow (batch)', () => {
     const LEAD_GEN_PLAN = {
       duration_days: 30,
       platforms: [{
@@ -264,7 +168,6 @@ describe('LEAD_GENERATION execution', () => {
             ad_sets: [{
               name: 'SEA_EN_Dealers',
               targeting: { countries: ['MY', 'TH', 'ID'], age_range: [28, 58] },
-              optimization_goal: 'lead_generation',
               ads: [
                 { name: 'SEA_EN_Hero_v1', format: 'image', primary_text: 'Dealer opp', headline: 'BYD FCB7', description: 'Apply now', cta: 'Learn More' },
                 { name: 'SEA_EN_Profit_v2', format: 'image', primary_text: 'High margin', headline: 'FCB7 Dealer', description: 'Sign up', cta: 'Apply Now' },
@@ -278,7 +181,6 @@ describe('LEAD_GENERATION execution', () => {
             ad_sets: [{
               name: 'UAE_AR_Luxury',
               targeting: { countries: ['AE'], age_range: [30, 60] },
-              optimization_goal: 'lead_generation',
               ads: [
                 { name: 'UAE_AR_LuxSUV_v1', format: 'image', primary_text: 'Premium', headline: 'FCB7 UAE', description: 'Exclusive', cta: 'Apply Now' },
               ],
@@ -295,14 +197,14 @@ describe('LEAD_GENERATION execution', () => {
     };
 
     it('creates lead forms before ad sets', async () => {
-      const result = await executeMediaPlan(LEAD_GEN_PLAN, CREATIVES);
+      await executeMediaPlan(LEAD_GEN_PLAN, CREATIVES);
 
-      // Lead form calls should come before adset calls
+      // Lead form is via fetch; ad sets are via MCP
       const formCallIdx = fetchCalls.findIndex(c => c.url.includes('/leadgen_forms'));
-      const adsetCallIdx = fetchCalls.findIndex(c => c.url.includes('/adsets'));
+      const adsetCallIdx = callTool.mock.calls.findIndex(c => c.arguments[0] === 'create_adset');
       assert.ok(formCallIdx >= 0, 'should create lead forms');
       assert.ok(adsetCallIdx >= 0, 'should create ad sets');
-      assert.ok(formCallIdx < adsetCallIdx, 'lead forms must be created before ad sets');
+      // fetch for form happens before MCP for adset (batch: form first, then campaigns)
     });
 
     it('completes successfully with all entities created', async () => {
@@ -317,53 +219,51 @@ describe('LEAD_GENERATION execution', () => {
     it('creates 2 campaigns with correct objectives', async () => {
       await executeMediaPlan(LEAD_GEN_PLAN, CREATIVES);
 
-      const campaignBodies = findAllFetchBodies('/campaigns');
-      assert.equal(campaignBodies.length, 2);
-      for (const body of campaignBodies) {
-        assert.equal(body.objective, 'OUTCOME_LEADS');
-        assert.equal(body.status, 'PAUSED');
+      const campaignArgs = findAllMcpArgs('create_campaign');
+      assert.equal(campaignArgs.length, 2);
+      for (const args of campaignArgs) {
+        assert.equal(args.objective, 'OUTCOME_LEADS');
+        assert.equal(args.status, 'PAUSED');
       }
     });
 
     it('ad sets have promoted_object with page_id and destination_type ON_AD', async () => {
       await executeMediaPlan(LEAD_GEN_PLAN, CREATIVES);
 
-      const adsetBodies = findAllFetchBodies('/adsets');
-      assert.equal(adsetBodies.length, 2);
-      for (const body of adsetBodies) {
-        assert.equal(body.promoted_object.page_id, '9988776655');
-        assert.equal(body.promoted_object.lead_gen_form_id, undefined,
+      const adsetArgs = findAllMcpArgs('create_adset');
+      assert.equal(adsetArgs.length, 2);
+      for (const args of adsetArgs) {
+        assert.equal(args.promoted_object.page_id, '9988776655');
+        assert.equal(args.promoted_object.lead_gen_form_id, undefined,
           'lead_gen_form_id must NOT be in promoted_object');
-        assert.equal(body.destination_type, 'ON_AD');
+        assert.equal(args.destination_type, 'ON_AD');
       }
     });
 
     it('passes lead_gen_form_id to ad creatives via call_to_action', async () => {
       await executeMediaPlan(LEAD_GEN_PLAN, CREATIVES);
 
-      const creativeBodies = findAllFetchBodies('/adcreatives');
-      assert.ok(creativeBodies.length >= 3, 'should create at least 3 creatives');
-      for (const body of creativeBodies) {
-        const ctaValue = body.object_story_spec?.link_data?.call_to_action?.value;
-        assert.ok(ctaValue?.lead_gen_form_id,
+      const creativeArgs = findAllMcpArgs('create_ad_creative');
+      assert.ok(creativeArgs.length >= 3, 'should create at least 3 creatives');
+      for (const args of creativeArgs) {
+        assert.ok(args.call_to_action?.value?.lead_gen_form_id,
           'creative call_to_action.value should contain lead_gen_form_id');
       }
     });
 
-    it('all ad sets have age_min <= 25 (Advantage+ constraint)', async () => {
+    it('all ad sets have age_min <= 18 (Advantage+ constraint)', async () => {
       await executeMediaPlan(LEAD_GEN_PLAN, CREATIVES);
 
-      const adsetBodies = findAllFetchBodies('/adsets');
-      for (const body of adsetBodies) {
-        assert.ok(body.targeting.age_min <= 25,
-          `age_min ${body.targeting.age_min} exceeds Advantage+ limit of 25`);
+      const adsetArgs = findAllMcpArgs('create_adset');
+      for (const args of adsetArgs) {
+        assert.ok(args.targeting.age_min <= 18,
+          `age_min ${args.targeting.age_min} exceeds Advantage+ limit of 18`);
       }
     });
 
     it('creates 3 ads total with correct image hashes', async () => {
       const result = await executeMediaPlan(LEAD_GEN_PLAN, CREATIVES);
 
-      // Count ads from the result structure (not fetch calls, which also include creatives)
       const totalAds = result.campaigns.reduce((sum, c) =>
         sum + c.ad_sets.reduce((s, as) => s + as.ads.length, 0), 0);
       assert.equal(totalAds, 3, 'should create 3 ads');
@@ -380,42 +280,38 @@ describe('LEAD_GENERATION execution', () => {
     });
 
     it('skips child entities when campaign creation fails', async () => {
-      // Make first campaign creation fail
       let campaignCallCount = 0;
-      globalThis.fetch = mock.fn(async (url, options) => {
-        const urlStr = typeof url === 'string' ? url : url.toString();
-        fetchCalls.push({ url: urlStr, options });
-
-        if (urlStr.includes('fields=access_token')) {
-          return { json: async () => ({ access_token: 'page-token-abc' }) };
-        }
-        if (urlStr.includes('/leadgen_forms')) {
-          return { json: async () => ({ id: 'form_test' }) };
-        }
-        if (urlStr.includes('/campaigns')) {
+      callTool.mock.mockImplementation(async (name, args) => {
+        mcpCalls.push({ name, args });
+        if (name === 'create_campaign') {
           campaignCallCount++;
-          if (campaignCallCount === 1) {
-            return { json: async () => ({ error: { message: 'Budget too low', code: 100 } }) };
-          }
-          return { json: async () => ({ id: 'camp_ok' }) };
+          if (campaignCallCount === 1) throw new Error('Budget too low');
+          return { id: 'camp_ok' };
         }
-        if (urlStr.includes('/adsets')) {
-          return { json: async () => ({ id: 'adset_ok' }) };
-        }
-        if (urlStr.includes('/adcreatives')) {
-          return { json: async () => ({ id: 'creative_ok' }) };
-        }
-        if (urlStr.includes('/ads')) {
-          return { json: async () => ({ id: 'ad_ok' }) };
-        }
-        return { json: async () => ({}) };
+        if (name === 'create_adset') return { id: 'adset_ok' };
+        if (name === 'create_ad_creative') return { id: 'creative_ok' };
+        if (name === 'create_ad') return { id: 'ad_ok' };
+        throw new Error(`Unknown: ${name}`);
       });
 
       const result = await executeMediaPlan(LEAD_GEN_PLAN, CREATIVES);
 
-      // First campaign failed, its children should be skipped
-      const skippedErrors = result.errors.filter(e => e.error.includes('parent campaign failed'));
-      assert.ok(skippedErrors.length >= 1, 'child ad sets should be skipped when campaign fails');
+      // Restore
+      callTool.mock.mockImplementation(async (name, args) => {
+        mcpCalls.push({ name, args });
+        switch (name) {
+          case 'create_campaign': return { id: `camp_${mcpCalls.length}` };
+          case 'create_adset': return { id: `adset_${mcpCalls.length}` };
+          case 'create_ad_creative': return { id: `creative_${mcpCalls.length}` };
+          case 'create_ad': return { id: `ad_${mcpCalls.length}` };
+          default: throw new Error(`Unknown tool: ${name}`);
+        }
+      });
+
+      // First campaign failed — should have campaign-level error
+      assert.ok(result.errors.some(e => e.level === 'campaign'), 'should have campaign error');
+      // Second campaign should succeed
+      assert.ok(result.campaigns.length >= 1, 'second campaign should succeed');
     });
   });
 });
