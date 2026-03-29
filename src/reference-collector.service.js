@@ -4,6 +4,55 @@ const FETCH_TIMEOUT = 20_000;
 const DEFAULT_FIRECRAWL_BASE_URL = 'https://api.firecrawl.dev/v1';
 
 /**
+ * Validate that a value is a usable image URL (http/https, not a description string).
+ */
+function isValidImageUrl(v) {
+  if (typeof v !== 'string') return false;
+  try {
+    const u = new URL(v);
+    return u.protocol === 'http:' || u.protocol === 'https:';
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Extract all user-provided reference images from brief fields.
+ *
+ * The intake agent / orchestrator patch_brief can store image references under
+ * various field names (product_images, reference_images, reference_image_url, etc.).
+ * This function normalises them into a deduplicated array of {url, description}.
+ */
+export function extractBriefImages(brief) {
+  if (!brief) return [];
+
+  const seen = new Set();
+  const results = [];
+
+  function add(url, description) {
+    if (!isValidImageUrl(url) || seen.has(url)) return;
+    seen.add(url);
+    results.push({ url, description });
+  }
+
+  // 1. product_images — [{url, filename}] from intake attachment uploads
+  for (const img of Array.isArray(brief.product_images) ? brief.product_images : []) {
+    add(img?.url, img?.filename || 'User uploaded product image');
+  }
+
+  // 2. reference_images — string[] or [{url}] set by LLM via update_brief / patch_brief
+  for (const img of Array.isArray(brief.reference_images) ? brief.reference_images : []) {
+    if (typeof img === 'string') add(img, 'Reference image');
+    else add(img?.url, img?.filename || 'Reference image');
+  }
+
+  // 3. reference_image_url — single string set by LLM
+  add(brief.reference_image_url, 'Reference image');
+
+  return results;
+}
+
+/**
  * Collect creative references from multiple sources.
  *
  * @param {Object} params
@@ -14,26 +63,29 @@ const DEFAULT_FIRECRAWL_BASE_URL = 'https://api.firecrawl.dev/v1';
 export async function collectReferences({ researchReport, brief }) {
   const references = [];
 
-  // 1. User-uploaded product images (highest priority — placed first so they
-  //    survive the slice(0,3) limit in generateAdImage)
-  if (brief?.product_images?.length) {
-    references.push(...brief.product_images.map(img => ({
-      source: 'user_upload',
-      url: img.url,
-      description: img.filename || 'User uploaded product image',
-    })));
-  }
+  // 1. User-provided product/reference images (highest priority — placed first
+  //    so they survive the slice(0,3) limit in generateAdImage)
+  const briefImages = extractBriefImages(brief);
+  console.log(`[reference-collector] Brief images: ${briefImages.length} (product_images: ${Array.isArray(brief?.product_images) ? brief.product_images.length : 0}, reference_images: ${Array.isArray(brief?.reference_images) ? brief.reference_images.length : 0})`);
+  references.push(...briefImages.map(img => ({
+    source: 'user_upload',
+    url: img.url,
+    description: img.description,
+  })));
 
   // 2. Extract competitor ad snapshots from research results
   const competitorRefs = extractCompetitorAds(researchReport);
+  console.log(`[reference-collector] Competitor ad refs: ${competitorRefs.length}`);
   references.push(...competitorRefs);
 
   // 3. Fetch product images from client website
   if (brief?.website) {
     const websiteRefs = await fetchWebsiteImages(brief.website, brief.products);
+    console.log(`[reference-collector] Website refs from ${brief.website}: ${websiteRefs.length}`);
     references.push(...websiteRefs);
   }
 
+  console.log(`[reference-collector] Total references collected: ${references.length} (user_upload: ${briefImages.length}, competitor: ${competitorRefs.length}, website: ${references.length - briefImages.length - competitorRefs.length})`);
   return references;
 }
 

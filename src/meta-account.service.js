@@ -32,7 +32,7 @@ export async function fetchAccountAssets() {
   };
 
   const results = await Promise.allSettled([
-    fetchWhatsAppPhoneNumbers(accountId, token, version),
+    fetchWhatsAppPhoneNumbers(accountId, token, version, pageId),
     fetchPages(accountId, token, version),
     fetchInstagramAccounts(accountId, token, version),
   ]);
@@ -45,15 +45,28 @@ export async function fetchAccountAssets() {
 }
 
 // ── WhatsApp Business phone numbers ─────────────────────────────────
+// WABA lives under the Page's Business, not the Ad Account's Business.
+// Path: System Token → Page → business.id → owned_whatsapp_business_accounts → phone_numbers
 
-async function fetchWhatsAppPhoneNumbers(accountId, token, version) {
+async function fetchWhatsAppPhoneNumbers(accountId, token, version, pageId) {
+  // Step 1: Resolve the Page's owning Business ID
+  const bizRes = await fetch(
+    `https://graph.facebook.com/${version}/${pageId}?fields=business{id,name}&access_token=${token}`,
+    { signal: AbortSignal.timeout(FETCH_TIMEOUT) },
+  );
+  const bizData = await bizRes.json();
+  const businessId = bizData.business?.id;
+  if (!businessId) return [];
+
+  // Step 2: List WABAs owned by that Business
   const wabaRes = await fetch(
-    `https://graph.facebook.com/${version}/${accountId}/owned_whatsapp_business_accounts?fields=id,name&access_token=${token}`,
+    `https://graph.facebook.com/${version}/${businessId}/owned_whatsapp_business_accounts?fields=id,name&access_token=${token}`,
     { signal: AbortSignal.timeout(FETCH_TIMEOUT) },
   );
   const wabaData = await wabaRes.json();
   if (wabaData.error) return [];
 
+  // Step 3: For each WABA, fetch phone numbers
   const phoneNumbers = [];
   for (const waba of wabaData.data || []) {
     const phoneRes = await fetch(
