@@ -334,6 +334,132 @@ describe('createFullCampaign', () => {
   });
 });
 
+// ── createFullCampaign — ad format variations ─────────────────────────
+describe('createFullCampaign — ad format variations', () => {
+  const baseAd = {
+    name: 'Ad 1',
+    image_hash: 'hash_abc',
+    primary_text: 'Check this out',
+    headline: 'Great Deal',
+    cta: 'Learn More',
+    link_url: 'https://example.com',
+  };
+
+  it('traffic campaign: OUTCOME_TRAFFIC, LINK_CLICKS, no promoted_object, no destination_type, SHOP_NOW CTA, no form_id', async () => {
+    const input = {
+      name: 'Traffic Campaign',
+      objective: 'traffic',
+      daily_budget: 50,
+      ad_sets: [{
+        name: 'Set A',
+        targeting: { countries: ['NG'], age_range: [25, 55] },
+        ads: [{ ...baseAd, cta: 'Shop Now' }],
+      }],
+    };
+    await createFullCampaign(input);
+
+    const campaignCall = callTool.mock.calls.find(c => c.arguments[0] === 'create_campaign');
+    assert.equal(campaignCall.arguments[1].objective, 'OUTCOME_TRAFFIC');
+
+    const adsetCall = callTool.mock.calls.find(c => c.arguments[0] === 'create_adset');
+    assert.equal(adsetCall.arguments[1].optimization_goal, 'LINK_CLICKS');
+    assert.equal(adsetCall.arguments[1].promoted_object, undefined, 'should have no promoted_object');
+    assert.equal(adsetCall.arguments[1].destination_type, undefined, 'should have no destination_type');
+
+    const creativeCall = callTool.mock.calls.find(c => c.arguments[0] === 'create_ad_creative');
+    assert.equal(creativeCall.arguments[1].call_to_action.type, 'SHOP_NOW');
+    assert.equal(creativeCall.arguments[1].call_to_action.value.lead_gen_form_id, undefined, 'should have no form_id in CTA value');
+  });
+
+  it('brand awareness campaign: objective maps to OUTCOME_AWARENESS', async () => {
+    const input = {
+      name: 'Awareness Campaign',
+      objective: 'brand_awareness',
+      daily_budget: 40,
+      ad_sets: [{
+        name: 'Set A',
+        targeting: { countries: ['NG'] },
+        ads: [baseAd],
+      }],
+    };
+    await createFullCampaign(input);
+
+    const campaignCall = callTool.mock.calls.find(c => c.arguments[0] === 'create_campaign');
+    assert.equal(campaignCall.arguments[1].objective, 'OUTCOME_AWARENESS');
+  });
+
+  it('WhatsApp CTA: "Send WhatsApp" maps to WHATSAPP_MESSAGE in creative call_to_action', async () => {
+    const input = {
+      name: 'WhatsApp Campaign',
+      objective: 'traffic',
+      daily_budget: 30,
+      ad_sets: [{
+        name: 'Set A',
+        targeting: { countries: ['NG'] },
+        ads: [{ ...baseAd, cta: 'Send WhatsApp' }],
+      }],
+    };
+    await createFullCampaign(input);
+
+    const creativeCall = callTool.mock.calls.find(c => c.arguments[0] === 'create_ad_creative');
+    assert.equal(creativeCall.arguments[1].call_to_action.type, 'WHATSAPP_MESSAGE');
+  });
+
+  it('multiple ad sets in same campaign: both created with correct gender targeting', async () => {
+    const input = {
+      name: 'Multi-Adset Campaign',
+      objective: 'traffic',
+      daily_budget: 60,
+      ad_sets: [
+        {
+          name: 'Male Set',
+          targeting: { countries: ['NG'], gender: 'male' },
+          ads: [{ ...baseAd, name: 'Male Ad' }],
+        },
+        {
+          name: 'Female Set',
+          targeting: { countries: ['NG'], gender: 'female' },
+          ads: [{ ...baseAd, name: 'Female Ad' }],
+        },
+      ],
+    };
+    await createFullCampaign(input);
+
+    const adsetCalls = callTool.mock.calls.filter(c => c.arguments[0] === 'create_adset');
+    assert.equal(adsetCalls.length, 2, 'should create 2 ad sets');
+
+    const maleAdset = adsetCalls.find(c => c.arguments[1].name === 'Male Set');
+    const femaleAdset = adsetCalls.find(c => c.arguments[1].name === 'Female Set');
+
+    assert.deepEqual(maleAdset.arguments[1].targeting.genders, [1], 'male adset should have genders=[1]');
+    assert.deepEqual(femaleAdset.arguments[1].targeting.genders, [2], 'female adset should have genders=[2]');
+  });
+
+  it('campaign with no successful ads (all missing image_hash): returns status="partial"', async () => {
+    const input = {
+      name: 'No-Image Campaign',
+      objective: 'traffic',
+      daily_budget: 30,
+      ad_sets: [{
+        name: 'Set A',
+        targeting: { countries: ['NG'] },
+        ads: [
+          { name: 'Ad No Hash 1' /* no image_hash */ },
+          { name: 'Ad No Hash 2' /* no image_hash */ },
+        ],
+      }],
+    };
+    const result = await createFullCampaign(input);
+
+    assert.equal(result.status, 'partial', 'should return partial when campaign and adsets created but no ads');
+    assert.ok(result.campaign_id, 'should have a campaign_id');
+    assert.equal(result.ad_sets.length, 1, 'adset should still be created');
+    assert.equal(result.ad_sets[0].ads.length, 0, 'no ads should be created');
+    assert.ok(result.errors.length > 0, 'should record errors for missing image_hash');
+    assert.ok(result.errors.every(e => e.error.includes('image_hash')), 'errors should mention image_hash');
+  });
+});
+
 // ── executeMediaPlanBatch tests ───────────────────────────────────────
 describe('executeMediaPlanBatch', () => {
   const PLAN = {
