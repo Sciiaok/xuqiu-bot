@@ -2,6 +2,8 @@ import { createClient } from '../../../../../../lib/supabase-server.js';
 import { resumeAfterFeedback } from '../../../../../../src/campaign-orchestrator.service.js';
 import { getSession, getLatestSession, updateSessionIfStatus } from '../../../../../../lib/repositories/orchestrator.repository.js';
 import { streamSSE } from '../../../../../../lib/sse.js';
+import { streamKey } from '../../../../../../lib/redis.js';
+import { getBrief } from '../../../../../../lib/repositories/campaign-brief.repository.js';
 
 /**
  * POST /api/campaign/orchestrate/[id]/feedback
@@ -41,9 +43,12 @@ export async function POST(request, { params }) {
     return Response.json({ error: 'Session not found' }, { status: 404 });
   }
 
+  const brief = await getBrief(session.brief_id);
+
   const sessionId = session.id;
   return streamSSE(resumeAfterFeedback(sessionId, responseText, { attachments: body.attachments }), {
     heartbeatIntervalMs: 5000,
+    streamKey: brief ? streamKey(brief.id) : undefined,
     onAbort: async () => {
       await updateSessionIfStatus(sessionId, 'running', { status: 'interrupted' });
     },

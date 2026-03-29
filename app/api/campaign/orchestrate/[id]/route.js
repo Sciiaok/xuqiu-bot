@@ -10,6 +10,7 @@ import {
 } from '../../../../../lib/repositories/orchestrator.repository.js';
 import { getBrief } from '../../../../../lib/repositories/campaign-brief.repository.js';
 import { streamSSE } from '../../../../../lib/sse.js';
+import { streamKey } from '../../../../../lib/redis.js';
 
 function isBriefReadyForOrchestration(brief) {
   const briefData = brief?.brief || {};
@@ -78,13 +79,13 @@ export async function POST(request, { params }) {
     if (session.status === 'intake' && session.current_phase === 'intake') {
       return streamSSE(
         processIntakeMessage(brief.id, body.message, { attachments: body.attachments }),
-        { heartbeatIntervalMs: 5000 },
+        { heartbeatIntervalMs: 5000, streamKey: streamKey(brief.id) },
       );
     }
     // Post-intake: use orchestrator chat handler
     return streamSSE(
       chatWithOrchestrator(session.id, body.message, { attachments: body.attachments }),
-      { heartbeatIntervalMs: 5000 },
+      { heartbeatIntervalMs: 5000, streamKey: streamKey(brief.id) },
     );
   }
 
@@ -92,6 +93,7 @@ export async function POST(request, { params }) {
   const sessionId = session.id;
   return streamSSE(orchestrate(sessionId, { phases: body.phases }), {
     heartbeatIntervalMs: 5000,
+    streamKey: streamKey(brief.id),
     onAbort: async () => {
       await updateSessionIfStatus(sessionId, 'running', { status: 'interrupted' });
     },
