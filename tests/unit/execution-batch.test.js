@@ -59,7 +59,12 @@ globalThis.fetch = async (url, options) => {
 
 // ── Import module under test ──────────────────────────────────────────
 const moduleUrl = pathToFileURL(resolve(process.cwd(), 'src/execution-agent.service.js')).href;
-const { uploadImages, createFullCampaign, executeMediaPlanBatch } = await import(moduleUrl);
+const mod = await import(moduleUrl);
+
+// Wrap batch functions to use MCP mode (tests mock callTool, not fetch)
+const uploadImages = (images, opts = {}) => mod.uploadImages(images, { useMcp: true, ...opts });
+const createFullCampaign = (input, opts = {}) => mod.createFullCampaign(input, { useMcp: true, ...opts });
+const executeMediaPlanBatch = (plan, creatives, opts = {}) => mod.executeMediaPlanBatch(plan, creatives, { useMcp: true, ...opts });
 
 // ── Helper to get callTool mock fn ────────────────────────────────────
 const { callTool } = await import(mcpModuleUrl);

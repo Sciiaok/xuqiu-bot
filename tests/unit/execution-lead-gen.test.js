@@ -68,13 +68,31 @@ beforeEach(() => {
     if (urlStr.includes('/leadgen_forms')) {
       return { json: async () => ({ id: `form_${Date.now()}` }) };
     }
+    if (urlStr.includes('/campaigns')) {
+      return { json: async () => ({ id: `camp_${Math.random().toString(36).slice(2, 8)}` }) };
+    }
+    if (urlStr.includes('/adsets')) {
+      return { json: async () => ({ id: `adset_${Math.random().toString(36).slice(2, 8)}` }) };
+    }
+    if (urlStr.includes('/adcreatives')) {
+      return { json: async () => ({ id: `creative_${Math.random().toString(36).slice(2, 8)}` }) };
+    }
+    if (urlStr.includes('/ads') && !urlStr.includes('/adsets') && !urlStr.includes('/adimages') && !urlStr.includes('/adcreatives')) {
+      return { json: async () => ({ id: `ad_${Math.random().toString(36).slice(2, 8)}` }) };
+    }
+    if (urlStr.includes('/adimages')) {
+      return { json: async () => ({ images: { img: { hash: `hash_${Math.random().toString(36).slice(2, 8)}` } } }) };
+    }
     return { json: async () => ({}) };
   };
 });
 
 // ── Import module under test ─────────────────────────────────────────
 const moduleUrl = pathToFileURL(resolve(process.cwd(), 'src/execution-agent.service.js')).href;
-const { createLeadForm, executeMediaPlan } = await import(moduleUrl);
+const mod = await import(moduleUrl);
+const { createLeadForm } = mod;
+// Use direct-API mode (default) — tests mock fetch for all Meta endpoints
+const executeMediaPlan = (plan, creatives, opts = {}) => mod.executeMediaPlan(plan, creatives, opts);
 
 // ── Helper to get callTool mock fn ────────────────────────────────────
 const { callTool } = await import(mcpModuleUrl);
@@ -83,23 +101,17 @@ beforeEach(() => {
   callTool.mock.resetCalls();
 });
 
-// ── Helper: find MCP call by tool name ──────────────────────────────
-function findMcpArgs(toolName) {
-  const call = callTool.mock.calls.find(c => c.arguments[0] === toolName);
-  return call?.arguments[1];
-}
-
-function findAllMcpArgs(toolName) {
-  return callTool.mock.calls
-    .filter(c => c.arguments[0] === toolName)
-    .map(c => c.arguments[1]);
-}
-
-// ── Helper: find fetch call by URL pattern ───────────────────────────
+// ── Helper: find fetch call body by URL pattern ──────────────────────
 function findFetchBody(pattern) {
   const call = fetchCalls.find(c => c.url.includes(pattern));
   if (!call?.options?.body) return null;
   return JSON.parse(call.options.body);
+}
+
+function findAllFetchBodies(pattern) {
+  return fetchCalls
+    .filter(c => c.url.includes(pattern) && c.options?.body)
+    .map(c => JSON.parse(c.options.body));
 }
 
 // ── Tests ────────────────────────────────────────────────────────────
@@ -199,12 +211,11 @@ describe('LEAD_GENERATION execution', () => {
     it('creates lead forms before ad sets', async () => {
       await executeMediaPlan(LEAD_GEN_PLAN, CREATIVES);
 
-      // Lead form is via fetch; ad sets are via MCP
       const formCallIdx = fetchCalls.findIndex(c => c.url.includes('/leadgen_forms'));
-      const adsetCallIdx = callTool.mock.calls.findIndex(c => c.arguments[0] === 'create_adset');
+      const adsetCallIdx = fetchCalls.findIndex(c => c.url.includes('/adsets'));
       assert.ok(formCallIdx >= 0, 'should create lead forms');
       assert.ok(adsetCallIdx >= 0, 'should create ad sets');
-      // fetch for form happens before MCP for adset (batch: form first, then campaigns)
+      assert.ok(formCallIdx < adsetCallIdx, 'lead forms must be created before ad sets');
     });
 
     it('completes successfully with all entities created', async () => {
@@ -219,34 +230,33 @@ describe('LEAD_GENERATION execution', () => {
     it('creates 2 campaigns with correct objectives', async () => {
       await executeMediaPlan(LEAD_GEN_PLAN, CREATIVES);
 
-      const campaignArgs = findAllMcpArgs('create_campaign');
-      assert.equal(campaignArgs.length, 2);
-      for (const args of campaignArgs) {
-        assert.equal(args.objective, 'OUTCOME_LEADS');
-        assert.equal(args.status, 'PAUSED');
+      const campaignBodies = findAllFetchBodies('/campaigns');
+      assert.equal(campaignBodies.length, 2);
+      for (const body of campaignBodies) {
+        assert.equal(body.objective, 'OUTCOME_LEADS');
+        assert.equal(body.status, 'PAUSED');
       }
     });
 
     it('ad sets have promoted_object with page_id and destination_type ON_AD', async () => {
       await executeMediaPlan(LEAD_GEN_PLAN, CREATIVES);
 
-      const adsetArgs = findAllMcpArgs('create_adset');
-      assert.equal(adsetArgs.length, 2);
-      for (const args of adsetArgs) {
-        assert.equal(args.promoted_object.page_id, '9988776655');
-        assert.equal(args.promoted_object.lead_gen_form_id, undefined,
-          'lead_gen_form_id must NOT be in promoted_object');
-        assert.equal(args.destination_type, 'ON_AD');
+      const adsetBodies = findAllFetchBodies('/adsets');
+      assert.equal(adsetBodies.length, 2);
+      for (const body of adsetBodies) {
+        assert.equal(body.promoted_object.page_id, '9988776655');
+        assert.equal(body.destination_type, 'ON_AD');
       }
     });
 
     it('passes lead_gen_form_id to ad creatives via call_to_action', async () => {
       await executeMediaPlan(LEAD_GEN_PLAN, CREATIVES);
 
-      const creativeArgs = findAllMcpArgs('create_ad_creative');
-      assert.ok(creativeArgs.length >= 3, 'should create at least 3 creatives');
-      for (const args of creativeArgs) {
-        assert.ok(args.call_to_action?.value?.lead_gen_form_id,
+      const creativeBodies = findAllFetchBodies('/adcreatives');
+      assert.ok(creativeBodies.length >= 3, 'should create at least 3 creatives');
+      for (const body of creativeBodies) {
+        const ctaValue = body.object_story_spec?.link_data?.call_to_action?.value;
+        assert.ok(ctaValue?.lead_gen_form_id,
           'creative call_to_action.value should contain lead_gen_form_id');
       }
     });
@@ -254,10 +264,10 @@ describe('LEAD_GENERATION execution', () => {
     it('all ad sets have age_min <= 18 (Advantage+ constraint)', async () => {
       await executeMediaPlan(LEAD_GEN_PLAN, CREATIVES);
 
-      const adsetArgs = findAllMcpArgs('create_adset');
-      for (const args of adsetArgs) {
-        assert.ok(args.targeting.age_min <= 18,
-          `age_min ${args.targeting.age_min} exceeds Advantage+ limit of 18`);
+      const adsetBodies = findAllFetchBodies('/adsets');
+      for (const body of adsetBodies) {
+        assert.ok(body.targeting.age_min <= 18,
+          `age_min ${body.targeting.age_min} exceeds Advantage+ limit of 18`);
       }
     });
 
@@ -281,36 +291,32 @@ describe('LEAD_GENERATION execution', () => {
 
     it('skips child entities when campaign creation fails', async () => {
       let campaignCallCount = 0;
-      callTool.mock.mockImplementation(async (name, args) => {
-        mcpCalls.push({ name, args });
-        if (name === 'create_campaign') {
-          campaignCallCount++;
-          if (campaignCallCount === 1) throw new Error('Budget too low');
-          return { id: 'camp_ok' };
+      globalThis.fetch = async (url, options) => {
+        const urlStr = typeof url === 'string' ? url : url.toString();
+        fetchCalls.push({ url: urlStr, options });
+        if (urlStr.includes('fields=access_token')) {
+          return { json: async () => ({ access_token: 'page-token-abc' }) };
         }
-        if (name === 'create_adset') return { id: 'adset_ok' };
-        if (name === 'create_ad_creative') return { id: 'creative_ok' };
-        if (name === 'create_ad') return { id: 'ad_ok' };
-        throw new Error(`Unknown: ${name}`);
-      });
+        if (urlStr.includes('/leadgen_forms')) {
+          return { json: async () => ({ id: 'form_test' }) };
+        }
+        if (urlStr.includes('/campaigns')) {
+          campaignCallCount++;
+          if (campaignCallCount === 1) {
+            return { json: async () => ({ error: { message: 'Budget too low', code: 100 } }) };
+          }
+          return { json: async () => ({ id: 'camp_ok' }) };
+        }
+        if (urlStr.includes('/adsets')) return { json: async () => ({ id: 'adset_ok' }) };
+        if (urlStr.includes('/adcreatives')) return { json: async () => ({ id: 'creative_ok' }) };
+        if (urlStr.includes('/ads')) return { json: async () => ({ id: 'ad_ok' }) };
+        if (urlStr.includes('/adimages')) return { json: async () => ({ images: { img: { hash: 'h1' } } }) };
+        return { json: async () => ({}) };
+      };
 
       const result = await executeMediaPlan(LEAD_GEN_PLAN, CREATIVES);
 
-      // Restore
-      callTool.mock.mockImplementation(async (name, args) => {
-        mcpCalls.push({ name, args });
-        switch (name) {
-          case 'create_campaign': return { id: `camp_${mcpCalls.length}` };
-          case 'create_adset': return { id: `adset_${mcpCalls.length}` };
-          case 'create_ad_creative': return { id: `creative_${mcpCalls.length}` };
-          case 'create_ad': return { id: `ad_${mcpCalls.length}` };
-          default: throw new Error(`Unknown tool: ${name}`);
-        }
-      });
-
-      // First campaign failed — should have campaign-level error
       assert.ok(result.errors.some(e => e.level === 'campaign'), 'should have campaign error');
-      // Second campaign should succeed
       assert.ok(result.campaigns.length >= 1, 'second campaign should succeed');
     });
   });

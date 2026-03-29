@@ -6,6 +6,52 @@ import { mapCountriesToISO } from '../lib/country-codes.js';
 const FETCH_TIMEOUT = 60_000;
 const MAX_TOOL_ITERATIONS = 20;
 
+// ── Direct Meta Graph API helpers ────────────────────────────────────
+
+function metaUrl(path) {
+  const version = config.meta?.apiVersion || 'v21.0';
+  return `https://graph.facebook.com/${version}/${path}`;
+}
+
+async function metaPost(path, body) {
+  const token = config.meta?.accessToken;
+  if (!token) throw new Error('META_ACCESS_TOKEN is not configured');
+
+  const res = await fetch(metaUrl(path), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ ...body, access_token: token }),
+    signal: AbortSignal.timeout(FETCH_TIMEOUT),
+  });
+
+  const data = await res.json();
+  if (data.error) {
+    const detail = data.error.error_user_msg || data.error.error_user_title || '';
+    throw new Error(`Meta API: ${data.error.message}${detail ? ' — ' + detail : ''}`);
+  }
+  return data;
+}
+
+async function metaUploadImageUrl(imageUrl) {
+  const adAccountId = config.meta?.adAccountId;
+  const token = config.meta?.accessToken;
+  if (!adAccountId || !token) throw new Error('META_AD_ACCOUNT_ID or META_ACCESS_TOKEN not configured');
+
+  const res = await fetch(metaUrl(`act_${adAccountId}/adimages`), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ url: imageUrl, access_token: token }),
+    signal: AbortSignal.timeout(FETCH_TIMEOUT),
+  });
+
+  const data = await res.json();
+  if (data.error) throw new Error(`Meta API: ${data.error.message}`);
+  const images = data.images || {};
+  const imageData = Object.values(images)[0];
+  if (!imageData?.hash) throw new Error('No image hash returned from Meta');
+  return imageData.hash;
+}
+
 // ── MCP tool allowlist for execution ─────────────────────────────────
 
 const MCP_TOOL_ALLOWLIST = new Set([
@@ -291,17 +337,22 @@ function pickOptimizationGoal(metaObjective) {
  */
 export async function uploadImages(images, options = {}) {
   const onProgress = options.onProgress;
+  const useMcp = options.useMcp ?? false;
   const accountId = `act_${config.meta?.adAccountId}`;
   const result = {};
   const CONCURRENCY = 5;
 
-  // Process in batches of CONCURRENCY
   for (let i = 0; i < images.length; i += CONCURRENCY) {
     const batch = images.slice(i, i + CONCURRENCY);
     const settled = await Promise.allSettled(
       batch.map(async (image) => {
-        const res = await callTool('upload_ad_image', { account_id: accountId, image_url: image.url });
-        const hash = res.image_hash || res.hash || res.images?.[Object.keys(res.images)[0]]?.hash;
+        let hash;
+        if (useMcp) {
+          const res = await callTool('upload_ad_image', { account_id: accountId, image_url: image.url });
+          hash = res.image_hash || res.hash || res.images?.[Object.keys(res.images)[0]]?.hash;
+        } else {
+          hash = await metaUploadImageUrl(image.url);
+        }
         return { name: image.name, hash };
       }),
     );
@@ -332,29 +383,33 @@ export async function uploadImages(images, options = {}) {
  */
 export async function createFullCampaign(input, options = {}) {
   const onProgress = options.onProgress;
+  const useMcp = options.useMcp ?? false;
   const accountId = `act_${config.meta?.adAccountId}`;
   const pageId = config.meta?.pageId;
   const metaObjective = OBJECTIVE_MAP[input.objective] || input.objective;
   const isLeadGen = metaObjective === 'OUTCOME_LEADS';
+  const ctaType = (cta) => CTA_MAP[cta] || 'LEARN_MORE';
   const errors = [];
   const adSetResults = [];
 
   // Create campaign
   let campaignId;
   try {
-    const campaignRes = await callTool('create_campaign', {
-      account_id: accountId,
+    const campaignBody = {
       name: input.name,
       objective: metaObjective,
       status: 'PAUSED',
       special_ad_categories: [],
       bid_strategy: 'LOWEST_COST_WITHOUT_CAP',
       daily_budget: Math.round((input.daily_budget || 0) * 100),
-    });
-    campaignId = campaignRes.id || campaignRes.campaign_id;
-    if (!campaignId) {
-      throw new Error(`create_campaign returned no ID: ${JSON.stringify(campaignRes).slice(0, 200)}`);
-    }
+    };
+
+    const campaignRes = useMcp
+      ? await callTool('create_campaign', { account_id: accountId, ...campaignBody })
+      : await metaPost(`${accountId}/campaigns`, campaignBody);
+
+    campaignId = campaignRes.id;
+    if (!campaignId) throw new Error(`No campaign ID returned: ${JSON.stringify(campaignRes).slice(0, 200)}`);
     onProgress?.({ step: 'create_campaign', name: input.name, campaign_id: campaignId });
   } catch (err) {
     errors.push({ level: 'campaign', name: input.name, error: err.message });
@@ -365,8 +420,7 @@ export async function createFullCampaign(input, options = {}) {
   for (const adSet of input.ad_sets || []) {
     let adSetId;
     try {
-      const adSetParams = {
-        account_id: accountId,
+      const adSetBody = {
         campaign_id: campaignId,
         name: adSet.name,
         status: 'PAUSED',
@@ -376,22 +430,22 @@ export async function createFullCampaign(input, options = {}) {
       };
 
       if (isLeadGen && pageId) {
-        adSetParams.promoted_object = { page_id: pageId };
-        adSetParams.destination_type = 'ON_AD';
+        adSetBody.promoted_object = { page_id: pageId };
+        adSetBody.destination_type = 'ON_AD';
       }
 
-      // Schedule
       if (input.duration_days > 0) {
         const now = new Date();
-        adSetParams.start_time = now.toISOString();
-        adSetParams.end_time = new Date(now.getTime() + input.duration_days * 24 * 60 * 60 * 1000).toISOString();
+        adSetBody.start_time = now.toISOString();
+        adSetBody.end_time = new Date(now.getTime() + input.duration_days * 24 * 60 * 60 * 1000).toISOString();
       }
 
-      const adSetRes = await callTool('create_adset', adSetParams);
-      adSetId = adSetRes.id || adSetRes.adset_id || adSetRes.ad_set_id;
-      if (!adSetId) {
-        throw new Error(`create_adset returned no ID: ${JSON.stringify(adSetRes).slice(0, 300)}`);
-      }
+      const adSetRes = useMcp
+        ? await callTool('create_adset', { account_id: accountId, ...adSetBody })
+        : await metaPost(`${accountId}/adsets`, adSetBody);
+
+      adSetId = adSetRes.id;
+      if (!adSetId) throw new Error(`No adset ID returned: ${JSON.stringify(adSetRes).slice(0, 300)}`);
       onProgress?.({ step: 'create_adset', name: adSet.name, adset_id: adSetId });
     } catch (err) {
       errors.push({ level: 'adset', name: adSet.name, error: err.message });
@@ -407,41 +461,55 @@ export async function createFullCampaign(input, options = {}) {
       }
 
       try {
-        // MCP create_ad_creative uses flat params (not object_story_spec)
-        const creativeParams = {
-          account_id: accountId,
-          name: `${ad.name} Creative`,
-          page_id: pageId,
-          image_hash: ad.image_hash,
-          message: ad.primary_text,
-          headline: ad.headline,
-          description: ad.description,
-          link_url: ad.link_url || input.link_url,
-          call_to_action_type: CTA_MAP[ad.cta] || 'LEARN_MORE',
-        };
-
+        let creativeId;
+        const callToAction = { type: ctaType(ad.cta) };
         if (isLeadGen && ad.lead_gen_form_id) {
-          creativeParams.lead_gen_form_id = ad.lead_gen_form_id;
+          callToAction.value = { lead_gen_form_id: ad.lead_gen_form_id };
         }
 
-        const creativeRes = await callTool('create_ad_creative', creativeParams);
-        const creativeId = creativeRes.id || creativeRes.creative_id;
-        if (!creativeId) {
-          throw new Error(`create_ad_creative returned no ID: ${JSON.stringify(creativeRes).slice(0, 300)}`);
+        if (useMcp) {
+          // MCP uses flat params
+          const mcpParams = {
+            account_id: accountId,
+            name: `${ad.name} Creative`,
+            page_id: pageId,
+            image_hash: ad.image_hash,
+            message: ad.primary_text,
+            headline: ad.headline,
+            description: ad.description,
+            link_url: ad.link_url || input.link_url,
+            call_to_action_type: ctaType(ad.cta),
+          };
+          if (isLeadGen && ad.lead_gen_form_id) mcpParams.lead_gen_form_id = ad.lead_gen_form_id;
+          const creativeRes = await callTool('create_ad_creative', mcpParams);
+          creativeId = creativeRes.id || creativeRes.creative_id;
+        } else {
+          // Direct API uses object_story_spec
+          const creativeRes = await metaPost(`${accountId}/adcreatives`, {
+            name: `Creative - ${ad.name}`,
+            object_story_spec: {
+              page_id: pageId,
+              link_data: {
+                image_hash: ad.image_hash,
+                link: ad.link_url || input.link_url,
+                message: ad.primary_text,
+                name: ad.headline,
+                description: ad.description,
+                call_to_action: callToAction,
+              },
+            },
+          });
+          creativeId = creativeRes.id;
         }
 
-        // MCP create_ad uses flat creative_id (not nested creative object)
-        const adRes = await callTool('create_ad', {
-          account_id: accountId,
-          adset_id: adSetId,
-          name: ad.name,
-          status: 'PAUSED',
-          creative_id: creativeId,
-        });
-        const adId = adRes.id || adRes.ad_id;
-        if (!adId) {
-          throw new Error(`create_ad returned no ID: ${JSON.stringify(adRes).slice(0, 300)}`);
-        }
+        if (!creativeId) throw new Error('No creative ID returned');
+
+        const adRes = useMcp
+          ? await callTool('create_ad', { account_id: accountId, adset_id: adSetId, name: ad.name, status: 'PAUSED', creative_id: creativeId })
+          : await metaPost(`${accountId}/ads`, { name: ad.name, adset_id: adSetId, creative: { creative_id: creativeId }, status: 'PAUSED' });
+
+        const adId = adRes.id;
+        if (!adId) throw new Error('No ad ID returned');
 
         adResults.push({ ad_id: adId, creative_id: creativeId, name: ad.name });
         onProgress?.({ step: 'create_ad', name: ad.name, ad_id: adId, creative_id: creativeId });
@@ -485,8 +553,9 @@ export async function executeMediaPlanBatch(plan, creatives = {}, options = {}) 
     .filter(([, c]) => c.url && !c.image_hash)
     .map(([name, c]) => ({ name, url: c.url }));
 
+  const useMcp = options.useMcp ?? false;
   const uploadedHashes = needsUpload.length > 0
-    ? await uploadImages(needsUpload, { onProgress })
+    ? await uploadImages(needsUpload, { onProgress, useMcp })
     : {};
 
   // 2. Merge pre-existing hashes with newly uploaded
@@ -536,7 +605,7 @@ export async function executeMediaPlanBatch(plan, creatives = {}, options = {}) 
 
     const result = await createFullCampaign(
       { ...campaign, duration_days, link_url, lead_gen_form_id, ad_sets: enrichedAdSets },
-      { onProgress },
+      { onProgress, useMcp },
     );
 
     if (result.campaign_id) {
@@ -764,7 +833,7 @@ export async function activateCampaigns(executionResult) {
 
   for (const id of campaignIds) {
     try {
-      await callTool('update_campaign', { campaign_id: id, status: 'ACTIVE' });
+      await metaPost(id, { status: 'ACTIVE' });
       activated.push(id);
     } catch (err) {
       errors.push({ id, error: err.message });
