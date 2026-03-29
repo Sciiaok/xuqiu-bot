@@ -503,8 +503,12 @@ export async function createFullCampaign(input, options = {}) {
 
       try {
         let creativeId;
-        const callToAction = { type: ctaType(ad.cta) };
-        if (isLeadGen && ad.lead_gen_form_id) {
+        const resolvedCta = ctaType(ad.cta);
+        // lead_gen_form_id is incompatible with messaging CTAs
+        const messagingCtas = new Set(['WHATSAPP_MESSAGE', 'MESSAGE_PAGE', 'SEND_MESSAGE', 'INSTAGRAM_MESSAGE']);
+        const canAttachForm = isLeadGen && ad.lead_gen_form_id && !messagingCtas.has(resolvedCta);
+        const callToAction = { type: resolvedCta };
+        if (canAttachForm) {
           callToAction.value = { lead_gen_form_id: ad.lead_gen_form_id };
         }
 
@@ -521,7 +525,7 @@ export async function createFullCampaign(input, options = {}) {
             link_url: ad.link_url || input.link_url,
             call_to_action_type: ctaType(ad.cta),
           };
-          if (isLeadGen && ad.lead_gen_form_id) mcpParams.lead_gen_form_id = ad.lead_gen_form_id;
+          if (canAttachForm) mcpParams.lead_gen_form_id = ad.lead_gen_form_id;
           const creativeRes = await callTool('create_ad_creative', mcpParams);
           creativeId = creativeRes.id || creativeRes.creative_id;
         } else {
