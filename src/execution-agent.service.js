@@ -293,18 +293,29 @@ export async function uploadImages(images, options = {}) {
   const onProgress = options.onProgress;
   const accountId = `act_${config.meta?.adAccountId}`;
   const result = {};
+  const CONCURRENCY = 5;
 
-  for (const image of images) {
-    try {
-      const res = await callTool('upload_ad_image', { account_id: accountId, image_url: image.url });
-      // MCP may return hash in different fields
-      const hash = res.image_hash || res.hash || res.images?.[Object.keys(res.images)[0]]?.hash;
-      if (hash) {
-        result[image.name] = hash;
+  // Process in batches of CONCURRENCY
+  for (let i = 0; i < images.length; i += CONCURRENCY) {
+    const batch = images.slice(i, i + CONCURRENCY);
+    const settled = await Promise.allSettled(
+      batch.map(async (image) => {
+        const res = await callTool('upload_ad_image', { account_id: accountId, image_url: image.url });
+        const hash = res.image_hash || res.hash || res.images?.[Object.keys(res.images)[0]]?.hash;
+        return { name: image.name, hash };
+      }),
+    );
+
+    for (let j = 0; j < settled.length; j++) {
+      const image = batch[j];
+      const outcome = settled[j];
+      if (outcome.status === 'fulfilled' && outcome.value.hash) {
+        result[image.name] = outcome.value.hash;
+        onProgress?.({ step: 'upload_image', name: image.name, image_hash: outcome.value.hash });
+      } else {
+        const error = outcome.status === 'rejected' ? outcome.reason.message : 'No hash returned';
+        onProgress?.({ step: 'upload_image', name: image.name, error });
       }
-      onProgress?.({ step: 'upload_image', name: image.name, image_hash: hash });
-    } catch (err) {
-      onProgress?.({ step: 'upload_image', name: image.name, error: err.message });
     }
   }
 
