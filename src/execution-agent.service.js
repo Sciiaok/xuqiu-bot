@@ -37,10 +37,19 @@ async function metaUploadImageUrl(imageUrl) {
   const token = config.meta?.accessToken;
   if (!adAccountId || !token) throw new Error('META_AD_ACCOUNT_ID or META_ACCESS_TOKEN not configured');
 
+  // Download image first, then upload via FormData (url-based upload requires special app permissions)
+  const imgRes = await fetch(imageUrl, { signal: AbortSignal.timeout(FETCH_TIMEOUT) });
+  if (!imgRes.ok) throw new Error(`Failed to download image: ${imgRes.status}`);
+  const blob = await imgRes.blob();
+
+  const formData = new FormData();
+  const filename = imageUrl.split('/').pop()?.split('?')[0] || 'ad_image.png';
+  formData.append('filename', blob, filename);
+  formData.append('access_token', token);
+
   const res = await fetch(metaUrl(`act_${adAccountId}/adimages`), {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ url: imageUrl, access_token: token }),
+    body: formData,
     signal: AbortSignal.timeout(FETCH_TIMEOUT),
   });
 
@@ -301,13 +310,22 @@ const CTA_MAP = {
   '获取详细资料': 'LEARN_MORE',
 };
 
+// Countries with higher minimum ad age than 18
+const COUNTRY_MIN_AGE = { TH: 20, ID: 21 };
+
 function buildBatchTargeting(targeting = {}) {
   const countries = targeting.countries || [];
+  const isoCodes = mapCountriesToISO(countries);
   const ageMin = targeting.age_range?.[0] || targeting.age_min || 18;
   const ageMax = targeting.age_range?.[1] || targeting.age_max || 65;
+
+  // Respect country-specific minimum age laws (e.g. Thailand requires 20+)
+  const countryMinAge = Math.max(...isoCodes.map(c => COUNTRY_MIN_AGE[c] || 18));
+  const effectiveMin = Math.max(countryMinAge, Math.min(ageMin, 18));
+
   const spec = {
-    geo_locations: { countries: mapCountriesToISO(countries) },
-    age_min: Math.min(ageMin, 18),
+    geo_locations: { countries: isoCodes },
+    age_min: effectiveMin,
     age_max: Math.max(ageMax, 65),
     targeting_automation: { advantage_audience: 1 },
   };
