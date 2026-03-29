@@ -503,17 +503,14 @@ export async function createFullCampaign(input, options = {}) {
 
       try {
         let creativeId;
-        let resolvedCta = ctaType(ad.cta);
+        const resolvedCta = ctaType(ad.cta);
         const messagingCtas = new Set(['WHATSAPP_MESSAGE', 'MESSAGE_PAGE', 'SEND_MESSAGE', 'INSTAGRAM_MESSAGE']);
+        const isMessagingCta = messagingCtas.has(resolvedCta);
 
-        // Lead gen campaigns require form_id on every ad, but messaging CTAs
-        // don't support it. Auto-downgrade to LEARN_MORE to keep the form.
-        if (isLeadGen && ad.lead_gen_form_id && messagingCtas.has(resolvedCta)) {
-          resolvedCta = 'LEARN_MORE';
-        }
-
+        // Lead gen + messaging CTA = WhatsApp lead capture (no form, uses WhatsApp conversation)
+        // Lead gen + other CTA = Lead form capture (attach form_id)
         const callToAction = { type: resolvedCta };
-        if (isLeadGen && ad.lead_gen_form_id) {
+        if (isLeadGen && ad.lead_gen_form_id && !isMessagingCta) {
           callToAction.value = { lead_gen_form_id: ad.lead_gen_form_id };
         }
 
@@ -530,7 +527,7 @@ export async function createFullCampaign(input, options = {}) {
             link_url: ad.link_url || input.link_url,
             call_to_action_type: resolvedCta,
           };
-          if (isLeadGen && ad.lead_gen_form_id) mcpParams.lead_gen_form_id = ad.lead_gen_form_id;
+          if (isLeadGen && ad.lead_gen_form_id && !isMessagingCta) mcpParams.lead_gen_form_id = ad.lead_gen_form_id;
           const creativeRes = await callTool('create_ad_creative', mcpParams);
           creativeId = creativeRes.id || creativeRes.creative_id;
         } else {

@@ -163,7 +163,7 @@ Your job: take a campaign brief, market research, and pre-computed data (budget 
 - Prefer the platforms suggested in the brief
 - Ad copy fields (primary_text, headline, description, cta) should be brief placeholders
 - CTA must be an exact match from the enum in the schema (English only, no translations)
-- CRITICAL: lead_gen/leads campaigns MUST NOT use "Send WhatsApp" CTA — it conflicts with lead form requirements. Use "Learn More", "Sign Up", "Get Quote", or "Apply Now" instead
+- lead_gen/leads campaigns support two conversion modes: "Send WhatsApp" (WhatsApp conversation lead capture) or form-based CTAs ("Learn More", "Sign Up", "Apply Now" etc). Both are valid but should NOT be mixed within the same ad_set
 - Include a brief summary (1-2 sentences)
 - Output flat lists: platforms, campaigns (linked by platform), ad_sets (linked by campaign_name), ads (linked by ad_set_name)
 - You MUST call submit_media_plan as your final action`;
