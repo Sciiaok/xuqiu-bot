@@ -614,15 +614,16 @@ export async function executeMediaPlanBatch(plan, creatives = {}, options = {}) 
 
   let lead_gen_form_id = null;
   if (hasLeadGen) {
-    try {
-      const formResult = await createLeadForm({
-        name: `${metaPlatform.campaigns[0]?.name || 'Campaign'} Lead Form`,
-        questions: [{ type: 'FULL_NAME' }, { type: 'EMAIL' }, { type: 'PHONE' }],
-      });
-      lead_gen_form_id = formResult.form_id;
-    } catch (err) {
-      // Non-fatal: continue without lead form
+    onProgress?.({ step: 'create_lead_form', detail: '创建潜客表单' });
+    const formResult = await createLeadForm({
+      name: `${metaPlatform.campaigns[0]?.name || 'Campaign'} Lead Form`,
+      questions: [{ type: 'FULL_NAME' }, { type: 'EMAIL' }, { type: 'PHONE' }],
+    });
+    lead_gen_form_id = formResult.form_id;
+    if (!lead_gen_form_id) {
+      throw new Error('createLeadForm succeeded but returned no form_id');
     }
+    onProgress?.({ step: 'create_lead_form', detail: `表单创建成功: ${lead_gen_form_id}`, form_id: lead_gen_form_id });
   }
 
   // 4. Create each campaign
