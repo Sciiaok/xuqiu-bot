@@ -65,7 +65,7 @@ const SUBMIT_TOOL = {
             primary_text: { type: 'string' },
             headline: { type: 'string' },
             description: { type: 'string' },
-            cta: { type: 'string' },
+            cta: { type: 'string', enum: ['Learn More', 'Shop Now', 'Sign Up', 'Contact Us', 'Get Quote', 'Apply Now', 'Download', 'Send WhatsApp', 'Subscribe', 'Book Now'], description: 'Must use exact value from enum. For lead_gen campaigns, do NOT use "Send WhatsApp" — use "Learn More", "Sign Up", or "Apply Now" instead.' },
             media_specs: { type: 'string', description: 'Image specs e.g. "1080x1080"' },
             suggested_content: { type: 'string' },
           },
@@ -162,6 +162,8 @@ Your job: take a campaign brief, market research, and pre-computed data (budget 
 - Daily budgets: minimum $5/day per ad set for Meta, $10/day for Google
 - Prefer the platforms suggested in the brief
 - Ad copy fields (primary_text, headline, description, cta) should be brief placeholders
+- CTA must be an exact match from the enum in the schema (English only, no translations)
+- CRITICAL: lead_gen/leads campaigns MUST NOT use "Send WhatsApp" CTA — it conflicts with lead form requirements. Use "Learn More", "Sign Up", "Get Quote", or "Apply Now" instead
 - Include a brief summary (1-2 sentences)
 - Output flat lists: platforms, campaigns (linked by platform), ad_sets (linked by campaign_name), ads (linked by ad_set_name)
 - You MUST call submit_media_plan as your final action`;
@@ -491,7 +493,7 @@ const SINGLE_CAMPAIGN_TOOL = {
             primary_text: { type: 'string' },
             headline: { type: 'string' },
             description: { type: 'string' },
-            cta: { type: 'string' },
+            cta: { type: 'string', enum: ['Learn More', 'Shop Now', 'Sign Up', 'Contact Us', 'Get Quote', 'Apply Now', 'Download', 'Send WhatsApp', 'Subscribe', 'Book Now'], description: 'Must use exact value from enum. For lead_gen campaigns, do NOT use "Send WhatsApp" — use "Learn More", "Sign Up", or "Apply Now" instead.' },
             media_specs: { type: 'string' },
             suggested_content: { type: 'string' },
           },
