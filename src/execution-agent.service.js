@@ -310,8 +310,28 @@ const CTA_MAP = {
   '获取详细资料': 'LEARN_MORE',
 };
 
-// Countries with higher minimum ad age than 18
-const COUNTRY_MIN_AGE = { TH: 20, ID: 21 };
+// Countries with higher minimum ad age than Meta's default (18)
+// Source: Meta Ads policies + local regulations
+const COUNTRY_MIN_AGE = {
+  // Southeast Asia
+  TH: 20, ID: 21, MM: 18, VN: 18, PH: 18, MY: 18, SG: 18, KH: 18, LA: 18, BN: 18,
+  // Middle East
+  AE: 21, SA: 21, KW: 21, QA: 21, BH: 21, OM: 21, JO: 18, LB: 18, IQ: 18,
+  // South Asia
+  IN: 18, PK: 18, BD: 18, LK: 18, NP: 18,
+  // East Asia
+  KR: 19, JP: 18, TW: 20, CN: 18,
+  // Africa
+  NG: 18, ZA: 18, KE: 18, GH: 18, ET: 18, TZ: 18, EG: 18,
+  // Americas
+  US: 18, CA: 18, BR: 18, MX: 18, AR: 18, CO: 18,
+  // Europe
+  DE: 18, FR: 18, GB: 18, IT: 18, ES: 18, NL: 18, BE: 18, PL: 18, SE: 18,
+  // Oceania
+  AU: 18, NZ: 18,
+  // Central Asia
+  KZ: 18, UZ: 18,
+};
 
 function buildBatchTargeting(targeting = {}) {
   const countries = targeting.countries || [];
