@@ -57,19 +57,38 @@ export default function ThinkingCard({ steps, type, tool, content }) {
 
   // Grouped tool steps mode
   const items = steps || [{ type, tool, content }];
+
+  // Determine if there's an active (pending) tool call — a tool_call without a matching tool_result after it
+  const isActive = useMemo(() => {
+    for (let i = items.length - 1; i >= 0; i--) {
+      if (items[i].type === 'tool_result') return false;
+      if (items[i].type === 'tool_call') return true;
+    }
+    return items.length === 0; // empty thinking_group = just started
+  }, [items]);
+
   const summary = useMemo(() => {
     const progressItems = items.filter(s => s.type === 'progress');
     const toolItems = items.filter(s => s.type === 'tool_call');
     const lastProgress = progressItems[progressItems.length - 1];
+    // Show the last active tool if still pending
+    if (isActive && toolItems.length > 0) {
+      const lastTool = toolItems[toolItems.length - 1];
+      return TOOL_LABELS[lastTool.tool] || lastTool.tool;
+    }
     const toolNames = [...new Set(toolItems.map(s => TOOL_LABELS[s.tool] || s.tool))];
     return lastProgress?.content || (toolNames.length > 0 ? toolNames.join(' → ') : phrase);
-  }, [items, phrase]);
+  }, [items, phrase, isActive]);
 
   return (
-    <div className="bg-gray-50 border border-gray-200 rounded-xl overflow-hidden">
+    <div className={`border rounded-xl overflow-hidden ${isActive ? 'bg-indigo-50/50 border-indigo-200' : 'bg-gray-50 border-gray-200'}`}>
       <button onClick={() => setOpen(!open)} className="w-full px-4 py-2.5 flex items-center gap-2.5 text-left">
-        <span className="text-sm">💭</span>
-        <span className="text-xs text-gray-400 truncate">{summary}</span>
+        {isActive ? (
+          <div className="w-3.5 h-3.5 rounded-full border-2 border-indigo-500 border-t-transparent animate-spin shrink-0" />
+        ) : (
+          <span className="text-sm">💭</span>
+        )}
+        <span className={`text-xs truncate ${isActive ? 'text-indigo-600 font-medium' : 'text-gray-400'}`}>{summary}{isActive ? '...' : ''}</span>
         <span className="ml-auto text-gray-300 text-[10px] shrink-0">{open ? '▼' : '▶'}</span>
       </button>
       {open && (

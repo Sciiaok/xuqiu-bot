@@ -107,7 +107,7 @@ export default function MessageBubble({ message, onApprove, onReject, onFeedback
 
         {/* Creative card */}
         {type === 'creative_progress' && (
-          <CreativeCard inProgress />
+          <CreativeCard inProgress completed={message.completed} total={message.total} errors={message.errors} lastDetail={message.lastDetail} />
         )}
         {type === 'creative_complete' && (
           <CreativeCard creatives={message.creatives} />

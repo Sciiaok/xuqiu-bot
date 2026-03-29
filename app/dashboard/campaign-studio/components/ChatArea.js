@@ -5,7 +5,7 @@ import { useTranslations } from 'next-intl';
 import MessageBubble from './MessageBubble';
 
 let msgIdCounter = 0;
-function nextMsgId() { return `msg-${++msgIdCounter}`; }
+function nextMsgId() { return `msg-${++msgIdCounter}-${Math.random().toString(36).slice(2, 6)}`; }
 
 /**
  * Parse SSE stream and call handler for each event.
@@ -181,14 +181,13 @@ export default function ChatArea({ briefId, sessionId, sessionStatus, onSessionU
           onSessionUpdate?.();
 
           if (data.status === 'awaiting_feedback' || data.status === 'awaiting_approval') {
-            // Find feedback message from latest messages
-            const feedbackMsg = data.messages
-              ?.filter(m => m.role === 'assistant' && m.content)
+            const feedbackEvt = data.messages
+              ?.filter(m => m.role === 'event' && m.tool_name === 'feedback_required')
               .pop();
             addMessage({
               type: 'feedback_required',
-              message: feedbackMsg?.content || t('planReadyConfirm'),
-              options: [t('confirmExecute'), t('cancel')],
+              message: feedbackEvt?.content || t('planReadyConfirm'),
+              options: feedbackEvt?.tool_result?.options || [t('confirmExecute'), t('cancel')],
             });
           }
         }
@@ -257,7 +256,7 @@ export default function ChatArea({ briefId, sessionId, sessionStatus, onSessionU
           const phaseResults = orchData.phase_results || {};
           const reconstructed = [];
 
-          // Build phase result cards keyed by phase (for insertion at phase_complete position)
+          // Phase result card builders
           const phaseResultBuilders = {
             research:      r => ({ type: 'research_complete', report: r, duration: null }),
             strategy:      r => ({ type: 'strategy_complete', plan: r }),
@@ -267,11 +266,23 @@ export default function ChatArea({ briefId, sessionId, sessionStatus, onSessionU
           };
           const emittedPhaseResults = new Set();
 
-          // Walk all messages in message_index order (already sorted by API)
-          for (const m of orchData.messages) {
-            // Intake conversation
+          // Separate messages into groups
+          // "Pre-phase" = intake + phase=null chat that came BEFORE any phase trace
+          // "Phase events" = role='event' messages
+          // "Post-phase chat" = phase=null chat that came AFTER phase traces
+          const firstPhaseIndex = orchData.messages.findIndex(
+            m => m.phase && m.phase !== 'intake' && m.phase !== 'null',
+          );
+          const prePhaseChat = [];
+          const postPhaseChat = [];
+          const eventMessages = [];
+
+          for (let i = 0; i < orchData.messages.length; i++) {
+            const m = orchData.messages[i];
+
+            // Intake conversation (phase='intake')
             if (m.phase === 'intake' && (m.role === 'user' || (m.role === 'assistant' && m.content))) {
-              reconstructed.push({
+              prePhaseChat.push({
                 id: nextMsgId(),
                 type: m.role === 'user' ? 'user' : 'assistant',
                 content: m.content,
@@ -282,80 +293,109 @@ export default function ChatArea({ briefId, sessionId, sessionStatus, onSessionU
 
             // Persisted event messages (role='event')
             if (m.role === 'event') {
-              switch (m.tool_name) {
-                case 'phase_start':
-                  reconstructed.push({
-                    id: nextMsgId(), type: 'phase_start',
-                    content: phaseLabels[m.phase] || m.content,
-                  });
-                  break;
-                case 'phase_complete': {
-                  // Insert the rich phase result card from phase_results
-                  const builder = phaseResultBuilders[m.phase];
-                  const result = phaseResults[m.phase];
-                  if (builder && result) {
-                    const card = builder(result);
-                    if (card) {
-                      reconstructed.push({ id: nextMsgId(), ...card });
-                      emittedPhaseResults.add(m.phase);
-                    }
-                  }
-                  break;
-                }
-                case 'phase_error':
-                  reconstructed.push({
-                    id: nextMsgId(), type: 'error',
-                    content: `${phaseLabels[m.phase] || m.phase} ${t('phaseFailed')}: ${m.content}`,
-                  });
-                  break;
-                case 'phase_skipped':
-                  reconstructed.push({
-                    id: nextMsgId(), type: 'phase_skipped',
-                    phase: m.phase, reason: m.content,
-                  });
-                  break;
-                case 'brief_patched':
-                  reconstructed.push({
-                    id: nextMsgId(), type: 'brief_update',
-                    fields: m.tool_result?.fields,
-                  });
-                  break;
-                case 'feedback_required':
-                  // Only show if session is still awaiting feedback
-                  if (orchData.status === 'awaiting_feedback' || orchData.status === 'awaiting_approval') {
-                    reconstructed.push({
-                      id: nextMsgId(), type: 'feedback_required',
-                      message: m.content,
-                      options: m.tool_result?.options || [t('confirmExecute'), t('cancel')],
-                    });
-                  }
-                  break;
-              }
+              eventMessages.push(m);
               continue;
             }
 
             // Chat messages (phase=null, non-tool, non-event)
             if (m.phase === null && m.role !== 'tool') {
-              if (m.role === 'user') {
-                reconstructed.push({
-                  id: nextMsgId(), type: 'user', content: m.content,
-                  ...(m.attachments?.length ? { attachments: m.attachments } : {}),
-                });
-              } else if (m.role === 'assistant' && m.content) {
-                reconstructed.push({ id: nextMsgId(), type: 'assistant', content: m.content });
+              const chatMsg = m.role === 'user'
+                ? { id: nextMsgId(), type: 'user', content: m.content, ...(m.attachments?.length ? { attachments: m.attachments } : {}) }
+                : (m.role === 'assistant' && m.content) ? { id: nextMsgId(), type: 'assistant', content: m.content } : null;
+              if (chatMsg) {
+                // Chat before any phase work → show first (like intake)
+                if (firstPhaseIndex < 0 || i < firstPhaseIndex) {
+                  prePhaseChat.push(chatMsg);
+                } else {
+                  postPhaseChat.push(chatMsg);
+                }
               }
-              continue;
             }
           }
 
-          // Fallback: emit phase result cards for phases that completed but have no persisted event
-          // (backwards compatibility with sessions created before event persistence)
+          // 1. Pre-phase chat (intake + early chat)
+          reconstructed.push(...prePhaseChat);
+
+          // 2. Phase events and result cards (in persisted order)
+          let lastFeedbackEvt = null;
+          for (const evt of eventMessages) {
+            switch (evt.tool_name) {
+              case 'phase_start': {
+                // Only show the LAST phase_start per phase to avoid duplicate dividers from retries
+                const hasLaterStart = eventMessages
+                  .slice(eventMessages.indexOf(evt) + 1)
+                  .some(e => e.tool_name === 'phase_start' && e.phase === evt.phase);
+                if (hasLaterStart) break;
+                reconstructed.push({
+                  id: nextMsgId(), type: 'phase_start',
+                  content: phaseLabels[evt.phase] || evt.content,
+                });
+                break;
+              }
+              case 'phase_complete': {
+                const builder = phaseResultBuilders[evt.phase];
+                const result = phaseResults[evt.phase];
+                if (builder && result) {
+                  const card = builder(result);
+                  if (card) {
+                    reconstructed.push({ id: nextMsgId(), ...card });
+                    emittedPhaseResults.add(evt.phase);
+                  }
+                }
+                break;
+              }
+              case 'phase_error':
+                reconstructed.push({
+                  id: nextMsgId(), type: 'error',
+                  content: `${phaseLabels[evt.phase] || evt.phase} ${t('phaseFailed')}: ${evt.content}`,
+                });
+                break;
+              case 'phase_skipped':
+                reconstructed.push({
+                  id: nextMsgId(), type: 'phase_skipped',
+                  phase: evt.phase, reason: evt.content,
+                });
+                break;
+              case 'brief_patched':
+                // Brief patches are informational — the current brief state is already
+                // available in orchData.brief. Don't create a card here; during SSE,
+                // cards are only shown when show_card is true.
+                break;
+              case 'feedback_required':
+                // Only record; we'll add the LAST one after the loop if session is still awaiting
+                lastFeedbackEvt = evt;
+                break;
+            }
+          }
+
+          // 2b. Only show the LAST feedback_required event (the currently active one)
+          if (lastFeedbackEvt && (orchData.status === 'awaiting_feedback' || orchData.status === 'awaiting_approval')) {
+            reconstructed.push({
+              id: nextMsgId(), type: 'feedback_required',
+              message: lastFeedbackEvt.content,
+              options: lastFeedbackEvt.tool_result?.options || [t('confirmExecute'), t('cancel')],
+            });
+          }
+
+          // 3. Fallback: phase result cards for sessions without persisted events
           for (const [phase, builder] of Object.entries(phaseResultBuilders)) {
             if (!emittedPhaseResults.has(phase) && phaseResults[phase]) {
               const result = phaseResults[phase];
               const card = builder(result);
               if (card) reconstructed.push({ id: nextMsgId(), ...card });
             }
+          }
+
+          // 4. Feedback fallback for old sessions without persisted feedback_required event
+          if ((orchData.status === 'awaiting_feedback' || orchData.status === 'awaiting_approval')
+            && !lastFeedbackEvt
+            && !eventMessages.some(e => e.tool_name === 'feedback_required')) {
+            reconstructed.push({
+              id: nextMsgId(),
+              type: 'feedback_required',
+              message: t('planReadyConfirm'),
+              options: [t('confirmExecute'), t('cancel')],
+            });
           }
 
           // Sync known phases for polling
@@ -373,6 +413,9 @@ export default function ChatArea({ briefId, sessionId, sessionStatus, onSessionU
               startPolling(sessionId);
             }
           }
+
+          // 5. Post-phase chat messages (after pipeline ran)
+          reconstructed.push(...postPhaseChat);
 
           setMessages(reconstructed);
         }
@@ -460,7 +503,12 @@ export default function ChatArea({ briefId, sessionId, sessionStatus, onSessionU
         case 'thinking':
           appendToolStep({ type: 'thinking', tool: null, content: data.text });
           break;
+        case 'tool_start':
+          // Tool use block started — show thinking indicator immediately
+          appendToolStep({ type: 'tool_call', tool: data.tool, content: '' });
+          break;
         case 'tool_call':
+          // Tool use block completed with full input — update the step
           appendToolStep({ type: 'tool_call', tool: data.tool, content: JSON.stringify(data.input, null, 2) });
           break;
         case 'tool_result':
@@ -478,6 +526,11 @@ export default function ChatArea({ briefId, sessionId, sessionStatus, onSessionU
           break;
         case 'done':
           onSessionUpdate?.();
+          // If intake completed (save_brief was called), auto-start orchestration
+          // Note: chatWithOrchestrator's done event has no status field, so this only fires for intake
+          if (data.status === 'completed' && data.brief_id) {
+            shouldStartOrchestration = true;
+          }
           break;
         case 'error':
           addMessage({ type: 'error', content: data.message });
@@ -506,6 +559,12 @@ export default function ChatArea({ briefId, sessionId, sessionStatus, onSessionU
     let receivedDone = false;
     await consumeSSE(res, (event, data) => {
       switch (event) {
+        case 'orchestration_start':
+        case 'orchestration_resumed':
+          // Create initial thinking_group so orchestrator progress events have somewhere to attach
+          addMessage({ id: nextMsgId(), type: 'thinking_group', steps: [] });
+          break;
+
         case 'phase_start':
           setCurrentPhase(data.phase);
           addMessage({
@@ -561,6 +620,14 @@ export default function ChatArea({ briefId, sessionId, sessionStatus, onSessionU
             tool: data.step,
             content: data.detail || data.step,
           });
+          // Update creative_progress card with real-time counts
+          if (data.phase === 'creative' && (data.step === 'creative_start' || data.step === 'creative_item' || data.step === 'creative_error' || data.step === 'creative_done')) {
+            setMessages(prev => prev.map(m =>
+              m.type === 'creative_progress'
+                ? { ...m, completed: data.completed ?? m.completed, total: data.total ?? m.total, errors: data.errors ?? m.errors, lastDetail: data.detail }
+                : m
+            ));
+          }
           break;
 
         case 'heartbeat':
@@ -625,6 +692,10 @@ export default function ChatArea({ briefId, sessionId, sessionStatus, onSessionU
 
   // Approve execution
   async function handleApprove() {
+    abortRef.current?.abort();
+    const controller = new AbortController();
+    abortRef.current = controller;
+
     setIsLoading(true);
     try {
       setMessages(prev => prev.filter(m => m.type !== 'execution_approval'));
@@ -634,40 +705,9 @@ export default function ChatArea({ briefId, sessionId, sessionStatus, onSessionU
         ? `/api/campaign/orchestrate/${sessionId}/approve`
         : `/api/campaign/orchestrate/${briefId}/approve`;
 
-      const res = await fetchSSE(endpoint, undefined, undefined);
+      const res = await fetchSSE(endpoint, undefined, controller.signal);
 
-      await consumeSSE(res, (event, data) => {
-        if (event === 'phase_complete' && data.phase === 'execution') {
-          setMessages(prev => prev.filter(m => m.type !== 'execution_progress'));
-          addMessage({ type: 'execution_complete', result: data.result });
-          onSessionUpdate?.();
-        }
-        if (event === 'error') {
-          addMessage({ type: 'error', content: data.message });
-        }
-      });
-    } finally {
-      setIsLoading(false);
-    }
-  }
-
-  function handleReject() {
-    setMessages(prev => prev.filter(m => m.type !== 'execution_approval'));
-    addMessage({ type: 'assistant', content: t('executionCancelled') });
-  }
-
-  async function handleFeedbackRespond(response) {
-    setIsLoading(true);
-    try {
-      setMessages(prev => prev.filter(m => m.type !== 'feedback_required'));
-
-      const endpoint = sessionId
-        ? `/api/campaign/orchestrate/${sessionId}/feedback`
-        : `/api/campaign/orchestrate/${briefId}/feedback`;
-
-      const res = await fetchSSE(endpoint, { response });
-
-      // Reuse the runOrchestration SSE handler pattern
+      let receivedDone = false;
       await consumeSSE(res, (event, data) => {
         switch (event) {
           case 'phase_start':
@@ -676,22 +716,51 @@ export default function ChatArea({ briefId, sessionId, sessionStatus, onSessionU
               type: 'phase_start',
               content: phaseLabels[data.phase] || data.phase,
             });
+            addMessage({ id: nextMsgId(), type: 'thinking_group', steps: [] });
+            if (data.phase === 'creative') {
+              addMessage({ type: 'creative_progress' });
+            }
+            if (data.phase === 'execution') {
+              addMessage({ type: 'execution_progress' });
+            }
+            break;
+          case 'phase_progress':
+            appendToolStep({
+              type: 'progress',
+              tool: data.step,
+              content: data.detail || data.step,
+            });
+            if (data.phase === 'creative' && (data.step === 'creative_start' || data.step === 'creative_item' || data.step === 'creative_error' || data.step === 'creative_done')) {
+              setMessages(prev => prev.map(m =>
+                m.type === 'creative_progress'
+                  ? { ...m, completed: data.completed ?? m.completed, total: data.total ?? m.total, errors: data.errors ?? m.errors, lastDetail: data.detail }
+                  : m
+              ));
+            }
             break;
           case 'phase_complete':
+            knownPhasesRef.current.add(data.phase);
+            if (data.phase === 'research') {
+              addMessage({ type: 'research_complete', report: data.result, duration: data.duration });
+            }
+            if (data.phase === 'strategy') {
+              addMessage({ type: 'strategy_complete', plan: data.result });
+            }
+            if (data.phase === 'creative_plan') {
+              addMessage({ type: 'creative_plan_complete', creativeTasks: data.result?.creative_tasks || [], references: data.result?.references || [] });
+            }
+            if (data.phase === 'creative') {
+              setMessages(prev => prev.filter(m => m.type !== 'creative_progress'));
+              addMessage({ type: 'creative_complete', creatives: data.result?.assets || data.result?.creatives || data.result || [] });
+            }
             if (data.phase === 'execution') {
+              setMessages(prev => prev.filter(m => m.type !== 'execution_progress'));
               addMessage({ type: 'execution_complete', result: data.result });
-            } else {
-              addMessage({
-                type: `${data.phase}_complete`,
-                ...(data.phase === 'research' ? { report: data.result, duration: data.duration } : {}),
-                ...(data.phase === 'strategy' ? { plan: data.result } : {}),
-                ...(data.phase === 'creative_plan' ? { creativeTasks: data.result?.creative_tasks || [], references: data.result?.references || [] } : {}),
-                ...(data.phase === 'creative' ? { creatives: data.result?.assets || data.result?.creatives || data.result || [] } : {}),
-              });
             }
             onSessionUpdate?.();
             break;
           case 'feedback_required':
+            receivedDone = true;
             setIsLoading(false);
             addMessage({
               type: 'feedback_required',
@@ -703,17 +772,165 @@ export default function ChatArea({ briefId, sessionId, sessionStatus, onSessionU
           case 'phase_skipped':
             addMessage({ type: 'phase_skipped', phase: data.phase, reason: data.reason });
             break;
+          case 'phase_error':
+            addMessage({ type: 'error', content: `${phaseLabels[data.phase] || data.phase} ${t('phaseFailed')}: ${data.error}` });
+            onSessionUpdate?.();
+            break;
+          case 'heartbeat':
+            break;
           case 'done':
+            receivedDone = true;
             onSessionUpdate?.();
             break;
           case 'error':
+            receivedDone = true;
             addMessage({ type: 'error', content: data.message });
             break;
         }
       });
+
+      if (!receivedDone && (sessionId || briefId)) {
+        console.log('[sse] approve stream ended without done/error — starting poll fallback');
+        addMessage({
+          type: 'phase_running',
+          phase: currentPhase || 'unknown',
+          content: phaseLabels[currentPhase] || '处理中',
+        });
+        startPolling(sessionId || briefId);
+      }
+    } finally {
+      if (!pollingRef.current) {
+        setIsLoading(false);
+      }
+    }
+  }
+
+  function handleReject() {
+    setMessages(prev => prev.filter(m => m.type !== 'execution_approval'));
+    addMessage({ type: 'assistant', content: t('executionCancelled') });
+  }
+
+  async function handleFeedbackRespond(response, attachments) {
+    abortRef.current?.abort();
+    const controller = new AbortController();
+    abortRef.current = controller;
+
+    setIsLoading(true);
+    // Snapshot the feedback card before removing, so we can restore on error
+    let removedFeedback = null;
+    try {
+      setMessages(prev => {
+        removedFeedback = prev.find(m => m.type === 'feedback_required');
+        return prev.filter(m => m.type !== 'feedback_required');
+      });
+
+      const endpoint = sessionId
+        ? `/api/campaign/orchestrate/${sessionId}/feedback`
+        : `/api/campaign/orchestrate/${briefId}/feedback`;
+
+      const payload = { response };
+      if (attachments?.length) payload.attachments = attachments;
+      const res = await fetchSSE(endpoint, payload, controller.signal);
+
+      // Reuse the runOrchestration SSE handler pattern
+      let receivedDone = false;
+      await consumeSSE(res, (event, data) => {
+        switch (event) {
+          case 'phase_start':
+            setCurrentPhase(data.phase);
+            addMessage({
+              type: 'phase_start',
+              content: phaseLabels[data.phase] || data.phase,
+            });
+            addMessage({ id: nextMsgId(), type: 'thinking_group', steps: [] });
+            if (data.phase === 'creative') {
+              addMessage({ type: 'creative_progress' });
+            }
+            if (data.phase === 'execution') {
+              addMessage({ type: 'execution_progress' });
+            }
+            break;
+          case 'phase_progress':
+            appendToolStep({
+              type: 'progress',
+              tool: data.step,
+              content: data.detail || data.step,
+            });
+            if (data.phase === 'creative' && (data.step === 'creative_start' || data.step === 'creative_item' || data.step === 'creative_error' || data.step === 'creative_done')) {
+              setMessages(prev => prev.map(m =>
+                m.type === 'creative_progress'
+                  ? { ...m, completed: data.completed ?? m.completed, total: data.total ?? m.total, errors: data.errors ?? m.errors, lastDetail: data.detail }
+                  : m
+              ));
+            }
+            break;
+          case 'phase_complete':
+            knownPhasesRef.current.add(data.phase);
+            if (data.phase === 'research') {
+              addMessage({ type: 'research_complete', report: data.result, duration: data.duration });
+            }
+            if (data.phase === 'strategy') {
+              addMessage({ type: 'strategy_complete', plan: data.result });
+            }
+            if (data.phase === 'creative_plan') {
+              addMessage({ type: 'creative_plan_complete', creativeTasks: data.result?.creative_tasks || [], references: data.result?.references || [] });
+            }
+            if (data.phase === 'creative') {
+              setMessages(prev => prev.filter(m => m.type !== 'creative_progress'));
+              addMessage({ type: 'creative_complete', creatives: data.result?.assets || data.result?.creatives || data.result || [] });
+            }
+            if (data.phase === 'execution') {
+              setMessages(prev => prev.filter(m => m.type !== 'execution_progress'));
+              addMessage({ type: 'execution_complete', result: data.result });
+            }
+            onSessionUpdate?.();
+            break;
+          case 'feedback_required':
+            receivedDone = true;
+            setIsLoading(false);
+            addMessage({
+              type: 'feedback_required',
+              message: data.message,
+              options: data.options,
+            });
+            onSessionUpdate?.();
+            break;
+          case 'phase_skipped':
+            addMessage({ type: 'phase_skipped', phase: data.phase, reason: data.reason });
+            break;
+          case 'phase_error':
+            addMessage({ type: 'error', content: `${phaseLabels[data.phase] || data.phase} ${t('phaseFailed')}: ${data.error}` });
+            onSessionUpdate?.();
+            break;
+          case 'heartbeat':
+            break;
+          case 'done':
+            receivedDone = true;
+            onSessionUpdate?.();
+            break;
+          case 'error':
+            receivedDone = true;
+            addMessage({ type: 'error', content: data.message });
+            break;
+        }
+      });
+
+      if (!receivedDone && (sessionId || briefId)) {
+        console.log('[sse] feedback stream ended without done/error — starting poll fallback');
+        addMessage({
+          type: 'phase_running',
+          phase: currentPhase || 'unknown',
+          content: phaseLabels[currentPhase] || '处理中',
+        });
+        startPolling(sessionId || briefId);
+      }
     } catch (err) {
       if (err.name !== 'AbortError') {
         addMessage({ type: 'error', content: err.message });
+        // Restore the feedback card so the user can retry
+        if (removedFeedback) {
+          addMessage({ type: removedFeedback.type, message: removedFeedback.message, options: removedFeedback.options });
+        }
       }
     } finally {
       setIsLoading(false);
@@ -852,7 +1069,7 @@ export default function ChatArea({ briefId, sessionId, sessionStatus, onSessionU
 
     // If awaiting feedback, treat user input as feedback response to resume the pipeline
     if (sessionStatus === 'awaiting_feedback' && sessionId) {
-      await handleFeedbackRespond(userMsg);
+      await handleFeedbackRespond(userMsg, attachments.length ? attachments : undefined);
       return;
     }
 
@@ -891,13 +1108,6 @@ export default function ChatArea({ briefId, sessionId, sessionStatus, onSessionU
       e.preventDefault();
       handleSend();
     }
-  }
-
-  function handleInputChange(e) {
-    setInput(e.target.value);
-    const el = e.target;
-    el.style.height = 'auto';
-    el.style.height = Math.min(el.scrollHeight, 120) + 'px';
   }
 
   if (!briefId) {
