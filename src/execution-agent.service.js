@@ -271,7 +271,10 @@ export async function createLeadForm({ name, questions, headline, description, p
   });
 
   const data = await res.json();
-  if (data.error) throw new Error(`Meta API error: ${data.error.message}`);
+  if (data.error) {
+    const detail = data.error.error_user_msg || data.error.error_user_title || '';
+    throw new Error(`Meta API error: ${data.error.message}${detail ? ' — ' + detail : ''} (code: ${data.error.code}, subcode: ${data.error.error_subcode})`);
+  }
   return { form_id: data.id, name };
 }
 
@@ -616,7 +619,7 @@ export async function executeMediaPlanBatch(plan, creatives = {}, options = {}) 
   if (hasLeadGen) {
     onProgress?.({ step: 'create_lead_form', detail: '创建潜客表单' });
     const formResult = await createLeadForm({
-      name: `${metaPlatform.campaigns[0]?.name || 'Campaign'} Lead Form`,
+      name: `${metaPlatform.campaigns[0]?.name || 'Campaign'} Lead Form ${Date.now()}`,
       questions: [{ type: 'FULL_NAME' }, { type: 'EMAIL' }, { type: 'PHONE' }],
     });
     lead_gen_form_id = formResult.form_id;

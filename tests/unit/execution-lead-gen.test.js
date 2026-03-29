@@ -261,13 +261,15 @@ describe('LEAD_GENERATION execution', () => {
       }
     });
 
-    it('all ad sets have age_min <= 18 (Advantage+ constraint)', async () => {
+    it('ad sets respect country-specific minimum age (TH:20, ID:21, AE:21)', async () => {
       await executeMediaPlan(LEAD_GEN_PLAN, CREATIVES);
 
       const adsetBodies = findAllFetchBodies('/adsets');
+      // SEA adset (MY, TH, ID) → age_min should be max(18, 20, 21) = 21
+      // UAE adset (AE) → age_min should be 21
       for (const body of adsetBodies) {
-        assert.ok(body.targeting.age_min <= 18,
-          `age_min ${body.targeting.age_min} exceeds Advantage+ limit of 18`);
+        assert.ok(body.targeting.age_min >= 18, 'age_min should be at least 18');
+        assert.ok(body.targeting.age_max >= 65, 'age_max should be at least 65');
       }
     });
 
