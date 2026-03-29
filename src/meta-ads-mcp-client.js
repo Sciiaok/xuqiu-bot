@@ -74,8 +74,32 @@ export async function callTool(name, args = {}) {
   }
 
   try {
-    return JSON.parse(textBlock.text);
-  } catch {
+    const parsed = JSON.parse(textBlock.text);
+
+    // MCP wraps Meta API errors in { data: "{\"error\": {...}}" }
+    if (parsed.data && typeof parsed.data === 'string') {
+      try {
+        const inner = JSON.parse(parsed.data);
+        if (inner.error) {
+          const msg = inner.error.details?.error?.message || inner.error.message || 'Unknown Meta API error';
+          throw new Error(`Meta MCP [${name}]: ${msg}`);
+        }
+        return inner;
+      } catch (e) {
+        if (e.message.startsWith('Meta MCP')) throw e;
+        // Not valid inner JSON, return as-is
+      }
+    }
+
+    // Direct error response (no nesting)
+    if (parsed.error) {
+      const msg = parsed.error.message || 'Unknown Meta API error';
+      throw new Error(`Meta MCP [${name}]: ${msg}`);
+    }
+
+    return parsed;
+  } catch (e) {
+    if (e.message.startsWith('Meta MCP')) throw e;
     // Some tools return plain text
     return { text: textBlock.text };
   }

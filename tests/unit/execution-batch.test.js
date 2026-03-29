@@ -248,7 +248,7 @@ describe('createFullCampaign', () => {
     await createFullCampaign(input);
 
     const creativeCall = callTool.mock.calls.find(c => c.arguments[0] === 'create_ad_creative');
-    assert.equal(creativeCall.arguments[1].call_to_action.value.lead_gen_form_id, 'form_456');
+    assert.equal(creativeCall.arguments[1].lead_gen_form_id, 'form_456');
   });
 
   it('skips adset children when adset creation fails', async () => {
@@ -367,8 +367,8 @@ describe('createFullCampaign — ad format variations', () => {
     assert.equal(adsetCall.arguments[1].destination_type, undefined, 'should have no destination_type');
 
     const creativeCall = callTool.mock.calls.find(c => c.arguments[0] === 'create_ad_creative');
-    assert.equal(creativeCall.arguments[1].call_to_action.type, 'SHOP_NOW');
-    assert.equal(creativeCall.arguments[1].call_to_action.value.lead_gen_form_id, undefined, 'should have no form_id in CTA value');
+    assert.equal(creativeCall.arguments[1].call_to_action_type, 'SHOP_NOW');
+    assert.equal(creativeCall.arguments[1].lead_gen_form_id, undefined, 'should have no form_id');
   });
 
   it('brand awareness campaign: objective maps to OUTCOME_AWARENESS', async () => {
@@ -402,7 +402,7 @@ describe('createFullCampaign — ad format variations', () => {
     await createFullCampaign(input);
 
     const creativeCall = callTool.mock.calls.find(c => c.arguments[0] === 'create_ad_creative');
-    assert.equal(creativeCall.arguments[1].call_to_action.type, 'WHATSAPP_MESSAGE');
+    assert.equal(creativeCall.arguments[1].call_to_action_type, 'WHATSAPP_MESSAGE');
   });
 
   it('multiple ad sets in same campaign: both created with correct gender targeting', async () => {

@@ -223,17 +223,22 @@ export async function createLeadForm({ name, questions, headline, description, p
 // ── Batch helpers ────────────────────────────────────────────────────
 
 const OBJECTIVE_MAP = {
-  lead_gen: 'OUTCOME_LEADS', leads: 'OUTCOME_LEADS',
+  lead_gen: 'OUTCOME_LEADS', leads: 'OUTCOME_LEADS', lead_generation: 'OUTCOME_LEADS',
   traffic: 'OUTCOME_TRAFFIC',
   brand_awareness: 'OUTCOME_AWARENESS', awareness: 'OUTCOME_AWARENESS',
   conversions: 'OUTCOME_SALES', sales: 'OUTCOME_SALES',
   engagement: 'OUTCOME_ENGAGEMENT',
+  reach: 'OUTCOME_AWARENESS',
 };
 
 const CTA_MAP = {
   'Learn More': 'LEARN_MORE',
   'Shop Now': 'SHOP_NOW',
   'Send WhatsApp': 'WHATSAPP_MESSAGE',
+  'WhatsApp': 'WHATSAPP_MESSAGE',
+  'Send WhatsApp Message': 'WHATSAPP_MESSAGE',
+  'Send Message to WhatsApp': 'WHATSAPP_MESSAGE',
+  'Send Message': 'MESSAGE_PAGE',
   'Sign Up': 'SIGN_UP',
   'Get Quote': 'GET_QUOTE',
   'Apply Now': 'APPLY_NOW',
@@ -241,6 +246,13 @@ const CTA_MAP = {
   'Contact Us': 'CONTACT_US',
   'Subscribe': 'SUBSCRIBE',
   'Book Now': 'BOOK_TRAVEL',
+  // Chinese aliases
+  '发送WhatsApp消息': 'WHATSAPP_MESSAGE',
+  '在WhatsApp上发消息': 'WHATSAPP_MESSAGE',
+  'WhatsApp联系': 'WHATSAPP_MESSAGE',
+  '联系我们': 'CONTACT_US',
+  '立即获取报价': 'GET_QUOTE',
+  '获取详细资料': 'LEARN_MORE',
 };
 
 function buildBatchTargeting(targeting = {}) {
@@ -258,6 +270,17 @@ function buildBatchTargeting(targeting = {}) {
   return spec;
 }
 
+function pickOptimizationGoal(metaObjective) {
+  switch (metaObjective) {
+    case 'OUTCOME_LEADS': return 'LEAD_GENERATION';
+    case 'OUTCOME_TRAFFIC': return 'LINK_CLICKS';
+    case 'OUTCOME_AWARENESS': return 'REACH';
+    case 'OUTCOME_SALES': return 'OFFSITE_CONVERSIONS';
+    case 'OUTCOME_ENGAGEMENT': return 'POST_ENGAGEMENT';
+    default: return 'LINK_CLICKS';
+  }
+}
+
 /**
  * Upload multiple images via MCP and return a { name: image_hash } map.
  *
@@ -268,13 +291,18 @@ function buildBatchTargeting(targeting = {}) {
  */
 export async function uploadImages(images, options = {}) {
   const onProgress = options.onProgress;
+  const accountId = `act_${config.meta?.adAccountId}`;
   const result = {};
 
   for (const image of images) {
     try {
-      const res = await callTool('upload_ad_image', { image_url: image.url });
-      result[image.name] = res.image_hash;
-      onProgress?.({ step: 'upload_image', name: image.name, image_hash: res.image_hash });
+      const res = await callTool('upload_ad_image', { account_id: accountId, image_url: image.url });
+      // MCP may return hash in different fields
+      const hash = res.image_hash || res.hash || res.images?.[Object.keys(res.images)[0]]?.hash;
+      if (hash) {
+        result[image.name] = hash;
+      }
+      onProgress?.({ step: 'upload_image', name: image.name, image_hash: hash });
     } catch (err) {
       onProgress?.({ step: 'upload_image', name: image.name, error: err.message });
     }
@@ -312,7 +340,10 @@ export async function createFullCampaign(input, options = {}) {
       bid_strategy: 'LOWEST_COST_WITHOUT_CAP',
       daily_budget: Math.round((input.daily_budget || 0) * 100),
     });
-    campaignId = campaignRes.id;
+    campaignId = campaignRes.id || campaignRes.campaign_id;
+    if (!campaignId) {
+      throw new Error(`create_campaign returned no ID: ${JSON.stringify(campaignRes).slice(0, 200)}`);
+    }
     onProgress?.({ step: 'create_campaign', name: input.name, campaign_id: campaignId });
   } catch (err) {
     errors.push({ level: 'campaign', name: input.name, error: err.message });
@@ -328,7 +359,7 @@ export async function createFullCampaign(input, options = {}) {
         campaign_id: campaignId,
         name: adSet.name,
         status: 'PAUSED',
-        optimization_goal: isLeadGen ? 'LEAD_GENERATION' : 'LINK_CLICKS',
+        optimization_goal: pickOptimizationGoal(metaObjective),
         billing_event: 'IMPRESSIONS',
         targeting: buildBatchTargeting(adSet.targeting),
       };
@@ -338,8 +369,18 @@ export async function createFullCampaign(input, options = {}) {
         adSetParams.destination_type = 'ON_AD';
       }
 
+      // Schedule
+      if (input.duration_days > 0) {
+        const now = new Date();
+        adSetParams.start_time = now.toISOString();
+        adSetParams.end_time = new Date(now.getTime() + input.duration_days * 24 * 60 * 60 * 1000).toISOString();
+      }
+
       const adSetRes = await callTool('create_adset', adSetParams);
-      adSetId = adSetRes.id;
+      adSetId = adSetRes.id || adSetRes.adset_id || adSetRes.ad_set_id;
+      if (!adSetId) {
+        throw new Error(`create_adset returned no ID: ${JSON.stringify(adSetRes).slice(0, 300)}`);
+      }
       onProgress?.({ step: 'create_adset', name: adSet.name, adset_id: adSetId });
     } catch (err) {
       errors.push({ level: 'adset', name: adSet.name, error: err.message });
@@ -355,6 +396,7 @@ export async function createFullCampaign(input, options = {}) {
       }
 
       try {
+        // MCP create_ad_creative uses flat params (not object_story_spec)
         const creativeParams = {
           account_id: accountId,
           name: `${ad.name} Creative`,
@@ -363,29 +405,35 @@ export async function createFullCampaign(input, options = {}) {
           message: ad.primary_text,
           headline: ad.headline,
           description: ad.description,
-          link_url: ad.link_url,
-          call_to_action: {
-            type: CTA_MAP[ad.cta] || ad.cta || 'LEARN_MORE',
-            value: {},
-          },
+          link_url: ad.link_url || input.link_url,
+          call_to_action_type: CTA_MAP[ad.cta] || 'LEARN_MORE',
         };
 
         if (isLeadGen && ad.lead_gen_form_id) {
-          creativeParams.call_to_action.value.lead_gen_form_id = ad.lead_gen_form_id;
+          creativeParams.lead_gen_form_id = ad.lead_gen_form_id;
         }
 
         const creativeRes = await callTool('create_ad_creative', creativeParams);
+        const creativeId = creativeRes.id || creativeRes.creative_id;
+        if (!creativeId) {
+          throw new Error(`create_ad_creative returned no ID: ${JSON.stringify(creativeRes).slice(0, 300)}`);
+        }
 
+        // MCP create_ad uses flat creative_id (not nested creative object)
         const adRes = await callTool('create_ad', {
           account_id: accountId,
           adset_id: adSetId,
           name: ad.name,
           status: 'PAUSED',
-          creative: { creative_id: creativeRes.id },
+          creative_id: creativeId,
         });
+        const adId = adRes.id || adRes.ad_id;
+        if (!adId) {
+          throw new Error(`create_ad returned no ID: ${JSON.stringify(adRes).slice(0, 300)}`);
+        }
 
-        adResults.push({ ad_id: adRes.id, creative_id: creativeRes.id, name: ad.name });
-        onProgress?.({ step: 'create_ad', name: ad.name, ad_id: adRes.id, creative_id: creativeRes.id });
+        adResults.push({ ad_id: adId, creative_id: creativeId, name: ad.name });
+        onProgress?.({ step: 'create_ad', name: ad.name, ad_id: adId, creative_id: creativeId });
       } catch (err) {
         errors.push({ level: 'ad', name: ad.name, error: err.message });
       }
