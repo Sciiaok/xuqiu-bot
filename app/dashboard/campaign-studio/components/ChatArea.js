@@ -185,12 +185,21 @@ export default function ChatArea({ briefId, sessionId, sessionStatus, onSessionU
     }
   }
 
+  const reconnectAttemptsRef = useRef(0);
+  const MAX_RECONNECT_ATTEMPTS = 3;
+
   function reconnectSSE(sid) {
     if (reconnectTimerRef.current) return; // already reconnecting
     const lastId = lastEventIdRef.current;
     if (!lastId) return; // no event ID to reconnect from
+    if (reconnectAttemptsRef.current >= MAX_RECONNECT_ATTEMPTS) {
+      console.warn('[sse] max reconnect attempts reached, giving up');
+      setIsLoading(false);
+      return;
+    }
 
-    console.log('[sse] reconnecting from', lastId);
+    reconnectAttemptsRef.current++;
+    console.log('[sse] reconnecting from', lastId, `(attempt ${reconnectAttemptsRef.current}/${MAX_RECONNECT_ATTEMPTS})`);
     reconnectTimerRef.current = setTimeout(async () => {
       reconnectTimerRef.current = null;
       try {
@@ -203,6 +212,8 @@ export default function ChatArea({ briefId, sessionId, sessionStatus, onSessionU
           return;
         }
 
+        // Success — reset retry counter
+        reconnectAttemptsRef.current = 0;
         const newLastId = await consumeSSE(res, (event, data) => {
           handleStreamEvent(event, data);
         });
@@ -210,11 +221,12 @@ export default function ChatArea({ briefId, sessionId, sessionStatus, onSessionU
       } catch (err) {
         if (err.name !== 'AbortError') {
           console.warn('[sse] reconnect error:', err.message);
-          // Retry once more after 2s
+          // Retry after increasing delay
+          const delay = Math.min(2000 * reconnectAttemptsRef.current, 8000);
           reconnectTimerRef.current = setTimeout(() => {
             reconnectTimerRef.current = null;
             reconnectSSE(sid);
-          }, 2000);
+          }, delay);
         }
       }
     }, 500);

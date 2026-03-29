@@ -61,12 +61,11 @@ export async function GET(request, { params }) {
       try {
         const redis = getRedis();
 
-        // Phase 1: Replay missed events via XRANGE (exclusive of lastEventId)
-        const replayEvents = await redis.xrange(key, lastEventId, '+');
+        // Phase 1: Replay missed events via XRANGE (exclusive start via '(' prefix)
+        const replayEvents = await redis.xrange(key, '(' + lastEventId, '+');
         let lastId = lastEventId;
 
         for (const [eventId, fields] of replayEvents) {
-          if (eventId === lastEventId) continue;
           const eventType = fields[fields.indexOf('event') + 1];
           const eventData = fields[fields.indexOf('data') + 1];
           send(eventId, eventType, eventData);

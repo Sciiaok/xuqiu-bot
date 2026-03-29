@@ -3,25 +3,25 @@ import Redis from 'ioredis';
 
 const REDIS_URL = process.env.REDIS_URL || 'redis://127.0.0.1:6379';
 
-// Skip if Redis is not available
+// Synchronous availability check — attempt to connect before describe runs
 let redis;
 let available = false;
 
-beforeAll(async () => {
-  try {
-    redis = new Redis(REDIS_URL, { connectTimeout: 2000 });
-    await redis.ping();
-    available = true;
-  } catch {
-    console.warn('Redis not available — skipping integration tests');
-  }
-});
+try {
+  redis = new Redis(REDIS_URL, { connectTimeout: 1000, lazyConnect: true });
+  await redis.connect();
+  await redis.ping();
+  available = true;
+} catch {
+  console.warn('Redis not available — skipping integration tests');
+  redis = null;
+}
 
 afterAll(async () => {
   if (redis) await redis.quit();
 });
 
-describe.runIf(() => available)('Redis Stream SSE integration', () => {
+describe.skipIf(!available)('Redis Stream SSE integration', () => {
   const testKey = `sse:test-${Date.now()}`;
 
   afterAll(async () => {
