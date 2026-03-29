@@ -220,6 +220,182 @@ export async function createLeadForm({ name, questions, headline, description, p
   return { form_id: data.id, name };
 }
 
+// ── Batch helpers ────────────────────────────────────────────────────
+
+const OBJECTIVE_MAP = {
+  lead_gen: 'OUTCOME_LEADS',
+  traffic: 'OUTCOME_TRAFFIC',
+  brand_awareness: 'OUTCOME_AWARENESS',
+  conversions: 'OUTCOME_SALES',
+  engagement: 'OUTCOME_ENGAGEMENT',
+};
+
+const CTA_MAP = {
+  'Learn More': 'LEARN_MORE',
+  'Shop Now': 'SHOP_NOW',
+  'Send WhatsApp': 'WHATSAPP_MESSAGE',
+  'Sign Up': 'SIGN_UP',
+  'Get Quote': 'GET_QUOTE',
+  'Apply Now': 'APPLY_NOW',
+  'Download': 'DOWNLOAD',
+  'Contact Us': 'CONTACT_US',
+  'Subscribe': 'SUBSCRIBE',
+  'Book Now': 'BOOK_TRAVEL',
+};
+
+function buildBatchTargeting(targeting = {}) {
+  const countries = targeting.countries || [];
+  const ageMin = targeting.age_range?.[0] || targeting.age_min || 18;
+  const ageMax = targeting.age_range?.[1] || targeting.age_max || 65;
+  const spec = {
+    geo_locations: { countries: mapCountriesToISO(countries) },
+    age_min: Math.min(ageMin, 18),
+    age_max: Math.max(ageMax, 65),
+    targeting_automation: { advantage_audience: 1 },
+  };
+  if (targeting.gender === 'male') spec.genders = [1];
+  else if (targeting.gender === 'female') spec.genders = [2];
+  return spec;
+}
+
+/**
+ * Upload multiple images via MCP and return a { name: image_hash } map.
+ *
+ * @param {Array<{name: string, url: string}>} images
+ * @param {Object} [options]
+ * @param {Function} [options.onProgress]
+ * @returns {Promise<Object>} Map of name → image_hash
+ */
+export async function uploadImages(images, options = {}) {
+  const onProgress = options.onProgress;
+  const result = {};
+
+  for (const image of images) {
+    try {
+      const res = await callTool('upload_ad_image', { image_url: image.url });
+      result[image.name] = res.image_hash;
+      onProgress?.({ step: 'upload_image', name: image.name, image_hash: res.image_hash });
+    } catch (err) {
+      onProgress?.({ step: 'upload_image', name: image.name, error: err.message });
+    }
+  }
+
+  return result;
+}
+
+/**
+ * Create a full campaign structure: campaign → adsets → creatives → ads via MCP.
+ *
+ * @param {Object} input - Campaign object with nested ad_sets[].ads[]
+ * @param {Object} [options]
+ * @param {Function} [options.onProgress]
+ * @returns {Promise<Object>} { status, campaign_id, ad_sets, errors }
+ */
+export async function createFullCampaign(input, options = {}) {
+  const onProgress = options.onProgress;
+  const accountId = `act_${config.meta?.adAccountId}`;
+  const pageId = config.meta?.pageId;
+  const errors = [];
+  const adSetResults = [];
+
+  // Create campaign
+  let campaignId;
+  try {
+    const campaignRes = await callTool('create_campaign', {
+      account_id: accountId,
+      name: input.name,
+      objective: OBJECTIVE_MAP[input.objective] || input.objective,
+      status: 'PAUSED',
+      special_ad_categories: [],
+      bid_strategy: 'LOWEST_COST_WITHOUT_CAP',
+      daily_budget: Math.round((input.daily_budget || 0) * 100),
+    });
+    campaignId = campaignRes.id;
+    onProgress?.({ step: 'create_campaign', name: input.name, campaign_id: campaignId });
+  } catch (err) {
+    errors.push({ level: 'campaign', name: input.name, error: err.message });
+    return { status: 'failed', campaign_id: null, ad_sets: [], errors };
+  }
+
+  // Create ad sets
+  for (const adSet of input.ad_sets || []) {
+    let adSetId;
+    try {
+      const adSetParams = {
+        account_id: accountId,
+        campaign_id: campaignId,
+        name: adSet.name,
+        status: 'PAUSED',
+        optimization_goal: input.objective === 'lead_gen' ? 'LEAD_GENERATION' : 'LINK_CLICKS',
+        billing_event: 'IMPRESSIONS',
+        targeting: buildBatchTargeting(adSet.targeting),
+      };
+
+      if (input.objective === 'lead_gen') {
+        adSetParams.promoted_object = { page_id: pageId };
+        adSetParams.destination_type = 'ON_AD';
+      }
+
+      const adSetRes = await callTool('create_adset', adSetParams);
+      adSetId = adSetRes.id;
+      onProgress?.({ step: 'create_adset', name: adSet.name, adset_id: adSetId });
+    } catch (err) {
+      errors.push({ level: 'adset', name: adSet.name, error: err.message });
+      continue;
+    }
+
+    // Create ads within this ad set
+    const adResults = [];
+    for (const ad of adSet.ads || []) {
+      if (!ad.image_hash) {
+        errors.push({ level: 'ad', name: ad.name, error: 'Missing image_hash' });
+        continue;
+      }
+
+      try {
+        const creativeParams = {
+          account_id: accountId,
+          name: `${ad.name} Creative`,
+          page_id: pageId,
+          image_hash: ad.image_hash,
+          message: ad.primary_text,
+          headline: ad.headline,
+          description: ad.description,
+          link_url: ad.link_url,
+          call_to_action: {
+            type: CTA_MAP[ad.cta] || ad.cta || 'LEARN_MORE',
+            value: {},
+          },
+        };
+
+        if (input.objective === 'lead_gen' && ad.lead_gen_form_id) {
+          creativeParams.call_to_action.value.lead_gen_form_id = ad.lead_gen_form_id;
+        }
+
+        const creativeRes = await callTool('create_ad_creative', creativeParams);
+
+        const adRes = await callTool('create_ad', {
+          account_id: accountId,
+          adset_id: adSetId,
+          name: ad.name,
+          status: 'PAUSED',
+          creative: { creative_id: creativeRes.id },
+        });
+
+        adResults.push({ ad_id: adRes.id, creative_id: creativeRes.id, name: ad.name });
+        onProgress?.({ step: 'create_ad', name: ad.name, ad_id: adRes.id, creative_id: creativeRes.id });
+      } catch (err) {
+        errors.push({ level: 'ad', name: ad.name, error: err.message });
+      }
+    }
+
+    adSetResults.push({ id: adSetId, name: adSet.name, ads: adResults });
+  }
+
+  const status = errors.length === 0 ? 'completed' : adSetResults.length === 0 ? 'failed' : 'partial';
+  return { status, campaign_id: campaignId, ad_sets: adSetResults, errors };
+}
+
 // ── Main execution via Claude agent + MCP tools ─────────────────────
 
 /**
