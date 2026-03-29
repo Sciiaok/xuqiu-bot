@@ -3,46 +3,10 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
 import { useTranslations } from 'next-intl';
 import MessageBubble from './MessageBubble';
+import { consumeSSE } from '@/lib/consume-sse';
 
 let msgIdCounter = 0;
 function nextMsgId() { return `msg-${++msgIdCounter}-${Math.random().toString(36).slice(2, 6)}`; }
-
-/**
- * Parse SSE stream and call handler for each event.
- * Respects AbortSignal for cancellation.
- */
-async function consumeSSE(response, onEvent) {
-  const reader = response.body.getReader();
-  const decoder = new TextDecoder();
-  let buffer = '';
-  let eventType = null;
-
-  try {
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-
-      buffer += decoder.decode(value, { stream: true });
-      const lines = buffer.split('\n');
-      buffer = lines.pop();
-
-      for (const line of lines) {
-        if (line.startsWith('event: ')) {
-          eventType = line.slice(7);
-        } else if (line.startsWith('data: ') && eventType) {
-          try {
-            const data = JSON.parse(line.slice(6));
-            onEvent(eventType, data);
-          } catch { /* skip malformed */ }
-          eventType = null;
-        }
-      }
-    }
-  } catch (err) {
-    if (err.name === 'AbortError') return;
-    throw err;
-  }
-}
 
 export default function ChatArea({ briefId, sessionId, sessionStatus, onSessionUpdate }) {
   const t = useTranslations('campaignStudio');
@@ -120,94 +84,153 @@ export default function ChatArea({ briefId, sessionId, sessionStatus, onSessionU
     };
   }, []);
 
-  // Poll for phase_results changes when session is running but SSE is not active
-  const pollingRef = useRef(null);
   const knownPhasesRef = useRef(new Set());
+  const lastEventIdRef = useRef(null);
+  const reconnectTimerRef = useRef(null);
 
-  const PHASE_BUILDERS = [
-    { phase: 'research',      build: r => ({ type: 'research_complete', report: r, duration: null }) },
-    { phase: 'strategy',      build: r => ({ type: 'strategy_complete', plan: r }) },
-    { phase: 'creative_plan', build: r => r?.creative_tasks?.length ? { type: 'creative_plan_complete', creativeTasks: r.creative_tasks, references: r.references || [] } : null },
-    { phase: 'creative',      build: r => ({ type: 'creative_complete', creatives: r?.assets || r?.creatives || r || [] }) },
-    { phase: 'execution',     build: r => ({ type: 'execution_complete', result: r }) },
-  ];
+  function handleStreamEvent(event, data) {
+    switch (event) {
+      case 'orchestration_start':
+      case 'orchestration_resumed':
+        addMessage({ id: nextMsgId(), type: 'thinking_group', steps: [] });
+        break;
 
-  function startPolling(sid) {
-    stopPolling();
-    console.log('[poll] start polling session', sid);
-    pollingRef.current = setInterval(async () => {
-      try {
-        const res = await fetch(`/api/campaign/orchestrate/${sid}`);
-        if (!res.ok) return;
-        const data = await res.json();
-        const results = data.phase_results || {};
-
-        // Add cards for newly completed phases
-        for (const { phase, build } of PHASE_BUILDERS) {
-          if (results[phase] && !knownPhasesRef.current.has(phase)) {
-            knownPhasesRef.current.add(phase);
-            const msg = build(results[phase]);
-            if (msg) {
-              // Remove phase_running indicator before adding completed card
-              setMessages(prev => prev.filter(m => m.type !== 'phase_running'));
-              addMessage(msg);
-            }
-          }
+      case 'phase_start':
+        setCurrentPhase(data.phase);
+        addMessage({
+          type: 'phase_start',
+          content: phaseLabels[data.phase] || data.phase,
+        });
+        addMessage({ id: nextMsgId(), type: 'thinking_group', steps: [] });
+        if (data.phase === 'creative') {
+          addMessage({ type: 'creative_progress' });
         }
-
-        // Update phase_running indicator if phase changed
-        if (data.status === 'running' && data.current_phase) {
-          setCurrentPhase(data.current_phase);
-          setMessages(prev => {
-            const running = prev.find(m => m.type === 'phase_running');
-            if (running && running.phase !== data.current_phase) {
-              return prev.map(m => m.type === 'phase_running'
-                ? { ...m, phase: data.current_phase, content: phaseLabels[data.current_phase] || data.current_phase }
-                : m);
-            }
-            if (!running && !knownPhasesRef.current.has(data.current_phase)) {
-              return [...prev, { id: nextMsgId(), type: 'phase_running', phase: data.current_phase, content: phaseLabels[data.current_phase] || data.current_phase }];
-            }
-            return prev;
-          });
+        if (data.phase === 'execution') {
+          addMessage({ type: 'execution_progress' });
         }
+        break;
 
-        // Session no longer running — stop polling
-        if (data.status !== 'running') {
-          console.log('[poll] session status changed to', data.status, '— stopping');
-          setMessages(prev => prev.filter(m => m.type !== 'phase_running'));
-          stopPolling();
-          setIsLoading(false);
-          onSessionUpdate?.();
-
-          if (data.status === 'awaiting_feedback' || data.status === 'awaiting_approval') {
-            const feedbackEvt = data.messages
-              ?.filter(m => m.role === 'event' && m.tool_name === 'feedback_required')
-              .pop();
-            addMessage({
-              type: 'feedback_required',
-              message: feedbackEvt?.content || t('planReadyConfirm'),
-              options: feedbackEvt?.tool_result?.options || [t('confirmExecute'), t('cancel')],
-            });
-          }
+      case 'phase_complete':
+        knownPhasesRef.current.add(data.phase);
+        if (data.phase === 'research') {
+          addMessage({ type: 'research_complete', report: data.result, duration: data.duration });
         }
-      } catch (err) {
-        console.warn('[poll] error:', err.message);
-      }
-    }, 4000);
-  }
+        if (data.phase === 'strategy') {
+          addMessage({ type: 'strategy_complete', plan: data.result });
+        }
+        if (data.phase === 'creative_plan') {
+          addMessage({ type: 'creative_plan_complete', creativeTasks: data.result?.creative_tasks || [], references: data.result?.references || [] });
+        }
+        if (data.phase === 'creative') {
+          setMessages(prev => prev.filter(m => m.type !== 'creative_progress'));
+          addMessage({ type: 'creative_complete', creatives: data.result?.assets || data.result?.creatives || data.result || [] });
+        }
+        if (data.phase === 'execution') {
+          setMessages(prev => prev.filter(m => m.type !== 'execution_progress'));
+          addMessage({ type: 'execution_complete', result: data.result });
+        }
+        onSessionUpdate?.();
+        break;
 
-  function stopPolling() {
-    if (pollingRef.current) {
-      clearInterval(pollingRef.current);
-      pollingRef.current = null;
+      case 'phase_progress':
+        appendToolStep({
+          type: 'progress',
+          tool: data.step,
+          content: data.detail || data.step,
+        });
+        if (data.phase === 'creative' && (data.step === 'creative_start' || data.step === 'creative_item' || data.step === 'creative_error' || data.step === 'creative_done')) {
+          setMessages(prev => prev.map(m =>
+            m.type === 'creative_progress'
+              ? { ...m, completed: data.completed ?? m.completed, total: data.total ?? m.total, errors: data.errors ?? m.errors, lastDetail: data.detail }
+              : m
+          ));
+        }
+        break;
+
+      case 'heartbeat':
+        break;
+
+      case 'approval_required':
+        setMessages(prev => prev.filter(m => m.type !== 'execution_progress'));
+        addMessage({ type: 'execution_approval', plan: data.plan });
+        onSessionUpdate?.();
+        break;
+
+      case 'feedback_required':
+        setIsLoading(false);
+        addMessage({
+          type: 'feedback_required',
+          message: data.message,
+          options: data.options,
+        });
+        onSessionUpdate?.();
+        return 'done'; // signal terminal event
+
+      case 'phase_skipped':
+        addMessage({ type: 'phase_skipped', phase: data.phase, reason: data.reason });
+        break;
+
+      case 'phase_error':
+        addMessage({ type: 'error', content: `${phaseLabels[data.phase] || data.phase} ${t('phaseFailed')}: ${data.error}` });
+        onSessionUpdate?.();
+        break;
+
+      case 'done':
+        onSessionUpdate?.();
+        return 'done'; // signal terminal event
+
+      case 'error':
+        addMessage({ type: 'error', content: data.message });
+        return 'done'; // signal terminal event
     }
   }
 
-  // Cleanup polling on unmount or session change
+  function reconnectSSE(sid) {
+    if (reconnectTimerRef.current) return; // already reconnecting
+    const lastId = lastEventIdRef.current;
+    if (!lastId) return; // no event ID to reconnect from
+
+    console.log('[sse] reconnecting from', lastId);
+    reconnectTimerRef.current = setTimeout(async () => {
+      reconnectTimerRef.current = null;
+      try {
+        const res = await fetch(
+          `/api/campaign/orchestrate/${sid}/stream?lastEventId=${lastId}`
+        );
+        if (!res.ok) {
+          console.warn('[sse] reconnect failed:', res.status);
+          setIsLoading(false);
+          return;
+        }
+
+        const newLastId = await consumeSSE(res, (event, data) => {
+          handleStreamEvent(event, data);
+        });
+        if (newLastId) lastEventIdRef.current = newLastId;
+      } catch (err) {
+        if (err.name !== 'AbortError') {
+          console.warn('[sse] reconnect error:', err.message);
+          // Retry once more after 2s
+          reconnectTimerRef.current = setTimeout(() => {
+            reconnectTimerRef.current = null;
+            reconnectSSE(sid);
+          }, 2000);
+        }
+      }
+    }, 500);
+  }
+
+  function stopReconnect() {
+    if (reconnectTimerRef.current) {
+      clearTimeout(reconnectTimerRef.current);
+      reconnectTimerRef.current = null;
+    }
+  }
+
+  // Cleanup reconnect on unmount or session change
   useEffect(() => {
-    return () => stopPolling();
-  }, [briefId, sessionId]);
+    return () => stopReconnect();
+  }, [sessionId, briefId]);
 
   // Load existing messages when session changes
   const isLoadingRef = useRef(false);
@@ -398,7 +421,7 @@ export default function ChatArea({ briefId, sessionId, sessionStatus, onSessionU
             });
           }
 
-          // Sync known phases for polling
+          // Sync known phases
           knownPhasesRef.current = new Set(Object.keys(phaseResults));
 
           // Show status-specific UI
@@ -410,7 +433,7 @@ export default function ChatArea({ briefId, sessionId, sessionStatus, onSessionU
               content: phaseLabels[orchData.current_phase] || orchData.current_phase,
             });
             if (!isLoadingRef.current) {
-              startPolling(sessionId);
+              reconnectSSE(sessionId);
             }
           }
 
@@ -494,7 +517,7 @@ export default function ChatArea({ briefId, sessionId, sessionStatus, onSessionU
 
     let shouldStartOrchestration = false;
 
-    await consumeSSE(res, (event, data) => {
+    const lastId = await consumeSSE(res, (event, data) => {
       switch (event) {
         case 'delta':
           assistantText += data.text;
@@ -537,6 +560,7 @@ export default function ChatArea({ briefId, sessionId, sessionStatus, onSessionU
           break;
       }
     });
+    if (lastId) lastEventIdRef.current = lastId;
 
     if (shouldStartOrchestration) {
       await runOrchestration();
@@ -546,7 +570,7 @@ export default function ChatArea({ briefId, sessionId, sessionStatus, onSessionU
   // Run orchestration pipeline
   async function runOrchestration() {
     abortRef.current?.abort();
-    stopPolling();
+    stopReconnect();
     const controller = new AbortController();
     abortRef.current = controller;
 
@@ -557,136 +581,16 @@ export default function ChatArea({ briefId, sessionId, sessionStatus, onSessionU
     const res = await fetchSSE(endpoint, {}, controller.signal);
 
     let receivedDone = false;
-    await consumeSSE(res, (event, data) => {
-      switch (event) {
-        case 'orchestration_start':
-        case 'orchestration_resumed':
-          // Create initial thinking_group so orchestrator progress events have somewhere to attach
-          addMessage({ id: nextMsgId(), type: 'thinking_group', steps: [] });
-          break;
-
-        case 'phase_start':
-          setCurrentPhase(data.phase);
-          addMessage({
-            type: 'phase_start',
-            content: phaseLabels[data.phase] || data.phase,
-          });
-          // Start a fresh thinking_group so progress events attach to the correct phase
-          addMessage({ id: nextMsgId(), type: 'thinking_group', steps: [] });
-          if (data.phase === 'creative') {
-            addMessage({ type: 'creative_progress' });
-          }
-          if (data.phase === 'execution') {
-            addMessage({ type: 'execution_progress' });
-          }
-          break;
-
-        case 'phase_complete':
-          knownPhasesRef.current.add(data.phase);
-          if (data.phase === 'research') {
-            addMessage({
-              type: 'research_complete',
-              report: data.result,
-              duration: data.duration,
-            });
-          }
-          if (data.phase === 'strategy') {
-            addMessage({ type: 'strategy_complete', plan: data.result });
-          }
-          if (data.phase === 'creative_plan') {
-            addMessage({
-              type: 'creative_plan_complete',
-              creativeTasks: data.result?.creative_tasks || [],
-              references: data.result?.references || [],
-            });
-          }
-          if (data.phase === 'creative') {
-            setMessages(prev => prev.filter(m => m.type !== 'creative_progress'));
-            addMessage({
-              type: 'creative_complete',
-              creatives: data.result?.assets || data.result?.creatives || data.result || [],
-            });
-          }
-          if (data.phase === 'execution') {
-            setMessages(prev => prev.filter(m => m.type !== 'execution_progress'));
-            addMessage({ type: 'execution_complete', result: data.result });
-          }
-          onSessionUpdate?.();
-          break;
-
-        case 'phase_progress':
-          appendToolStep({
-            type: 'progress',
-            tool: data.step,
-            content: data.detail || data.step,
-          });
-          // Update creative_progress card with real-time counts
-          if (data.phase === 'creative' && (data.step === 'creative_start' || data.step === 'creative_item' || data.step === 'creative_error' || data.step === 'creative_done')) {
-            setMessages(prev => prev.map(m =>
-              m.type === 'creative_progress'
-                ? { ...m, completed: data.completed ?? m.completed, total: data.total ?? m.total, errors: data.errors ?? m.errors, lastDetail: data.detail }
-                : m
-            ));
-          }
-          break;
-
-        case 'heartbeat':
-          break;
-
-        case 'approval_required':
-          setMessages(prev => prev.filter(m => m.type !== 'execution_progress'));
-          addMessage({
-            type: 'execution_approval',
-            plan: data.plan,
-          });
-          onSessionUpdate?.();
-          break;
-
-        case 'feedback_required':
-          receivedDone = true;
-          setIsLoading(false);
-          addMessage({
-            type: 'feedback_required',
-            message: data.message,
-            options: data.options,
-          });
-          onSessionUpdate?.();
-          break;
-
-        case 'phase_skipped':
-          addMessage({
-            type: 'phase_skipped',
-            phase: data.phase,
-            reason: data.reason,
-          });
-          break;
-
-        case 'phase_error':
-          addMessage({ type: 'error', content: `${phaseLabels[data.phase] || data.phase} ${t('phaseFailed')}: ${data.error}` });
-          onSessionUpdate?.();
-          break;
-
-        case 'done':
-          receivedDone = true;
-          onSessionUpdate?.();
-          break;
-
-        case 'error':
-          receivedDone = true;
-          addMessage({ type: 'error', content: data.message });
-          break;
-      }
+    const lastId = await consumeSSE(res, (event, data) => {
+      const result = handleStreamEvent(event, data);
+      if (result === 'done') receivedDone = true;
     });
+    if (lastId) lastEventIdRef.current = lastId;
 
-    // SSE ended without a terminal event — server may still be running, fall back to polling
+    // SSE ended without a terminal event — server may still be running, reconnect
     if (!receivedDone && (sessionId || briefId)) {
-      console.log('[sse] stream ended without done/error — starting poll fallback');
-      addMessage({
-        type: 'phase_running',
-        phase: currentPhase || 'unknown',
-        content: phaseLabels[currentPhase] || '处理中',
-      });
-      startPolling(sessionId || briefId);
+      console.log('[sse] stream ended without done/error — reconnecting');
+      reconnectSSE(sessionId || briefId);
     }
   }
 
@@ -708,98 +612,18 @@ export default function ChatArea({ briefId, sessionId, sessionStatus, onSessionU
       const res = await fetchSSE(endpoint, undefined, controller.signal);
 
       let receivedDone = false;
-      await consumeSSE(res, (event, data) => {
-        switch (event) {
-          case 'phase_start':
-            setCurrentPhase(data.phase);
-            addMessage({
-              type: 'phase_start',
-              content: phaseLabels[data.phase] || data.phase,
-            });
-            addMessage({ id: nextMsgId(), type: 'thinking_group', steps: [] });
-            if (data.phase === 'creative') {
-              addMessage({ type: 'creative_progress' });
-            }
-            if (data.phase === 'execution') {
-              addMessage({ type: 'execution_progress' });
-            }
-            break;
-          case 'phase_progress':
-            appendToolStep({
-              type: 'progress',
-              tool: data.step,
-              content: data.detail || data.step,
-            });
-            if (data.phase === 'creative' && (data.step === 'creative_start' || data.step === 'creative_item' || data.step === 'creative_error' || data.step === 'creative_done')) {
-              setMessages(prev => prev.map(m =>
-                m.type === 'creative_progress'
-                  ? { ...m, completed: data.completed ?? m.completed, total: data.total ?? m.total, errors: data.errors ?? m.errors, lastDetail: data.detail }
-                  : m
-              ));
-            }
-            break;
-          case 'phase_complete':
-            knownPhasesRef.current.add(data.phase);
-            if (data.phase === 'research') {
-              addMessage({ type: 'research_complete', report: data.result, duration: data.duration });
-            }
-            if (data.phase === 'strategy') {
-              addMessage({ type: 'strategy_complete', plan: data.result });
-            }
-            if (data.phase === 'creative_plan') {
-              addMessage({ type: 'creative_plan_complete', creativeTasks: data.result?.creative_tasks || [], references: data.result?.references || [] });
-            }
-            if (data.phase === 'creative') {
-              setMessages(prev => prev.filter(m => m.type !== 'creative_progress'));
-              addMessage({ type: 'creative_complete', creatives: data.result?.assets || data.result?.creatives || data.result || [] });
-            }
-            if (data.phase === 'execution') {
-              setMessages(prev => prev.filter(m => m.type !== 'execution_progress'));
-              addMessage({ type: 'execution_complete', result: data.result });
-            }
-            onSessionUpdate?.();
-            break;
-          case 'feedback_required':
-            receivedDone = true;
-            setIsLoading(false);
-            addMessage({
-              type: 'feedback_required',
-              message: data.message,
-              options: data.options,
-            });
-            onSessionUpdate?.();
-            break;
-          case 'phase_skipped':
-            addMessage({ type: 'phase_skipped', phase: data.phase, reason: data.reason });
-            break;
-          case 'phase_error':
-            addMessage({ type: 'error', content: `${phaseLabels[data.phase] || data.phase} ${t('phaseFailed')}: ${data.error}` });
-            onSessionUpdate?.();
-            break;
-          case 'heartbeat':
-            break;
-          case 'done':
-            receivedDone = true;
-            onSessionUpdate?.();
-            break;
-          case 'error':
-            receivedDone = true;
-            addMessage({ type: 'error', content: data.message });
-            break;
-        }
+      const lastId = await consumeSSE(res, (event, data) => {
+        const result = handleStreamEvent(event, data);
+        if (result === 'done') receivedDone = true;
       });
+      if (lastId) lastEventIdRef.current = lastId;
 
       if (!receivedDone && (sessionId || briefId)) {
-        console.log('[sse] approve stream ended without done/error — starting poll fallback');
-        addMessage({
-          type: 'phase_running',
-          phase: currentPhase || 'unknown',
-          content: phaseLabels[currentPhase] || '处理中',
-        });
-        startPolling(sessionId || briefId);
+        console.log('[sse] approve stream ended without done/error — reconnecting');
+        reconnectSSE(sessionId || briefId);
       }
     } finally {
-      if (!pollingRef.current) {
+      if (!reconnectTimerRef.current) {
         setIsLoading(false);
       }
     }
@@ -832,97 +656,17 @@ export default function ChatArea({ briefId, sessionId, sessionStatus, onSessionU
       if (attachments?.length) payload.attachments = attachments;
       const res = await fetchSSE(endpoint, payload, controller.signal);
 
-      // Reuse the runOrchestration SSE handler pattern
+      // Reuse the shared stream event handler
       let receivedDone = false;
-      await consumeSSE(res, (event, data) => {
-        switch (event) {
-          case 'phase_start':
-            setCurrentPhase(data.phase);
-            addMessage({
-              type: 'phase_start',
-              content: phaseLabels[data.phase] || data.phase,
-            });
-            addMessage({ id: nextMsgId(), type: 'thinking_group', steps: [] });
-            if (data.phase === 'creative') {
-              addMessage({ type: 'creative_progress' });
-            }
-            if (data.phase === 'execution') {
-              addMessage({ type: 'execution_progress' });
-            }
-            break;
-          case 'phase_progress':
-            appendToolStep({
-              type: 'progress',
-              tool: data.step,
-              content: data.detail || data.step,
-            });
-            if (data.phase === 'creative' && (data.step === 'creative_start' || data.step === 'creative_item' || data.step === 'creative_error' || data.step === 'creative_done')) {
-              setMessages(prev => prev.map(m =>
-                m.type === 'creative_progress'
-                  ? { ...m, completed: data.completed ?? m.completed, total: data.total ?? m.total, errors: data.errors ?? m.errors, lastDetail: data.detail }
-                  : m
-              ));
-            }
-            break;
-          case 'phase_complete':
-            knownPhasesRef.current.add(data.phase);
-            if (data.phase === 'research') {
-              addMessage({ type: 'research_complete', report: data.result, duration: data.duration });
-            }
-            if (data.phase === 'strategy') {
-              addMessage({ type: 'strategy_complete', plan: data.result });
-            }
-            if (data.phase === 'creative_plan') {
-              addMessage({ type: 'creative_plan_complete', creativeTasks: data.result?.creative_tasks || [], references: data.result?.references || [] });
-            }
-            if (data.phase === 'creative') {
-              setMessages(prev => prev.filter(m => m.type !== 'creative_progress'));
-              addMessage({ type: 'creative_complete', creatives: data.result?.assets || data.result?.creatives || data.result || [] });
-            }
-            if (data.phase === 'execution') {
-              setMessages(prev => prev.filter(m => m.type !== 'execution_progress'));
-              addMessage({ type: 'execution_complete', result: data.result });
-            }
-            onSessionUpdate?.();
-            break;
-          case 'feedback_required':
-            receivedDone = true;
-            setIsLoading(false);
-            addMessage({
-              type: 'feedback_required',
-              message: data.message,
-              options: data.options,
-            });
-            onSessionUpdate?.();
-            break;
-          case 'phase_skipped':
-            addMessage({ type: 'phase_skipped', phase: data.phase, reason: data.reason });
-            break;
-          case 'phase_error':
-            addMessage({ type: 'error', content: `${phaseLabels[data.phase] || data.phase} ${t('phaseFailed')}: ${data.error}` });
-            onSessionUpdate?.();
-            break;
-          case 'heartbeat':
-            break;
-          case 'done':
-            receivedDone = true;
-            onSessionUpdate?.();
-            break;
-          case 'error':
-            receivedDone = true;
-            addMessage({ type: 'error', content: data.message });
-            break;
-        }
+      const lastId = await consumeSSE(res, (event, data) => {
+        const result = handleStreamEvent(event, data);
+        if (result === 'done') receivedDone = true;
       });
+      if (lastId) lastEventIdRef.current = lastId;
 
       if (!receivedDone && (sessionId || briefId)) {
-        console.log('[sse] feedback stream ended without done/error — starting poll fallback');
-        addMessage({
-          type: 'phase_running',
-          phase: currentPhase || 'unknown',
-          content: phaseLabels[currentPhase] || '处理中',
-        });
-        startPolling(sessionId || briefId);
+        console.log('[sse] feedback stream ended without done/error — reconnecting');
+        reconnectSSE(sessionId || briefId);
       }
     } catch (err) {
       if (err.name !== 'AbortError') {
@@ -1091,13 +835,13 @@ export default function ChatArea({ briefId, sessionId, sessionStatus, onSessionU
       await runOrchestration();
     } catch (err) {
       if (err.name !== 'AbortError') {
-        // Network error mid-stream — fall back to polling
-        console.log('[sse] orchestration fetch error, starting poll fallback:', err.message);
-        startPolling(sessionId || briefId);
+        // Network error mid-stream — try to reconnect
+        console.log('[sse] orchestration fetch error, reconnecting:', err.message);
+        reconnectSSE(sessionId || briefId);
       }
     } finally {
-      // Only clear loading if polling didn't take over
-      if (!pollingRef.current) {
+      // Only clear loading if reconnect didn't take over
+      if (!reconnectTimerRef.current) {
         setIsLoading(false);
       }
     }
