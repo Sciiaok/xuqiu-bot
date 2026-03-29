@@ -1,5 +1,6 @@
 import { createClient } from '../../../../../lib/supabase-server.js';
 import { orchestrate, chatWithOrchestrator } from '../../../../../src/campaign-orchestrator.service.js';
+import { processIntakeMessage } from '../../../../../src/campaign-intake.service.js';
 import {
   createSession,
   getSession,
@@ -71,8 +72,16 @@ export async function POST(request, { params }) {
     return Response.json({ error: 'Brief not found' }, { status: 404 });
   }
 
-  // Chat mode: user sends a message — always goes through orchestrator chat
+  // Chat mode: user sends a message
   if (body.message) {
+    // Intake phase: use dedicated intake agent (has web_search, confidence checks, etc.)
+    if (session.status === 'intake' && session.current_phase === 'intake') {
+      return streamSSE(
+        processIntakeMessage(brief.id, body.message, { attachments: body.attachments }),
+        { heartbeatIntervalMs: 5000 },
+      );
+    }
+    // Post-intake: use orchestrator chat handler
     return streamSSE(
       chatWithOrchestrator(session.id, body.message, { attachments: body.attachments }),
       { heartbeatIntervalMs: 5000 },

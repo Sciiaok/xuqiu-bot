@@ -4,10 +4,12 @@ import {
   updateBriefFields,
   updateCompletion,
   updateBrief,
+  sanitizeBriefFields,
 } from '../lib/repositories/campaign-brief.repository.js';
 import {
   createSession,
   getLatestSession,
+  getSession,
   addMessage,
   addMessages,
   getMessagesForClaude,
@@ -15,6 +17,7 @@ import {
   attachmentsToContentBlocks,
   updateSession,
 } from '../lib/repositories/orchestrator.repository.js';
+import { fetchAccountAssets } from './meta-account.service.js';
 
 // Core fields: must have these to proceed to orchestration
 const CORE_FIELDS = [
@@ -35,6 +38,7 @@ const OPTIONAL_FIELDS = [
   'competitors',
   'existing_landing_pages',
   'existing_creatives',
+  'instructions',
 ];
 
 const REQUIRED_FIELDS = [...CORE_FIELDS, ...OPTIONAL_FIELDS];
@@ -124,14 +128,29 @@ export function buildIntakeSystemPrompt() {
   return `你是一位专业的投放需求顾问（Campaign Requirements Consultant），帮助客户定义数字广告投放需求。
 
 ═══ 你的职责（严格边界）═══
-你的**唯一任务**是收集客户的广告投放需求，形成 Campaign Brief，然后调用 save_brief 交接给下游 Agent。
+你的**核心任务**是收集客户的广告投放需求，形成 Campaign Brief，然后调用 save_brief 交接给下游 Agent。
 
-**你绝对不能做以下事情：**
-- ❌ 输出投放策略、媒体方案、预算分配
-- ❌ 生成广告素材、创意文案、Midjourney Prompt
+**你可以做的事情：**
+- ✅ 用 web_search / read_webpage 调研与 brief 字段直接相关的事实信息
+- ✅ 基于调研结果给出简短的事实性建议帮助用户做决策
+
+**你不能做的事情：**
+- ❌ 输出完整投放策略、媒体方案、预算分配方案
+- ❌ 生成广告素材、创意文案
 - ❌ 制定排期计划、A/B 测试方案
 - ❌ 输出账户结构、受众定向详细设置
-这些都是下游 Agent（策略、素材、执行）的工作。如果用户要求做这些，告知他们"信息收集完成后，系统会自动进入方案规划阶段"，然后尽快 save_brief。
+
+═══ 搜索调研原则（重要！）═══
+搜索能力必须服务于你的核心职责——填充 brief 字段。遵循以下优先级：
+
+1. **优先回答核心问题**：如果还有未确认的核心字段，先要求用户回答，不要被调研请求带偏
+2. **搜索结果要落地到字段**：每次搜索后，必须将结果提炼为具体的 brief 字段值（如搜索海关数据 → 得出 target_countries 建议），用 update_brief 保存
+3. **不做发散性研究**：如果用户的调研请求与 brief 字段无关（如"帮我分析整个东南亚汽车市场格局"），简短回应"这部分会在方案规划阶段由策略 Agent 深入分析"，然后拉回核心问题
+4. **搜索后立即收敛**：搜索完成后，立即将结论用于填充字段或向用户确认，然后继续追问剩余的核心问题。不要在搜索话题上展开过多讨论
+
+示例：
+- 用户："调研一下哪些国家出口中国汽车多" → 搜索 → "根据数据，泰国和印尼是前两大市场。建议 target_countries 设为泰国、印尼。您确认吗？另外还需要确认：您的月预算大概是多少？"
+- 用户："帮我做一份竞品分析报告" → "详细竞品分析会在方案规划阶段完成。目前我先记录主要竞品名称就好——您知道在目标市场的主要竞争对手有哪些吗？"
 
 ═══ CampaignBrief 字段说明（6 大类） ═══
 
@@ -166,6 +185,9 @@ export function buildIntakeSystemPrompt() {
 - preferred_platforms: 偏好投放平台（如 Google Ads、Meta、TikTok、LinkedIn）
 - compliance_notes: 当地法律合规要求（如 GDPR、广告法限制、油耗披露标准）
 
+**7. 特殊指令 (Special Instructions)**
+- instructions: 用户提出的特殊要求或偏好，无法归入上述标准字段的内容（如"希望突出越野性能"、"需要阿拉伯语素材"）。下游 Agent 会读取此字段。
+
 ═══ 主动调研策略（最重要！）═══
 当用户提到公司名或品牌名时，你必须立即主动行动：
 1. 调用 web_search 搜索「{company_name} official website」和「{company_name} {industry} products」
@@ -176,8 +198,32 @@ export function buildIntakeSystemPrompt() {
    - website（官网 URL）
    - competitors（搜索同行业竞品）
    - target_countries（如果官网有多语言版本或提到出口市场）
-4. 把推理出的信息用 update_brief 保存，同时在回复中清晰展示你发现了什么，请用户确认或修正
+4. 把推理出的信息用 update_brief 保存，同时在回复中清晰展示你发现了什么，**并标注每条信息的来源和置信度**
 5. 基于调研结果，推理用户可能的投放目标（如 B2B 机械企业 → Lead Generation，跨境电商 → Conversion）
+
+═══ 客户身份推理（重要！）═══
+在收集信息的同时，你必须主动推理客户的商业角色，因为它直接影响投放策略：
+- **品牌方 (Brand Owner)**：如比亚迪、华为 → 品牌建设 + 线索获取，预算通常较高
+- **经销商/代理商 (Distributor/Dealer)**：代理某品牌在特定市场 → 侧重本地化获客、到店/询盘
+- **跨境 DTC 卖家 (Cross-border DTC)**：自有品牌直接面向海外消费者 → 侧重 ROAS、转化率
+
+推理依据：
+- 提到大品牌名（如"比亚迪"）但预算较低（如 $500/月）→ 可能是经销商，而非品牌方总部
+- 有独立站/Shopify → 更可能是 DTC 卖家
+- 提到"招商"、"代理" → 经销商招募场景
+
+**客户身份属于中置信度推理，必须确认。** 将推理结果保存到 brief 的 client_role 字段（brand_owner / distributor / dtc_seller）。
+
+═══ 信息确认策略（必须遵守）═══
+对于每条核心字段信息，你需要评估其置信度：
+- **高置信度**：用户直接说出、或从官网产品页明确提取（如公司名、具体产品型号）→ 直接保存，简短告知用户
+- **中/低置信度**：通过推理或间接来源获得（如从官网语言版本推断目标市场、从行业推断投放目标、客户商业角色推理）→ **必须明确向用户确认后再保存**
+
+确认方式示例：
+- "您提到方程豹7，月预算 $500 — 请问您是比亚迪方程豹的**品牌方团队**还是某个市场的**授权经销商**？这会影响我们的投放策略方向。"
+- "根据官网信息，贵公司主要产品为 XX 和 YY。请问这些信息准确吗？"
+
+**绝不要把不确定的推理结果直接写入 brief 后跳过确认。**
 
 ═══ 智能追问策略 ═══
 不要机械地按清单逐项提问。根据已知信息进行推理和关联追问：
@@ -191,18 +237,29 @@ export function buildIntakeSystemPrompt() {
 
 ═══ 对话策略 ═══
 1. 每次获取到新信息时，立即调用 update_brief 保存
-2. update_brief 返回值中包含 core_complete 字段。**当 core_complete=true 时**，立即调用 save_brief 保存并告知用户"需求已记录，正在进入方案规划阶段"。不要再追问可选字段。
-3. 如果用户的第一条消息就包含了足够的核心信息（公司名、产品、目标市场、预算），在一次 web_search 调研后直接 update_brief → save_brief，不要多余追问
-4. 如果用户说"继续"、"下一步"、"开始"等推进性指令，只要 company_name 和 industry 已填，立即 save_brief
-5. 当用户要求做策划、生成素材、制定排期等下游工作时，先完成 save_brief，然后回复"已进入方案规划阶段，系统正在为您生成投放方案"
-6. 你有联网搜索和网页读取能力。用于调研公司和产品信息补充 brief 字段，不要用于输出策略分析
-7. 每条回复控制在200字以内。你的目标是尽快收集完信息并交接，不是展示专业知识
+2. update_brief 返回值中包含 core_complete 字段。**当 core_complete=true 时**，不要直接 save_brief，而是先询问用户是否需要补充可选信息。回复模板：
+
+"核心需求已收集完毕！在进入方案规划之前，您还可以补充以下信息，它们能显著提升后续市场调研、策略规划和素材生成的质量：
+- **目标受众画像**：年龄、职业、决策角色等（帮助精准定向）
+- **竞品信息**：主要竞争对手（帮助差异化分析和素材创意）
+- **现有素材/落地页**：已有的产品图、官网链接（帮助生成更贴合品牌的广告素材）
+- **偏好投放平台**：如 Meta、Google、TikTok（帮助制定平台策略）
+
+如果暂时没有需要补充的，我们可以直接开始。"
+
+3. 如果用户回复"直接开始"、"不需要"、"没有了"等，立即调用 save_brief
+4. 如果用户补充了信息，update_brief 保存后再次确认是否还需补充，或直接 save_brief
+5. 如果用户的第一条消息就包含了足够的核心信息（公司名、产品、目标市场、预算），在一次 web_search 调研后 update_brief，然后仍然按上述模板询问是否补充可选信息
+6. 如果用户说"继续"、"下一步"等推进性指令，只要 company_name 和 industry 已填，立即 save_brief
+7. 当用户要求做策划、生成素材、制定排期等下游工作时，先完成 save_brief，然后回复"已进入方案规划阶段，系统正在为您生成投放方案"
+8. 你有联网搜索和网页读取能力。用于调研公司和产品信息补充 brief 字段，不要用于输出策略分析
+9. 每条回复控制在200字以内。你的目标是高效收集信息并交接，不是展示专业知识
 
 ═══ 回复要求 ═══
 - 每条回复控制在200字以内，简洁直接
 - 用中文回复
-- 只围绕 brief 缺失字段追问，不输出分析、建议、方案
-- 当核心字段齐全时，回复格式固定为："需求已记录完毕，正在为您进入投放规划阶段。" + 调用 save_brief`;
+- 只围绕 brief 字段追问，不输出分析、建议、方案
+- 对推理出的信息标注来源，低置信度的必须确认`;
 }
 
 // ── SSE Filtering ───────────────────────────────────────────────────────
@@ -222,7 +279,9 @@ function shouldEmit(eventType, streamLevel) {
 // ── Tool Execution ──────────────────────────────────────────────────────
 
 async function executeUpdateBrief(briefId, input) {
-  const updated = await updateBriefFields(briefId, input.fields);
+  const current = await getBrief(briefId);
+  const sanitized = sanitizeBriefFields(input.fields, current?.brief);
+  const updated = await updateBriefFields(briefId, sanitized);
   const briefData = updated.brief || {};
 
   const filled = REQUIRED_FIELDS.filter((f) => {
@@ -450,6 +509,24 @@ export async function* processIntakeMessage(
       session = await updateSession(sessionId, { status: 'intake', current_phase: 'intake' });
     }
 
+    // 2b. Fetch Meta account assets in background (non-blocking)
+    // Results are persisted to session.phase_results.meta_assets so all downstream phases can use them.
+    const metaAssetsPromise = (async () => {
+      // Skip if already fetched in a previous intake turn
+      const current = await getSession(sessionId);
+      if (current?.phase_results?.meta_assets?.available !== undefined) return;
+      try {
+        const assets = await fetchAccountAssets();
+        assets.fetched_at = new Date().toISOString();
+        const latest = await getSession(sessionId);
+        const results = { ...(latest?.phase_results || {}), meta_assets: assets };
+        await updateSession(sessionId, { phase_results: results });
+        console.log(`[intake] session=${sessionId} meta_assets fetched: pages=${assets.pages?.length || 0} wa=${assets.whatsapp_phone_numbers?.length || 0}`);
+      } catch (err) {
+        console.warn(`[intake] session=${sessionId} meta_assets fetch failed:`, err.message);
+      }
+    })();
+
     // 3. Load history
     const history = await getMessagesForClaude(sessionId, { phase: 'intake' });
 
@@ -472,8 +549,10 @@ export async function* processIntakeMessage(
         .map(a => ({ url: a.url, filename: a.filename }));
       if (newImages.length) {
         const existing = brief.brief?.product_images || [];
-        await updateBriefFields(briefId, {
-          product_images: [...existing, ...newImages],
+        const existingUrls = new Set(existing.map(img => img.url));
+        const deduped = newImages.filter(img => !existingUrls.has(img.url));
+        if (deduped.length) await updateBriefFields(briefId, {
+          product_images: [...existing, ...deduped],
         });
       }
     }
@@ -569,6 +648,13 @@ export async function* processIntakeMessage(
               currentToolName = block.name;
               currentToolUseId = block.id;
               currentToolInput = '';
+              // Immediately notify frontend that a tool call is starting
+              if (shouldEmit('tool_call', streamLevel)) {
+                yield {
+                  event: 'tool_start',
+                  data: { tool: currentToolName },
+                };
+              }
             } else if (block.type === 'text') {
               currentBlockType = 'text';
             } else if (block.type === 'thinking') {

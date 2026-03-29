@@ -24,9 +24,14 @@ export async function POST(request, { params }) {
     return Response.json({ error: 'Invalid JSON body' }, { status: 400 });
   }
 
-  if (!body.response) {
+  const hasResponse = Boolean(body.response);
+  const hasAttachments = Array.isArray(body.attachments) && body.attachments.length > 0;
+  if (!hasResponse && !hasAttachments) {
     return Response.json({ error: 'Missing response field' }, { status: 400 });
   }
+
+  // If user only sent images, synthesize a text response
+  const responseText = body.response || '用户上传了参考图片';
 
   let session = await getSession(id);
   if (!session) {
@@ -37,7 +42,7 @@ export async function POST(request, { params }) {
   }
 
   const sessionId = session.id;
-  return streamSSE(resumeAfterFeedback(sessionId, body.response), {
+  return streamSSE(resumeAfterFeedback(sessionId, responseText, { attachments: body.attachments }), {
     heartbeatIntervalMs: 5000,
     onAbort: async () => {
       await updateSessionIfStatus(sessionId, 'running', { status: 'interrupted' });

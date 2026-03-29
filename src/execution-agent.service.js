@@ -359,10 +359,28 @@ Start by uploading the creative images, then create campaigns, ad sets, creative
 
   // Force submit if Claude didn't call submit_execution_result
   messages.push({ role: 'assistant', content: response.content });
-  messages.push({
-    role: 'user',
-    content: 'Please call submit_execution_result now with your results.',
-  });
+
+  // If the last response had tool_use blocks (e.g. loop hit MAX_TOOL_ITERATIONS),
+  // we must provide tool_result for each before sending the next user message.
+  const pendingToolUse = response.content.filter(c => c.type === 'tool_use');
+  if (pendingToolUse.length > 0) {
+    messages.push({
+      role: 'user',
+      content: [
+        ...pendingToolUse.map(block => ({
+          type: 'tool_result',
+          tool_use_id: block.id,
+          content: JSON.stringify({ skipped: 'Max iterations reached' }),
+        })),
+        { type: 'text', text: 'Max iterations reached. Please call submit_execution_result now with your results.' },
+      ],
+    });
+  } else {
+    messages.push({
+      role: 'user',
+      content: 'Please call submit_execution_result now with your results.',
+    });
+  }
 
   response = await anthropic.messages.create({
     model: MODELS.SONNET,

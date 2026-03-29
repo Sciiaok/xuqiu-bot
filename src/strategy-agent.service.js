@@ -2,12 +2,13 @@ import { anthropic, MODELS } from './llm-client.js';
 
 // ── Tool definition (submit only) ────────────────────────────────────
 
+// ── Flat schema: LLM outputs 4 parallel arrays, code reassembles nesting ──
 const SUBMIT_TOOL = {
   name: 'submit_media_plan',
-  description: 'Submit the final media plan.',
+  description: 'Submit the final media plan as flat lists. Use platform/campaign_name/ad_set_name to link entities.',
   input_schema: {
     type: 'object',
-    required: ['summary', 'total_budget', 'currency', 'duration_days', 'platforms'],
+    required: ['summary', 'total_budget', 'currency', 'duration_days', 'platforms', 'campaigns', 'ad_sets', 'ads'],
     properties: {
       summary: { type: 'string', description: 'Brief summary (1-2 sentences)' },
       total_budget: { type: 'number' },
@@ -17,65 +18,129 @@ const SUBMIT_TOOL = {
         type: 'array',
         items: {
           type: 'object',
-          required: ['platform', 'budget_allocation', 'budget_amount', 'rationale', 'campaigns'],
+          required: ['platform', 'budget_allocation', 'budget_amount', 'rationale'],
           properties: {
             platform: { type: 'string', enum: ['meta', 'google', 'tiktok', 'linkedin', 'reddit'] },
-            budget_allocation: { type: 'number', description: 'Percentage number, e.g. 40 means 40%. All platforms must sum to 100.' },
+            budget_allocation: { type: 'number', description: 'Percentage, e.g. 40 means 40%. Must sum to 100.' },
             budget_amount: { type: 'number' },
             rationale: { type: 'string' },
-            campaigns: {
-              type: 'array',
-              items: {
-                type: 'object',
-                required: ['name', 'objective', 'daily_budget', 'ad_sets'],
-                properties: {
-                  name: { type: 'string' },
-                  objective: { type: 'string' },
-                  daily_budget: { type: 'number' },
-                  ad_sets: {
-                    type: 'array',
-                    items: {
-                      type: 'object',
-                      required: ['name', 'targeting', 'optimization_goal', 'ads'],
-                      properties: {
-                        name: { type: 'string' },
-                        targeting: { type: 'object' },
-                        optimization_goal: { type: 'string' },
-                        ads: {
-                          type: 'array',
-                          items: {
-                            type: 'object',
-                            required: ['name', 'format', 'primary_text', 'headline', 'description', 'cta'],
-                            properties: {
-                              name: { type: 'string' },
-                              format: { type: 'string', enum: ['image'] },
-                              primary_text: { type: 'string' },
-                              headline: { type: 'string' },
-                              description: { type: 'string' },
-                              cta: { type: 'string' },
-                              media_requirements: {
-                                type: 'object',
-                                properties: {
-                                  type: { type: 'string' },
-                                  specs: { type: 'string' },
-                                  suggested_content: { type: 'string' },
-                                },
-                              },
-                            },
-                          },
-                        },
-                      },
-                    },
-                  },
-                },
-              },
-            },
+          },
+        },
+      },
+      campaigns: {
+        type: 'array',
+        items: {
+          type: 'object',
+          required: ['platform', 'name', 'objective', 'daily_budget'],
+          properties: {
+            platform: { type: 'string', description: 'Must match a platform above' },
+            name: { type: 'string' },
+            objective: { type: 'string' },
+            daily_budget: { type: 'number' },
+          },
+        },
+      },
+      ad_sets: {
+        type: 'array',
+        items: {
+          type: 'object',
+          required: ['campaign_name', 'name', 'targeting', 'optimization_goal'],
+          properties: {
+            campaign_name: { type: 'string', description: 'Must match a campaign name above' },
+            name: { type: 'string' },
+            targeting: { type: 'object' },
+            optimization_goal: { type: 'string' },
+          },
+        },
+      },
+      ads: {
+        type: 'array',
+        items: {
+          type: 'object',
+          required: ['ad_set_name', 'name', 'format', 'primary_text', 'headline', 'description', 'cta'],
+          properties: {
+            ad_set_name: { type: 'string', description: 'Must match an ad_set name above' },
+            name: { type: 'string' },
+            format: { type: 'string', enum: ['image'] },
+            primary_text: { type: 'string' },
+            headline: { type: 'string' },
+            description: { type: 'string' },
+            cta: { type: 'string' },
+            media_specs: { type: 'string', description: 'Image specs e.g. "1080x1080"' },
+            suggested_content: { type: 'string' },
           },
         },
       },
     },
   },
 };
+
+/**
+ * Reassemble flat LLM output into the nested structure consumers expect:
+ * platforms[] → campaigns[] → ad_sets[] → ads[]
+ */
+function nestMediaPlan(flat) {
+  const { summary, total_budget, currency, duration_days } = flat;
+
+  // Index ads by ad_set_name
+  const adsByAdSet = new Map();
+  for (const ad of (flat.ads || [])) {
+    const key = ad.ad_set_name;
+    if (!adsByAdSet.has(key)) adsByAdSet.set(key, []);
+    adsByAdSet.get(key).push({
+      name: ad.name,
+      format: ad.format || 'image',
+      primary_text: ad.primary_text,
+      headline: ad.headline,
+      description: ad.description,
+      cta: ad.cta,
+      ...(ad.media_specs || ad.suggested_content ? {
+        media_requirements: {
+          type: ad.format || 'image',
+          specs: ad.media_specs || '',
+          suggested_content: ad.suggested_content || '',
+        },
+      } : {}),
+    });
+  }
+
+  // Index ad_sets by campaign_name
+  const adSetsByCampaign = new Map();
+  for (const as of (flat.ad_sets || [])) {
+    const key = as.campaign_name;
+    if (!adSetsByCampaign.has(key)) adSetsByCampaign.set(key, []);
+    adSetsByCampaign.get(key).push({
+      name: as.name,
+      targeting: as.targeting,
+      optimization_goal: as.optimization_goal,
+      ads: adsByAdSet.get(as.name) || [],
+    });
+  }
+
+  // Index campaigns by platform
+  const campaignsByPlatform = new Map();
+  for (const c of (flat.campaigns || [])) {
+    const key = c.platform;
+    if (!campaignsByPlatform.has(key)) campaignsByPlatform.set(key, []);
+    campaignsByPlatform.get(key).push({
+      name: c.name,
+      objective: c.objective,
+      daily_budget: c.daily_budget,
+      ad_sets: adSetsByCampaign.get(c.name) || [],
+    });
+  }
+
+  // Build nested platforms
+  const platforms = (flat.platforms || []).map(p => ({
+    platform: p.platform,
+    budget_allocation: p.budget_allocation,
+    budget_amount: p.budget_amount,
+    rationale: p.rationale,
+    campaigns: campaignsByPlatform.get(p.platform) || [],
+  }));
+
+  return { summary, total_budget, currency, duration_days, platforms };
+}
 
 const STRATEGY_SYSTEM_PROMPT = `You are a senior digital advertising strategist specializing in overseas campaign planning.
 
@@ -98,6 +163,7 @@ Your job: take a campaign brief, market research, and pre-computed data (budget 
 - Prefer the platforms suggested in the brief
 - Ad copy fields (primary_text, headline, description, cta) should be brief placeholders
 - Include a brief summary (1-2 sentences)
+- Output flat lists: platforms, campaigns (linked by platform), ad_sets (linked by campaign_name), ads (linked by ad_set_name)
 - You MUST call submit_media_plan as your final action`;
 
 // ── Pre-computation (no LLM needed) ─────────────────────────────────
@@ -236,28 +302,41 @@ ${JSON.stringify(audienceData)}`,
 
   const submitBlock = response.content.find(c => c.type === 'tool_use' && c.name === 'submit_media_plan');
   if (!submitBlock) throw new Error('Strategy agent did not produce a media plan');
-  validateMediaPlan(submitBlock.input);
-  return submitBlock.input;
+  return validateAndNestMediaPlan(submitBlock.input);
 }
 
 /**
  * Basic validation of MediaPlan structure.
  */
-function validateMediaPlan(plan) {
-  // Normalize: some models nest platforms under different keys
-  if (!plan.platforms && plan.platform) plan.platforms = Array.isArray(plan.platform) ? plan.platform : [plan.platform];
-  if (!plan.platforms && plan.media_plan?.platforms) plan.platforms = plan.media_plan.platforms;
-
-  if (!plan.platforms || !Array.isArray(plan.platforms)) {
-    console.error('[strategy] MediaPlan validation failed. Actual keys:', Object.keys(plan), 'Input:', JSON.stringify(plan).slice(0, 500));
-    throw new Error('MediaPlan missing platforms array');
+/**
+ * Validate flat media plan from LLM, then nest into consumer structure.
+ * Returns the nested plan.
+ */
+function validateAndNestMediaPlan(flat) {
+  // Detect JSON parse failure from llm-client
+  if (flat._parse_error) {
+    console.error('[strategy] MediaPlan received unparseable JSON from LLM.',
+      'Parse error:', flat._parse_error,
+      'Raw (first 500):', (flat._raw || '').slice(0, 500));
+    throw new Error(`MediaPlan JSON parse failed: ${flat._parse_error}. Raw: ${(flat._raw || '').slice(0, 200)}`);
   }
-  if (plan.platforms.length === 0) throw new Error('MediaPlan has no platforms');
 
-  for (const platform of plan.platforms) {
-    if (!platform.platform) throw new Error('Platform entry missing platform name');
-    if (!Array.isArray(platform.campaigns)) throw new Error(`Platform ${platform.platform} missing campaigns array`);
+  if (!Array.isArray(flat.platforms) || flat.platforms.length === 0) {
+    console.error('[strategy] MediaPlan validation failed. Actual keys:', Object.keys(flat), 'Full input:', JSON.stringify(flat).slice(0, 1000));
+    throw new Error(`MediaPlan missing platforms array. Got keys: [${Object.keys(flat).join(', ')}]`);
   }
+  if (!Array.isArray(flat.campaigns) || flat.campaigns.length === 0) {
+    throw new Error(`MediaPlan missing campaigns array. Got keys: [${Object.keys(flat).join(', ')}]`);
+  }
+  if (!Array.isArray(flat.ad_sets) || flat.ad_sets.length === 0) {
+    throw new Error(`MediaPlan missing ad_sets array. Got keys: [${Object.keys(flat).join(', ')}]`);
+  }
+  if (!Array.isArray(flat.ads) || flat.ads.length === 0) {
+    throw new Error(`MediaPlan missing ads array. Got keys: [${Object.keys(flat).join(', ')}]`);
+  }
+
+  // Reassemble into nested structure
+  const plan = nestMediaPlan(flat);
 
   // Normalize budget_allocation: if values look like decimals (sum ≤ 1.1), convert to percentages
   const rawSum = plan.platforms.reduce((s, p) => s + (p.budget_allocation || 0), 0);
@@ -272,6 +351,8 @@ function validateMediaPlan(plan) {
     const totalCampaigns = plan.platforms.reduce((s, p) => s + (p.campaigns?.length || 0), 0);
     plan.summary = `${platformNames} campaign plan: ${totalCampaigns} campaigns, $${plan.total_budget || '?'} ${plan.currency || 'USD'} over ${plan.duration_days || '?'} days`;
   }
+
+  return plan;
 }
 
 // ── Merged: Strategy + Creative Plan (progressive disclosure) ─────────
@@ -328,9 +409,17 @@ ${JSON.stringify(audienceData)}`,
   });
 
   const submitBlock = strategyResponse.content.find(c => c.type === 'tool_use' && c.name === 'submit_media_plan');
-  if (!submitBlock) throw new Error('Strategy agent did not produce a media plan');
-  validateMediaPlan(submitBlock.input);
-  const mediaPlan = submitBlock.input;
+  if (!submitBlock) {
+    console.error('[strategy] No tool_use block. Response content types:', strategyResponse.content.map(c => c.type), 'stop_reason:', strategyResponse.stop_reason);
+    throw new Error('Strategy agent did not produce a media plan');
+  }
+  let mediaPlan;
+  try {
+    mediaPlan = validateAndNestMediaPlan(submitBlock.input);
+  } catch (valErr) {
+    onProgress?.({ step: 'strategy_validation_failed', detail: `方案校验失败: ${valErr.message}` });
+    throw valErr;
+  }
   onProgress?.({ step: 'strategy_done', detail: `方案已生成：${mediaPlan.platforms?.length || 0} 个平台` });
 
   return mediaPlan;
@@ -364,14 +453,16 @@ const SINGLE_CAMPAIGN_SYSTEM_PROMPT = `You are a senior digital advertising stra
 - Each ad_set must have targeting (with countries, age_range, interests) and 2-3 ads
 - Ad copy language must match target market language
 - Campaign name format: "{Platform}-{RegionCode}-{Stage}-{Description}" (e.g. "Meta-EU-Awareness-BrandReach")
+- Output flat lists: ad_sets and ads as separate arrays. Link ads to ad_sets by ad_set_name.
 - You MUST call submit_campaign as your final action`;
 
+// ── Flat single-campaign schema: ad_sets and ads are parallel arrays ──
 const SINGLE_CAMPAIGN_TOOL = {
   name: 'submit_campaign',
-  description: 'Submit a single campaign.',
+  description: 'Submit a single campaign. Use ad_set_name to link ads to their ad_set.',
   input_schema: {
     type: 'object',
-    required: ['name', 'objective', 'daily_budget', 'ad_sets'],
+    required: ['name', 'objective', 'daily_budget', 'ad_sets', 'ads'],
     properties: {
       name: { type: 'string' },
       objective: { type: 'string' },
@@ -380,34 +471,29 @@ const SINGLE_CAMPAIGN_TOOL = {
         type: 'array',
         items: {
           type: 'object',
-          required: ['name', 'targeting', 'optimization_goal', 'ads'],
+          required: ['name', 'targeting', 'optimization_goal'],
           properties: {
             name: { type: 'string' },
             targeting: { type: 'object' },
             optimization_goal: { type: 'string' },
-            ads: {
-              type: 'array',
-              items: {
-                type: 'object',
-                required: ['name', 'format', 'primary_text', 'headline', 'description', 'cta'],
-                properties: {
-                  name: { type: 'string' },
-                  format: { type: 'string', enum: ['image'] },
-                  primary_text: { type: 'string' },
-                  headline: { type: 'string' },
-                  description: { type: 'string' },
-                  cta: { type: 'string' },
-                  media_requirements: {
-                    type: 'object',
-                    properties: {
-                      type: { type: 'string' },
-                      specs: { type: 'string' },
-                      suggested_content: { type: 'string' },
-                    },
-                  },
-                },
-              },
-            },
+          },
+        },
+      },
+      ads: {
+        type: 'array',
+        items: {
+          type: 'object',
+          required: ['ad_set_name', 'name', 'format', 'primary_text', 'headline', 'description', 'cta'],
+          properties: {
+            ad_set_name: { type: 'string', description: 'Must match an ad_set name above' },
+            name: { type: 'string' },
+            format: { type: 'string', enum: ['image'] },
+            primary_text: { type: 'string' },
+            headline: { type: 'string' },
+            description: { type: 'string' },
+            cta: { type: 'string' },
+            media_specs: { type: 'string' },
+            suggested_content: { type: 'string' },
           },
         },
       },
@@ -416,29 +502,70 @@ const SINGLE_CAMPAIGN_TOOL = {
 };
 
 /**
- * Validate a single campaign output from a cell. Returns array of error strings (empty = valid).
+ * Reassemble flat campaign output into nested structure: ad_sets[] → ads[]
  */
-function validateCellCampaign(campaign, cellLabel) {
-  const errors = [];
-  if (!campaign.name) errors.push('missing name');
-  if (!campaign.objective) errors.push('missing objective');
-  if (typeof campaign.daily_budget !== 'number' || campaign.daily_budget <= 0) errors.push(`invalid daily_budget: ${campaign.daily_budget}`);
-  if (!Array.isArray(campaign.ad_sets) || campaign.ad_sets.length === 0) {
-    errors.push('missing or empty ad_sets');
-    return errors; // can't validate deeper
+function nestCampaign(flat) {
+  const adsByAdSet = new Map();
+  for (const ad of (flat.ads || [])) {
+    const key = ad.ad_set_name;
+    if (!adsByAdSet.has(key)) adsByAdSet.set(key, []);
+    adsByAdSet.get(key).push({
+      name: ad.name,
+      format: ad.format || 'image',
+      primary_text: ad.primary_text,
+      headline: ad.headline,
+      description: ad.description,
+      cta: ad.cta,
+      ...(ad.media_specs || ad.suggested_content ? {
+        media_requirements: {
+          type: ad.format || 'image',
+          specs: ad.media_specs || '',
+          suggested_content: ad.suggested_content || '',
+        },
+      } : {}),
+    });
   }
-  for (const as of campaign.ad_sets) {
+
+  return {
+    name: flat.name,
+    objective: flat.objective,
+    daily_budget: flat.daily_budget,
+    ad_sets: (flat.ad_sets || []).map(as => ({
+      name: as.name,
+      targeting: as.targeting,
+      optimization_goal: as.optimization_goal,
+      ads: adsByAdSet.get(as.name) || [],
+    })),
+  };
+}
+
+/**
+ * Validate a flat single-campaign output from a cell. Returns array of error strings (empty = valid).
+ * Works on the flat structure (before nesting).
+ */
+function validateCellCampaign(flat, cellLabel) {
+  if (flat._parse_error) return [`JSON parse failed: ${flat._parse_error}`];
+  const errors = [];
+  if (!flat.name) errors.push('missing name');
+  if (!flat.objective) errors.push('missing objective');
+  if (typeof flat.daily_budget !== 'number' || flat.daily_budget <= 0) errors.push(`invalid daily_budget: ${flat.daily_budget}`);
+  if (!Array.isArray(flat.ad_sets) || flat.ad_sets.length === 0) {
+    errors.push('missing or empty ad_sets');
+    return errors;
+  }
+  for (const as of flat.ad_sets) {
     if (!as.name) errors.push('ad_set missing name');
     if (!as.targeting) errors.push(`ad_set ${as.name || '?'} missing targeting`);
-    if (!Array.isArray(as.ads) || as.ads.length === 0) {
-      errors.push(`ad_set ${as.name || '?'} has no ads`);
-      continue;
-    }
-    for (const ad of as.ads) {
-      if (!ad.name) errors.push('ad missing name');
-      if (!ad.primary_text) errors.push(`ad ${ad.name || '?'} missing primary_text`);
-      if (!ad.headline) errors.push(`ad ${ad.name || '?'} missing headline`);
-    }
+  }
+  if (!Array.isArray(flat.ads) || flat.ads.length === 0) {
+    errors.push('missing or empty ads');
+    return errors;
+  }
+  for (const ad of flat.ads) {
+    if (!ad.name) errors.push('ad missing name');
+    if (!ad.ad_set_name) errors.push(`ad ${ad.name || '?'} missing ad_set_name`);
+    if (!ad.primary_text) errors.push(`ad ${ad.name || '?'} missing primary_text`);
+    if (!ad.headline) errors.push(`ad ${ad.name || '?'} missing headline`);
   }
   return errors;
 }
@@ -497,16 +624,19 @@ ${JSON.stringify(researchReport)}`,
     throw new Error(`[parallel] ${cellLabel}: ${err}`);
   }
 
-  const campaign = submitBlock.input;
+  const flatCampaign = submitBlock.input;
   const durationMs = Date.now() - t0;
 
-  // Validate output
-  const validationErrors = validateCellCampaign(campaign, cellLabel);
+  // Validate flat output
+  const validationErrors = validateCellCampaign(flatCampaign, cellLabel);
   if (validationErrors.length > 0) {
     const summary = validationErrors.slice(0, 3).join('; ') + (validationErrors.length > 3 ? `; +${validationErrors.length - 3} more` : '');
     onProgress?.({ step: 'cell_failed', detail: `[${cellIndex + 1}/${totalCells}] ${cellLabel} 校验失败 (${durationMs}ms): ${summary}` });
     throw new Error(`[parallel] ${cellLabel} validation failed: ${summary}`);
   }
+
+  // Reassemble into nested structure for downstream consumers
+  const campaign = nestCampaign(flatCampaign);
 
   const adCount = campaign.ad_sets.reduce((s, as) => s + (as.ads?.length || 0), 0);
   onProgress?.({ step: 'cell_done', detail: `[${cellIndex + 1}/${totalCells}] ${cellLabel} 完成 (${durationMs}ms): ${campaign.name} — ${campaign.ad_sets.length} ad_sets, ${adCount} ads` });
@@ -528,11 +658,6 @@ export async function generateCampaignPlanParallel(brief, researchReport, instru
   onProgress?.({ step: 'computing', detail: '预算分配 & 关键词 & 受众定向' });
   const budgetData = computeBudgetAllocation(brief, researchReport);
   const platforms = budgetData.allocations.map(a => a.platform);
-
-  // Single platform + single region → fall back to sequential
-  if (platforms.length <= 1 && regions.length <= 1) {
-    return generateCampaignPlan(brief, researchReport, instructions, onProgress);
-  }
 
   const keywordData = computeKeywords(brief, researchReport);
   const audienceData = computeAudienceSegments(brief, researchReport);

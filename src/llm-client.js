@@ -281,7 +281,12 @@ function wrapJsonResponseAsToolUse(openaiResponse, toolName, model) {
   const fenceMatch = rawJson.match(/```(?:json)?\s*([\s\S]*?)```/);
   if (fenceMatch) rawJson = fenceMatch[1].trim();
   let input;
-  try { input = JSON.parse(rawJson); } catch { input = { _raw: rawJson }; }
+  try {
+    input = JSON.parse(rawJson);
+  } catch (parseErr) {
+    console.error(`[llm-client] JSON parse failed for forced tool ${toolName}. Error: ${parseErr.message}. Raw (first 800 chars): ${rawJson.slice(0, 800)}`);
+    input = { _raw: rawJson, _parse_error: parseErr.message };
+  }
 
   // Generate a tool_use ID matching Anthropic format
   const toolUseId = `toolu_mm_${Date.now().toString(36)}`;
