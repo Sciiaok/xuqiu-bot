@@ -1442,7 +1442,9 @@ export async function* chatWithOrchestrator(sessionId, message, { attachments } 
   }
 
   if (shouldRestart) {
-    yield { event: 'trigger_orchestration', data: { reason: restartReason } };
+    // Backend-driven: chain directly into orchestrate(), no frontend round-trip
+    yield* orchestrate(sessionId);
+    return; // orchestrate yields its own done event
   }
 
   yield { event: 'done', data: { session_id: sessionId } };
