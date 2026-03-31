@@ -38,7 +38,7 @@ const MIXAI_KEY = process.env.MIXAI_API_KEY;
 const MIXAI_URL = process.env.MIXAI_BASE_URL || 'https://us.mixaicloud.com';
 
 const mixaiClient = MIXAI_KEY
-  ? new Anthropic({ apiKey: MIXAI_KEY, baseURL: MIXAI_URL, timeout: 60_000 })
+  ? new Anthropic({ apiKey: MIXAI_KEY, baseURL: MIXAI_URL })
   : null;
 
 const ANTHROPIC_KEY = process.env.ANTHROPIC_API_KEY;
@@ -276,12 +276,6 @@ function wrapJsonResponseAsToolUse(openaiResponse, toolName, model) {
   const choice = openaiResponse.choices?.[0];
   if (!choice?.message?.content) throw new Error('[llm-client] Empty response from MiniMax (forced JSON)');
 
-  // Detect truncation via finish_reason before attempting parse
-  if (choice.finish_reason === 'length') {
-    console.warn(`[llm-client] MiniMax response truncated (finish_reason=length) for tool ${toolName}. Output tokens: ${openaiResponse.usage?.completion_tokens}`);
-    throw new Error(`LLM 输出被截断 (token 限制)，素材方案过大。请减少投放平台或地区后重试。`);
-  }
-
   let rawJson = choice.message.content;
   // Strip markdown code fences if model wrapped JSON in ```json ... ```
   const fenceMatch = rawJson.match(/```(?:json)?\s*([\s\S]*?)```/);
@@ -313,56 +307,6 @@ function wrapJsonResponseAsToolUse(openaiResponse, toolName, model) {
   };
 }
 
-// ── OpenRouter Claude call handler (Anthropic format → OpenAI format → Anthropic format) ──
-
-const OPENROUTER_CLAUDE_MODELS = {
-  'claude-sonnet-4-6': 'anthropic/claude-sonnet-4',
-  'claude-haiku-4-5-20251001': 'anthropic/claude-haiku-4-5',
-};
-
-async function callClaudeViaOpenRouter(params) {
-  if (!openrouterClient) throw new Error('[llm-client] OPENROUTER_API_KEY required for OpenRouter fallback');
-
-  const t0 = Date.now();
-  const orModel = OPENROUTER_CLAUDE_MODELS[params.model] || `anthropic/${params.model}`;
-  const isForcedTool = params.tool_choice?.type === 'tool';
-  const forcedToolName = isForcedTool ? params.tool_choice.name : null;
-
-  let result;
-  if (isForcedTool) {
-    const jsonParams = buildForcedJsonCall(params, forcedToolName);
-    jsonParams.model = orModel;
-    const raw = await openrouterClient.chat.completions.create(jsonParams);
-    result = wrapJsonResponseAsToolUse(raw, forcedToolName, params.model);
-  } else {
-    const openaiParams = {
-      model: orModel,
-      max_tokens: params.max_tokens,
-      messages: [
-        ...translateSystemToOpenAI(params.system),
-        ...translateMessagesToOpenAI(params.messages),
-      ],
-    };
-    const openaiTools = translateToolsToOpenAI(params.tools);
-    if (openaiTools?.length) {
-      openaiParams.tools = openaiTools;
-      openaiParams.tool_choice = 'auto';
-    }
-    const raw = await openrouterClient.chat.completions.create(openaiParams);
-    result = translateResponseToAnthropic(raw, params.model);
-  }
-
-  logLlmCall({
-    method: 'create', provider: 'openrouter', model: params.model,
-    responseModel: result.model, tools: params.tools?.length || 0,
-    toolChoice: isForcedTool ? `forced:${forcedToolName}→json` : (params.tool_choice?.type || null),
-    stopReason: result.stop_reason,
-    inputTokens: result.usage?.input_tokens, outputTokens: result.usage?.output_tokens,
-    durationMs: Date.now() - t0,
-  });
-  return result;
-}
-
 // ── MiniMax call handler ────────────────────────────────────────────
 
 async function callMiniMax(params) {
@@ -386,17 +330,7 @@ async function callMiniMax(params) {
   if (isForcedTool) {
     // Forced tool_choice → JSON mode with schema injection
     const jsonParams = buildForcedJsonCall(params, forcedToolName);
-    let raw;
-    try {
-      raw = await openrouterClient.chat.completions.create(jsonParams);
-    } catch (err) {
-      // OpenRouter may return truncated HTTP body → SDK JSON parse fails
-      const msg = err.message || String(err);
-      if (msg.includes('JSON') || msg.includes('Unexpected')) {
-        throw new Error(`OpenRouter 返回异常 (${params.model}): ${msg}。请重试。`);
-      }
-      throw err;
-    }
+    const raw = await openrouterClient.chat.completions.create(jsonParams);
     result = wrapJsonResponseAsToolUse(raw, forcedToolName, params.model);
   } else {
     // Auto/none tool_choice → standard OpenAI tool calling
@@ -458,26 +392,12 @@ const anthropicProxy = {
         logLlmCall({ ...logMeta, provider, responseModel: result.model, stopReason: result.stop_reason, inputTokens: result.usage?.input_tokens, outputTokens: result.usage?.output_tokens, durationMs: Date.now() - t0 });
         return result;
       } catch (err) {
-        if (provider === 'mixai' && !process.env.LLM_NO_FALLBACK) {
-          console.warn(`[llm-client] MixAI failed, falling back:`, err.message);
-          emitLlmEvent({ type: 'fallback', from: 'mixai', to: 'openrouter', model: params.model, error: err.message });
-
-          // Fallback 1: OpenRouter (Claude via OpenAI format)
-          if (openrouterClient && !needsDirectApi(params)) {
-            try {
-              return await callClaudeViaOpenRouter(params);
-            } catch (orErr) {
-              console.warn(`[llm-client] OpenRouter fallback also failed:`, orErr.message);
-              emitLlmEvent({ type: 'fallback', from: 'openrouter', to: 'direct', model: params.model, error: orErr.message });
-            }
-          }
-
-          // Fallback 2: Anthropic Direct
-          if (anthropicDirect) {
-            const result = await anthropicDirect.messages.create(params);
-            logLlmCall({ ...logMeta, provider: 'direct', responseModel: result.model, stopReason: result.stop_reason, inputTokens: result.usage?.input_tokens, outputTokens: result.usage?.output_tokens, durationMs: Date.now() - t0 });
-            return result;
-          }
+        if (provider === 'mixai' && anthropicDirect && !process.env.LLM_NO_FALLBACK) {
+          console.warn(`[llm-client] MixAI failed, falling back to Anthropic direct:`, err.message);
+          emitLlmEvent({ type: 'fallback', from: 'mixai', to: 'direct', model: params.model, error: err.message });
+          const result = await anthropicDirect.messages.create(params);
+          logLlmCall({ ...logMeta, provider: 'direct', responseModel: result.model, stopReason: result.stop_reason, inputTokens: result.usage?.input_tokens, outputTokens: result.usage?.output_tokens, durationMs: Date.now() - t0 });
+          return result;
         }
         emitLlmEvent({ type: 'error', provider, model: params.model, error: err.message });
         throw err;
@@ -516,14 +436,14 @@ const anthropicProxy = {
       });
 
       // If primary is mixai, attach a fallback wrapper
-      if (provider === 'mixai' && !process.env.LLM_NO_FALLBACK) {
+      if (provider === 'mixai' && anthropicDirect && !process.env.LLM_NO_FALLBACK) {
+        const originalOn = stream.on.bind(stream);
+        let hasError = false;
+        originalOn('error', () => { hasError = true; });
+        // Expose a retry helper the caller can use
         stream._fallbackStream = () => {
-          // Stream fallback goes straight to Anthropic direct (OpenRouter doesn't support Anthropic streaming API)
-          if (anthropicDirect) {
-            console.warn('[llm-client] Stream fallback: MixAI → Anthropic direct');
-            return anthropicDirect.messages.stream(params);
-          }
-          throw new Error('[llm-client] No stream fallback available');
+          console.warn('[llm-client] Stream fallback: MixAI → Anthropic direct');
+          return anthropicDirect.messages.stream(params);
         };
       }
 
