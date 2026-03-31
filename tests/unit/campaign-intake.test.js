@@ -9,6 +9,8 @@ const supabaseModuleUrl = pathToFileURL(resolve(process.cwd(), 'lib/supabase.js'
 const briefRepoUrl = pathToFileURL(resolve(process.cwd(), 'lib/repositories/campaign-brief.repository.js')).href;
 const orchRepoUrl = pathToFileURL(resolve(process.cwd(), 'lib/repositories/orchestrator.repository.js')).href;
 
+process.env.ANTHROPIC_API_KEY = 'test-key';
+
 // ── Mock state holders ──────────────────────────────────────────────────
 const mockRepo = {
   // brief repo
@@ -23,6 +25,8 @@ const mockRepo = {
   getNextMessageIndex: mock.fn(async () => 0),
   addMessage: mock.fn(async () => ({})),
   addMessages: mock.fn(async () => []),
+  updateSession: mock.fn(async () => ({ id: 'session-1', status: 'intake', current_phase: 'intake' })),
+  attachmentsToContentBlocks: mock.fn(async () => []),
 };
 
 // ── Mock config ─────────────────────────────────────────────────────────
@@ -61,6 +65,8 @@ mock.module(orchRepoUrl, {
     getNextMessageIndex: mockRepo.getNextMessageIndex,
     addMessage: mockRepo.addMessage,
     addMessages: mockRepo.addMessages,
+    updateSession: mockRepo.updateSession,
+    attachmentsToContentBlocks: mockRepo.attachmentsToContentBlocks,
   },
 });
 
@@ -115,15 +121,17 @@ async function collectEvents(gen) {
 // ════════════════════════════════════════════════════════════════════════
 
 describe('getIntakeTools', () => {
-  it('returns 3 tool definitions', () => {
+  it('returns 5 tool definitions including search and webpage tools', () => {
     const tools = getIntakeTools();
-    assert.equal(tools.length, 3);
+    assert.equal(tools.length, 5);
     assert.ok(tools.find(t => t.name === 'update_brief'));
     assert.ok(tools.find(t => t.name === 'save_brief'));
     assert.ok(tools.find(t => t.name === 'parse_attachment'));
+    assert.ok(tools.find(t => t.name === 'web_search'));
+    assert.ok(tools.find(t => t.name === 'read_webpage'));
   });
 
-  it('each tool has name, description, and input_schema', () => {
+  it('all intake tools expose JSON schemas for Claude tool use', () => {
     for (const tool of getIntakeTools()) {
       assert.ok(tool.name);
       assert.ok(tool.description);

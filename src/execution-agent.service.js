@@ -1,32 +1,16 @@
-import Anthropic from '@anthropic-ai/sdk';
+import { anthropic, MODELS } from './llm-client.js';
+import { callTool, listTools } from './meta-ads-mcp-client.js';
 import { config } from './config.js';
 import { mapCountriesToISO } from '../lib/country-codes.js';
 
-const anthropic = new Anthropic({
-  apiKey: config.anthropic.apiKey,
-  ...(config.anthropic.baseURL && { baseURL: config.anthropic.baseURL }),
-});
-
 const FETCH_TIMEOUT = 60_000;
-const MAX_TOOL_ITERATIONS = 15; // Execution may need many tool calls
+const MAX_TOOL_ITERATIONS = 20;
 
-// ── Meta Graph API helpers ─────────────────────────────────────────────
+// ── Direct Meta Graph API helpers ────────────────────────────────────
 
 function metaUrl(path) {
   const version = config.meta?.apiVersion || 'v21.0';
   return `https://graph.facebook.com/${version}/${path}`;
-}
-
-let _cachedPageToken = null;
-async function getPageAccessToken(pageId, systemToken) {
-  if (_cachedPageToken) return _cachedPageToken;
-  const res = await fetch(metaUrl(`${pageId}?fields=access_token&access_token=${systemToken}`), {
-    signal: AbortSignal.timeout(FETCH_TIMEOUT),
-  });
-  const data = await res.json();
-  if (data.error) throw new Error(`Failed to get page token: ${data.error.message}`);
-  _cachedPageToken = data.access_token;
-  return _cachedPageToken;
 }
 
 async function metaPost(path, body) {
@@ -43,261 +27,23 @@ async function metaPost(path, body) {
   const data = await res.json();
   if (data.error) {
     const detail = data.error.error_user_msg || data.error.error_user_title || '';
-    const err = new Error(`Meta API error: ${data.error.message}${detail ? ' — ' + detail : ''}`);
-    err.code = data.error.code;
-    err.subcode = data.error.error_subcode;
-    err.type = data.error.type;
-    err.blameFields = data.error.error_data?.blame_field_specs;
-    throw err;
+    throw new Error(`Meta API: ${data.error.message}${detail ? ' — ' + detail : ''}`);
   }
   return data;
 }
 
-// ── Tool definitions ───────────────────────────────────────────────────
-
-const EXECUTION_TOOLS = [
-  {
-    name: 'meta_upload_media',
-    description: 'Upload an image to the Meta ad account. Returns an image_hash for use in ad creatives. Currently accepts a filename reference (the actual image should be pre-uploaded to storage).',
-    input_schema: {
-      type: 'object',
-      required: ['filename'],
-      properties: {
-        filename: { type: 'string', description: 'Filename reference for the image' },
-      },
-    },
-  },
-  {
-    name: 'meta_create_campaign',
-    description: 'Create a Meta Ads campaign. All campaigns are created in PAUSED status.',
-    input_schema: {
-      type: 'object',
-      required: ['name', 'objective', 'daily_budget'],
-      properties: {
-        name: { type: 'string', description: 'Campaign name' },
-        objective: {
-          type: 'string',
-          enum: ['lead_gen', 'traffic', 'brand_awareness', 'conversions', 'engagement'],
-          description: 'Campaign objective',
-        },
-        daily_budget: { type: 'number', description: 'Daily budget in dollars' },
-      },
-    },
-  },
-  {
-    name: 'meta_create_lead_form',
-    description: 'Create an Instant Form (Lead Gen Form) on the Facebook Page. Required before creating ad sets with lead_generation optimization. Returns a form_id to use in meta_create_adset.',
-    input_schema: {
-      type: 'object',
-      required: ['name', 'questions'],
-      properties: {
-        name: { type: 'string', description: 'Form name, e.g. "BYD Dealer Inquiry Form"' },
-        questions: {
-          type: 'array',
-          items: {
-            type: 'object',
-            properties: {
-              type: {
-                type: 'string',
-                enum: ['FULL_NAME', 'EMAIL', 'PHONE', 'COMPANY_NAME', 'JOB_TITLE', 'CITY', 'COUNTRY', 'CUSTOM'],
-                description: 'Question type. Use predefined types when possible.',
-              },
-              label: { type: 'string', description: 'Only needed for CUSTOM type questions' },
-            },
-          },
-          description: 'Form fields. Always include FULL_NAME and EMAIL at minimum.',
-        },
-        headline: { type: 'string', description: 'Form headline shown to users' },
-        description: { type: 'string', description: 'Form description/body text' },
-        privacy_policy_url: { type: 'string', description: 'Privacy policy URL (required by Meta). Use the company website if no dedicated page.' },
-        thank_you_message: { type: 'string', description: 'Message shown after form submission' },
-      },
-    },
-  },
-  {
-    name: 'meta_create_adset',
-    description: 'Create an ad set within a campaign. Budget is managed at campaign level (CBO), so do NOT pass daily_budget here. For lead_generation ad sets, you MUST pass lead_gen_form_id from meta_create_lead_form.',
-    input_schema: {
-      type: 'object',
-      required: ['campaign_id', 'name', 'targeting', 'optimization_goal'],
-      properties: {
-        campaign_id: { type: 'string', description: 'Parent campaign ID returned by meta_create_campaign' },
-        name: { type: 'string' },
-        lead_gen_form_id: { type: 'string', description: 'Form ID from meta_create_lead_form. Required when optimization_goal is lead_generation.' },
-        targeting: {
-          type: 'object',
-          properties: {
-            countries: { type: 'array', items: { type: 'string' }, description: '2-letter ISO country codes, e.g. ["ZA","SA","NG"]' },
-            age_range: { type: 'array', items: { type: 'number' }, description: '[min_age, max_age], e.g. [25, 55]' },
-            gender: { type: 'string', enum: ['all', 'male', 'female'] },
-          },
-        },
-        optimization_goal: {
-          type: 'string',
-          enum: ['lead_generation', 'link_clicks', 'landing_page_views', 'impressions', 'reach', 'conversions'],
-          description: 'Use lead_generation for lead campaigns. Requires lead_gen_form_id.',
-        },
-        duration_days: { type: 'number', description: 'Campaign duration in days from the media plan. Ad set auto-schedules: start=now, end=now+duration_days.' },
-      },
-    },
-  },
-  {
-    name: 'meta_create_ad',
-    description: 'Create an ad with creative within an ad set.',
-    input_schema: {
-      type: 'object',
-      required: ['adset_id', 'name', 'primary_text', 'headline', 'description', 'cta', 'image_hash', 'link_url'],
-      properties: {
-        adset_id: { type: 'string', description: 'Parent ad set ID' },
-        name: { type: 'string' },
-        primary_text: { type: 'string', description: 'Main body text' },
-        headline: { type: 'string' },
-        description: { type: 'string' },
-        cta: {
-          type: 'string',
-          enum: ['Learn More', 'Shop Now', 'Sign Up', 'Contact Us', 'Get Quote', 'Send WhatsApp', 'Download', 'Apply Now'],
-        },
-        image_hash: { type: 'string', description: 'Image hash from meta_upload_media' },
-        link_url: { type: 'string', description: 'Landing page URL' },
-      },
-    },
-  },
-  {
-    name: 'submit_execution_result',
-    description: 'Submit the final execution results. Call this after creating all campaigns, ad sets, and ads.',
-    input_schema: {
-      type: 'object',
-      required: ['status', 'campaigns', 'errors'],
-      properties: {
-        status: { type: 'string', enum: ['completed', 'partial', 'failed'] },
-        platform: { type: 'string' },
-        campaigns: {
-          type: 'array',
-          items: {
-            type: 'object',
-            properties: {
-              id: { type: 'string' },
-              name: { type: 'string' },
-              ad_sets: {
-                type: 'array',
-                items: {
-                  type: 'object',
-                  properties: {
-                    id: { type: 'string' },
-                    name: { type: 'string' },
-                    ads: { type: 'array', items: { type: 'object' } },
-                  },
-                },
-              },
-            },
-          },
-        },
-        errors: {
-          type: 'array',
-          items: {
-            type: 'object',
-            properties: {
-              level: { type: 'string' },
-              name: { type: 'string' },
-              error: { type: 'string' },
-            },
-          },
-        },
-      },
-    },
-  },
-];
-
-const EXECUTION_SYSTEM_PROMPT = `You are a Meta Ads execution agent. You create campaigns, ad sets, and ads via the Meta Marketing API.
-
-## Workflow
-1. Read the media plan (note: duration_days at the top level)
-2. If any campaign has objective=lead_gen: call meta_create_lead_form FIRST (one per language)
-3. For each campaign: call meta_create_campaign (ensure one campaign per country)
-4. For each ad_set: call meta_create_adset with campaign_id + lead_gen_form_id + duration_days
-5. For each ad: call meta_create_ad with adset_id + image_hash
-6. Call submit_execution_result with all results
-
-## Meta Ads API Best Practices
-
-### Campaign Level
-- Objective mapping: lead_gen → OUTCOME_LEADS, traffic → OUTCOME_TRAFFIC, brand_awareness → OUTCOME_AWARENESS
-- Budget is set at campaign level (CBO — Campaign Budget Optimization). Do NOT set budget on ad sets.
-- bid_strategy is handled automatically (LOWEST_COST_WITHOUT_CAP). Do NOT pass bid_amount.
-- Each country MUST have its own campaign — never put multiple countries in one campaign (CBO will drain budget to cheapest country).
-
-### Lead Gen Forms (Instant Forms)
-- OUTCOME_LEADS campaigns with lead_generation optimization REQUIRE an Instant Form.
-- Call meta_create_lead_form BEFORE creating ad sets. Include FULL_NAME, EMAIL, PHONE, and COMPANY_NAME as questions.
-- Pass the returned form_id as lead_gen_form_id when calling meta_create_adset.
-- You can share one form across multiple ad sets if they target the same language. Create separate forms for different languages.
-
-### Ad Set Level — CRITICAL RULES
-- optimization_goal: use "lead_generation" for lead campaigns. The system maps it to the correct Meta enum.
-- For lead_generation ad sets, you MUST pass lead_gen_form_id — without it Meta will reject the ad set.
-- ALWAYS pass duration_days (from the media plan's duration_days field). The system auto-schedules: start=now, end=now+duration_days.
-- Do NOT set daily_budget on ad sets — budget comes from the parent campaign (CBO).
-- Do NOT set bid_amount or bid_strategy on ad sets — inherited from campaign.
-- targeting: only pass country codes (2-letter ISO: ZA, SA, NG, KE) + age_range + gender. Nothing else.
-- Do NOT include interests — Advantage+ audience finds high-intent users automatically.
-- All entities are created as PAUSED. They go live after the user approves.
-
-### Valid optimization_goal → billing_event combinations
-| optimization_goal   | billing_event options     |
-|---------------------|---------------------------|
-| lead_generation     | IMPRESSIONS               |
-| link_clicks         | LINK_CLICKS, IMPRESSIONS  |
-| landing_page_views  | IMPRESSIONS               |
-| impressions         | IMPRESSIONS               |
-| reach               | IMPRESSIONS               |
-| conversions         | IMPRESSIONS               |
-When in doubt, use IMPRESSIONS — it works with all optimization goals.
-
-### Ad Level
-- CTA mapping: Learn More → LEARN_MORE, Send WhatsApp → WHATSAPP_MESSAGE, Get Quote → GET_QUOTE, Apply Now → APPLY_NOW, Download → DOWNLOAD
-- image_hash: use the hash from the creatives map. If missing for an ad, skip it and record error.
-
-## Error Handling
-- If a tool call returns an error, record it and CONTINUE with the next entity. Do not retry.
-- If a campaign fails, skip all its child ad sets and ads.
-- If an ad set fails, skip all its child ads.
-
-## Final
-- All entities are created PAUSED — ads go live after user approval.
-- You MUST call submit_execution_result as your final action.`;
-
-// ── Tool execution ─────────────────────────────────────────────────────
-
-async function executeTool(toolName, toolInput) {
-  switch (toolName) {
-    case 'meta_upload_media':
-      return uploadMedia(Buffer.from('placeholder'), toolInput.filename);
-    case 'meta_create_campaign':
-      return createCampaign(toolInput);
-    case 'meta_create_lead_form':
-      return createLeadForm(toolInput);
-    case 'meta_create_adset':
-      return createAdSet(toolInput);
-    case 'meta_create_ad':
-      return createAd(toolInput);
-    default:
-      return { error: `Unknown tool: ${toolName}` };
-  }
-}
-
-// ── Low-level Meta API functions ──────────────────────────────────────
-
-/**
- * Upload an image to the ad account.
- */
-export async function uploadMedia(imageBuffer, filename = 'ad_image.png') {
+async function metaUploadImageUrl(imageUrl) {
   const adAccountId = config.meta?.adAccountId;
-  if (!adAccountId) throw new Error('META_AD_ACCOUNT_ID is not configured');
   const token = config.meta?.accessToken;
-  if (!token) throw new Error('META_ACCESS_TOKEN is not configured');
+  if (!adAccountId || !token) throw new Error('META_AD_ACCOUNT_ID or META_ACCESS_TOKEN not configured');
+
+  // Download image first, then upload via FormData (url-based upload requires special app permissions)
+  const imgRes = await fetch(imageUrl, { signal: AbortSignal.timeout(FETCH_TIMEOUT) });
+  if (!imgRes.ok) throw new Error(`Failed to download image: ${imgRes.status}`);
+  const blob = await imgRes.blob();
 
   const formData = new FormData();
-  const blob = new Blob([imageBuffer], { type: 'image/png' });
+  const filename = imageUrl.split('/').pop()?.split('?')[0] || 'ad_image.png';
   formData.append('filename', blob, filename);
   formData.append('access_token', token);
 
@@ -308,36 +54,189 @@ export async function uploadMedia(imageBuffer, filename = 'ad_image.png') {
   });
 
   const data = await res.json();
-  if (data.error) throw new Error(`Meta API error: ${data.error.message}`);
-
+  if (data.error) throw new Error(`Meta API: ${data.error.message}`);
   const images = data.images || {};
   const imageData = Object.values(images)[0];
   if (!imageData?.hash) throw new Error('No image hash returned from Meta');
-
-  return { image_hash: imageData.hash };
+  return imageData.hash;
 }
 
-/**
- * Create a Lead Gen Form (Instant Form) on the Facebook Page.
- */
+// ── MCP tool allowlist for execution ─────────────────────────────────
+
+const MCP_TOOL_ALLOWLIST = new Set([
+  'upload_ad_image',
+  'create_campaign',
+  'create_adset',
+  'create_ad',
+  'create_ad_creative',
+  'get_account_pages',
+]);
+
+// ── Custom tools (not available in MCP) ──────────────────────────────
+
+const CREATE_LEAD_FORM_TOOL = {
+  name: 'create_lead_form',
+  description: 'Create an Instant Form (Lead Gen Form) on the Facebook Page. Required before creating lead_generation ad sets. Returns form_id.',
+  input_schema: {
+    type: 'object',
+    required: ['name', 'questions'],
+    properties: {
+      name: { type: 'string', description: 'Form name' },
+      questions: {
+        type: 'array',
+        items: {
+          type: 'object',
+          properties: {
+            type: {
+              type: 'string',
+              enum: ['FULL_NAME', 'EMAIL', 'PHONE', 'COMPANY_NAME', 'JOB_TITLE', 'CITY', 'COUNTRY', 'CUSTOM'],
+            },
+            label: { type: 'string', description: 'Only needed for CUSTOM type' },
+          },
+        },
+        description: 'Form fields. Always include FULL_NAME and EMAIL at minimum.',
+      },
+      headline: { type: 'string', description: 'Form headline' },
+      description: { type: 'string', description: 'Form description' },
+      privacy_policy_url: { type: 'string', description: 'Privacy policy URL' },
+      thank_you_message: { type: 'string', description: 'Post-submission message' },
+    },
+  },
+};
+
+const SUBMIT_EXECUTION_RESULT_TOOL = {
+  name: 'submit_execution_result',
+  description: 'Submit the final execution results. Call this after creating all campaigns, ad sets, and ads.',
+  input_schema: {
+    type: 'object',
+    required: ['status', 'campaigns', 'errors'],
+    properties: {
+      status: { type: 'string', enum: ['completed', 'partial', 'failed'] },
+      platform: { type: 'string' },
+      campaigns: {
+        type: 'array',
+        items: {
+          type: 'object',
+          properties: {
+            id: { type: 'string' },
+            name: { type: 'string' },
+            ad_sets: {
+              type: 'array',
+              items: {
+                type: 'object',
+                properties: {
+                  id: { type: 'string' },
+                  name: { type: 'string' },
+                  ads: { type: 'array', items: { type: 'object' } },
+                },
+              },
+            },
+          },
+        },
+      },
+      errors: {
+        type: 'array',
+        items: {
+          type: 'object',
+          properties: {
+            level: { type: 'string' },
+            name: { type: 'string' },
+            error: { type: 'string' },
+          },
+        },
+      },
+    },
+  },
+};
+
+// ── System prompt ────────────────────────────────────────────────────
+
+function buildExecutionPrompt(accountId, pageId) {
+  return `You are a Meta Ads execution agent. You create campaigns, ad sets, and ads using the provided tools.
+
+## Account Info
+- account_id: ${accountId}
+- page_id: ${pageId || 'NOT CONFIGURED'}
+
+## Workflow
+1. Upload images: call upload_ad_image with image_url for each creative asset
+2. Lead forms: if any campaign uses lead_gen/leads objective, call create_lead_form FIRST (one per language)
+3. Create campaigns: call create_campaign for each campaign (one campaign per country)
+4. Create ad sets: call create_adset for each ad set within its campaign
+5. Create ad creatives: call create_ad_creative with image_hash + page_id + ad copy
+6. Create ads: call create_ad with creative_id + adset_id
+7. Submit: call submit_execution_result with all created entities and any errors
+
+## Account Assets
+WhatsApp phone numbers, Instagram accounts, and other assets are provided in the ACCOUNT ASSETS section of the user message. Use these IDs directly — do NOT make separate API calls to fetch them.
+
+## Objective Mapping
+The media plan uses short names. Map them for create_campaign:
+- lead_gen / leads → OUTCOME_LEADS
+- traffic → OUTCOME_TRAFFIC
+- brand_awareness / awareness → OUTCOME_AWARENESS
+- conversions / sales → OUTCOME_SALES
+- engagement → OUTCOME_ENGAGEMENT
+
+## Campaign Rules
+- status: always PAUSED (ads go live after user approval)
+- bid_strategy: LOWEST_COST_WITHOUT_CAP
+- daily_budget: in CENTS (multiply dollars by 100)
+- special_ad_categories: [] (empty array)
+- One campaign per country — never mix countries (CBO drains budget to cheapest)
+
+## Ad Set Rules
+- Do NOT set daily_budget on ad sets — budget comes from campaign (CBO)
+- Do NOT set bid_amount — inherited from campaign
+- optimization_goal: use LEAD_GENERATION for lead campaigns, LINK_CLICKS for traffic
+- billing_event: IMPRESSIONS (works with all goals)
+- For LEAD_GENERATION: set promoted_object: { "page_id": "${pageId}" } and destination_type: "ON_AD"
+- targeting: use geo_locations.countries with 2-letter ISO codes (ZA, NG, SA, etc.)
+  Set age_min, age_max. Enable targeting_automation: { "advantage_audience": 1 }
+  Do NOT include interests — let Advantage+ handle targeting
+- Schedule: set start_time and end_time (ISO 8601) using duration_days from the plan
+
+## Ad Creative Rules
+- Pass page_id to create_ad_creative
+- Set call_to_action_type: LEARN_MORE, SIGN_UP, SHOP_NOW, GET_QUOTE, WHATSAPP_MESSAGE, APPLY_NOW, DOWNLOAD
+- For lead gen: pass lead_gen_form_id from create_lead_form result
+
+## Error Handling
+- If a tool call errors, record the error and CONTINUE with next entity
+- If a campaign fails, skip all its child ad sets and ads
+- If an ad set fails, skip its child ads
+- Do NOT retry failed tool calls
+- At the end, call submit_execution_result with status: "completed" (no errors), "partial" (some errors), or "failed" (all failed)`;
+}
+
+// ── Lead Form (direct API — MCP does not support this) ───────────────
+
+let _cachedPageToken = null;
+async function getPageAccessToken(pageId, systemToken) {
+  if (_cachedPageToken) return _cachedPageToken;
+  const version = config.meta?.apiVersion || 'v21.0';
+  const res = await fetch(
+    `https://graph.facebook.com/${version}/${pageId}?fields=access_token&access_token=${systemToken}`,
+    { signal: AbortSignal.timeout(FETCH_TIMEOUT) },
+  );
+  const data = await res.json();
+  if (data.error) throw new Error(`Failed to get page token: ${data.error.message}`);
+  _cachedPageToken = data.access_token;
+  return _cachedPageToken;
+}
+
 export async function createLeadForm({ name, questions, headline, description, privacy_policy_url, thank_you_message }) {
   const pageId = config.meta?.pageId;
   if (!pageId) throw new Error('META_PAGE_ID is not configured');
   const systemToken = config.meta?.accessToken;
   if (!systemToken) throw new Error('META_ACCESS_TOKEN is not configured');
 
-  // Lead Gen Forms require a Page Access Token, not a System User Token
   const token = await getPageAccessToken(pageId, systemToken);
 
-  // Build questions array for Meta API
   const metaQuestions = (questions || []).map(q => {
-    if (q.type === 'CUSTOM') {
-      return { type: 'CUSTOM', label: q.label || 'Other' };
-    }
+    if (q.type === 'CUSTOM') return { type: 'CUSTOM', label: q.label || 'Other' };
     return { type: q.type };
   });
-
-  // Ensure at minimum FULL_NAME and EMAIL
   const types = metaQuestions.map(q => q.type);
   if (!types.includes('FULL_NAME')) metaQuestions.unshift({ type: 'FULL_NAME' });
   if (!types.includes('EMAIL')) metaQuestions.push({ type: 'EMAIL' });
@@ -363,7 +262,8 @@ export async function createLeadForm({ name, questions, headline, description, p
     button_text: 'WhatsApp Us',
   });
 
-  const res = await fetch(`https://graph.facebook.com/${config.meta.apiVersion}/${pageId}/leadgen_forms`, {
+  const version = config.meta?.apiVersion || 'v21.0';
+  const res = await fetch(`https://graph.facebook.com/${version}/${pageId}/leadgen_forms`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
@@ -371,158 +271,613 @@ export async function createLeadForm({ name, questions, headline, description, p
   });
 
   const data = await res.json();
-  if (data.error) throw new Error(`Meta API error: ${data.error.message}`);
-
+  if (data.error) {
+    const detail = data.error.error_user_msg || data.error.error_user_title || '';
+    throw new Error(`Meta API error: ${data.error.message}${detail ? ' — ' + detail : ''} (code: ${data.error.code}, subcode: ${data.error.error_subcode})`);
+  }
   return { form_id: data.id, name };
 }
 
-/**
- * Create a Meta ad campaign.
- */
-export async function createCampaign({ name, objective, daily_budget, status = 'PAUSED' }) {
-  const adAccountId = config.meta?.adAccountId;
-  if (!adAccountId) throw new Error('META_AD_ACCOUNT_ID is not configured');
+// ── Batch helpers ────────────────────────────────────────────────────
 
-  const body = {
-    name,
-    objective: mapObjective(objective),
-    status,
-    special_ad_categories: [],
-    bid_strategy: 'LOWEST_COST_WITHOUT_CAP',
+const OBJECTIVE_MAP = {
+  lead_gen: 'OUTCOME_LEADS', leads: 'OUTCOME_LEADS', lead_generation: 'OUTCOME_LEADS',
+  traffic: 'OUTCOME_TRAFFIC',
+  brand_awareness: 'OUTCOME_AWARENESS', awareness: 'OUTCOME_AWARENESS',
+  conversions: 'OUTCOME_SALES', sales: 'OUTCOME_SALES',
+  engagement: 'OUTCOME_ENGAGEMENT',
+  reach: 'OUTCOME_AWARENESS',
+  video_views: 'OUTCOME_AWARENESS',
+  app_installs: 'OUTCOME_APP_PROMOTION',
+  messages: 'OUTCOME_LEADS',
+};
+
+const CTA_MAP = {
+  'Learn More': 'LEARN_MORE',
+  'Shop Now': 'SHOP_NOW',
+  'Send WhatsApp': 'WHATSAPP_MESSAGE',
+  'WhatsApp': 'WHATSAPP_MESSAGE',
+  'Send WhatsApp Message': 'WHATSAPP_MESSAGE',
+  'Send Message to WhatsApp': 'WHATSAPP_MESSAGE',
+  'Send Message': 'MESSAGE_PAGE',
+  'Sign Up': 'SIGN_UP',
+  'Get Quote': 'GET_QUOTE',
+  'Apply Now': 'APPLY_NOW',
+  'Download': 'DOWNLOAD',
+  'Contact Us': 'CONTACT_US',
+  'Subscribe': 'SUBSCRIBE',
+  'Book Now': 'BOOK_TRAVEL',
+  // Chinese aliases
+  '发送WhatsApp消息': 'WHATSAPP_MESSAGE',
+  '在WhatsApp上发消息': 'WHATSAPP_MESSAGE',
+  'WhatsApp联系': 'WHATSAPP_MESSAGE',
+  '联系我们': 'CONTACT_US',
+  '立即获取报价': 'GET_QUOTE',
+  '获取详细资料': 'LEARN_MORE',
+};
+
+// Countries with higher minimum ad age than Meta's default (18)
+// Source: Meta Ads policies + local regulations
+const COUNTRY_MIN_AGE = {
+  // Southeast Asia
+  TH: 20, ID: 21, MM: 18, VN: 18, PH: 18, MY: 18, SG: 18, KH: 18, LA: 18, BN: 18,
+  // Middle East
+  AE: 21, SA: 21, KW: 21, QA: 21, BH: 21, OM: 21, JO: 18, LB: 18, IQ: 18,
+  // South Asia
+  IN: 18, PK: 18, BD: 18, LK: 18, NP: 18,
+  // East Asia
+  KR: 19, JP: 18, TW: 20, CN: 18,
+  // Africa
+  NG: 18, ZA: 18, KE: 18, GH: 18, ET: 18, TZ: 18, EG: 18,
+  // Americas
+  US: 18, CA: 18, BR: 18, MX: 18, AR: 18, CO: 18,
+  // Europe
+  DE: 18, FR: 18, GB: 18, IT: 18, ES: 18, NL: 18, BE: 18, PL: 18, SE: 18,
+  // Oceania
+  AU: 18, NZ: 18,
+  // Central Asia
+  KZ: 18, UZ: 18,
+};
+
+function buildBatchTargeting(targeting = {}) {
+  const countries = targeting.countries || [];
+  const isoCodes = mapCountriesToISO(countries);
+  if (isoCodes.length === 0) throw new Error('No valid target countries — ad_set targeting.countries is empty');
+  const ageMin = targeting.age_range?.[0] || targeting.age_min || 18;
+  const ageMax = targeting.age_range?.[1] || targeting.age_max || 65;
+
+  // Respect country-specific minimum age laws (e.g. Thailand requires 20+)
+  const countryMinAge = Math.max(...isoCodes.map(c => COUNTRY_MIN_AGE[c] || 18));
+  const effectiveMin = Math.max(countryMinAge, Math.min(ageMin, 18));
+
+  const spec = {
+    geo_locations: { countries: isoCodes },
+    age_min: effectiveMin,
+    age_max: Math.max(ageMax, 65),
+    targeting_automation: { advantage_audience: 1 },
   };
+  if (targeting.gender === 'male') spec.genders = [1];
+  else if (targeting.gender === 'female') spec.genders = [2];
+  return spec;
+}
 
-  // Use Advantage Campaign Budget (CBO) — budget is set at campaign level,
-  // ad sets must NOT have their own daily_budget.
-  if (daily_budget) {
-    body.daily_budget = Math.round(daily_budget * 100);
+function pickOptimizationGoal(metaObjective) {
+  switch (metaObjective) {
+    case 'OUTCOME_LEADS': return 'LEAD_GENERATION';
+    case 'OUTCOME_TRAFFIC': return 'LINK_CLICKS';
+    case 'OUTCOME_AWARENESS': return 'REACH';
+    case 'OUTCOME_SALES': return 'OFFSITE_CONVERSIONS';
+    case 'OUTCOME_ENGAGEMENT': return 'POST_ENGAGEMENT';
+    default: return 'LINK_CLICKS';
   }
-
-  return metaPost(`act_${adAccountId}/campaigns`, body);
 }
 
 /**
- * Create a Meta ad set.
- */
-export async function createAdSet({
-  campaign_id,
-  name,
-  targeting,
-  optimization_goal,
-  lead_gen_form_id,
-  billing_event = 'IMPRESSIONS',
-  duration_days,
-  status = 'PAUSED',
-}) {
-  const adAccountId = config.meta?.adAccountId;
-  if (!adAccountId) throw new Error('META_AD_ACCOUNT_ID is not configured');
-
-  // Drop interests — let Meta Advantage+ audience handle targeting optimization.
-  // Manual interest targeting often causes "audience too small" errors in niche B2B markets.
-  if (targeting?.interests) {
-    targeting = { ...targeting };
-    delete targeting.interests;
-  }
-
-  const mappedGoal = mapOptimizationGoal(optimization_goal);
-
-  const body = {
-    campaign_id,
-    name,
-    targeting: buildMetaTargeting(targeting),
-    optimization_goal: mappedGoal,
-    billing_event,
-    // bid_amount not needed — campaign sets LOWEST_COST_WITHOUT_CAP
-    status,
-  };
-
-  // LEAD_GENERATION requires promoted_object with page_id + destination_type ON_AD
-  // Note: lead_gen_form_id goes on the ad creative, NOT on promoted_object
-  const pageId = config.meta?.pageId;
-  if (['LEAD_GENERATION', 'LEADS'].includes(mappedGoal) && pageId) {
-    body.optimization_goal = 'LEAD_GENERATION';
-    body.promoted_object = { page_id: pageId };
-    body.destination_type = 'ON_AD';
-    body.billing_event = 'IMPRESSIONS';
-  } else if (['LEAD_GENERATION', 'LEADS'].includes(mappedGoal)) {
-    // No page_id: fall back to LINK_CLICKS which works with OUTCOME_LEADS campaigns
-    body.optimization_goal = 'LINK_CLICKS';
-    body.billing_event = 'LINK_CLICKS';
-  }
-
-  // Ensure compatible billing_event for the optimization_goal
-  if (['LINK_CLICKS', 'LANDING_PAGE_VIEWS'].includes(body.optimization_goal)) {
-    body.billing_event = 'LINK_CLICKS';
-  }
-
-  // Schedule: start now, end after duration_days
-  if (duration_days && duration_days > 0) {
-    const now = new Date();
-    body.start_time = now.toISOString();
-    const end = new Date(now.getTime() + duration_days * 24 * 60 * 60 * 1000);
-    body.end_time = end.toISOString();
-  }
-
-  return metaPost(`act_${adAccountId}/adsets`, body);
-}
-
-/**
- * Create an ad creative + ad.
- */
-export async function createAd({
-  adset_id,
-  name,
-  primary_text,
-  headline,
-  description,
-  cta,
-  image_hash,
-  link_url,
-  lead_gen_form_id,
-  status = 'PAUSED',
-}) {
-  const adAccountId = config.meta?.adAccountId;
-  if (!adAccountId) throw new Error('META_AD_ACCOUNT_ID is not configured');
-  const pageId = config.meta?.pageId;
-
-  // Build call_to_action — for lead gen, attach form_id in value
-  const callToAction = { type: mapCTA(cta) };
-  if (lead_gen_form_id) {
-    callToAction.value = { lead_gen_form_id };
-  }
-
-  // Step 1: Create ad creative
-  const creative = await metaPost(`act_${adAccountId}/adcreatives`, {
-    name: `Creative - ${name}`,
-    object_story_spec: {
-      page_id: pageId,
-      link_data: {
-        image_hash,
-        link: link_url,
-        message: primary_text,
-        name: headline,
-        description,
-        call_to_action: callToAction,
-      },
-    },
-  });
-
-  // Step 2: Create ad using the creative
-  const ad = await metaPost(`act_${adAccountId}/ads`, {
-    name,
-    adset_id,
-    creative: { creative_id: creative.id },
-    status,
-  });
-
-  return { creative_id: creative.id, ad_id: ad.id };
-}
-
-/**
- * Activate all PAUSED campaigns (and their child ad sets + ads) from execution results.
- * Called after user approves the plan.
+ * Upload multiple images via MCP and return a { name: image_hash } map.
  *
- * @param {Object} executionResult - The phase_results.execution object
- * @returns {{ activated: string[], errors: Array<{id: string, error: string}> }}
+ * @param {Array<{name: string, url: string}>} images
+ * @param {Object} [options]
+ * @param {Function} [options.onProgress]
+ * @returns {Promise<Object>} Map of name → image_hash
+ */
+export async function uploadImages(images, options = {}) {
+  const onProgress = options.onProgress;
+  const useMcp = options.useMcp ?? false;
+  const accountId = `act_${config.meta?.adAccountId}`;
+  const result = {};
+  const CONCURRENCY = 5;
+
+  for (let i = 0; i < images.length; i += CONCURRENCY) {
+    const batch = images.slice(i, i + CONCURRENCY);
+    const settled = await Promise.allSettled(
+      batch.map(async (image) => {
+        let hash;
+        if (useMcp) {
+          const res = await callTool('upload_ad_image', { account_id: accountId, image_url: image.url });
+          hash = res.image_hash || res.hash || res.images?.[Object.keys(res.images)[0]]?.hash;
+        } else {
+          hash = await metaUploadImageUrl(image.url);
+        }
+        return { name: image.name, hash };
+      }),
+    );
+
+    for (let j = 0; j < settled.length; j++) {
+      const image = batch[j];
+      const outcome = settled[j];
+      if (outcome.status === 'fulfilled' && outcome.value.hash) {
+        result[image.name] = outcome.value.hash;
+        onProgress?.({ step: 'upload_image', name: image.name, image_hash: outcome.value.hash });
+      } else {
+        const error = outcome.status === 'rejected' ? outcome.reason.message : 'No hash returned';
+        onProgress?.({ step: 'upload_image', name: image.name, error });
+      }
+    }
+  }
+
+  return result;
+}
+
+/**
+ * Create a full campaign structure: campaign → adsets → creatives → ads via MCP.
+ *
+ * @param {Object} input - Campaign object with nested ad_sets[].ads[]
+ * @param {Object} [options]
+ * @param {Function} [options.onProgress]
+ * @returns {Promise<Object>} { status, campaign_id, ad_sets, errors }
+ */
+export async function createFullCampaign(input, options = {}) {
+  const onProgress = options.onProgress;
+  const useMcp = options.useMcp ?? false;
+  const accountId = `act_${config.meta?.adAccountId}`;
+  const pageId = config.meta?.pageId;
+  const metaObjective = OBJECTIVE_MAP[input.objective] || input.objective;
+  const isLeadGen = metaObjective === 'OUTCOME_LEADS';
+  const ctaType = (cta) => CTA_MAP[cta] || 'LEARN_MORE';
+  const errors = [];
+  const adSetResults = [];
+
+  // Create campaign
+  let campaignId;
+  try {
+    const campaignBody = {
+      name: input.name,
+      objective: metaObjective,
+      status: 'PAUSED',
+      special_ad_categories: [],
+      bid_strategy: 'LOWEST_COST_WITHOUT_CAP',
+      daily_budget: Math.round((input.daily_budget || 0) * 100),
+    };
+
+    const campaignRes = useMcp
+      ? await callTool('create_campaign', { account_id: accountId, ...campaignBody })
+      : await metaPost(`${accountId}/campaigns`, campaignBody);
+
+    campaignId = campaignRes.id;
+    if (!campaignId) throw new Error(`No campaign ID returned: ${JSON.stringify(campaignRes).slice(0, 200)}`);
+    onProgress?.({ step: 'create_campaign', name: input.name, campaign_id: campaignId });
+  } catch (err) {
+    errors.push({ level: 'campaign', name: input.name, error: err.message });
+    return { status: 'failed', campaign_id: null, ad_sets: [], errors };
+  }
+
+  // Create ad sets
+  for (const adSet of input.ad_sets || []) {
+    let adSetId;
+    try {
+      const adSetBody = {
+        campaign_id: campaignId,
+        name: adSet.name,
+        status: 'PAUSED',
+        optimization_goal: pickOptimizationGoal(metaObjective),
+        billing_event: 'IMPRESSIONS',
+        targeting: buildBatchTargeting({
+          ...adSet.targeting,
+          // Fallback: inherit campaign-level countries if ad_set has none
+          countries: adSet.targeting?.countries?.length ? adSet.targeting.countries : (input.target_countries || input.countries || []),
+        }),
+      };
+
+      if (isLeadGen && pageId) {
+        adSetBody.promoted_object = { page_id: pageId };
+        // WhatsApp messages campaigns use WHATSAPP destination instead of ON_AD
+        adSetBody.destination_type = input.objective === 'messages' ? 'WHATSAPP' : 'ON_AD';
+      }
+
+      if (input.duration_days > 0) {
+        const now = new Date();
+        adSetBody.start_time = now.toISOString();
+        adSetBody.end_time = new Date(now.getTime() + input.duration_days * 24 * 60 * 60 * 1000).toISOString();
+      }
+
+      const adSetRes = useMcp
+        ? await callTool('create_adset', { account_id: accountId, ...adSetBody })
+        : await metaPost(`${accountId}/adsets`, adSetBody);
+
+      adSetId = adSetRes.id;
+      if (!adSetId) throw new Error(`No adset ID returned: ${JSON.stringify(adSetRes).slice(0, 300)}`);
+      onProgress?.({ step: 'create_adset', name: adSet.name, adset_id: adSetId });
+    } catch (err) {
+      errors.push({ level: 'adset', name: adSet.name, error: err.message });
+      continue;
+    }
+
+    // Create ads within this ad set
+    const adResults = [];
+    for (const ad of adSet.ads || []) {
+      if (!ad.image_hash) {
+        errors.push({ level: 'ad', name: ad.name, error: 'Missing image_hash' });
+        continue;
+      }
+
+      try {
+        let creativeId;
+        const resolvedCta = ctaType(ad.cta);
+        const messagingCtas = new Set(['WHATSAPP_MESSAGE', 'MESSAGE_PAGE', 'SEND_MESSAGE', 'INSTAGRAM_MESSAGE']);
+        const isMessagingCta = messagingCtas.has(resolvedCta);
+
+        // Lead gen + messaging CTA = WhatsApp lead capture (no form, uses WhatsApp conversation)
+        // Lead gen + other CTA = Lead form capture (attach form_id)
+        const callToAction = { type: resolvedCta };
+        if (isLeadGen && ad.lead_gen_form_id && !isMessagingCta) {
+          callToAction.value = { lead_gen_form_id: ad.lead_gen_form_id };
+        }
+
+        if (useMcp) {
+          // MCP uses flat params
+          const mcpParams = {
+            account_id: accountId,
+            name: `${ad.name} Creative`,
+            page_id: pageId,
+            image_hash: ad.image_hash,
+            message: ad.primary_text,
+            headline: ad.headline,
+            description: ad.description,
+            link_url: ad.link_url || input.link_url,
+            call_to_action_type: resolvedCta,
+          };
+          if (isLeadGen && ad.lead_gen_form_id && !isMessagingCta) mcpParams.lead_gen_form_id = ad.lead_gen_form_id;
+          const creativeRes = await callTool('create_ad_creative', mcpParams);
+          creativeId = creativeRes.id || creativeRes.creative_id;
+        } else {
+          // Direct API uses object_story_spec
+          const creativeRes = await metaPost(`${accountId}/adcreatives`, {
+            name: `Creative - ${ad.name}`,
+            object_story_spec: {
+              page_id: pageId,
+              link_data: {
+                image_hash: ad.image_hash,
+                link: ad.link_url || input.link_url,
+                message: ad.primary_text,
+                name: ad.headline,
+                description: ad.description,
+                call_to_action: callToAction,
+              },
+            },
+          });
+          creativeId = creativeRes.id;
+        }
+
+        if (!creativeId) throw new Error('No creative ID returned');
+
+        const adRes = useMcp
+          ? await callTool('create_ad', { account_id: accountId, adset_id: adSetId, name: ad.name, status: 'PAUSED', creative_id: creativeId })
+          : await metaPost(`${accountId}/ads`, { name: ad.name, adset_id: adSetId, creative: { creative_id: creativeId }, status: 'PAUSED' });
+
+        const adId = adRes.id;
+        if (!adId) throw new Error('No ad ID returned');
+
+        adResults.push({ ad_id: adId, creative_id: creativeId, name: ad.name });
+        onProgress?.({ step: 'create_ad', name: ad.name, ad_id: adId, creative_id: creativeId });
+      } catch (err) {
+        errors.push({ level: 'ad', name: ad.name, error: err.message });
+      }
+    }
+
+    adSetResults.push({ id: adSetId, name: adSet.name, ads: adResults });
+  }
+
+  const status = errors.length === 0 ? 'completed' : adSetResults.length === 0 ? 'failed' : 'partial';
+  return { status, campaign_id: campaignId, ad_sets: adSetResults, errors };
+}
+
+// ── Batch execution (direct MCP calls, no Claude agent) ─────────────
+
+/**
+ * Execute a media plan using direct MCP tool calls (no Claude agent).
+ * Images are uploaded first, then campaigns/adsets/ads are created.
+ *
+ * @param {Object} plan - MediaPlan from generateMediaPlan()
+ * @param {Object} creatives - Map of ad name → { url, image_hash }
+ * @param {Object} [options]
+ * @param {string} [options.link_url] - Default landing page URL
+ * @param {Function} [options.onProgress]
+ * @param {Object} [options.accountAssets]
+ * @returns {Promise<Object>} Execution results
+ */
+export async function executeMediaPlanBatch(plan, creatives = {}, options = {}) {
+  const onProgress = options.onProgress;
+  const accountAssets = options.accountAssets;
+  const metaPlatform = plan.platforms?.find(p => p.platform === 'meta');
+  if (!metaPlatform) {
+    return { status: 'skipped', reason: 'No Meta platform in plan', campaigns: [], errors: [] };
+  }
+
+  onProgress?.({ step: 'batch_start' });
+
+  // 1. Upload images that have URLs but no hash
+  const needsUpload = Object.entries(creatives)
+    .filter(([, c]) => c.url && !c.image_hash)
+    .map(([name, c]) => ({ name, url: c.url }));
+
+  const useMcp = options.useMcp ?? false;
+  const uploadedHashes = needsUpload.length > 0
+    ? await uploadImages(needsUpload, { onProgress, useMcp })
+    : {};
+
+  // 2. Merge pre-existing hashes with newly uploaded
+  const allHashes = { ...uploadedHashes };
+  for (const [name, c] of Object.entries(creatives)) {
+    if (c.image_hash) allHashes[name] = c.image_hash;
+  }
+
+  const duration_days = plan.duration_days || 30;
+  const link_url = options.link_url || 'https://revopanda.com';
+
+  // 3. Create lead forms if any campaign uses lead_gen
+  const campaigns = metaPlatform.campaigns || [];
+  const hasLeadGen = campaigns.some(c => {
+    const obj = OBJECTIVE_MAP[c.objective] || c.objective;
+    return obj === 'OUTCOME_LEADS';
+  });
+
+  let lead_gen_form_id = null;
+  if (hasLeadGen) {
+    onProgress?.({ step: 'create_lead_form', detail: '创建潜客表单' });
+    const formResult = await createLeadForm({
+      name: `${metaPlatform.campaigns[0]?.name || 'Campaign'} Lead Form ${Date.now()}`,
+      questions: [{ type: 'FULL_NAME' }, { type: 'EMAIL' }, { type: 'PHONE' }],
+    });
+    lead_gen_form_id = formResult.form_id;
+    if (!lead_gen_form_id) {
+      throw new Error('createLeadForm succeeded but returned no form_id');
+    }
+    onProgress?.({ step: 'create_lead_form', detail: `表单创建成功: ${lead_gen_form_id}`, form_id: lead_gen_form_id });
+  }
+
+  // 4. Create each campaign
+  const allCampaignResults = [];
+  const allErrors = [];
+
+  for (const campaign of campaigns) {
+    // Enrich ads with image_hashes and lead_gen_form_id
+    const enrichedAdSets = (campaign.ad_sets || []).map(adSet => ({
+      ...adSet,
+      ads: (adSet.ads || []).map(ad => ({
+        ...ad,
+        image_hash: allHashes[ad.name] || ad.image_hash,
+        link_url: ad.link_url || link_url,
+        lead_gen_form_id: lead_gen_form_id || ad.lead_gen_form_id,
+      })),
+    }));
+
+    const result = await createFullCampaign(
+      { ...campaign, duration_days, link_url, lead_gen_form_id, ad_sets: enrichedAdSets },
+      { onProgress, useMcp, accountAssets },
+    );
+
+    if (result.campaign_id) {
+      allCampaignResults.push({
+        id: result.campaign_id,
+        name: campaign.name,
+        ad_sets: result.ad_sets,
+      });
+    }
+    allErrors.push(...result.errors);
+  }
+
+  onProgress?.({ step: 'batch_done' });
+
+  const status = allErrors.length === 0
+    ? 'completed'
+    : allCampaignResults.length === 0
+      ? 'failed'
+      : 'partial';
+
+  return {
+    status,
+    platform: 'meta',
+    campaigns: allCampaignResults,
+    errors: allErrors,
+  };
+}
+
+export const executeMediaPlan = executeMediaPlanBatch;
+
+// ── Main execution via Claude agent + MCP tools ─────────────────────
+
+/**
+ * Execute a media plan using a Claude agent that autonomously calls
+ * MCP tools (Meta Ads API) to create campaigns, ad sets, and ads.
+ *
+ * @param {Object} plan - MediaPlan from generateMediaPlan()
+ * @param {Object} creatives - Map of ad name → { url } (public image URLs)
+ * @param {Object} [options]
+ * @param {string} [options.link_url] - Default landing page URL
+ * @returns {Promise<Object>} Execution results
+ */
+export async function executeMediaPlanMCP(plan, creatives = {}, options = {}) {
+  const onProgress = options.onProgress;
+  const metaPlatform = plan.platforms?.find(p => p.platform === 'meta');
+  if (!metaPlatform) {
+    return { status: 'skipped', reason: 'No Meta platform in plan', campaigns: [], errors: [] };
+  }
+
+  const accountId = `act_${config.meta?.adAccountId}`;
+  const pageId = config.meta?.pageId;
+
+  // 1. Get MCP tool definitions and filter to execution-relevant tools
+  const allMcpTools = await listTools();
+  const mcpTools = allMcpTools
+    .filter(t => MCP_TOOL_ALLOWLIST.has(t.name))
+    .map(t => ({
+      name: t.name,
+      description: t.description,
+      input_schema: t.inputSchema,
+    }));
+
+  // 2. Combine MCP tools + custom tools
+  const tools = [...mcpTools, CREATE_LEAD_FORM_TOOL, SUBMIT_EXECUTION_RESULT_TOOL];
+
+  // 3. Build context for Claude
+  const creativeSummary = Object.entries(creatives)
+    .filter(([, c]) => !c.error && c.url)
+    .map(([name, c]) => `- "${name}": ${c.url}`)
+    .join('\n');
+
+  // Account assets from orchestrator (WhatsApp numbers, IG accounts, etc.)
+  const accountAssets = options.accountAssets;
+  let assetsSection = '';
+  if (accountAssets?.available) {
+    const parts = [];
+    if (accountAssets.whatsapp_phone_numbers?.length) {
+      parts.push(`WhatsApp Phone Numbers:\n${accountAssets.whatsapp_phone_numbers.map(p => `  - ${p.display_phone_number} (ID: ${p.phone_number_id}, name: ${p.verified_name})`).join('\n')}`);
+    }
+    if (accountAssets.instagram_accounts?.length) {
+      parts.push(`Instagram Accounts:\n${accountAssets.instagram_accounts.map(ig => `  - @${ig.username} (ID: ${ig.instagram_account_id})`).join('\n')}`);
+    }
+    if (parts.length) assetsSection = `\nACCOUNT ASSETS:\n${parts.join('\n')}\n`;
+  }
+
+  const messages = [{
+    role: 'user',
+    content: `Execute this media plan on Meta Ads. All entities must be PAUSED.
+
+MEDIA PLAN:
+${JSON.stringify(metaPlatform)}
+
+DURATION: ${plan.duration_days || 30} days
+
+CREATIVE ASSETS (image URLs to upload):
+${creativeSummary || 'No creatives available — skip ad creation for ads without images.'}
+
+DEFAULT LANDING URL: ${options.link_url || 'https://revopanda.com'}
+${assetsSection}
+
+Start by uploading the creative images, then create campaigns, ad sets, creatives, and ads. Call submit_execution_result when done.`,
+  }];
+
+  // 4. Claude agent loop
+  let response = await anthropic.messages.create({
+    model: MODELS.SONNET,
+    max_tokens: 8192,
+    system: buildExecutionPrompt(accountId, pageId),
+    messages,
+    tools,
+    tool_choice: { type: 'auto' },
+  });
+
+  let toolCallCount = 0;
+  let errorCount = 0;
+  onProgress?.({ step: 'execution_start', detail: '开始执行 Meta 广告投放' });
+
+  for (let iteration = 0; iteration < MAX_TOOL_ITERATIONS; iteration++) {
+    if (response.stop_reason !== 'tool_use') break;
+
+    const toolBlocks = response.content.filter(c => c.type === 'tool_use');
+    messages.push({ role: 'assistant', content: response.content });
+
+    // Check for submit_execution_result first
+    const submitBlock = toolBlocks.find(t => t.name === 'submit_execution_result');
+    if (submitBlock) {
+      onProgress?.({ step: 'execution_done', detail: `投放执行完成：${toolCallCount} 次 API 调用${errorCount ? `，${errorCount} 个错误` : ''}`, tool_calls: toolCallCount, errors: errorCount });
+      return { platform: 'meta', ...submitBlock.input };
+    }
+
+    // Execute all tool calls
+    const toolResults = [];
+    for (const block of toolBlocks) {
+      toolCallCount++;
+      onProgress?.({ step: 'tool_call', detail: `执行 ${block.name} (${toolCallCount})`, tool: block.name, iteration, tool_calls: toolCallCount });
+      let result;
+      try {
+        if (block.name === 'create_lead_form') {
+          result = await createLeadForm(block.input);
+        } else {
+          result = await callTool(block.name, block.input);
+        }
+      } catch (err) {
+        errorCount++;
+        result = { error: err.message };
+        onProgress?.({ step: 'tool_error', detail: `✗ ${block.name} 失败: ${err.message}`, tool: block.name, error: err.message, tool_calls: toolCallCount, errors: errorCount });
+      }
+
+      toolResults.push({
+        type: 'tool_result',
+        tool_use_id: block.id,
+        content: JSON.stringify(result),
+      });
+    }
+
+    messages.push({ role: 'user', content: toolResults });
+
+    response = await anthropic.messages.create({
+      model: MODELS.SONNET,
+      max_tokens: 8192,
+      system: buildExecutionPrompt(accountId, pageId),
+      messages,
+      tools,
+      tool_choice: { type: 'auto' },
+    });
+  }
+
+  // Force submit if Claude didn't call submit_execution_result
+  messages.push({ role: 'assistant', content: response.content });
+
+  // If the last response had tool_use blocks (e.g. loop hit MAX_TOOL_ITERATIONS),
+  // we must provide tool_result for each before sending the next user message.
+  const pendingToolUse = response.content.filter(c => c.type === 'tool_use');
+  if (pendingToolUse.length > 0) {
+    messages.push({
+      role: 'user',
+      content: [
+        ...pendingToolUse.map(block => ({
+          type: 'tool_result',
+          tool_use_id: block.id,
+          content: JSON.stringify({ skipped: 'Max iterations reached' }),
+        })),
+        { type: 'text', text: 'Max iterations reached. Please call submit_execution_result now with your results.' },
+      ],
+    });
+  } else {
+    messages.push({
+      role: 'user',
+      content: 'Please call submit_execution_result now with your results.',
+    });
+  }
+
+  response = await anthropic.messages.create({
+    model: MODELS.SONNET,
+    max_tokens: 4096,
+    system: buildExecutionPrompt(accountId, pageId),
+    messages,
+    tools,
+    tool_choice: { type: 'tool', name: 'submit_execution_result' },
+  });
+
+  const forced = response.content.find(c => c.type === 'tool_use' && c.name === 'submit_execution_result');
+  if (forced) {
+    return { platform: 'meta', ...forced.input };
+  }
+
+  throw new Error('Execution agent did not produce results');
+}
+
+// ── Activate campaigns via MCP ──────────────────────────────────────
+
+/**
+ * Activate all PAUSED campaigns from execution results.
+ * Called after user approves the plan.
  */
 export async function activateCampaigns(executionResult) {
   const campaignIds = (executionResult?.campaigns || [])
@@ -546,157 +901,7 @@ export async function activateCampaigns(executionResult) {
   return { activated, errors };
 }
 
-// ── Main entry point (deterministic execution) ──────────────────────────
-
-/**
- * Execute a media plan by directly calling Meta APIs.
- * No LLM involved — deterministic traversal of plan structure.
- *
- * @param {Object} plan - MediaPlan from generateMediaPlan()
- * @param {Object} creatives - Map of ad name → { image_hash }
- * @param {Object} [options]
- * @param {string} [options.link_url] - Default landing page URL
- * @returns {Promise<Object>} Execution results
- */
-export async function executeMediaPlan(plan, creatives = {}, options = {}) {
-  const metaPlatform = plan.platforms?.find(p => p.platform === 'meta');
-  if (!metaPlatform) {
-    return { status: 'skipped', reason: 'No Meta platform in plan', campaigns: [], errors: [] };
-  }
-
-  const campaignResults = [];
-  const errors = [];
-  const linkUrl = options.link_url || 'https://revopanda.com';
-  const durationDays = plan.duration_days || 30;
-
-  // Step 1: Create lead forms if any campaign uses lead_gen
-  const leadFormIds = {}; // language → form_id
-  const hasLeadGen = metaPlatform.campaigns?.some(c =>
-    (c.objective || '').toLowerCase().includes('lead'));
-
-  if (hasLeadGen) {
-    // Detect languages needed from ad names
-    const languages = new Set();
-    for (const c of metaPlatform.campaigns || []) {
-      for (const as of c.ad_sets || []) {
-        for (const ad of as.ads || []) {
-          const langMatch = (ad.name || '').match(/_([A-Z]{2})(?:_|$)/);
-          languages.add(langMatch?.[1] || 'EN');
-        }
-      }
-    }
-
-    for (const lang of languages) {
-      try {
-        const { form_id } = await createLeadForm({
-          name: `Lead Form (${lang}) — ${plan.summary?.slice(0, 50) || 'Campaign'}`,
-          questions: [
-            { type: 'FULL_NAME' },
-            { type: 'EMAIL' },
-            { type: 'PHONE' },
-            { type: 'COMPANY_NAME' },
-          ],
-          privacy_policy_url: linkUrl,
-          thank_you_message: 'Thank you for your interest! We will contact you shortly.',
-        });
-        leadFormIds[lang] = form_id;
-      } catch (err) {
-        errors.push({ level: 'lead_form', name: `Lead Form (${lang})`, error: err.message });
-      }
-    }
-  }
-
-  // Default form for fallback
-  const defaultFormId = leadFormIds['EN'] || Object.values(leadFormIds)[0] || null;
-
-  // Step 2: Create campaigns → ad sets → ads
-  for (const planCampaign of metaPlatform.campaigns || []) {
-    let campaignId;
-    try {
-      const campResult = await createCampaign({
-        name: planCampaign.name,
-        objective: planCampaign.objective || 'lead_gen',
-        daily_budget: planCampaign.daily_budget,
-      });
-      campaignId = campResult.id;
-    } catch (err) {
-      errors.push({ level: 'campaign', name: planCampaign.name, error: err.message });
-      // Skip all children
-      for (const as of planCampaign.ad_sets || []) {
-        errors.push({ level: 'ad_set', name: as.name, error: `Skipped — parent campaign failed` });
-        for (const ad of as.ads || []) {
-          errors.push({ level: 'ad', name: ad.name, error: `Skipped — parent campaign failed` });
-        }
-      }
-      continue;
-    }
-
-    const adSetResults = [];
-
-    for (const planAdSet of planCampaign.ad_sets || []) {
-      // Detect language for lead form
-      const langMatch = (planAdSet.name || '').match(/_([A-Z]{2})(?:_|$)/);
-      const lang = langMatch?.[1] || 'EN';
-      const formId = leadFormIds[lang] || defaultFormId;
-
-      let adSetId;
-      try {
-        const asResult = await createAdSet({
-          campaign_id: campaignId,
-          name: planAdSet.name,
-          targeting: planAdSet.targeting || {},
-          optimization_goal: planAdSet.optimization_goal || 'lead_generation',
-          lead_gen_form_id: formId,
-          duration_days: durationDays,
-        });
-        adSetId = asResult.id;
-      } catch (err) {
-        errors.push({ level: 'ad_set', name: planAdSet.name, error: err.message });
-        for (const ad of planAdSet.ads || []) {
-          errors.push({ level: 'ad', name: ad.name, error: `Skipped — parent ad set failed` });
-        }
-        continue;
-      }
-
-      const adResults = [];
-
-      for (const planAd of planAdSet.ads || []) {
-        const creative = creatives[planAd.name];
-        if (!creative?.image_hash) {
-          errors.push({ level: 'ad', name: planAd.name, error: 'No image_hash in creatives map' });
-          continue;
-        }
-
-        try {
-          const adResult = await createAd({
-            adset_id: adSetId,
-            name: planAd.name,
-            primary_text: planAd.primary_text || planAd.headline || planAd.name,
-            headline: planAd.headline || planAd.name,
-            description: planAd.description || '',
-            cta: planAd.cta || 'Learn More',
-            image_hash: creative.image_hash,
-            link_url: linkUrl,
-            lead_gen_form_id: formId || undefined,
-          });
-          adResults.push({ name: planAd.name, ad_id: adResult.ad_id, creative_id: adResult.creative_id });
-        } catch (err) {
-          errors.push({ level: 'ad', name: planAd.name, error: err.message });
-        }
-      }
-
-      adSetResults.push({ id: adSetId, name: planAdSet.name, ads: adResults });
-    }
-
-    campaignResults.push({ id: campaignId, name: planCampaign.name, ad_sets: adSetResults });
-  }
-
-  const status = errors.length === 0 ? 'completed'
-    : campaignResults.some(c => c.ad_sets.length > 0) ? 'partial'
-    : 'failed';
-
-  return { status, platform: 'meta', campaigns: campaignResults, errors };
-}
+// ── Preview (no API calls) ──────────────────────────────────────────
 
 /**
  * Generate a human-readable preview of what will be created.
@@ -721,7 +926,6 @@ export function previewExecution(plan) {
       lines.push(`  Ad Set: ${as.name}`);
       lines.push(`    Countries: ${as.targeting?.countries?.join(', ') || 'N/A'}`);
       lines.push(`    Age: ${as.targeting?.age_range?.join('-') || 'N/A'}`);
-      lines.push(`    Interests: ${as.targeting?.interests?.slice(0, 3).join(', ') || 'N/A'}`);
 
       for (const ad of as.ads || []) {
         lines.push(`    Ad: ${ad.name} (${ad.format})`);
@@ -741,99 +945,4 @@ export function previewExecution(plan) {
         sum + (c.ad_sets || []).reduce((s, as) => s + (as.ads?.length || 0), 0), 0),
     },
   };
-}
-
-// ── Mapping helpers ───────────────────────────────────────────────────
-
-function mapObjective(objective) {
-  const map = {
-    'lead_gen': 'OUTCOME_LEADS', 'lead_generation': 'OUTCOME_LEADS', 'leads': 'OUTCOME_LEADS',
-    'traffic': 'OUTCOME_TRAFFIC', 'brand_awareness': 'OUTCOME_AWARENESS', 'awareness': 'OUTCOME_AWARENESS',
-    'conversions': 'OUTCOME_SALES', 'sales': 'OUTCOME_SALES', 'engagement': 'OUTCOME_ENGAGEMENT',
-    'app_installs': 'OUTCOME_APP_PROMOTION',
-  };
-  return map[(objective || '').toLowerCase().replace(/\s+/g, '_')] || objective || 'OUTCOME_LEADS';
-}
-
-function mapOptimizationGoal(goal) {
-  const map = {
-    'lead_generation': 'LEAD_GENERATION', 'leads': 'LEAD_GENERATION', 'lead': 'LEAD_GENERATION',
-    'lead_gen': 'LEAD_GENERATION', 'lead_quality': 'QUALITY_LEAD', 'quality_lead': 'QUALITY_LEAD',
-    'link_clicks': 'LINK_CLICKS', 'clicks': 'LINK_CLICKS',
-    'impressions': 'IMPRESSIONS', 'reach': 'REACH',
-    'conversions': 'OFFSITE_CONVERSIONS', 'landing_page_views': 'LANDING_PAGE_VIEWS',
-  };
-  return map[(goal || '').toLowerCase().replace(/\s+/g, '_')] || goal || 'LINK_CLICKS';
-}
-
-function mapCTA(cta) {
-  const map = {
-    'learn more': 'LEARN_MORE', 'shop now': 'SHOP_NOW', 'sign up': 'SIGN_UP',
-    'contact us': 'CONTACT_US', 'get quote': 'GET_QUOTE', 'send message': 'MESSAGE_PAGE',
-    'whatsapp': 'WHATSAPP_MESSAGE', 'send whatsapp': 'WHATSAPP_MESSAGE',
-    'download': 'DOWNLOAD', 'apply now': 'APPLY_NOW',
-  };
-  return map[(cta || '').toLowerCase()] || cta || 'LEARN_MORE';
-}
-
-/**
- * Resolve interest names to Meta interest IDs via the search API.
- * Returns array of { id, name } objects.
- */
-async function resolveInterestIds(interestNames) {
-  const token = config.meta?.accessToken;
-  if (!token || !interestNames?.length) return [];
-
-  const resolved = [];
-  for (const name of interestNames.slice(0, 10)) {
-    try {
-      const res = await fetch(
-        metaUrl(`search?type=adinterest&q=${encodeURIComponent(name)}&access_token=${token}`),
-        { signal: AbortSignal.timeout(10_000) },
-      );
-      const data = await res.json();
-      const match = data.data?.[0];
-      if (match?.id) {
-        resolved.push({ id: match.id, name: match.name });
-      }
-    } catch { /* skip unresolvable interests */ }
-  }
-  return resolved;
-}
-
-function buildMetaTargeting(targeting) {
-  if (!targeting) return {};
-  const spec = {};
-
-  if (targeting.countries?.length) {
-    spec.geo_locations = {
-      countries: mapCountriesToISO(targeting.countries),
-    };
-  }
-  // Advantage+ audience constraints: age_min <= 25, age_max >= 65
-  if (targeting.age_range?.length === 2) {
-    spec.age_min = Math.min(targeting.age_range[0], 25);
-    spec.age_max = Math.max(targeting.age_range[1], 65);
-  } else {
-    if (targeting.age_min) spec.age_min = Math.min(targeting.age_min, 25);
-    if (targeting.age_max) spec.age_max = Math.max(targeting.age_max, 65);
-  }
-  if (targeting.gender && targeting.gender !== 'all') {
-    spec.genders = targeting.gender === 'male' ? [1] : [2];
-  }
-  // Note: interests are resolved to Meta IDs by resolveInterestIds() before
-  // buildMetaTargeting is called. If interests still have no id, skip them.
-  if (targeting.interests?.length) {
-    const withIds = targeting.interests
-      .filter(i => typeof i === 'object' && i.id)
-      .map(i => ({ id: i.id, name: i.name }));
-    if (withIds.length > 0) {
-      spec.flexible_spec = [{ interests: withIds }];
-    }
-  }
-  // Enable Advantage+ audience — Meta's algorithm finds high-intent users
-  // automatically from page, creative, and landing page signals.
-  // Much more effective than manual interest targeting for B2B niche markets.
-  spec.targeting_automation = { advantage_audience: 1 };
-  return spec;
 }

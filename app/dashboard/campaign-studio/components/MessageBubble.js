@@ -9,7 +9,7 @@ import CreativeCard from './cards/CreativeCard';
 import ExecutionCard from './cards/ExecutionCard';
 import ThinkingCard from './cards/ThinkingCard';
 import FeedbackCard from './cards/FeedbackCard';
-import CreativeReferenceCard from './cards/CreativeReferenceCard';
+import CreativePlanCard from './cards/CreativePlanCard';
 
 function MarkdownContent({ children }) {
   return (
@@ -43,24 +43,36 @@ export default function MessageBubble({ message, onApprove, onReject, onFeedback
 
   // User message
   if (type === 'user') {
+    const hasImages = message.attachments?.length > 0;
     return (
       <div className="flex justify-end">
-        <div className="max-w-[65%] bg-indigo-600 text-white rounded-2xl rounded-br-sm px-4 py-3 text-[13.5px] leading-relaxed whitespace-pre-wrap">
-          {message.content}
+        <div className="max-w-[65%]">
+          {hasImages && (
+            <div className={`flex gap-1.5 mb-1.5 justify-end flex-wrap`}>
+              {message.attachments.map((att, i) => (
+                <img
+                  key={i}
+                  src={att.url}
+                  alt={att.filename || ''}
+                  className="w-32 h-32 object-cover rounded-xl border border-indigo-400/30"
+                  data-testid="user-message-image"
+                />
+              ))}
+            </div>
+          )}
+          {message.content && (
+            <div className="bg-indigo-600 text-white rounded-2xl rounded-br-sm px-4 py-3 text-[13.5px] leading-relaxed whitespace-pre-wrap">
+              {message.content}
+            </div>
+          )}
         </div>
       </div>
     );
   }
 
-  // AI messages and cards share the avatar layout
+  // AI messages and cards
   return (
-    <div className="flex gap-2.5 max-w-[88%]">
-      {/* AI avatar */}
-      <div className="w-8 h-8 rounded-[10px] bg-gradient-to-br from-indigo-600 to-purple-600 flex items-center justify-center flex-shrink-0 text-white text-xs font-bold">
-        AI
-      </div>
-
-      <div className="flex flex-col gap-2.5 flex-1 min-w-0">
+    <div className="flex flex-col gap-2.5 max-w-[88%]">
         {/* Markdown-rendered message */}
         {type === 'assistant' && (
           <div className="bg-white border border-gray-200 rounded-sm rounded-tr-2xl rounded-br-2xl rounded-bl-2xl px-4 py-3 shadow-sm">
@@ -83,24 +95,19 @@ export default function MessageBubble({ message, onApprove, onReject, onFeedback
           <ResearchCard report={message.report} duration={message.duration} />
         )}
 
-        {/* Strategy card - in progress */}
-        {type === 'strategy_progress' && (
-          <StrategyCard inProgress steps={message.steps} />
-        )}
-
         {/* Strategy card - complete */}
         {type === 'strategy_complete' && (
           <StrategyCard plan={message.plan} />
         )}
 
-        {/* Creative reference card */}
-        {type === 'creative_reference_complete' && (
-          <CreativeReferenceCard references={message.references} />
+        {/* Creative plan card */}
+        {type === 'creative_plan_complete' && (
+          <CreativePlanCard creativeTasks={message.creativeTasks} references={message.references} />
         )}
 
         {/* Creative card */}
         {type === 'creative_progress' && (
-          <CreativeCard inProgress />
+          <CreativeCard inProgress completed={message.completed} total={message.total} errors={message.errors} lastDetail={message.lastDetail} />
         )}
         {type === 'creative_complete' && (
           <CreativeCard creatives={message.creatives} />
@@ -140,7 +147,12 @@ export default function MessageBubble({ message, onApprove, onReject, onFeedback
           </div>
         )}
 
-        {/* Thinking / tool use */}
+        {/* Thinking / tool use — grouped */}
+        {type === 'thinking_group' && (
+          <ThinkingCard steps={message.steps} />
+        )}
+
+        {/* Thinking / tool use — legacy single events */}
         {(type === 'thinking' || type === 'tool_call' || type === 'tool_result') && (
           <ThinkingCard type={type} tool={message.tool} content={message.content} />
         )}
@@ -154,13 +166,23 @@ export default function MessageBubble({ message, onApprove, onReject, onFeedback
           </div>
         )}
 
+        {/* Phase running indicator (shown after page refresh when orchestration is in progress) */}
+        {type === 'phase_running' && (
+          <div className="bg-white border border-indigo-200 rounded-xl overflow-hidden shadow-sm">
+            <div className="px-4 py-3 bg-indigo-50 flex items-center gap-2">
+              <div className="w-3.5 h-3.5 rounded-full border-2 border-indigo-500 border-t-transparent animate-spin" />
+              <span className="text-xs font-semibold text-indigo-900">{message.content}</span>
+              <span className="text-xs text-indigo-400">执行中...</span>
+            </div>
+          </div>
+        )}
+
         {/* Error */}
         {type === 'error' && (
           <div className="bg-red-50 border border-red-200 rounded-xl px-4 py-3 text-[13px] text-red-700">
             {message.content}
           </div>
         )}
-      </div>
     </div>
   );
 }

@@ -15,6 +15,8 @@ export default function SessionList({ sessions, activeId, onSelect, onCreate, is
     running: { label: t('statuses.running'), bg: 'bg-indigo-100', text: 'text-indigo-700' },
     brief_completed: { label: t('statuses.briefCompleted'), bg: 'bg-blue-100', text: 'text-blue-700' },
     awaiting_approval: { label: t('statuses.awaitingApproval'), bg: 'bg-amber-100', text: 'text-amber-700' },
+    awaiting_feedback: { label: t('statuses.awaitingFeedback'), bg: 'bg-amber-100', text: 'text-amber-700' },
+    interrupted: { label: t('statuses.interrupted'), bg: 'bg-orange-100', text: 'text-orange-700' },
     completed: { label: t('statuses.completed'), bg: 'bg-green-100', text: 'text-green-700' },
     failed: { label: t('statuses.failed'), bg: 'bg-red-100', text: 'text-red-700' },
   };
@@ -95,23 +97,6 @@ export default function SessionList({ sessions, activeId, onSelect, onCreate, is
                 </span>
               </div>
 
-              {/* Phase progress bar */}
-              <div className="flex gap-1">
-                {PHASE_NAMES.map((_, i) => (
-                  <div
-                    key={i}
-                    className={`flex-1 h-[3px] rounded-full ${
-                      i < session.phase_index
-                        ? 'bg-green-500'
-                        : i === session.phase_index && session.status === 'running'
-                          ? 'bg-indigo-500'
-                          : i === session.phase_index && session.status === 'awaiting_approval'
-                            ? 'bg-amber-400'
-                            : 'bg-gray-200'
-                    }`}
-                  />
-                ))}
-              </div>
             </div>
           );
         })}

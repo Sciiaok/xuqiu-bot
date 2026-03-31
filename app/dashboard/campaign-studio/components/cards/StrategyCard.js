@@ -74,41 +74,8 @@ function CampaignTree({ platforms }) {
   );
 }
 
-export default function StrategyCard({ plan, inProgress, steps }) {
+export default function StrategyCard({ plan }) {
   const [expanded, setExpanded] = useState(false);
-
-  // In-progress state: show step checklist
-  if (inProgress) {
-    return (
-      <div className="bg-white border border-purple-200 rounded-xl overflow-hidden shadow-sm">
-        <div className="px-4 py-3 bg-purple-50 flex items-center gap-2 border-b border-purple-200">
-          <div className="w-3.5 h-3.5 rounded-full border-2 border-purple-500 border-t-transparent animate-spin" />
-          <span className="text-xs font-semibold text-purple-900">方案规划中</span>
-        </div>
-        <div className="px-4 py-3 text-[13px] space-y-2">
-          {(steps || []).map((step, i) => (
-            <div key={i} className="flex items-center gap-2">
-              {step.done ? (
-                <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
-                  <circle cx="8" cy="8" r="6" stroke="#16a34a" strokeWidth="1.2"/>
-                  <path d="M5.5 8l2 2 3-3" stroke="#16a34a" strokeWidth="1.2" strokeLinecap="round"/>
-                </svg>
-              ) : step.active ? (
-                <div className="w-3.5 h-3.5 rounded-full border-2 border-purple-500 border-t-transparent animate-spin" />
-              ) : (
-                <div className="w-3.5 h-3.5 rounded-full border-2 border-gray-300" />
-              )}
-              <span className={step.active ? 'text-purple-600 font-medium' : step.done ? 'text-gray-700' : 'text-gray-400'}>
-                {step.label}
-              </span>
-            </div>
-          ))}
-        </div>
-      </div>
-    );
-  }
-
-  // Completed state
   if (!plan) return null;
 
   const platforms = plan.platforms || [];

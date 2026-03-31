@@ -60,16 +60,19 @@ export default function CampaignStudioPage() {
     loadSessions();
   }, [loadSessions]);
 
+  // URL → state: only re-run when the URL itself changes (not when sessions reload)
+  useEffect(() => {
+    const briefIdFromUrl = searchParams.get('brief_id')?.trim();
+    if (briefIdFromUrl) {
+      setActiveBriefId(prev => prev === briefIdFromUrl ? prev : briefIdFromUrl);
+    }
+  }, [searchParams]);
+
+  // Edge case: URL has session_id but no brief_id → look up brief_id from sessions
   useEffect(() => {
     const briefIdFromUrl = searchParams.get('brief_id')?.trim();
     const sessionIdFromUrl = searchParams.get('session_id')?.trim();
-
-    if (briefIdFromUrl) {
-      setActiveBriefId(prev => prev === briefIdFromUrl ? prev : briefIdFromUrl);
-      return;
-    }
-
-    if (sessionIdFromUrl && sessions.length > 0) {
+    if (!briefIdFromUrl && sessionIdFromUrl && sessions.length > 0) {
       const matchedSession = sessions.find(s => s.session_id === sessionIdFromUrl);
       if (matchedSession) {
         setActiveBriefId(prev => prev === matchedSession.brief_id ? prev : matchedSession.brief_id);
@@ -101,11 +104,11 @@ export default function CampaignStudioPage() {
   async function handleCreate() {
     setIsCreating(true);
     try {
-      const res = await fetch('/api/campaign/intake', { method: 'POST' });
+      const res = await fetch('/api/campaign/orchestrate', { method: 'POST' });
       if (!res.ok) throw new Error('Failed to create session');
-      const { brief_id } = await res.json();
+      const { brief_id, session_id } = await res.json();
       setActiveBriefId(brief_id);
-      syncUrlParams(brief_id, null);
+      syncUrlParams(brief_id, session_id || null);
       await loadSessions();
     } catch (err) {
       console.error('Failed to create session:', err);

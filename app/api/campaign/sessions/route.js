@@ -1,3 +1,4 @@
+import { createClient } from '../../../../lib/supabase-server.js';
 import supabase from '../../../../lib/supabase.js';
 
 /**
@@ -8,6 +9,12 @@ import supabase from '../../../../lib/supabase.js';
  */
 export async function GET() {
   try {
+    const authClient = await createClient();
+    const { data: { user } } = await authClient.auth.getUser();
+    if (!user) {
+      return Response.json({ error: 'Unauthorized' }, { status: 401 });
+    }
+
     const { data: briefs, error } = await supabase
       .from('campaign_briefs')
       .select('id, brief, completion, status, created_at, updated_at')
@@ -70,22 +77,22 @@ export async function GET() {
       const session = sessionByBrief[b.id];
 
       // Derive phase progress
-      const phaseOrder = ['intake', 'research', 'strategy', 'creative_reference', 'creative', 'execution'];
+      const phaseOrder = ['intake', 'research', 'strategy', 'creative_plan', 'creative', 'execution'];
       let currentPhaseIndex = 0;
       let displayStatus = 'intake';
 
       if (session) {
-        if (session.status === 'draft' && b.status === 'completed') {
-          // Session created but orchestration not started yet, brief is done
+        if (session.status === 'brief_completed' || (session.status === 'draft' && b.status === 'completed')) {
+          // Brief is ready, but orchestration has not started yet
           displayStatus = 'brief_completed';
           currentPhaseIndex = 1;
-        } else if (session.status === 'draft') {
+        } else if (session.status === 'draft' || session.status === 'intake') {
           // Still in intake phase
           displayStatus = 'intake';
           currentPhaseIndex = 0;
         } else if (session.status === 'completed') {
           displayStatus = 'completed';
-          currentPhaseIndex = 6;
+          currentPhaseIndex = phaseOrder.length - 1;
         } else {
           displayStatus = session.status;
           const cp = session.current_phase;

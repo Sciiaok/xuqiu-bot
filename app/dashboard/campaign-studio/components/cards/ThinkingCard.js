@@ -1,42 +1,113 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useMemo } from 'react';
 
-export default function ThinkingCard({ type, tool, content }) {
+const THINKING_PHRASES = [
+  '正在分析信息...',
+  '让我想想...',
+  '正在搜索相关资料...',
+  '梳理思路中...',
+  '正在整理数据...',
+  '深入研究中...',
+  '综合分析中...',
+  '正在查阅资料...',
+];
+
+const TOOL_LABELS = {
+  web_search: '搜索网页',
+  read_webpage: '读取网页',
+  update_brief: '更新需求',
+  save_brief: '保存需求',
+  parse_attachment: '解析附件',
+};
+
+function randomPhrase() {
+  return THINKING_PHRASES[Math.floor(Math.random() * THINKING_PHRASES.length)];
+}
+
+/**
+ * Unified thinking card — collapsed by default, shows random thinking text.
+ *
+ * Props:
+ *   steps: [{ type: 'tool_call'|'tool_result', tool, content }]  (grouped mode)
+ *   — OR legacy single-event mode —
+ *   type: 'thinking'|'tool_call'|'tool_result', tool, content
+ */
+export default function ThinkingCard({ steps, type, tool, content }) {
   const [open, setOpen] = useState(false);
+  const phrase = useMemo(randomPhrase, []);
 
-  const isToolCall = type === 'tool_call';
-  const isToolResult = type === 'tool_result';
-  const isThinking = type === 'thinking';
+  // Legacy single-event mode (thinking block)
+  if (type === 'thinking') {
+    return (
+      <div className="bg-gray-50 border border-gray-200 rounded-xl overflow-hidden">
+        <button onClick={() => setOpen(!open)} className="w-full px-4 py-2.5 flex items-center gap-2 text-left">
+          <span className="text-sm">💭</span>
+          <span className="text-xs text-gray-400">{phrase}</span>
+          <span className="ml-auto text-gray-300 text-[10px]">{open ? '▼' : '▶'}</span>
+        </button>
+        {open && (
+          <div className="px-4 pb-3 border-t border-gray-100">
+            <pre className="text-[11px] text-gray-500 whitespace-pre-wrap overflow-x-auto font-mono leading-relaxed mt-2">{content}</pre>
+          </div>
+        )}
+      </div>
+    );
+  }
 
-  const label = isToolCall
-    ? `调用工具: ${tool}`
-    : isToolResult
-      ? `工具结果: ${tool}`
-      : '思考中';
+  // Grouped tool steps mode
+  const items = steps || [{ type, tool, content }];
 
-  const bgColor = isThinking ? 'bg-gray-50' : 'bg-slate-50';
+  // Determine if there's an active (pending) tool call — a tool_call without a matching tool_result after it
+  const isActive = useMemo(() => {
+    for (let i = items.length - 1; i >= 0; i--) {
+      if (items[i].type === 'tool_result') return false;
+      if (items[i].type === 'tool_call') return true;
+    }
+    return items.length === 0; // empty thinking_group = just started
+  }, [items]);
+
+  const summary = useMemo(() => {
+    const progressItems = items.filter(s => s.type === 'progress');
+    const toolItems = items.filter(s => s.type === 'tool_call');
+    const lastProgress = progressItems[progressItems.length - 1];
+    // Show the last active tool if still pending
+    if (isActive && toolItems.length > 0) {
+      const lastTool = toolItems[toolItems.length - 1];
+      return TOOL_LABELS[lastTool.tool] || lastTool.tool;
+    }
+    const toolNames = [...new Set(toolItems.map(s => TOOL_LABELS[s.tool] || s.tool))];
+    return lastProgress?.content || (toolNames.length > 0 ? toolNames.join(' → ') : phrase);
+  }, [items, phrase, isActive]);
 
   return (
-    <div className={`${bgColor} border border-gray-200 rounded-xl overflow-hidden`}>
-      <button
-        onClick={() => setOpen(!open)}
-        className="w-full px-4 py-2.5 flex items-center gap-2 text-left"
-      >
-        <span className="text-gray-400 text-[10px]">{open ? '▼' : '▶'}</span>
-        <span className="text-xs text-gray-500 font-medium">{label}</span>
-        {isToolCall && (
-          <svg className="ml-auto w-3.5 h-3.5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.066 2.573c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.573 1.066c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.066-2.573c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
-          </svg>
+    <div className={`border rounded-xl overflow-hidden ${isActive ? 'bg-indigo-50/50 border-indigo-200' : 'bg-gray-50 border-gray-200'}`}>
+      <button onClick={() => setOpen(!open)} className="w-full px-4 py-2.5 flex items-center gap-2.5 text-left">
+        {isActive ? (
+          <div className="w-3.5 h-3.5 rounded-full border-2 border-indigo-500 border-t-transparent animate-spin shrink-0" />
+        ) : (
+          <span className="text-sm">💭</span>
         )}
+        <span className={`text-xs truncate ${isActive ? 'text-indigo-600 font-medium' : 'text-gray-400'}`}>{summary}{isActive ? '...' : ''}</span>
+        <span className="ml-auto text-gray-300 text-[10px] shrink-0">{open ? '▼' : '▶'}</span>
       </button>
       {open && (
-        <div className="px-4 pb-3 border-t border-gray-100">
-          <pre className="text-[11px] text-gray-500 whitespace-pre-wrap overflow-x-auto font-mono leading-relaxed mt-2">
-            {content}
-          </pre>
+        <div className="border-t border-gray-100 divide-y divide-gray-100">
+          {items.map((step, i) => (
+            <div key={i} className="px-4 py-2">
+              <div className="text-[11px] text-gray-400 mb-1">
+                {step.type === 'tool_call' ? `调用 ${step.tool}`
+                  : step.type === 'progress' ? `📍 ${step.content}`
+                  : step.type === 'tool_result' ? `结果 ${step.tool}`
+                  : step.tool || '思考'}
+              </div>
+              {step.type !== 'progress' && (
+                <pre className="text-[11px] text-gray-500 whitespace-pre-wrap overflow-x-auto font-mono leading-relaxed max-h-40 overflow-y-auto">
+                  {step.content}
+                </pre>
+              )}
+            </div>
+          ))}
         </div>
       )}
     </div>

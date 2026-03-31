@@ -29,8 +29,8 @@ export default defineConfig({
   test: {
     environment: 'jsdom',
     globals: false,
-    include: ['**/__tests__/**/*.test.{js,jsx}', 'app/**/*.test.{js,jsx}'],
-    exclude: ['**/node_modules/**', 'tests/**'],
+    include: ['**/__tests__/**/*.test.{js,jsx}', 'app/**/*.test.{js,jsx}', 'tests/unit/**/*.test.{js,jsx}'],
+    exclude: ['**/node_modules/**'],
   },
   resolve: {
     alias: {

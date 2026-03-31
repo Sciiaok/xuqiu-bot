@@ -5,7 +5,10 @@ const withNextIntl = createNextIntlPlugin('./i18n/request.js');
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   // Allow server-side imports of Node.js built-ins
-  serverExternalPackages: ['openai', '@anthropic-ai/sdk'],
+  serverExternalPackages: ['openai', '@anthropic-ai/sdk', 'xlsx'],
+  experimental: {
+    proxyClientMaxBodySize: '50mb',
+  },
 };
 
 export default withNextIntl(nextConfig);

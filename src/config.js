@@ -50,11 +50,19 @@ export const config = {
     apiKey: process.env.SERPAPI_KEY,
   },
 
-  // AIGC — image/video generation via OpenRouter
+  // Firecrawl — website scraping / extraction
+  firecrawl: {
+    apiKey: process.env.FIRECRAWL_API_KEY,
+    baseURL: process.env.FIRECRAWL_BASE_URL || 'https://api.firecrawl.dev/v1',
+  },
+
+  // AIGC — image generation via MixAI (primary) or OpenRouter (fallback)
   aigc: {
-    apiKey: process.env.OPENROUTER_API_KEY,
-    baseURL: process.env.OPENROUTER_BASE_URL || 'https://openrouter.ai/api',
-    imageModel: process.env.AIGC_IMAGE_MODEL || 'google/gemini-3.1-flash-image-preview',
+    apiKey: process.env.MIXAI_API_KEY || process.env.OPENROUTER_API_KEY,
+    baseURL: process.env.MIXAI_API_KEY
+      ? (process.env.MIXAI_BASE_URL || 'https://us.mixaicloud.com')
+      : (process.env.OPENROUTER_BASE_URL || 'https://openrouter.ai/api'),
+    imageModel: process.env.AIGC_IMAGE_MODEL || (process.env.MIXAI_API_KEY ? 'gemini-3.1-flash-image-preview' : 'google/gemini-3.1-flash-image-preview'),
     storageBucket: 'aigc-assets',
   },
 

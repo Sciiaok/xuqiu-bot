@@ -1,4 +1,6 @@
+import { createClient } from '../../../../../lib/supabase-server.js';
 import { orchestrate, chatWithOrchestrator } from '../../../../../src/campaign-orchestrator.service.js';
+import { processIntakeMessage } from '../../../../../src/campaign-intake.service.js';
 import {
   createSession,
   getSession,
@@ -8,6 +10,12 @@ import {
 } from '../../../../../lib/repositories/orchestrator.repository.js';
 import { getBrief } from '../../../../../lib/repositories/campaign-brief.repository.js';
 import { streamSSE } from '../../../../../lib/sse.js';
+import { streamKey } from '../../../../../lib/redis.js';
+
+function isBriefReadyForOrchestration(brief) {
+  const briefData = brief?.brief || {};
+  return Boolean(briefData.company_name && briefData.industry);
+}
 
 /**
  * POST /api/campaign/orchestrate/[id]
@@ -20,37 +28,74 @@ import { streamSSE } from '../../../../../lib/sse.js';
  * Query: ?start_phase=research → resume from specific phase
  */
 export async function POST(request, { params }) {
+  const supabase = await createClient();
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) {
+    return Response.json({ error: 'Unauthorized' }, { status: 401 });
+  }
+
   const { id } = await params;
 
   let body = {};
   try { body = await request.json(); } catch { /* empty body = run pipeline */ }
+  const hasMessageField = typeof body.message === 'string';
+  const hasAttachments = Array.isArray(body.attachments) && body.attachments.length > 0;
+  const isChatMode = hasMessageField || hasAttachments;
 
   // Resolve session: id could be session_id or brief_id
   let session = await getSession(id);
+  let brief = null;
   if (!session) {
     // Try as brief_id — find or create session
-    const brief = await getBrief(id);
+    brief = await getBrief(id);
     if (!brief) {
       return Response.json({ error: 'Brief or session not found' }, { status: 404 });
     }
     session = await getLatestSession(id);
-    if (!session || session.status === 'completed' || session.status === 'failed') {
-      session = await createSession(id);
+
+    if (isChatMode) {
+      if (!session) {
+        session = await createSession(id, { status: 'intake', current_phase: 'intake' });
+      }
+    } else if (!session || session.status === 'completed' || session.status === 'failed') {
+      session = await createSession(id, {
+        status: isBriefReadyForOrchestration(brief) ? 'brief_completed' : 'intake',
+        current_phase: 'intake',
+      });
     } else if (session.status === 'running') {
       const { data } = await updateSessionIfStatus(session.id, 'running', { status: 'interrupted' });
       session = data || await getSession(session.id);
     }
   }
 
+  if (!brief) {
+    brief = await getBrief(session.brief_id);
+  }
+  if (!brief) {
+    return Response.json({ error: 'Brief not found' }, { status: 404 });
+  }
+
   // Chat mode: user sends a message
-  if (body.message) {
-    return streamSSE(chatWithOrchestrator(session.id, body.message));
+  if (isChatMode) {
+    // Intake phase: use dedicated intake agent (has web_search, confidence checks, etc.)
+    if (session.status === 'intake' && session.current_phase === 'intake') {
+      return streamSSE(
+        processIntakeMessage(brief.id, body.message || '', { attachments: body.attachments }),
+        { heartbeatIntervalMs: 5000, streamKey: streamKey(brief.id) },
+      );
+    }
+    // Post-intake: use orchestrator chat handler
+    return streamSSE(
+      chatWithOrchestrator(session.id, body.message || '', { attachments: body.attachments }),
+      { heartbeatIntervalMs: 5000, streamKey: streamKey(brief.id) },
+    );
   }
 
   // Pipeline mode: run orchestration (heartbeat keeps connection alive during long phases)
   const sessionId = session.id;
-  return streamSSE(orchestrate(sessionId), {
+  return streamSSE(orchestrate(sessionId, { phases: body.phases }), {
     heartbeatIntervalMs: 5000,
+    streamKey: streamKey(brief.id),
     onAbort: async () => {
       await updateSessionIfStatus(sessionId, 'running', { status: 'interrupted' });
     },
@@ -65,9 +110,16 @@ export async function POST(request, { params }) {
  *        ?phase=chat     → user conversation only (phase IS NULL)
  */
 export async function GET(request, { params }) {
+  const supabase = await createClient();
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) {
+    return Response.json({ error: 'Unauthorized' }, { status: 401 });
+  }
+
   const { id } = await params;
   const { searchParams } = new URL(request.url);
   const phaseFilter = searchParams.get('phase');
+  const debug = searchParams.get('debug') !== null;
 
   // Resolve session
   let session = await getSession(id);
@@ -77,7 +129,6 @@ export async function GET(request, { params }) {
   if (!session) {
     return Response.json({ error: 'Session not found' }, { status: 404 });
   }
-
   const msgOpts = {};
   if (phaseFilter === 'chat') {
     msgOpts.phase = null;
@@ -87,6 +138,9 @@ export async function GET(request, { params }) {
 
   const messages = await getMessages(session.id, msgOpts);
 
+  // Include brief data so frontend doesn't need a separate intake endpoint
+  const briefData = await getBrief(session.brief_id);
+
   return Response.json({
     session_id: session.id,
     brief_id: session.brief_id,
@@ -94,15 +148,17 @@ export async function GET(request, { params }) {
     current_phase: session.current_phase,
     phase_results_keys: Object.keys(session.phase_results || {}),
     phase_results: session.phase_results || {},
-    messages: messages.map(m => ({
+    brief: briefData?.brief || {},
+    completion: briefData?.completion || {},
+    messages: messages.filter(m => debug || !(m.role === 'event' && !m.tool_name)).map(m => ({
       id: m.id,
       phase: m.phase,
       role: m.role,
       content: m.content,
       tool_name: m.tool_name,
       tool_result: m.tool_result,
+      attachments: m.attachments || null,
       created_at: m.created_at,
     })),
   });
 }
-

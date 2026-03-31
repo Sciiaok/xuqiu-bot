@@ -1,16 +1,6 @@
-import OpenAI from 'openai';
+import { openai, openaiModel, MODELS } from './llm-client.js';
 import { read, utils } from 'xlsx';
-import { config } from './config.js';
 import supabase from '../lib/supabase.js';
-
-// Use OpenRouter if available (same OpenAI-compatible API), fallback to OpenAI direct
-const openai = new OpenAI({
-  apiKey: process.env.OPENROUTER_API_KEY || config.openai.apiKey,
-  baseURL: process.env.OPENROUTER_API_KEY
-    ? (process.env.OPENROUTER_BASE_URL || 'https://openrouter.ai/api') + '/v1'
-    : undefined,
-  timeout: 60000,
-});
 
 /**
  * Parse a PDF file using opendataloader-pdf and store results.
@@ -306,7 +296,7 @@ export function parseExcel(excelBuffer) {
  */
 export async function extractExcelContent(rawText, productLine) {
   const response = await openai.chat.completions.create({
-    model: process.env.OPENROUTER_API_KEY ? 'openai/gpt-4o-mini' : 'gpt-4o-mini',
+    model: openaiModel(MODELS.GPT_MINI),
     temperature: 0,
     response_format: { type: 'json_object' },
     messages: [
@@ -486,7 +476,7 @@ export async function normalizeSpecFields(rawKeyValues, productLine) {
   }
 
   const response = await openai.chat.completions.create({
-    model: process.env.OPENROUTER_API_KEY ? 'openai/gpt-4o-mini' : 'gpt-4o-mini',
+    model: openaiModel(MODELS.GPT_MINI),
     temperature: 0,
     response_format: { type: 'json_object' },
     messages: [
@@ -579,7 +569,7 @@ function splitMarkdownIntoChunks(text, maxChars) {
  */
 export async function generateEmbeddings(texts) {
   const response = await openai.embeddings.create({
-    model: process.env.OPENROUTER_API_KEY ? 'openai/text-embedding-3-small' : 'text-embedding-3-small',
+    model: openaiModel(MODELS.EMBEDDING),
     input: texts,
   });
 

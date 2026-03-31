@@ -1,11 +1,6 @@
-import Anthropic from '@anthropic-ai/sdk';
+import { anthropic, MODELS } from './llm-client.js';
 import { config } from './config.js';
 import { mapCountriesToISO } from '../lib/country-codes.js';
-
-const anthropic = new Anthropic({
-  apiKey: config.anthropic.apiKey,
-  ...(config.anthropic.baseURL && { baseURL: config.anthropic.baseURL }),
-});
 
 const FETCH_TIMEOUT = 30_000;
 const META_GRAPH_URL = 'https://graph.facebook.com';
@@ -147,9 +142,7 @@ async function executeTool(toolName, toolInput) {
  * @param {Object} brief - CampaignBrief object
  * @returns {Promise<Object>} Research report
  */
-const RESEARCH_MODEL = 'anthropic/claude-haiku-4.5';
-
-export async function conductResearch(brief, instructions) {
+export async function conductResearch(brief, instructions, onProgress) {
   const systemPrompt = instructions
     ? `${RESEARCH_SYSTEM_PROMPT}\n\n═══ 额外指令 ═══\n${instructions}`
     : RESEARCH_SYSTEM_PROMPT;
@@ -163,10 +156,12 @@ export async function conductResearch(brief, instructions) {
   const countries = brief.target_countries || [];
   const keywords = [brief.industry, ...productNames, productsStr].filter(Boolean).slice(0, 3);
 
+  onProgress?.({ step: 'fetching_data', detail: '获取 Meta 广告库和 Google Trends 数据' });
   const [adLibraryResult, trendsResult] = await Promise.all([
     fetchMetaAdLibrary({ search_terms: searchTerms, countries }).catch(err => ({ available: false, error: err.message })),
     fetchGoogleTrends({ keywords }).catch(err => ({ available: false, error: err.message })),
   ]);
+  onProgress?.({ step: 'analyzing', detail: '分析市场数据，生成调研报告' });
 
   const rawAds = adLibraryResult?.ads || [];
 
@@ -176,29 +171,29 @@ export async function conductResearch(brief, instructions) {
     content: `Conduct market research for this campaign brief and submit your report via submit_report.
 
 CAMPAIGN BRIEF:
-${JSON.stringify(brief, null, 2)}
+${JSON.stringify(brief)}
 
 EXTERNAL DATA (pre-fetched):
 
 === Meta Ad Library Results ===
-${JSON.stringify(adLibraryResult, null, 2)}
+${JSON.stringify(adLibraryResult)}
 
 === Google Trends Results ===
-${JSON.stringify(trendsResult, null, 2)}
+${JSON.stringify(trendsResult)}
 
 Analyze the brief and external data above, then call submit_report with your complete research report.`,
   }];
 
-  const model = config.anthropic.baseURL ? RESEARCH_MODEL : 'claude-haiku-4-5-20251001';
+  const model = MODELS.HAIKU;
 
-  const response = await anthropic.messages.create({
+  const response = await anthropic.messages.stream({
     model,
-    max_tokens: 8192,
+    max_tokens: 16384,
     system: systemPrompt,
     messages,
     tools: RESEARCH_TOOLS,
     tool_choice: { type: 'tool', name: 'submit_report' },
-  });
+  }).finalMessage();
 
   const submitBlock = response.content.find(c => c.type === 'tool_use' && c.name === 'submit_report');
   if (submitBlock?.input && Object.keys(submitBlock.input).length > 0) {

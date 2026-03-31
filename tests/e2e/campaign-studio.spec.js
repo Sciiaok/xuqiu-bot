@@ -143,7 +143,7 @@ test.describe('Campaign Studio - AI 投放助手', () => {
     });
 
     // Mock chat SSE
-    await page.route('**/api/campaign/intake/brief-new/chat*', route => {
+    await page.route('**/api/campaign/orchestrate/brief-new', route => {
       return route.fulfill({
         headers: { 'Content-Type': 'text/event-stream' },
         body: MOCK_INTAKE_SSE,
@@ -445,7 +445,7 @@ test.describe('Campaign Studio - AI 投放助手', () => {
       route.fulfill({ json: { id: 'brief-tools', brief: {}, completion: {}, status: 'active' } })
     );
 
-    await page.route('**/api/campaign/intake/brief-tools/chat*', route =>
+    await page.route('**/api/campaign/orchestrate/brief-tools', route =>
       route.fulfill({ headers: { 'Content-Type': 'text/event-stream' }, body: SSE_WITH_TOOLS })
     );
 

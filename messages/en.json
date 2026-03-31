@@ -407,6 +407,15 @@
     "close": "Close",
     "model": "Model"
   },
+  "productAssets": {
+    "title": "Product Assets",
+    "uploadAsset": "Upload Asset",
+    "uploading": "Uploading...",
+    "dropOrClick": "Drop images here, or click to browse (JPG / PNG / WebP / GIF)",
+    "noModels": "No models yet (upload product docs first)",
+    "delete": "Delete",
+    "confirmDelete": "Delete {filename}?"
+  },
   "conversationList": {
     "title": "Conversations",
     "searchPlaceholder": "Search...",
@@ -431,6 +440,7 @@
     "loadingConversation": "Loading session content...",
     "startPlan": "Generate campaign plan",
     "inputPlaceholder": "Type your message...",
+    "uploadImage": "Upload image",
     "planReadyConfirm": "Plan is ready. Confirm to execute?",
     "confirmExecute": "Confirm",
     "cancel": "Cancel",
@@ -440,7 +450,7 @@
       "intake": "Requirements Intake",
       "research": "Market Research",
       "strategy": "Strategy Planning",
-      "creativeReference": "Creative References",
+      "creativePlan": "Creative Planning",
       "creative": "Creative Production",
       "execution": "Campaign Execution"
     },
@@ -450,6 +460,8 @@
       "running": "Running",
       "briefCompleted": "Brief completed",
       "awaitingApproval": "Awaiting approval",
+      "awaitingFeedback": "Awaiting confirmation",
+      "interrupted": "Interrupted",
       "completed": "Completed",
       "failed": "Failed"
     }

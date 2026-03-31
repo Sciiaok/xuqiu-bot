@@ -1,6 +1,9 @@
+import { createClient } from '../../../../../../lib/supabase-server.js';
 import { resumeAfterFeedback } from '../../../../../../src/campaign-orchestrator.service.js';
 import { getSession, getLatestSession, updateSessionIfStatus } from '../../../../../../lib/repositories/orchestrator.repository.js';
 import { streamSSE } from '../../../../../../lib/sse.js';
+import { streamKey } from '../../../../../../lib/redis.js';
+import { getBrief } from '../../../../../../lib/repositories/campaign-brief.repository.js';
 
 /**
  * POST /api/campaign/orchestrate/[id]/feedback
@@ -10,6 +13,12 @@ import { streamSSE } from '../../../../../../lib/sse.js';
  * Returns: SSE stream
  */
 export async function POST(request, { params }) {
+  const supabase = await createClient();
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) {
+    return Response.json({ error: 'Unauthorized' }, { status: 401 });
+  }
+
   const { id } = await params;
 
   let body;
@@ -17,9 +26,14 @@ export async function POST(request, { params }) {
     return Response.json({ error: 'Invalid JSON body' }, { status: 400 });
   }
 
-  if (!body.response) {
+  const hasResponse = Boolean(body.response);
+  const hasAttachments = Array.isArray(body.attachments) && body.attachments.length > 0;
+  if (!hasResponse && !hasAttachments) {
     return Response.json({ error: 'Missing response field' }, { status: 400 });
   }
+
+  // If user only sent images, synthesize a text response
+  const responseText = body.response || '用户上传了参考图片';
 
   let session = await getSession(id);
   if (!session) {
@@ -29,9 +43,12 @@ export async function POST(request, { params }) {
     return Response.json({ error: 'Session not found' }, { status: 404 });
   }
 
+  const brief = await getBrief(session.brief_id);
+
   const sessionId = session.id;
-  return streamSSE(resumeAfterFeedback(sessionId, body.response), {
+  return streamSSE(resumeAfterFeedback(sessionId, responseText, { attachments: body.attachments }), {
     heartbeatIntervalMs: 5000,
+    streamKey: brief ? streamKey(brief.id) : undefined,
     onAbort: async () => {
       await updateSessionIfStatus(sessionId, 'running', { status: 'interrupted' });
     },

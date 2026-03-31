@@ -5,6 +5,8 @@ import { useTranslations } from 'next-intl';
 import ProductDocUploader from '../components/ProductDocUploader';
 import ProductDocCard from '../components/ProductDocCard';
 import ProductSpecViewer from '../components/ProductSpecViewer';
+import ProductAssetUploader from '../components/ProductAssetUploader';
+import ProductAssetGallery from '../components/ProductAssetGallery';
 
 export default function ProductDocsPage() {
   const [docs, setDocs] = useState([]);
@@ -14,8 +16,12 @@ export default function ProductDocsPage() {
   const [filterAgentId, setFilterAgentId] = useState(null);
   const [viewingSpecsDocId, setViewingSpecsDocId] = useState(null);
   const [specsCounts, setSpecsCounts] = useState({});
+  const [assets, setAssets] = useState([]);
   const t = useTranslations('productDocs');
+  const tAssets = useTranslations('productAssets');
   const tTime = useTranslations('time');
+
+  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
 
   const fetchDocs = useCallback(async () => {
     try {
@@ -42,6 +48,20 @@ export default function ProductDocsPage() {
     }
   }, []);
 
+  const fetchAssets = useCallback(async () => {
+    try {
+      const url = filterAgentId
+        ? `/api/product-assets?agent_id=${filterAgentId}`
+        : '/api/product-assets';
+      const res = await fetch(url);
+      if (!res.ok) return;
+      const data = await res.json();
+      setAssets(data);
+    } catch {
+      // silently fail
+    }
+  }, [filterAgentId]);
+
   const fetchOperations = useCallback(async () => {
     try {
       const url = filterAgentId
@@ -58,8 +78,8 @@ export default function ProductDocsPage() {
 
   // Initial load
   useEffect(() => {
-    Promise.all([fetchDocs(), fetchAgents(), fetchOperations()]).finally(() => setLoading(false));
-  }, [fetchDocs, fetchAgents, fetchOperations]);
+    Promise.all([fetchDocs(), fetchAgents(), fetchOperations(), fetchAssets()]).finally(() => setLoading(false));
+  }, [fetchDocs, fetchAgents, fetchOperations, fetchAssets]);
 
   // Polling when processing docs exist
   useEffect(() => {
@@ -111,6 +131,10 @@ export default function ProductDocsPage() {
   const handleUploaded = () => {
     fetchDocs();
     fetchOperations();
+  };
+
+  const handleAssetUploaded = () => {
+    fetchAssets();
   };
 
   const agentMap = Object.fromEntries(agents.map(a => [a.id, a]));
@@ -209,6 +233,21 @@ export default function ProductDocsPage() {
             <p className="text-text-muted text-sm mt-1">{t('noDocumentsDescription')}</p>
           </div>
         )}
+      </div>
+
+      {/* Product Assets */}
+      <div>
+        <h2 className="text-lg font-semibold text-text-primary mb-3">{tAssets('title')}</h2>
+        {agents.length > 0 && (
+          <ProductAssetUploader agents={agents} onUploaded={handleAssetUploaded} />
+        )}
+        <div className="mt-4">
+          <ProductAssetGallery
+            assets={assets}
+            supabaseUrl={supabaseUrl}
+            onDelete={handleAssetUploaded}
+          />
+        </div>
       </div>
 
       {/* Operation History */}

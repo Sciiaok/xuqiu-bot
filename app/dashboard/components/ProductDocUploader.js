@@ -25,8 +25,13 @@ export default function ProductDocUploader({ agents, onUploaded }) {
       });
 
       if (!res.ok) {
-        const data = await res.json();
-        throw new Error(data.error || 'Upload failed');
+        let errorMsg = `Upload failed (${res.status})`;
+        const contentType = res.headers.get('content-type') || '';
+        if (contentType.includes('application/json')) {
+          const data = await res.json();
+          errorMsg = data.error || errorMsg;
+        }
+        throw new Error(errorMsg);
       }
 
       onUploaded();
