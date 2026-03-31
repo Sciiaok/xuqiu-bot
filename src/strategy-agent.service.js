@@ -35,7 +35,7 @@ const SUBMIT_TOOL = {
           properties: {
             platform: { type: 'string', description: 'Must match a platform above' },
             name: { type: 'string' },
-            objective: { type: 'string' },
+            objective: { type: 'string', enum: ['lead_gen', 'traffic', 'awareness', 'conversions', 'engagement', 'video_views', 'app_installs', 'reach', 'messages'], description: 'Use exactly these values. Do NOT use "lead_generation" — use "lead_gen" instead.' },
             daily_budget: { type: 'number' },
           },
         },
@@ -57,7 +57,7 @@ const SUBMIT_TOOL = {
         type: 'array',
         items: {
           type: 'object',
-          required: ['ad_set_name', 'name', 'format', 'primary_text', 'headline', 'description', 'cta'],
+          required: ['ad_set_name', 'name', 'format', 'primary_text', 'headline', 'description', 'cta', 'suggested_content'],
           properties: {
             ad_set_name: { type: 'string', description: 'Must match an ad_set name above' },
             name: { type: 'string' },
@@ -67,7 +67,7 @@ const SUBMIT_TOOL = {
             description: { type: 'string' },
             cta: { type: 'string', enum: ['Learn More', 'Shop Now', 'Sign Up', 'Contact Us', 'Get Quote', 'Apply Now', 'Download', 'Send WhatsApp', 'Subscribe', 'Book Now'], description: 'Must use exact value from enum. For lead_gen campaigns, do NOT use "Send WhatsApp" — use "Learn More", "Sign Up", or "Apply Now" instead.' },
             media_specs: { type: 'string', description: 'Image specs e.g. "1080x1080"' },
-            suggested_content: { type: 'string' },
+            suggested_content: { type: 'string', description: 'What the ad image should visually depict, e.g. "Product hero shot on white background with lifestyle context"' },
           },
         },
       },
@@ -94,13 +94,11 @@ function nestMediaPlan(flat) {
       headline: ad.headline,
       description: ad.description,
       cta: ad.cta,
-      ...(ad.media_specs || ad.suggested_content ? {
-        media_requirements: {
-          type: ad.format || 'image',
-          specs: ad.media_specs || '',
-          suggested_content: ad.suggested_content || '',
-        },
-      } : {}),
+      media_requirements: {
+        type: ad.format || 'image',
+        specs: ad.media_specs || '',
+        suggested_content: ad.suggested_content || `${ad.headline}. ${ad.description}`,
+      },
     });
   }
 
@@ -139,6 +137,39 @@ function nestMediaPlan(flat) {
     campaigns: campaignsByPlatform.get(p.platform) || [],
   }));
 
+  // ── Post-processing: normalize objectives & enforce CTA rules ──
+  const OBJECTIVE_ALIASES = {
+    lead_generation: 'lead_gen',
+    LEAD_GENERATION: 'lead_gen',
+    OUTCOME_LEADS: 'lead_gen',
+    OUTCOME_TRAFFIC: 'traffic',
+    OUTCOME_AWARENESS: 'awareness',
+    OUTCOME_SALES: 'conversions',
+    OUTCOME_ENGAGEMENT: 'engagement',
+    OUTCOME_APP_PROMOTION: 'app_installs',
+  };
+  const LEAD_GEN_OBJECTIVES = new Set(['lead_gen', 'leads']);
+  const WHATSAPP_CTA = 'Send WhatsApp';
+
+  for (const plat of platforms) {
+    for (const camp of plat.campaigns) {
+      // Normalize objective aliases
+      if (OBJECTIVE_ALIASES[camp.objective]) {
+        camp.objective = OBJECTIVE_ALIASES[camp.objective];
+      }
+      // Downgrade WhatsApp CTA to Learn More in lead_gen campaigns
+      if (LEAD_GEN_OBJECTIVES.has(camp.objective)) {
+        for (const adSet of camp.ad_sets) {
+          for (const ad of adSet.ads) {
+            if (ad.cta === WHATSAPP_CTA) {
+              ad.cta = 'Learn More';
+            }
+          }
+        }
+      }
+    }
+  }
+
   return { summary, total_budget, currency, duration_days, platforms };
 }
 
@@ -161,9 +192,11 @@ Your job: take a campaign brief, market research, and pre-computed data (budget 
 - Each campaign must have at least one ad_set with targeting and at least one ad
 - Daily budgets: minimum $5/day per ad set for Meta, $10/day for Google
 - Prefer the platforms suggested in the brief
+- Campaign count should match the budget scale: 1 campaign for budgets < $3,000, 1-2 for $3,000-$10,000, 2-3 for > $10,000. Do NOT over-create campaigns — each campaign needs enough daily budget to be effective
 - Ad copy fields (primary_text, headline, description, cta) should be brief placeholders
 - CTA must be an exact match from the enum in the schema (English only, no translations)
-- lead_gen/leads campaigns support two conversion modes: "Send WhatsApp" (WhatsApp conversation lead capture) or form-based CTAs ("Learn More", "Sign Up", "Apply Now" etc). Both are valid but should NOT be mixed within the same ad_set
+- For lead_gen/leads campaigns: NEVER use "Send WhatsApp" as CTA. Use "Learn More", "Sign Up", or "Apply Now" instead
+- "Send WhatsApp" CTA is ONLY allowed for messaging/engagement campaigns, never for lead_gen
 - Include a brief summary (1-2 sentences)
 - Output flat lists: platforms, campaigns (linked by platform), ad_sets (linked by campaign_name), ads (linked by ad_set_name)
 - You MUST call submit_media_plan as your final action`;
@@ -273,8 +306,8 @@ export async function generateMediaPlan(brief, researchReport, instructions) {
     ? `${STRATEGY_SYSTEM_PROMPT}\n\n═══ 额外指令 ═══\n${instructions}`
     : STRATEGY_SYSTEM_PROMPT;
 
-  const response = await anthropic.messages.create({
-    model: MODELS.MINIMAX,
+  const response = await anthropic.messages.stream({
+    model: MODELS.HAIKU,
     max_tokens: 16384,
     system: systemPrompt,
     messages: [{
@@ -300,7 +333,7 @@ ${JSON.stringify(audienceData)}`,
     }],
     tools: [SUBMIT_TOOL],
     tool_choice: { type: 'tool', name: 'submit_media_plan' },
-  });
+  }).finalMessage();
 
   const submitBlock = response.content.find(c => c.type === 'tool_use' && c.name === 'submit_media_plan');
   if (!submitBlock) throw new Error('Strategy agent did not produce a media plan');
@@ -401,14 +434,14 @@ ${JSON.stringify(audienceData)}`,
   }];
 
   onProgress?.({ step: 'generating_strategy', detail: '生成媒体投放方案' });
-  const strategyResponse = await anthropic.messages.create({
-    model: MODELS.MINIMAX,
+  const strategyResponse = await anthropic.messages.stream({
+    model: MODELS.HAIKU,
     max_tokens: 16384,
     system: systemPrompt,
     messages,
     tools: [SUBMIT_TOOL],
     tool_choice: { type: 'tool', name: 'submit_media_plan' },
-  });
+  }).finalMessage();
 
   const submitBlock = strategyResponse.content.find(c => c.type === 'tool_use' && c.name === 'submit_media_plan');
   if (!submitBlock) {
@@ -436,6 +469,93 @@ const FUNNEL_STAGES = [
   { key: 'consideration', label: 'Consideration / Engagement',  budget_pct: 0.55 },
   { key: 'conversion',    label: 'Conversion / Retargeting',    budget_pct: 0.25 },
 ];
+
+// ── Strategy Planner: LLM decides optimal dimensions before parallel generation ──
+
+const STRATEGY_PLANNER_PROMPT = `你是资深数字广告投放策略师。根据预算和投放需求，决定最优的 campaign 矩阵维度。
+
+## 平台最低日预算参考
+- Meta (Facebook/Instagram): $5/天/campaign
+- Google (Search/Display): $10/天/campaign
+- TikTok: $5/天/campaign
+- LinkedIn: $10/天/campaign
+- Reddit: $5/天/campaign
+
+## 漏斗阶段选项
+- 完整漏斗 (3 stages): awareness(20%) + consideration(55%) + conversion(25%) — 适合日预算 ≥$30/平台/区域
+- 双阶段 (2 stages): consideration(75%) + conversion(25%) — 适合日预算 $15-30/平台/区域
+- 单阶段 (1 stage): full_funnel(100%) — 适合日预算 <$15/平台/区域
+
+## 决策规则
+1. 计算 日预算 = total_budget / duration_days
+2. **硬约束**：每个 campaign (cell = 1 platform × 1 region × 1 stage) 的日预算必须 ≥ 该平台最低日预算。不满足就必须继续裁剪维度，绝不允许低于平台最低预算投放
+3. 如果预算不足以覆盖所有 platform × region × stage 组合，按优先级裁剪：
+   - 先减 funnel stages（3→2→1）
+   - 再减 regions（合并或保留 ROI 最高的区域）
+   - 再减 platforms（保留 fit score 最高的平台，优先裁剪其他平台）
+   - 如果只剩 1 platform × 1 region × 1 stage 仍不满足最低预算，保留该配置但在 reasoning 中说明预算不足
+4. Meta 是当前唯一支持自动执行投放的平台，当用户选择了 Meta 时必须保留，裁剪平台时优先裁剪其他平台
+5. 输出你推荐的实际维度，以及每个平台的预算分配百分比（加总 = 100）`;
+
+const STRATEGY_PLANNER_TOOL = {
+  name: 'submit_plan_dimensions',
+  description: 'Submit the recommended campaign matrix dimensions.',
+  input_schema: {
+    type: 'object',
+    required: ['platforms', 'regions', 'funnel_stages', 'reasoning'],
+    properties: {
+      platforms: {
+        type: 'array',
+        items: {
+          type: 'object',
+          required: ['platform', 'budget_pct'],
+          properties: {
+            platform: { type: 'string' },
+            budget_pct: { type: 'number', description: 'Budget percentage for this platform, all must sum to 100' },
+          },
+        },
+      },
+      regions: { type: 'array', items: { type: 'string' }, description: 'Regions to target (subset or all of requested regions)' },
+      funnel_stages: {
+        type: 'array',
+        items: {
+          type: 'object',
+          required: ['key', 'label', 'budget_pct'],
+          properties: {
+            key: { type: 'string', enum: ['awareness', 'consideration', 'conversion', 'full_funnel'] },
+            label: { type: 'string' },
+            budget_pct: { type: 'number', description: 'Fraction of platform-region budget, all must sum to 1.0' },
+          },
+        },
+      },
+      reasoning: { type: 'string', description: 'Brief explanation of dimension decisions' },
+    },
+  },
+};
+
+async function planDimensions(brief, budgetData, regions, researchReport) {
+  const response = await anthropic.messages.stream({
+    model: MODELS.HAIKU,
+    max_tokens: 1024,
+    system: STRATEGY_PLANNER_PROMPT,
+    messages: [{
+      role: 'user',
+      content: `请为以下投放需求规划最优 campaign 矩阵维度：
+
+BUDGET: ${budgetData.total_budget} ${budgetData.currency} over ${budgetData.duration_days} days (daily: ${(budgetData.total_budget / budgetData.duration_days).toFixed(2)})
+REQUESTED PLATFORMS: ${budgetData.allocations.map(a => `${a.platform}(${a.percentage}%)`).join(', ')}
+REQUESTED REGIONS: ${JSON.stringify(regions)}
+INDUSTRY: ${brief.industry || 'unknown'}
+OBJECTIVES: ${JSON.stringify(brief.objectives || [])}`,
+    }],
+    tools: [STRATEGY_PLANNER_TOOL],
+    tool_choice: { type: 'tool', name: 'submit_plan_dimensions' },
+  }).finalMessage();
+
+  const block = response.content.find(c => c.type === 'tool_use' && c.name === 'submit_plan_dimensions');
+  if (!block?.input?.platforms?.length) return null;
+  return block.input;
+}
 
 const SINGLE_CAMPAIGN_SYSTEM_PROMPT = `You are a senior digital advertising strategist. Generate exactly ONE campaign for the specified platform, region, and funnel stage.
 
@@ -467,7 +587,7 @@ const SINGLE_CAMPAIGN_TOOL = {
     required: ['name', 'objective', 'daily_budget', 'ad_sets', 'ads'],
     properties: {
       name: { type: 'string' },
-      objective: { type: 'string' },
+      objective: { type: 'string', enum: ['lead_gen', 'traffic', 'awareness', 'conversions', 'engagement', 'video_views', 'app_installs', 'reach', 'messages'], description: 'Use exactly these values. Do NOT use "lead_generation" — use "lead_gen" instead.' },
       daily_budget: { type: 'number' },
       ad_sets: {
         type: 'array',
@@ -476,7 +596,16 @@ const SINGLE_CAMPAIGN_TOOL = {
           required: ['name', 'targeting', 'optimization_goal'],
           properties: {
             name: { type: 'string' },
-            targeting: { type: 'object' },
+            targeting: {
+              type: 'object',
+              required: ['countries'],
+              properties: {
+                countries: { type: 'array', items: { type: 'string' }, description: 'Target country names or ISO codes, e.g. ["UAE"] or ["AE"]. REQUIRED for every ad_set.' },
+                age_range: { type: 'array', items: { type: 'number' }, description: '[min_age, max_age]' },
+                interests: { type: 'array', items: { type: 'string' } },
+                gender: { type: 'string', enum: ['all', 'male', 'female'] },
+              },
+            },
             optimization_goal: { type: 'string' },
           },
         },
@@ -495,7 +624,7 @@ const SINGLE_CAMPAIGN_TOOL = {
             description: { type: 'string' },
             cta: { type: 'string', enum: ['Learn More', 'Shop Now', 'Sign Up', 'Contact Us', 'Get Quote', 'Apply Now', 'Download', 'Send WhatsApp', 'Subscribe', 'Book Now'], description: 'Must use exact value from enum. For lead_gen campaigns, do NOT use "Send WhatsApp" — use "Learn More", "Sign Up", or "Apply Now" instead.' },
             media_specs: { type: 'string' },
-            suggested_content: { type: 'string' },
+            suggested_content: { type: 'string', description: 'What the ad image should visually depict, e.g. "Product hero shot on white background with lifestyle context"' },
           },
         },
       },
@@ -518,27 +647,59 @@ function nestCampaign(flat) {
       headline: ad.headline,
       description: ad.description,
       cta: ad.cta,
-      ...(ad.media_specs || ad.suggested_content ? {
-        media_requirements: {
-          type: ad.format || 'image',
-          specs: ad.media_specs || '',
-          suggested_content: ad.suggested_content || '',
-        },
-      } : {}),
+      media_requirements: {
+        type: ad.format || 'image',
+        specs: ad.media_specs || '',
+        suggested_content: ad.suggested_content || `${ad.headline}. ${ad.description}`,
+      },
     });
   }
 
-  return {
-    name: flat.name,
-    objective: flat.objective,
-    daily_budget: flat.daily_budget,
-    ad_sets: (flat.ad_sets || []).map(as => ({
-      name: as.name,
-      targeting: as.targeting,
-      optimization_goal: as.optimization_goal,
-      ads: adsByAdSet.get(as.name) || [],
-    })),
+  // Normalize objective alias
+  const OBJECTIVE_ALIASES = {
+    lead_generation: 'lead_gen', LEAD_GENERATION: 'lead_gen',
+    OUTCOME_LEADS: 'lead_gen', OUTCOME_TRAFFIC: 'traffic',
+    OUTCOME_AWARENESS: 'awareness', OUTCOME_SALES: 'conversions',
   };
+  const objective = OBJECTIVE_ALIASES[flat.objective] || flat.objective;
+  const LEAD_GEN_OBJECTIVES = new Set(['lead_gen', 'leads']);
+
+  const adSets = (flat.ad_sets || []).map(as => ({
+    name: as.name,
+    targeting: as.targeting,
+    optimization_goal: as.optimization_goal,
+    ads: (adsByAdSet.get(as.name) || []).map(ad => {
+      // Downgrade WhatsApp CTA in lead_gen campaigns
+      if (LEAD_GEN_OBJECTIVES.has(objective) && ad.cta === 'Send WhatsApp') {
+        return { ...ad, cta: 'Learn More' };
+      }
+      return ad;
+    }),
+  }));
+
+  return { name: flat.name, objective, daily_budget: flat.daily_budget, ad_sets: adSets };
+}
+
+/**
+ * Normalize LLM output: if ads are nested inside ad_sets, flatten them out.
+ * Haiku sometimes nests ads inside ad_sets instead of outputting flat parallel arrays.
+ */
+function normalizeCellOutput(raw) {
+  if (Array.isArray(raw.ads) && raw.ads.length > 0) return raw; // already flat
+  // Check if ads are nested inside ad_sets
+  const hasNestedAds = Array.isArray(raw.ad_sets) && raw.ad_sets.some(as => Array.isArray(as.ads) && as.ads.length > 0);
+  if (!hasNestedAds) return raw;
+  // Flatten: extract ads from ad_sets, add ad_set_name link
+  const flatAds = [];
+  const cleanAdSets = [];
+  for (const as of raw.ad_sets) {
+    const { ads: nestedAds, ...adSetFields } = as;
+    cleanAdSets.push(adSetFields);
+    for (const ad of (nestedAds || [])) {
+      flatAds.push({ ad_set_name: as.name, ...ad });
+    }
+  }
+  return { ...raw, ad_sets: cleanAdSets, ads: flatAds };
 }
 
 /**
@@ -610,14 +771,14 @@ MARKET RESEARCH:
 ${JSON.stringify(researchReport)}`,
   }];
 
-  const strategyResp = await anthropic.messages.create({
-    model: MODELS.MINIMAX,
+  const strategyResp = await anthropic.messages.stream({
+    model: MODELS.HAIKU,
     max_tokens: 8192,
     system: systemPrompt,
     messages,
     tools: [SINGLE_CAMPAIGN_TOOL],
     tool_choice: { type: 'tool', name: 'submit_campaign' },
-  });
+  }).finalMessage();
 
   const submitBlock = strategyResp.content.find(c => c.type === 'tool_use' && c.name === 'submit_campaign');
   if (!submitBlock) {
@@ -626,7 +787,7 @@ ${JSON.stringify(researchReport)}`,
     throw new Error(`[parallel] ${cellLabel}: ${err}`);
   }
 
-  const flatCampaign = submitBlock.input;
+  const flatCampaign = normalizeCellOutput(submitBlock.input);
   const durationMs = Date.now() - t0;
 
   // Validate flat output
@@ -664,14 +825,111 @@ export async function generateCampaignPlanParallel(brief, researchReport, instru
   const keywordData = computeKeywords(brief, researchReport);
   const audienceData = computeAudienceSegments(brief, researchReport);
 
+  // ── Strategy Planner: let LLM decide optimal dimensions ─────────────
+  onProgress?.({ step: 'planning_dimensions', detail: '分析预算，规划最优投放维度' });
+  let activeAllocations = budgetData.allocations;
+  let activeRegions = regions;
+  let activeStages = FUNNEL_STAGES;
+
+  try {
+    const plan = await planDimensions(brief, budgetData, regions, researchReport);
+    if (plan) {
+      // Apply LLM-planned platforms (keep only those in original allocations)
+      const plannedPlatforms = new Set(plan.platforms.map(p => p.platform));
+      activeAllocations = budgetData.allocations.filter(a => plannedPlatforms.has(a.platform));
+      if (activeAllocations.length > 0) {
+        // Recalculate percentages from planner output
+        const pctMap = Object.fromEntries(plan.platforms.map(p => [p.platform, p.budget_pct]));
+        activeAllocations = activeAllocations.map(a => {
+          const pct = pctMap[a.platform] || a.percentage;
+          return { ...a, percentage: pct, amount: Math.round(budgetData.total_budget * pct / 100), daily_budget: Math.round((budgetData.total_budget / budgetData.duration_days) * pct / 100) };
+        });
+      } else {
+        activeAllocations = budgetData.allocations; // fallback
+      }
+
+      // Apply LLM-planned regions (keep only those in original regions)
+      if (plan.regions?.length) {
+        const plannedRegions = plan.regions.filter(r => regions.includes(r));
+        if (plannedRegions.length > 0) activeRegions = plannedRegions;
+      }
+
+      // Apply LLM-planned funnel stages
+      if (plan.funnel_stages?.length) {
+        activeStages = plan.funnel_stages.map(s => ({
+          key: s.key,
+          label: s.label,
+          budget_pct: s.budget_pct,
+        }));
+      }
+
+      console.log(`[strategy-parallel] Planner: ${activeAllocations.map(a => a.platform).join('+')} × ${activeRegions.length}r × ${activeStages.length}f — ${plan.reasoning}`);
+      onProgress?.({ step: 'dimensions_planned', detail: plan.reasoning });
+    }
+  } catch (err) {
+    console.warn(`[strategy-parallel] Planner failed, using full dimensions:`, err.message);
+  }
+
+  // ── Budget guardrail: ensure every cell meets platform minimum daily budget ──
+  const PLATFORM_MIN_DAILY = { meta: 5, google: 10, tiktok: 5, linkedin: 10, reddit: 5 };
+  const DEFAULT_MIN_DAILY = 5;
+  const totalDaily = budgetData.total_budget / budgetData.duration_days;
+
+  function lowestCellDaily() {
+    // Simulate cell budget for current dimensions
+    let min = Infinity;
+    for (const alloc of activeAllocations) {
+      const platformDaily = totalDaily * (alloc.percentage / 100) / activeRegions.length;
+      for (const stage of activeStages) {
+        const cellDaily = platformDaily * stage.budget_pct;
+        const minRequired = PLATFORM_MIN_DAILY[alloc.platform] || DEFAULT_MIN_DAILY;
+        if (cellDaily < minRequired) min = Math.min(min, cellDaily / minRequired);
+      }
+    }
+    return min; // ratio: <1 means under minimum
+  }
+
+  // Prune until all cells meet minimum, or dimensions are at minimum
+  if (lowestCellDaily() < 1) {
+    // Step 1: collapse funnel stages
+    if (activeStages.length > 1) {
+      activeStages = [{ key: 'full_funnel', label: 'Full Funnel', budget_pct: 1.0 }];
+    }
+    // Step 2: reduce regions
+    while (lowestCellDaily() < 1 && activeRegions.length > 1) {
+      activeRegions = activeRegions.slice(0, -1);
+    }
+    // Step 3: reduce platforms (keep meta if present)
+    while (lowestCellDaily() < 1 && activeAllocations.length > 1) {
+      const hasMeta = activeAllocations.some(a => a.platform === 'meta');
+      // Drop last non-meta platform, or last if no meta
+      const dropIdx = hasMeta
+        ? activeAllocations.findLastIndex(a => a.platform !== 'meta')
+        : activeAllocations.length - 1;
+      if (dropIdx < 0) break;
+      activeAllocations = activeAllocations.filter((_, i) => i !== dropIdx);
+      // Redistribute percentages
+      const totalPct = activeAllocations.reduce((s, a) => s + a.percentage, 0);
+      activeAllocations = activeAllocations.map(a => ({
+        ...a,
+        percentage: Math.round((a.percentage / totalPct) * 100),
+      }));
+    }
+
+    console.log(`[strategy-parallel] Budget guardrail: pruned to ${activeAllocations.map(a => a.platform).join('+')} × ${activeRegions.length}r × ${activeStages.length}f`);
+    onProgress?.({
+      step: 'budget_guardrail',
+      detail: `预算兜底：${activeAllocations.map(a => a.platform).join('+')} × ${activeRegions.length} 区域 × ${activeStages.length} 阶段`,
+    });
+  }
+
   // Build cell matrix: platform × region × funnel stage
-  // Budget: compute daily from total/duration per cell to avoid rounding-to-zero
   const cells = [];
-  for (const alloc of budgetData.allocations) {
+  for (const alloc of activeAllocations) {
     const platformBudgetShare = alloc.percentage / 100;
-    const regionBudgetShare = platformBudgetShare / regions.length;
-    for (const region of regions) {
-      for (const stage of FUNNEL_STAGES) {
+    const regionBudgetShare = platformBudgetShare / activeRegions.length;
+    for (const region of activeRegions) {
+      for (const stage of activeStages) {
         const cellTotal = budgetData.total_budget * regionBudgetShare * stage.budget_pct;
         const cellDaily = cellTotal / budgetData.duration_days;
         cells.push({
@@ -692,7 +950,7 @@ export async function generateCampaignPlanParallel(brief, researchReport, instru
   const totalCells = cells.length;
   onProgress?.({
     step: 'generating_strategy',
-    detail: `并行生成 ${totalCells} 个 campaign（${platforms.length} 平台 × ${regions.length} 区域 × ${FUNNEL_STAGES.length} 漏斗阶段）`,
+    detail: `并行生成 ${totalCells} 个 campaign（${activeAllocations.length} 平台 × ${activeRegions.length} 区域 × ${activeStages.length} 漏斗阶段）`,
     cells: cells.map(c => ({ platform: c.platform, region: c.region, stage: c.stage.key, budget: c.budget })),
   });
   console.log(`[strategy-parallel] Launching ${totalCells} parallel cells: ${cells.map(c => `${c.platform}/${c.region}/${c.stage.key}`).join(', ')}`);

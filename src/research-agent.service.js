@@ -184,16 +184,16 @@ ${JSON.stringify(trendsResult)}
 Analyze the brief and external data above, then call submit_report with your complete research report.`,
   }];
 
-  const model = MODELS.MINIMAX;
+  const model = MODELS.HAIKU;
 
-  const response = await anthropic.messages.create({
+  const response = await anthropic.messages.stream({
     model,
     max_tokens: 16384,
     system: systemPrompt,
     messages,
     tools: RESEARCH_TOOLS,
     tool_choice: { type: 'tool', name: 'submit_report' },
-  });
+  }).finalMessage();
 
   const submitBlock = response.content.find(c => c.type === 'tool_use' && c.name === 'submit_report');
   if (submitBlock?.input && Object.keys(submitBlock.input).length > 0) {

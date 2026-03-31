@@ -6,6 +6,7 @@ import {
   createSession,
   getSession,
   updateSession,
+  updateSessionIfStatus,
   addMessages,
   getMessagesForClaude,
   getNextMessageIndex,
@@ -105,13 +106,13 @@ async function runAgentWithTrace(sessionId, phaseKey, agentFn, agentArgs) {
   await addMessages(sessionId, [
     {
       phase: phaseKey,
-      role: 'user',
-      content: `[Agent ${phaseKey}] Started at ${startTime}\nInput: ${JSON.stringify(agentArgs[0]).slice(0, 500)}`,
+      role: 'event',
+      content: `[Agent ${phaseKey}] Started at ${startTime}\nInput: ${JSON.stringify(agentArgs[0])}`,
       message_index: startIndex,
     },
     {
       phase: phaseKey,
-      role: 'assistant',
+      role: 'event',
       content: `[Agent ${phaseKey}] Completed\nResult keys: ${Object.keys(result || {}).join(', ')}`,
       tool_result: result,
       message_index: startIndex + 1,
@@ -193,7 +194,7 @@ async function runCreative(sessionId, brief, phaseResults, _instructions, onProg
   for (const campaign of metaPlatform.campaigns || []) {
     for (const adSet of campaign.ad_sets || []) {
       for (const ad of adSet.ads || []) {
-        if (ad.format === 'image' && ad.media_requirements?.suggested_content) {
+        if (ad.format === 'image') {
           const productMatch = (ad.name || '').match(/[A-Z]{2,}[_-]?\d+/i);
           const targetProduct = productMatch ? productMatch[0].replace('_', '-') : undefined;
           const langSuffix = (ad.name || '').match(/_([A-Z]{2})$/)?.[1];
@@ -250,13 +251,13 @@ async function runCreative(sessionId, brief, phaseResults, _instructions, onProg
   await addMessages(sessionId, [
     {
       phase: 'creative',
-      role: 'user',
+      role: 'event',
       content: `[Agent creative] Started at ${startTime}\nInput: ${adJobs.length} ad images to generate`,
       message_index: startIndex,
     },
     {
       phase: 'creative',
-      role: 'assistant',
+      role: 'event',
       content: `[Agent creative] Completed\nResult keys: ${Object.keys(creatives).join(', ')}`,
       tool_result: { creatives },
       message_index: startIndex + 1,
@@ -629,23 +630,42 @@ async function* runToolUseLoop(sessionId, brief, messages, initialPhaseResults, 
     });
 
     yield { event: 'phase_progress', data: { phase: 'orchestrator', step: 'thinking', detail: '主控 Agent 分析中…' } };
-    const response = await anthropic.messages.create({
-      model: MODELS.SONNET,
-      max_tokens: 4096,
-      system: buildOrchestratorPrompt(phaseResults),
-      messages,
-      tools: ORCHESTRATOR_TOOLS,
-      tool_choice: { type: 'auto' },
-    });
+    let response;
+    try {
+      const llmStream = anthropic.messages.stream({
+        model: MODELS.SONNET,
+        max_tokens: 4096,
+        system: buildOrchestratorPrompt(phaseResults),
+        messages,
+        tools: ORCHESTRATOR_TOOLS,
+        tool_choice: { type: 'auto' },
+      });
 
-    // Surface Claude's text reasoning so the frontend ThinkingCard shows what the orchestrator decided
-    const textBlocks = response.content.filter(c => c.type === 'text');
-    for (const block of textBlocks) {
-      yield { event: 'phase_progress', data: { phase: 'orchestrator', step: 'reasoning', detail: block.text } };
+      // Stream reasoning text to frontend in real-time
+      let textBuffer = '';
+      for await (const event of llmStream) {
+        if (event.type === 'content_block_delta' && event.delta?.type === 'text_delta') {
+          textBuffer += event.delta.text;
+          if (textBuffer.includes('\n') || textBuffer.length >= 80) {
+            yield { event: 'phase_progress', data: { phase: 'orchestrator', step: 'reasoning_delta', detail: textBuffer } };
+            textBuffer = '';
+          }
+        }
+      }
+      if (textBuffer) {
+        yield { event: 'phase_progress', data: { phase: 'orchestrator', step: 'reasoning_delta', detail: textBuffer } };
+      }
+
+      response = await llmStream.finalMessage();
+    } catch (err) {
+      console.error(`[orchestrator] LLM stream failed at iteration ${iteration}:`, err.message);
+      await updateSessionIfStatus(sessionId, 'running', { status: 'interrupted', current_phase: 'orchestrating' });
+      yield { event: 'error', data: { message: `主控 Agent 调用失败: ${err.message}`, recoverable: true } };
+      return;
     }
 
     if (response.stop_reason !== 'tool_use') {
-      await updateSession(sessionId, { status: 'completed', current_phase: 'done', orchestrator_state: null });
+      await updateSessionIfStatus(sessionId, 'running', { status: 'completed', current_phase: 'done', orchestrator_state: null });
       yield { event: 'done', data: { session_id: sessionId, phases_completed: Object.keys(phaseResults) } };
       return;
     }
@@ -692,15 +712,27 @@ async function* runToolUseLoop(sessionId, brief, messages, initialPhaseResults, 
               (onProgress) => executor(sessionId, brief, phaseResults, instructions, onProgress),
             );
             let phaseResult;
+            const progressEvents = [];
             for await (const evt of heartbeatGen) {
               if (evt.event === '__result') {
                 phaseResult = evt.data;
               } else {
+                if (evt.event === 'phase_progress') progressEvents.push(evt);
                 yield evt;
               }
             }
-            // Strategy merged flow: extract creative_plan before persisting
-            phaseResults = { ...phaseResults, [phaseKey]: phaseResult };
+            // Persist progress events so they survive page refresh
+            if (progressEvents.length > 0) {
+              let progIdx = await getNextMessageIndex(sessionId);
+              await addMessages(sessionId, progressEvents.map(evt => ({
+                phase: phaseKey, role: 'event', tool_name: 'phase_progress',
+                content: evt.data?.detail || evt.data?.step || '',
+                message_index: progIdx++,
+              })));
+            }
+            // Strategy merged flow: merge into fresh DB copy to avoid overwriting concurrent updates
+            const freshSession = await getSession(sessionId);
+            phaseResults = { ...(freshSession?.phase_results || {}), [phaseKey]: phaseResult };
             await updateSession(sessionId, { phase_results: phaseResults, current_phase: phaseKey });
             const duration = Math.round((Date.now() - phaseStartTime) / 1000);
             const resultSummary = summarizePhaseResult(phaseKey, phaseResult);
@@ -837,7 +869,8 @@ async function* runToolUseLoop(sessionId, brief, messages, initialPhaseResults, 
             try {
               const assets = await fetchAccountAssets();
               assets.fetched_at = new Date().toISOString();
-              phaseResults = { ...phaseResults, meta_assets: assets };
+              const freshForAssets = await getSession(sessionId);
+              phaseResults = { ...(freshForAssets?.phase_results || {}), meta_assets: assets };
               await updateSession(sessionId, { phase_results: phaseResults });
               result = assets;
             } catch (err) {
@@ -860,7 +893,7 @@ async function* runToolUseLoop(sessionId, brief, messages, initialPhaseResults, 
         }
 
         case 'submit_final':
-          await updateSession(sessionId, { status: 'completed', current_phase: 'done', orchestrator_state: null });
+          await updateSessionIfStatus(sessionId, 'running', { status: 'completed', current_phase: 'done', orchestrator_state: null });
           shouldTerminate = true;
           terminateSummary = input.summary;
           result = { completed: true };
@@ -874,7 +907,7 @@ async function* runToolUseLoop(sessionId, brief, messages, initialPhaseResults, 
     }
 
     if (pendingFeedback) {
-      await updateSession(sessionId, {
+      await updateSessionIfStatus(sessionId, 'running', {
         status: 'awaiting_feedback',
         orchestrator_state: {
           messages: [...messages],
@@ -899,7 +932,7 @@ async function* runToolUseLoop(sessionId, brief, messages, initialPhaseResults, 
     messages.push({ role: 'user', content: toolResults });
   }
 
-  await updateSession(sessionId, { status: 'completed', current_phase: 'done', orchestrator_state: null });
+  await updateSessionIfStatus(sessionId, 'running', { status: 'completed', current_phase: 'done', orchestrator_state: null });
   yield { event: 'done', data: { session_id: sessionId, phases_completed: Object.keys(phaseResults), summary: 'Force-terminated: max iterations reached' } };
 }
 
@@ -951,7 +984,17 @@ export async function* orchestrate(sessionId, options = {}) {
   }
 
   const phaseResults = session.phase_results || {};
-  await updateSession(sessionId, { status: 'running', current_phase: 'orchestrating' });
+  // Only start if session is in a valid starting state
+  const validStartStatuses = ['brief_completed', 'interrupted'];
+  if (!validStartStatuses.includes(session.status)) {
+    yield { event: 'error', data: { message: `Cannot start orchestration: session status is '${session.status}'` } };
+    return;
+  }
+  const { updated } = await updateSessionIfStatus(sessionId, session.status, { status: 'running', current_phase: 'orchestrating' });
+  if (!updated) {
+    yield { event: 'error', data: { message: 'Session status changed concurrently — not starting' } };
+    return;
+  }
 
   yield {
     event: 'orchestration_start',
@@ -1065,8 +1108,8 @@ export async function* resumeAfterFeedback(sessionId, userResponse, { attachment
     ],
   });
 
-  // Clear saved state and set running
-  await updateSession(sessionId, {
+  // Clear saved state and set running (atomic: only if still awaiting)
+  await updateSessionIfStatus(sessionId, session.status, {
     status: 'running',
     orchestrator_state: null,
   });
@@ -1126,7 +1169,9 @@ function buildChatSystemPrompt(session, brief) {
     return v !== undefined && v !== null && v !== '' && !(Array.isArray(v) && v.length === 0);
   });
   const coreMissing = coreFields.filter(f => !coreFilled.includes(f));
-  const isIntakePhase = coreMissing.length > 0;
+  // Use session status as SSOT: only enter intake mode if session is actually in intake
+  // AND core fields are missing. If session has progressed past intake, stay in orchestration mode.
+  const isIntakePhase = session.status === 'intake' && coreMissing.length > 0;
 
   const phaseLabels = {
     research: '市场调研',
@@ -1269,7 +1314,7 @@ export async function* chatWithOrchestrator(sessionId, message, { attachments } 
     const imageBlocks = await attachmentsToContentBlocks(attachments);
     userContent = [
       ...imageBlocks,
-      { type: 'text', text: message },
+      ...(message ? [{ type: 'text', text: message }] : []),
     ];
   } else {
     userContent = message;
@@ -1280,39 +1325,68 @@ export async function* chatWithOrchestrator(sessionId, message, { attachments } 
     { role: 'user', content: userContent },
   ];
 
-  // Use create (not stream) to support tool_use
-  const response = await anthropic.messages.create({
-    model: MODELS.SONNET,
-    max_tokens: 2048,
-    system: systemPrompt,
-    messages,
-    tools: ORCHESTRATOR_CHAT_TOOLS,
-    tool_choice: { type: 'auto' },
-  });
-
-  // Process response — may need multiple turns for tool_use
+  // Stream response for real-time output (supports tool_use via multi-turn)
   let assistantText = '';
   let shouldRestart = false;
   let restartReason = '';
   let currentMessages = [...messages];
-  let currentResponse = response;
 
   for (let turn = 0; turn < 5; turn++) {
-    const toolUseBlocks = [];
+    const stream = anthropic.messages.stream({
+      model: MODELS.SONNET,
+      max_tokens: 2048,
+      system: systemPrompt,
+      messages: currentMessages,
+      tools: ORCHESTRATOR_CHAT_TOOLS,
+      tool_choice: { type: 'auto' },
+    });
 
-    for (const block of currentResponse.content || []) {
-      if (block.type === 'text') {
-        assistantText += block.text;
-        yield { event: 'delta', data: { text: block.text } };
-      } else if (block.type === 'tool_use') {
-        toolUseBlocks.push(block);
+    const toolUseBlocks = []; // { id, name, input }
+    let currentBlockType = null;
+    let currentToolInput = '';
+    let currentToolName = '';
+    let currentToolUseId = '';
+
+    for await (const event of stream) {
+      if (event.type === 'content_block_start') {
+        const block = event.content_block;
+        if (block.type === 'tool_use') {
+          currentBlockType = 'tool_use';
+          currentToolName = block.name;
+          currentToolUseId = block.id;
+          currentToolInput = '';
+          yield { event: 'tool_start', data: { tool: currentToolName } };
+        } else if (block.type === 'text') {
+          currentBlockType = 'text';
+        } else if (block.type === 'thinking') {
+          currentBlockType = 'thinking';
+        }
+      } else if (event.type === 'content_block_delta') {
+        const delta = event.delta;
+        if (delta.type === 'text_delta') {
+          assistantText += delta.text;
+          yield { event: 'delta', data: { text: delta.text } };
+        } else if (delta.type === 'thinking_delta') {
+          yield { event: 'thinking', data: { text: delta.thinking } };
+        } else if (delta.type === 'input_json_delta') {
+          currentToolInput += delta.partial_json;
+        }
+      } else if (event.type === 'content_block_stop') {
+        if (currentBlockType === 'tool_use') {
+          let parsedInput = {};
+          try { parsedInput = JSON.parse(currentToolInput); } catch { /* empty */ }
+          yield { event: 'tool_call', data: { tool: currentToolName, input: parsedInput } };
+          toolUseBlocks.push({ id: currentToolUseId, name: currentToolName, input: parsedInput });
+        }
+        currentBlockType = null;
       }
     }
 
     if (toolUseBlocks.length === 0) break;
 
     // Process tool calls
-    currentMessages.push({ role: 'assistant', content: currentResponse.content });
+    const finalMessage = await stream.finalMessage();
+    currentMessages.push({ role: 'assistant', content: finalMessage.content });
     const toolResults = [];
 
     for (const block of toolUseBlocks) {
@@ -1334,17 +1408,9 @@ export async function* chatWithOrchestrator(sessionId, message, { attachments } 
       }
     }
 
-    if (shouldRestart) break; // Don't continue turns after restart
+    if (shouldRestart) break;
 
     currentMessages.push({ role: 'user', content: toolResults });
-    currentResponse = await anthropic.messages.create({
-      model: MODELS.SONNET,
-      max_tokens: 2048,
-      system: systemPrompt,
-      messages: currentMessages,
-      tools: ORCHESTRATOR_CHAT_TOOLS,
-      tool_choice: { type: 'auto' },
-    });
   }
 
   // Persist assistant response

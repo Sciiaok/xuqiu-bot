@@ -1,4 +1,5 @@
 import { anthropic, MODELS } from './llm-client.js';
+import { parseExcel, extractExcelContent } from './product-knowledge.service.js';
 import {
   getBrief,
   updateBriefFields,
@@ -16,8 +17,10 @@ import {
   getNextMessageIndex,
   attachmentsToContentBlocks,
   updateSession,
+  updateSessionIfStatus,
 } from '../lib/repositories/orchestrator.repository.js';
 import { fetchAccountAssets } from './meta-account.service.js';
+import { orchestrate } from './campaign-orchestrator.service.js';
 
 // Core fields: must have these to proceed to orchestration
 const CORE_FIELDS = [
@@ -57,7 +60,23 @@ export function getIntakeTools() {
           fields: {
             type: 'object',
             description:
-              'Partial CampaignBrief fields to merge into the existing brief',
+              'Partial CampaignBrief fields to merge into the existing brief. products MUST be an array of objects [{model, category, key_specs, selling_points}], never a plain string.',
+            properties: {
+              products: {
+                type: 'array',
+                items: {
+                  type: 'object',
+                  properties: {
+                    model: { type: 'string' },
+                    category: { type: 'string' },
+                    key_specs: { type: 'object' },
+                    selling_points: { type: 'array', items: { type: 'string' } },
+                  },
+                  required: ['model'],
+                },
+                description: 'Product list. Each item must have at least a model name. NEVER pass a plain string.',
+              },
+            },
           },
           show_summary: {
             type: 'boolean',
@@ -85,12 +104,12 @@ export function getIntakeTools() {
     {
       name: 'parse_attachment',
       description:
-        'Parse an uploaded attachment (PDF, image) to extract product information. (Phase 2)',
+        'Parse an uploaded document (PDF or XLSX) to extract product information such as specs, pricing, and company info. Only call this for PDF/XLSX files — images are already visible to you directly.',
       input_schema: {
         type: 'object',
         properties: {
-          attachment_url: { type: 'string' },
-          type: { type: 'string', enum: ['pdf', 'image', 'video'] },
+          attachment_url: { type: 'string', description: 'Public URL of the uploaded file' },
+          type: { type: 'string', enum: ['pdf', 'xlsx'], description: 'File format' },
         },
         required: ['attachment_url', 'type'],
       },
@@ -251,9 +270,14 @@ export function buildIntakeSystemPrompt() {
 4. 如果用户补充了信息，update_brief 保存后再次确认是否还需补充，或直接 save_brief
 5. 如果用户的第一条消息就包含了足够的核心信息（公司名、产品、目标市场、预算），在一次 web_search 调研后 update_brief，然后仍然按上述模板询问是否补充可选信息
 6. 如果用户说"继续"、"下一步"等推进性指令，只要 company_name 和 industry 已填，立即 save_brief
-7. 当用户要求做策划、生成素材、制定排期等下游工作时，先完成 save_brief，然后回复"已进入方案规划阶段，系统正在为您生成投放方案"
+7. 当用户要求做策划、生成素材、制定排期等下游工作时，先完成 save_brief，然后简短回复"需求已保存，系统即将自动启动方案规划"
 8. 你有联网搜索和网页读取能力。用于调研公司和产品信息补充 brief 字段，不要用于输出策略分析
 9. 每条回复控制在200字以内。你的目标是高效收集信息并交接，不是展示专业知识
+
+═══ 重要：关于系统状态 ═══
+- save_brief 成功后，系统会**自动**启动方案规划流程，你无需做任何额外操作
+- 不要说"请稍候"、"正在生成"等暗示你在等待结果的话——你的任务在 save_brief 后就结束了
+- 如果 save_brief 后用户继续发消息，简短回复"需求已保存，方案正在自动生成中"即可
 
 ═══ 回复要求 ═══
 - 每条回复控制在200字以内，简洁直接
@@ -314,12 +338,63 @@ async function executeUpdateBrief(briefId, input) {
 }
 
 async function executeSaveBrief(briefId, input) {
-  await updateBrief(briefId, { status: 'completed', brief: input.brief });
+  // Only update status — brief data is already collected via update_brief.
+  // Do NOT overwrite brief with input.brief (LLM may send incomplete/garbage data).
+  await updateBrief(briefId, { status: 'completed' });
   return { saved: true, brief_id: briefId };
 }
 
-async function executeParseAttachment(_briefId, _input) {
-  return { extracted_text: 'Attachment parsing not yet implemented' };
+async function executeParseAttachment(_briefId, input) {
+  const { attachment_url, type } = input;
+  try {
+    const res = await fetch(attachment_url);
+    if (!res.ok) throw new Error(`Download failed: HTTP ${res.status}`);
+    const buffer = Buffer.from(await res.arrayBuffer());
+
+    if (type === 'xlsx') {
+      const rawText = parseExcel(buffer);
+      const extracted = await extractExcelContent(rawText);
+      return {
+        company_info: extracted.company_info || null,
+        product_intro: extracted.product_intro || null,
+        selling_points: extracted.selling_points || null,
+        features: extracted.features || null,
+        notes: extracted.notes || null,
+        raw_specs: extracted.raw_specs || null,
+      };
+    }
+
+    if (type === 'pdf') {
+      // Dynamic import to avoid loading Java dependency at module level
+      const { convert } = await import('@opendataloader/pdf');
+      const { writeFile, readFile, mkdtemp, rm } = await import('node:fs/promises');
+      const { tmpdir } = await import('node:os');
+      const { join } = await import('node:path');
+      const { readdirSync } = await import('node:fs');
+
+      const tempDir = await mkdtemp(join(tmpdir(), 'intake-pdf-'));
+      const inputPath = join(tempDir, 'input.pdf');
+      const outputDir = join(tempDir, 'output');
+
+      try {
+        await writeFile(inputPath, buffer);
+        await convert([inputPath], { outputDir, format: 'markdown' });
+        const mdFile = readdirSync(outputDir).find(f => f.endsWith('.md'));
+        const markdown = mdFile
+          ? await readFile(join(outputDir, mdFile), 'utf-8')
+          : '';
+        // Return first 6000 chars to fit in tool result
+        return { extracted_text: markdown.slice(0, 6000) };
+      } finally {
+        await rm(tempDir, { recursive: true, force: true }).catch(() => {});
+      }
+    }
+
+    return { error: `Unsupported type: ${type}` };
+  } catch (err) {
+    console.error('[executeParseAttachment]', err);
+    return { error: `Parse failed: ${err.message}` };
+  }
 }
 
 function extractTextBlocks(content = []) {
@@ -505,8 +580,14 @@ export async function* processIntakeMessage(
       session = await createSession(briefId, { status: 'intake', current_phase: 'intake' });
     }
     sessionId = session.id;
-    if (session.status !== 'intake' || session.current_phase !== 'intake') {
-      session = await updateSession(sessionId, { status: 'intake', current_phase: 'intake' });
+    // Only reset to intake if session hasn't progressed beyond intake
+    // (don't regress brief_completed/running/completed back to intake)
+    const INTAKE_COMPATIBLE = ['intake'];
+    if (!INTAKE_COMPATIBLE.includes(session.status)) {
+      // Session is past intake — this call will be handled by chatWithOrchestrator, not here
+      // but if we're here anyway, don't regress the status
+    } else if (session.current_phase !== 'intake') {
+      session = await updateSession(sessionId, { current_phase: 'intake' });
     }
 
     // 2b. Fetch Meta account assets in background (non-blocking)
@@ -560,10 +641,21 @@ export async function* processIntakeMessage(
     // 5b. Build Claude request messages (multimodal if attachments exist)
     let userContent;
     if (attachments?.length) {
-      const imageBlocks = await attachmentsToContentBlocks(attachments);
+      const imageAttachments = attachments.filter(a => a.content_type?.startsWith('image/'));
+      const docAttachments = attachments.filter(a => !a.content_type?.startsWith('image/'));
+
+      const imageBlocks = await attachmentsToContentBlocks(imageAttachments);
+
+      // For document attachments, add text hints so Claude calls parse_attachment
+      const docHints = docAttachments.map(a => {
+        const ext = a.filename?.endsWith('.xlsx') ? 'xlsx' : 'pdf';
+        return `[User uploaded file: ${a.filename} (${ext}), url: ${a.url}] — please use parse_attachment to extract content.`;
+      });
+
+      const textPart = [...docHints, message].filter(Boolean).join('\n');
       userContent = [
         ...imageBlocks,
-        { type: 'text', text: message },
+        ...(textPart ? [{ type: 'text', text: textPart }] : []),
       ];
     } else {
       userContent = message;
@@ -733,8 +825,8 @@ export async function* processIntakeMessage(
               }
               if (currentToolName === 'save_brief') {
                 briefCompleted = true;
-                // Immediately persist session status so it survives stream errors
-                await updateSession(sessionId, { status: 'brief_completed' });
+                // Atomic: only promote intake → brief_completed
+                await updateSessionIfStatus(sessionId, 'intake', { status: 'brief_completed' });
               }
             }
             currentBlockType = null;
@@ -839,8 +931,11 @@ export async function* processIntakeMessage(
       console.warn(`[intake] session=${sessionId} hit maxIterations=${maxIterations}`);
     }
 
-    const briefStatus = briefCompleted ? 'brief_completed' : 'intake';
-    await updateSession(sessionId, { status: briefStatus, current_phase: 'intake' });
+    // Status update: atomic promote only (intake → brief_completed), never demote
+    if (briefCompleted) {
+      await updateSessionIfStatus(sessionId, 'intake', { status: 'brief_completed', current_phase: 'intake' });
+    }
+    // If not briefCompleted, leave status unchanged (don't regress brief_completed → intake)
 
     // Yield brief update
     if (shouldEmit('brief_update', streamLevel)) {
@@ -854,11 +949,17 @@ export async function* processIntakeMessage(
       };
     }
 
-    // Yield done
-    yield {
-      event: 'done',
-      data: { brief_id: briefId, status: briefCompleted ? 'completed' : 'collecting' },
-    };
+    // Check if orchestration should start (this turn or a previous turn completed the brief)
+    const finalSession = await getSession(sessionId);
+    const shouldOrchestrate = briefCompleted || finalSession?.status === 'brief_completed';
+
+    if (shouldOrchestrate) {
+      // Chain directly into orchestration — no frontend round-trip needed
+      yield { event: 'done', data: { brief_id: briefId, status: 'completed' } };
+      yield* orchestrate(sessionId);
+    } else {
+      yield { event: 'done', data: { brief_id: briefId, status: 'collecting' } };
+    }
   } catch (err) {
     console.error(`[intake] session=${sessionId} fatal error:`, err.message, err.stack?.split('\n').slice(0, 3).join(' | '));
     yield {

@@ -38,7 +38,9 @@ export async function POST(request, { params }) {
 
   let body = {};
   try { body = await request.json(); } catch { /* empty body = run pipeline */ }
-  const isChatMode = Boolean(body.message);
+  const hasMessageField = typeof body.message === 'string';
+  const hasAttachments = Array.isArray(body.attachments) && body.attachments.length > 0;
+  const isChatMode = hasMessageField || hasAttachments;
 
   // Resolve session: id could be session_id or brief_id
   let session = await getSession(id);
@@ -74,17 +76,17 @@ export async function POST(request, { params }) {
   }
 
   // Chat mode: user sends a message
-  if (body.message) {
+  if (isChatMode) {
     // Intake phase: use dedicated intake agent (has web_search, confidence checks, etc.)
     if (session.status === 'intake' && session.current_phase === 'intake') {
       return streamSSE(
-        processIntakeMessage(brief.id, body.message, { attachments: body.attachments }),
+        processIntakeMessage(brief.id, body.message || '', { attachments: body.attachments }),
         { heartbeatIntervalMs: 5000, streamKey: streamKey(brief.id) },
       );
     }
     // Post-intake: use orchestrator chat handler
     return streamSSE(
-      chatWithOrchestrator(session.id, body.message, { attachments: body.attachments }),
+      chatWithOrchestrator(session.id, body.message || '', { attachments: body.attachments }),
       { heartbeatIntervalMs: 5000, streamKey: streamKey(brief.id) },
     );
   }
@@ -117,6 +119,7 @@ export async function GET(request, { params }) {
   const { id } = await params;
   const { searchParams } = new URL(request.url);
   const phaseFilter = searchParams.get('phase');
+  const debug = searchParams.get('debug') !== null;
 
   // Resolve session
   let session = await getSession(id);
@@ -126,7 +129,6 @@ export async function GET(request, { params }) {
   if (!session) {
     return Response.json({ error: 'Session not found' }, { status: 404 });
   }
-
   const msgOpts = {};
   if (phaseFilter === 'chat') {
     msgOpts.phase = null;
@@ -148,7 +150,7 @@ export async function GET(request, { params }) {
     phase_results: session.phase_results || {},
     brief: briefData?.brief || {},
     completion: briefData?.completion || {},
-    messages: messages.map(m => ({
+    messages: messages.filter(m => debug || !(m.role === 'event' && !m.tool_name)).map(m => ({
       id: m.id,
       phase: m.phase,
       role: m.role,

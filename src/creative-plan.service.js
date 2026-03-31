@@ -218,14 +218,14 @@ ${JSON.stringify(references)}
 请分析所有广告位，按创意策略分组，为每个素材生成完整的创作任务。每个任务必须包含本地化文案、AI 图片生成 Prompt 和对应的广告位链接。`,
   }];
 
-  const response = await anthropic.messages.create({
-    model: MODELS.MINIMAX,
-    max_tokens: 16384,
+  const response = await anthropic.messages.stream({
+    model: MODELS.HAIKU,
+    max_tokens: 32768,
     system: systemPrompt,
     messages,
     tools: CREATIVE_PLAN_TOOLS,
     tool_choice: { type: 'tool', name: 'submit_creative_plan' },
-  });
+  }).finalMessage();
 
   const submitBlock = response.content.find(c => c.type === 'tool_use' && c.name === 'submit_creative_plan');
   if (submitBlock?.input && Array.isArray(submitBlock.input.creative_tasks)) {

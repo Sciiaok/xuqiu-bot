@@ -287,6 +287,9 @@ const OBJECTIVE_MAP = {
   conversions: 'OUTCOME_SALES', sales: 'OUTCOME_SALES',
   engagement: 'OUTCOME_ENGAGEMENT',
   reach: 'OUTCOME_AWARENESS',
+  video_views: 'OUTCOME_AWARENESS',
+  app_installs: 'OUTCOME_APP_PROMOTION',
+  messages: 'OUTCOME_LEADS',
 };
 
 const CTA_MAP = {
@@ -339,6 +342,7 @@ const COUNTRY_MIN_AGE = {
 function buildBatchTargeting(targeting = {}) {
   const countries = targeting.countries || [];
   const isoCodes = mapCountriesToISO(countries);
+  if (isoCodes.length === 0) throw new Error('No valid target countries — ad_set targeting.countries is empty');
   const ageMin = targeting.age_range?.[0] || targeting.age_min || 18;
   const ageMax = targeting.age_range?.[1] || targeting.age_max || 65;
 
@@ -467,12 +471,17 @@ export async function createFullCampaign(input, options = {}) {
         status: 'PAUSED',
         optimization_goal: pickOptimizationGoal(metaObjective),
         billing_event: 'IMPRESSIONS',
-        targeting: buildBatchTargeting(adSet.targeting),
+        targeting: buildBatchTargeting({
+          ...adSet.targeting,
+          // Fallback: inherit campaign-level countries if ad_set has none
+          countries: adSet.targeting?.countries?.length ? adSet.targeting.countries : (input.target_countries || input.countries || []),
+        }),
       };
 
       if (isLeadGen && pageId) {
         adSetBody.promoted_object = { page_id: pageId };
-        adSetBody.destination_type = 'ON_AD';
+        // WhatsApp messages campaigns use WHATSAPP destination instead of ON_AD
+        adSetBody.destination_type = input.objective === 'messages' ? 'WHATSAPP' : 'ON_AD';
       }
 
       if (input.duration_days > 0) {
@@ -588,6 +597,7 @@ export async function createFullCampaign(input, options = {}) {
  */
 export async function executeMediaPlanBatch(plan, creatives = {}, options = {}) {
   const onProgress = options.onProgress;
+  const accountAssets = options.accountAssets;
   const metaPlatform = plan.platforms?.find(p => p.platform === 'meta');
   if (!metaPlatform) {
     return { status: 'skipped', reason: 'No Meta platform in plan', campaigns: [], errors: [] };
@@ -653,7 +663,7 @@ export async function executeMediaPlanBatch(plan, creatives = {}, options = {}) 
 
     const result = await createFullCampaign(
       { ...campaign, duration_days, link_url, lead_gen_form_id, ad_sets: enrichedAdSets },
-      { onProgress, useMcp },
+      { onProgress, useMcp, accountAssets },
     );
 
     if (result.campaign_id) {
