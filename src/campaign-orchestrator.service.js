@@ -34,6 +34,16 @@ const PHASES = [
   { key: 'execution',          name: '投放执行', description: 'Creating campaigns on Meta Ads', needsApproval: true },
 ];
 
+// Downstream phases that must be invalidated when an upstream phase is rerun.
+// creative reads ad names from strategy; execution reads image keys from creative.
+const PHASE_DOWNSTREAM = {
+  research:      ['strategy', 'creative_plan', 'creative', 'execution'],
+  strategy:      ['creative_plan', 'creative', 'execution'],
+  creative_plan: ['creative', 'execution'],
+  creative:      ['execution'],
+  execution:     [],
+};
+
 // ── Helper: run a Promise with heartbeat yields ────────────────────────
 
 async function* runWithHeartbeat(phaseKey, workFn) {
@@ -733,6 +743,14 @@ async function* runToolUseLoop(sessionId, brief, messages, initialPhaseResults, 
             // Strategy merged flow: merge into fresh DB copy to avoid overwriting concurrent updates
             const freshSession = await getSession(sessionId);
             phaseResults = { ...(freshSession?.phase_results || {}), [phaseKey]: phaseResult };
+            // Cascade: invalidate downstream phases whose inputs just changed
+            const stale = PHASE_DOWNSTREAM[phaseKey] || [];
+            for (const dk of stale) {
+              if (phaseResults[dk]) {
+                console.log(`[orchestrator] cascade: invalidating ${dk} (upstream ${phaseKey} rerun)`);
+                delete phaseResults[dk];
+              }
+            }
             await updateSession(sessionId, { phase_results: phaseResults, current_phase: phaseKey });
             const duration = Math.round((Date.now() - phaseStartTime) / 1000);
             const resultSummary = summarizePhaseResult(phaseKey, phaseResult);
@@ -1424,7 +1442,9 @@ export async function* chatWithOrchestrator(sessionId, message, { attachments } 
   }
 
   if (shouldRestart) {
-    yield { event: 'trigger_orchestration', data: { reason: restartReason } };
+    // Backend-driven: chain directly into orchestrate(), no frontend round-trip
+    yield* orchestrate(sessionId);
+    return; // orchestrate yields its own done event
   }
 
   yield { event: 'done', data: { session_id: sessionId } };
