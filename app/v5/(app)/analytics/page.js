@@ -8,10 +8,15 @@ import Card from '../../components/Card/Card';
 import DataTable from '../../components/DataTable/DataTable';
 import TabBar from '../../components/TabBar/TabBar';
 import Tag from '../../components/Tag/Tag';
-import Button from '../../components/Button/Button';
 import Markdown from '../../components/Markdown/Markdown';
+import ScoreBar from '../../components/ScoreBar/ScoreBar';
 
-const SUPPLY_CHAINS = ['全部供应链', '农机', '汽车整车', '零配件'];
+const PRODUCT_LINES = [
+  { key: 'all', label: '全部业务线' },
+  { key: 'vehicle', label: '整车' },
+  { key: 'auto_parts', label: '汽配' },
+  { key: 'agri_machinery', label: '农机' },
+];
 
 const DATE_TABS = [
   { key: '7d', label: '7D' },
@@ -20,74 +25,77 @@ const DATE_TABS = [
   { key: 'custom', label: 'Custom' },
 ];
 
-const HUMAN_NOW_TABS = [
-  { key: 'today', label: 'Today' },
-  { key: '7d', label: '7D' },
-  { key: '30d', label: '30D' },
-];
-
 const DATE_TAB_TO_DAYS = { '7d': 7, '14d': 14, '30d': 30 };
-const HUMAN_NOW_TAB_TO_DAYS = { today: 1, '7d': 7, '30d': 30 };
 
-const SUPPLY_CHAIN_COLORS = [
-  'var(--accent)',
-  'var(--teal)',
-  'var(--purple)',
-  'var(--amber)',
-  'var(--green)',
-];
+const INTENT_LABELS = {
+  business_inquiry: '业务咨询',
+  business_cooperation: '商务合作',
+  personal_consumer: '个人消费',
+  other: '其他',
+};
 
-function businessValueVariant(val) {
-  if (!val) return 'low';
-  const lower = String(val).toLowerCase();
-  if (lower === 'high') return 'high';
-  if (lower === 'medium' || lower === 'mid' || lower === 'avg') return 'avg';
-  if (lower === 'good') return 'good';
-  return 'low';
-}
+const QUALITY_COLORS = {
+  PROOF: 'var(--green)',
+  QUALIFY: 'var(--accent)',
+  GOOD: 'var(--amber)',
+  BAD: 'var(--red)',
+};
 
-function calcDelta(today, yesterday) {
-  if (yesterday == null || yesterday === 0) return null;
-  const pct = Math.round(((today - yesterday) / yesterday) * 100);
-  if (pct > 0) return `↑ +${pct}%`;
-  if (pct < 0) return `↓ ${pct}%`;
+const PRODUCT_LINE_COLORS = {
+  vehicle: 'var(--accent)',
+  auto_parts: 'var(--amber)',
+  agri_machinery: 'var(--green)',
+  unknown: 'var(--text3)',
+};
+
+function calcDelta(current, previous) {
+  if (previous == null || previous === 0) return null;
+  const pct = Math.round(((current - previous) / previous) * 100);
+  if (pct > 0) return `+${pct}%`;
+  if (pct < 0) return `${pct}%`;
   return null;
 }
 
-function calcTrend(today, yesterday) {
-  if (yesterday == null || yesterday === 0) return 'neutral';
-  return today >= yesterday ? 'up' : 'down';
+function calcTrend(current, previous) {
+  if (previous == null || previous === 0) return 'neutral';
+  return current >= previous ? 'up' : 'down';
 }
 
-// Country/supply chain distributions now come from API response (all leads in date range)
-
 export default function AnalyticsPage() {
-  const [supplyChain, setSupplyChain] = useState('全部供应链');
+  const [selectedLines, setSelectedLines] = useState('all');
   const [dateRange, setDateRange] = useState('7d');
-  const [humanNowTab, setHumanNowTab] = useState('today');
-  const [selectedRow, setSelectedRow] = useState(null);
   const [customFrom, setCustomFrom] = useState('');
   const [customTo, setCustomTo] = useState('');
-  const [humanPage, setHumanPage] = useState(1);
-  const HUMAN_PAGE_SIZE = 10;
 
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
-  const [humanNowLoading, setHumanNowLoading] = useState(false);
   const [error, setError] = useState(null);
 
   const [aiInsight, setAiInsight] = useState(null);
   const [aiInsightLoading, setAiInsightLoading] = useState(false);
   const [aiStatus, setAiStatus] = useState(null);
 
-  const fetchAiInsight = async (days) => {
-    const aiCacheKey = `ai_report:market_insight:${days}`;
+  const prevMainDepsRef = useRef(null);
+
+  // Fetch AI Summary via SSE
+  const fetchAiInsight = async (params) => {
     setAiInsightLoading(true);
     setAiInsight(null);
     setAiStatus(null);
     let accumulated = '';
+
+    const qs = new URLSearchParams();
+    if (params.startDate && params.endDate) {
+      qs.set('startDate', params.startDate);
+      qs.set('endDate', params.endDate);
+    } else {
+      qs.set('days', String(params.days));
+    }
+    qs.set('productLines', params.productLines);
+    qs.set('lang', 'zh');
+
     try {
-      const res = await fetch(`/api/ai/report/stream?type=market_insight&days=${days}`);
+      const res = await fetch(`/api/inquiry-dashboard/summary?${qs}`);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const reader = res.body.getReader();
       const decoder = new TextDecoder();
@@ -105,17 +113,16 @@ export default function AnalyticsPage() {
             eventType = line.slice(7).trim();
           } else if (line.startsWith('data: ') && eventType) {
             try {
-              const data = JSON.parse(line.slice(6));
+              const d = JSON.parse(line.slice(6));
               if (eventType === 'chunk') {
-                accumulated += data.text;
+                accumulated += d.text;
                 setAiInsight(accumulated);
               } else if (eventType === 'status') {
-                setAiStatus(data.message);
+                setAiStatus(d.message);
               } else if (eventType === 'done') {
-                setAiInsight(data.text);
-                sessionStorage.setItem(aiCacheKey, data.text);
+                setAiInsight(d.text);
               } else if (eventType === 'error') {
-                console.error('AI report stream error:', data.message);
+                console.error('AI summary error:', d.message);
               }
             } catch {}
             eventType = null;
@@ -130,37 +137,39 @@ export default function AnalyticsPage() {
     }
   };
 
-  const prevMainDepsRef = useRef(null);
-
+  // Fetch main data
   useEffect(() => {
     let days;
+    let startDate, endDate;
     if (dateRange === 'custom') {
       if (!customFrom || !customTo) return;
-      const msPerDay = 86400000;
-      days = Math.max(1, Math.round((new Date(customTo) - new Date(customFrom)) / msPerDay) + 1);
+      startDate = customFrom;
+      endDate = customTo;
     } else {
       days = DATE_TAB_TO_DAYS[dateRange] ?? 7;
     }
 
-    const humanNowDays = HUMAN_NOW_TAB_TO_DAYS[humanNowTab] ?? 1;
-    const country = supplyChain !== '全部供应链' ? supplyChain : undefined;
+    const productLines = selectedLines === 'all'
+      ? 'vehicle,auto_parts,agri_machinery'
+      : selectedLines;
 
-    // Determine if only humanNowTab changed (not a full page reload)
-    const mainKey = `${dateRange}|${supplyChain}|${customFrom}|${customTo}`;
-    const isHumanNowOnly = prevMainDepsRef.current !== null && prevMainDepsRef.current === mainKey;
+    const mainKey = `${dateRange}|${selectedLines}|${customFrom}|${customTo}`;
+    const isInitial = prevMainDepsRef.current === null;
     prevMainDepsRef.current = mainKey;
 
-    if (isHumanNowOnly) {
-      setHumanNowLoading(true);
-    } else {
-      setLoading(true);
-    }
+    setLoading(true);
     setError(null);
 
-    const params = new URLSearchParams({ days, humanNowDays });
-    if (country) params.set('country', country);
+    const qs = new URLSearchParams();
+    if (startDate && endDate) {
+      qs.set('startDate', startDate);
+      qs.set('endDate', endDate);
+    } else {
+      qs.set('days', String(days));
+    }
+    qs.set('productLines', productLines);
 
-    fetch(`/api/analytics?${params}`)
+    fetch(`/api/inquiry-dashboard?${qs}`)
       .then(res => {
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         return res.json();
@@ -168,81 +177,45 @@ export default function AnalyticsPage() {
       .then(json => {
         setData(json);
         setLoading(false);
-        setHumanNowLoading(false);
       })
       .catch(err => {
         setError(err.message);
         setLoading(false);
-        setHumanNowLoading(false);
       });
 
-    // Restore AI insight from sessionStorage cache; skip fetch if cached
-    // Only reload AI insight when main filters change, not humanNowTab
-    if (!isHumanNowOnly) {
-      const aiCacheKey = `ai_report:market_insight:${days}`;
-      const cached = sessionStorage.getItem(aiCacheKey);
-      if (cached) {
-        setAiInsight(cached);
-      } else {
-        fetchAiInsight(days);
-      }
-    }
-  }, [dateRange, supplyChain, humanNowTab, customFrom, customTo]);
+    // Fetch AI insight
+    fetchAiInsight({ days, startDate, endDate, productLines });
+  }, [dateRange, selectedLines, customFrom, customTo]);
 
-  // Derived values from API data
   const kpi = data?.kpi ?? {};
-  const humanNowList = data?.humanNowList ?? [];
+  const dailyTrend = data?.dailyTrend ?? [];
+  const agentDistribution = data?.agentDistribution ?? [];
+  const countryDistribution = data?.countryDistribution ?? [];
+  const qualityDistribution = data?.qualityDistribution ?? [];
+  const buyerTypeDistribution = data?.buyerTypeDistribution ?? [];
+  const intentDistribution = data?.intentDistribution ?? [];
+  const topProducts = data?.topProducts ?? [];
 
-  const newConvToday = kpi.newConversations?.today ?? 0;
-  const newConvYesterday = kpi.newConversations?.yesterday ?? null;
-  const qualifyToday = kpi.qualifyRate?.today ?? 0;
-  const qualifyYesterday = kpi.qualifyRate?.yesterday ?? null;
-  const newLeadsToday = kpi.newLeads?.today ?? 0;
-  const newLeadsYesterday = kpi.newLeads?.yesterday ?? null;
-  const humanNowCount = kpi.humanNowCount ?? 0;
-
-  // Reset page when tab/data changes
-  useEffect(() => { setHumanPage(1); }, [humanNowTab, dateRange]);
-
-  const humanTotalPages = Math.max(1, Math.ceil(humanNowList.length / HUMAN_PAGE_SIZE));
-  const humanPagedList = humanNowList.slice((humanPage - 1) * HUMAN_PAGE_SIZE, humanPage * HUMAN_PAGE_SIZE);
-
-  const humanNowRows = humanPagedList.map(item => [
-    item.contactName || item.companyName || '—',
-    item.country || '—',
-    item.carModel || '—',
-    item.qty || '—',
-    <Tag key={item.id} variant={businessValueVariant(item.businessValue)}>
-      {item.businessValue ?? '—'}
-    </Tag>,
-  ]);
-
-  // Use API-returned distributions (all leads in date range), not humanNowList
-  const topMarkets = data?.countryDistribution ?? [];
-  const chainDistRaw = data?.supplyChainDistribution ?? [];
-  const chainTotal = chainDistRaw.reduce((s, d) => s + d.value, 0) || 1;
-  const chainBars = chainDistRaw.slice(0, 5).map((d, i) => ({
-    label: d.name,
-    pct: Math.round((d.value / chainTotal) * 100),
-    color: SUPPLY_CHAIN_COLORS[i % SUPPLY_CHAIN_COLORS.length],
-  }));
+  // Find max for scaling bars
+  const maxCountryInquiry = Math.max(...countryDistribution.map(c => c.inquiryCount), 1);
+  const maxProductInquiry = Math.max(...topProducts.map(p => p.inquiryCount), 1);
 
   return (
     <div className={s.root}>
       {/* Header */}
       <div className={s.header}>
         <div className={s.headerLeft}>
-          <h1 className={s.title}>Analytics</h1>
-          <span className={s.subtitle}>实时业务概览 · 数据截至今日 08:00</span>
+          <h1 className={s.title}>询盘数据看板</h1>
+          <span className={s.subtitle}>业务询盘质量与转化分析</span>
         </div>
         <div className={s.headerRight}>
           <select
             className={s.supplySelect}
-            value={supplyChain}
-            onChange={e => setSupplyChain(e.target.value)}
+            value={selectedLines}
+            onChange={e => setSelectedLines(e.target.value)}
           >
-            {SUPPLY_CHAINS.map(sc => (
-              <option key={sc} value={sc}>{sc}</option>
+            {PRODUCT_LINES.map(pl => (
+              <option key={pl.key} value={pl.key}>{pl.label}</option>
             ))}
           </select>
           <TabBar
@@ -257,30 +230,14 @@ export default function AnalyticsPage() {
                 type="date"
                 value={customFrom}
                 onChange={e => setCustomFrom(e.target.value)}
-                style={{
-                  background: 'var(--bg2)',
-                  border: '1px solid var(--border)',
-                  borderRadius: 'var(--r, 6px)',
-                  color: 'var(--text)',
-                  fontFamily: 'var(--font-sans)',
-                  fontSize: 13,
-                  padding: '6px 10px',
-                }}
+                className={s.dateInput}
               />
               <span style={{ color: 'var(--text3)', fontFamily: 'var(--font-sans)', fontSize: 13 }}>—</span>
               <input
                 type="date"
                 value={customTo}
                 onChange={e => setCustomTo(e.target.value)}
-                style={{
-                  background: 'var(--bg2)',
-                  border: '1px solid var(--border)',
-                  borderRadius: 'var(--r, 6px)',
-                  color: 'var(--text)',
-                  fontFamily: 'var(--font-sans)',
-                  fontSize: 13,
-                  padding: '6px 10px',
-                }}
+                className={s.dateInput}
               />
             </div>
           )}
@@ -289,209 +246,280 @@ export default function AnalyticsPage() {
 
       <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
 
-      {/* Loading overlay */}
+      {/* Loading */}
       {loading && (
-        <div style={{
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          padding: '48px 0',
-          gap: 10,
-          color: 'var(--text3)',
-          fontFamily: 'var(--font-sans)',
-          fontSize: 13,
-        }}>
-          <div style={{
-            width: 18,
-            height: 18,
-            border: '2px solid var(--border)',
-            borderTopColor: 'var(--accent)',
-            borderRadius: '50%',
-            animation: 'spin 0.7s linear infinite',
-          }} />
-          Loading…
+        <div className={s.loadingWrap}>
+          <div className={s.spinner} />
+          Loading...
         </div>
       )}
 
-      {/* Error state */}
+      {/* Error */}
       {!loading && error && (
-        <div style={{
-          padding: '16px',
-          background: 'var(--red-dim)',
-          border: '1px solid var(--red)',
-          borderRadius: 'var(--r)',
-          color: 'var(--red)',
-          fontFamily: 'var(--font-sans)',
-          fontSize: 13,
-        }}>
-          Failed to load analytics: {error}
+        <div className={s.errorWrap}>
+          Failed to load data: {error}
         </div>
       )}
 
-      {/* Metric Cards */}
+      {/* Main Content */}
       {!loading && !error && (
         <>
+          {/* KPI Cards */}
           <div className={s.metrics}>
             <MetricCard
-              label="新增对话"
-              value={String(newConvToday)}
-              delta={calcDelta(newConvToday, newConvYesterday)}
-              trend={calcTrend(newConvToday, newConvYesterday)}
+              label="总询盘数"
+              value={String(kpi.totalInquiries?.current ?? 0)}
+              delta={calcDelta(kpi.totalInquiries?.current, kpi.totalInquiries?.previous)}
+              trend={calcTrend(kpi.totalInquiries?.current, kpi.totalInquiries?.previous)}
             />
             <MetricCard
-              label="Qualify Rate"
-              value={`${qualifyToday}%`}
-              delta={calcDelta(qualifyToday, qualifyYesterday)}
-              trend={calcTrend(qualifyToday, qualifyYesterday)}
+              label="Proof 询盘"
+              value={String(kpi.proofInquiries?.current ?? 0)}
+              delta={calcDelta(kpi.proofInquiries?.current, kpi.proofInquiries?.previous)}
+              trend={calcTrend(kpi.proofInquiries?.current, kpi.proofInquiries?.previous)}
+              color="green"
             />
             <MetricCard
-              label="新增线索"
-              value={String(newLeadsToday)}
-              delta={calcDelta(newLeadsToday, newLeadsYesterday)}
-              trend={calcTrend(newLeadsToday, newLeadsYesterday)}
+              label="Proof 率"
+              value={`${kpi.proofRate?.current ?? 0}%`}
+              delta={calcDelta(kpi.proofRate?.current, kpi.proofRate?.previous)}
+              trend={calcTrend(kpi.proofRate?.current, kpi.proofRate?.previous)}
+              color="teal"
+            />
+            <MetricCard
+              label="高价值占比"
+              value={`${kpi.highValueRate?.current ?? 0}%`}
+              delta={calcDelta(kpi.highValueRate?.current, kpi.highValueRate?.previous)}
+              trend={calcTrend(kpi.highValueRate?.current, kpi.highValueRate?.previous)}
               color="amber"
-            />
-            <MetricCard
-              label="Human Now 队列"
-              value={String(humanNowCount)}
-              trend="neutral"
-              color="purple"
             />
           </div>
 
-          {/* AI Panel */}
+          {/* AI Summary Panel */}
           <AIPanel
-            title="今日市场洞察"
-            tag={aiInsightLoading ? (aiStatus || '正在生成…') : aiInsight ? '自动生成' : '自动生成'}
+            title="AI 询盘洞察"
+            tag={aiInsightLoading ? (aiStatus || '正在生成...') : aiInsight ? '自动生成' : '自动生成'}
             onRefresh={() => {
-              const d = dateRange === 'custom' && customFrom && customTo
-                ? Math.max(1, Math.round((new Date(customTo) - new Date(customFrom)) / 86400000) + 1)
-                : DATE_TAB_TO_DAYS[dateRange] ?? 7;
-              return fetchAiInsight(d);
+              const productLines = selectedLines === 'all'
+                ? 'vehicle,auto_parts,agri_machinery'
+                : selectedLines;
+              if (dateRange === 'custom' && customFrom && customTo) {
+                return fetchAiInsight({ startDate: customFrom, endDate: customTo, productLines });
+              }
+              const days = DATE_TAB_TO_DAYS[dateRange] ?? 7;
+              return fetchAiInsight({ days, productLines });
             }}
-            refreshLabel="↺ 刷新"
+            refreshLabel="刷新"
           >
             {aiInsight ? (
               <Markdown>{aiInsight}</Markdown>
             ) : aiInsightLoading ? (
               <div style={{ color: 'var(--text3)', fontSize: 13 }}>
-                {aiStatus || '✦ 正在生成市场洞察…'}
+                {aiStatus || '正在生成询盘洞察...'}
               </div>
             ) : null}
           </AIPanel>
 
-          {/* Bottom Two-Column Grid */}
+          {/* Daily Trend (simple bar visualization) */}
+          <Card title="每日询盘趋势">
+            {dailyTrend.length > 0 ? (
+              <div className={s.trendWrap}>
+                <div className={s.trendChart}>
+                  {dailyTrend.map(day => {
+                    const maxVal = Math.max(...dailyTrend.map(d => d.total), 1);
+                    const totalPct = (day.total / maxVal) * 100;
+                    const proofPct = (day.proof / maxVal) * 100;
+                    const dateLabel = `${new Date(day.date + 'T00:00:00').getMonth() + 1}/${new Date(day.date + 'T00:00:00').getDate()}`;
+                    return (
+                      <div key={day.date} className={s.trendCol} title={`${day.date}\n总询盘: ${day.total}\nProof: ${day.proof}`}>
+                        <div className={s.trendBarWrap}>
+                          <div className={s.trendBarTotal} style={{ height: `${totalPct}%` }} />
+                          <div className={s.trendBarProof} style={{ height: `${proofPct}%` }} />
+                        </div>
+                        <span className={s.trendDate}>{dateLabel}</span>
+                      </div>
+                    );
+                  })}
+                </div>
+                <div className={s.trendLegend}>
+                  <span className={s.legendDot} style={{ background: 'var(--accent)' }} /> 总询盘
+                  <span className={s.legendDot} style={{ background: 'var(--green)', marginLeft: 12 }} /> Proof
+                </div>
+              </div>
+            ) : (
+              <span className={s.noData}>No data</span>
+            )}
+          </Card>
+
+          {/* Two-Column Grid: Agent Distribution + Country */}
           <div className={s.bottomGrid}>
-            {/* Left: Human Now Leads Table */}
-            <Card
-              title={`Human Now Leads (${humanNowCount})`}
-              actions={
-                <TabBar
-                  tabs={HUMAN_NOW_TABS}
-                  active={humanNowTab}
-                  onChange={setHumanNowTab}
-                  style={{ marginLeft: 'auto' }}
-                />
-              }
-            >
-              {humanNowLoading ? (
-                <div style={{
-                  display: 'flex', alignItems: 'center', justifyContent: 'center',
-                  padding: '32px 0', gap: 8, color: 'var(--text3)', fontSize: 13,
-                  fontFamily: 'var(--font-sans)',
-                }}>
-                  <div style={{
-                    width: 16, height: 16,
-                    border: '2px solid var(--border)', borderTopColor: 'var(--accent)',
-                    borderRadius: '50%', animation: 'spin 0.7s linear infinite',
-                  }} />
-                  加载中…
+            {/* Agent Distribution */}
+            <Card title="业务线分布">
+              {agentDistribution.length > 0 ? (
+                <div className={s.agentList}>
+                  {agentDistribution.map(agent => {
+                    const total = Object.values(agent.quality).reduce((s, v) => s + v, 0);
+                    return (
+                      <div key={agent.agentName} className={s.agentRow}>
+                        <div className={s.agentHeader}>
+                          <span className={s.agentName}>{agent.agentName}</span>
+                          <Tag variant={agent.productLine === 'vehicle' ? 'proof' : agent.productLine === 'auto_parts' ? 'avg' : 'good'}>
+                            {PRODUCT_LINES.find(p => p.key === agent.productLine)?.label || agent.productLine}
+                          </Tag>
+                          <span className={s.agentStats}>
+                            {agent.inquiryCount} / {agent.proofCount} ({agent.proofRate}%)
+                          </span>
+                        </div>
+                        {/* Stacked quality bar */}
+                        <div className={s.qualityBar}>
+                          {Object.entries(QUALITY_COLORS).map(([key, color]) => {
+                            const pct = total > 0 ? (agent.quality[key] / total) * 100 : 0;
+                            if (pct === 0) return null;
+                            return (
+                              <div
+                                key={key}
+                                className={s.qualitySegment}
+                                style={{ width: `${pct}%`, background: color }}
+                                title={`${key}: ${agent.quality[key]}`}
+                              />
+                            );
+                          })}
+                        </div>
+                      </div>
+                    );
+                  })}
+                  {/* Legend */}
+                  <div className={s.qualityLegend}>
+                    {Object.entries(QUALITY_COLORS).map(([key, color]) => (
+                      <span key={key} className={s.legendItem}>
+                        <span className={s.legendDot} style={{ background: color }} />
+                        {key}
+                      </span>
+                    ))}
+                  </div>
                 </div>
               ) : (
-              <DataTable
-                columns={['Contact', 'Country', 'Model', 'Qty', 'Value']}
-                rows={humanNowRows}
-                selectedIndex={selectedRow}
-                onRowClick={setSelectedRow}
-              />
-              )}
-              {!humanNowLoading && humanTotalPages > 1 && (
-                <div style={{
-                  display: 'flex', alignItems: 'center', justifyContent: 'center',
-                  gap: 6, padding: '10px 0 4px', borderTop: '1px solid var(--border)',
-                  marginTop: 4,
-                }}>
-                  <button
-                    onClick={() => setHumanPage(p => Math.max(1, p - 1))}
-                    disabled={humanPage <= 1}
-                    style={{
-                      background: 'none', border: '1px solid var(--border)', borderRadius: 'var(--r, 6px)',
-                      padding: '3px 10px', fontSize: 11, color: humanPage <= 1 ? 'var(--text3)' : 'var(--text2)',
-                      cursor: humanPage <= 1 ? 'default' : 'pointer', fontFamily: 'var(--font-sans)',
-                    }}
-                  >
-                    ‹ 上一页
-                  </button>
-                  <span style={{ fontSize: 11, color: 'var(--text3)', fontFamily: 'var(--font-mono)' }}>
-                    {humanPage} / {humanTotalPages}
-                  </span>
-                  <button
-                    onClick={() => setHumanPage(p => Math.min(humanTotalPages, p + 1))}
-                    disabled={humanPage >= humanTotalPages}
-                    style={{
-                      background: 'none', border: '1px solid var(--border)', borderRadius: 'var(--r, 6px)',
-                      padding: '3px 10px', fontSize: 11, color: humanPage >= humanTotalPages ? 'var(--text3)' : 'var(--text2)',
-                      cursor: humanPage >= humanTotalPages ? 'default' : 'pointer', fontFamily: 'var(--font-sans)',
-                    }}
-                  >
-                    下一页 ›
-                  </button>
-                </div>
+                <span className={s.noData}>No data</span>
               )}
             </Card>
 
-            {/* Right: Two stacked cards */}
-            <div className={s.rightCol}>
-              {/* Supply Chain Distribution */}
-              <Card title="供应链线索分布">
+            {/* Country Distribution */}
+            <Card title="国家分布 Top 10">
+              {countryDistribution.length > 0 ? (
                 <div className={s.barList}>
-                  {chainBars.length > 0 ? chainBars.map(bar => (
-                    <div key={bar.label} className={s.barRow}>
-                      <span className={s.barLabel}>{bar.label}</span>
+                  {countryDistribution.map((c, i) => (
+                    <div key={c.country} className={s.barRow}>
+                      <span className={s.barRank}>{i + 1}</span>
+                      <span className={s.barLabel}>{c.country}</span>
                       <div className={s.barTrack}>
                         <div
                           className={s.barFill}
-                          style={{ width: `${bar.pct}%`, background: bar.color }}
+                          style={{
+                            width: `${(c.inquiryCount / maxCountryInquiry) * 100}%`,
+                            background: 'var(--accent)',
+                          }}
                         />
                       </div>
-                      <span className={s.barPct}>{bar.pct}%</span>
+                      <span className={s.barValue}>{c.inquiryCount}</span>
                     </div>
-                  )) : (
-                    <span style={{ fontSize: 13, color: 'var(--text3)', fontFamily: 'var(--font-sans)' }}>
-                      No data
-                    </span>
-                  )}
+                  ))}
                 </div>
-              </Card>
-
-              {/* Top Markets */}
-              <Card title="Top 市场">
-                <div className={s.marketList}>
-                  {topMarkets.length > 0 ? topMarkets.slice(0, 8).map((m, i) => (
-                    <div key={m.name} className={s.marketRow}>
-                      <span className={s.marketRank}>{i + 1}</span>
-                      <span className={s.marketName}>{m.name}</span>
-                      <span className={s.marketValue}>{m.value}</span>
-                    </div>
-                  )) : (
-                    <span style={{ fontSize: 13, color: 'var(--text3)', fontFamily: 'var(--font-sans)', padding: '8px 0', display: 'block' }}>
-                      No data
-                    </span>
-                  )}
-                </div>
-              </Card>
-            </div>
+              ) : (
+                <span className={s.noData}>No data</span>
+              )}
+            </Card>
           </div>
+
+          {/* Three Distribution Cards */}
+          <div className={s.threeCol}>
+            {/* Quality Distribution */}
+            <Card title="询盘质量分布">
+              {qualityDistribution.length > 0 ? (
+                <div className={s.distList}>
+                  {qualityDistribution.map(item => {
+                    const totalQ = qualityDistribution.reduce((s, i) => s + i.value, 0) || 1;
+                    const pct = Math.round((item.value / totalQ) * 100);
+                    return (
+                      <div key={item.name} className={s.distRow}>
+                        <span className={s.distDot} style={{ background: QUALITY_COLORS[item.name] || 'var(--text3)' }} />
+                        <span className={s.distName}>{item.name}</span>
+                        <span className={s.distPct}>{pct}%</span>
+                        <span className={s.distValue}>{item.value}</span>
+                      </div>
+                    );
+                  })}
+                </div>
+              ) : (
+                <span className={s.noData}>No data</span>
+              )}
+            </Card>
+
+            {/* Buyer Type Distribution */}
+            <Card title="买家类型分布">
+              {buyerTypeDistribution.length > 0 ? (
+                <div className={s.distList}>
+                  {buyerTypeDistribution.map((item, i) => {
+                    const totalB = buyerTypeDistribution.reduce((s, i) => s + i.value, 0) || 1;
+                    const pct = Math.round((item.value / totalB) * 100);
+                    const colors = ['var(--accent)', 'var(--purple)', 'var(--teal)', 'var(--amber)', 'var(--green)'];
+                    return (
+                      <div key={item.name} className={s.distRow}>
+                        <span className={s.distDot} style={{ background: colors[i % colors.length] }} />
+                        <span className={s.distName}>{item.name}</span>
+                        <span className={s.distPct}>{pct}%</span>
+                        <span className={s.distValue}>{item.value}</span>
+                      </div>
+                    );
+                  })}
+                </div>
+              ) : (
+                <span className={s.noData}>No data</span>
+              )}
+            </Card>
+
+            {/* Intent Distribution */}
+            <Card title="对话意图分布">
+              {intentDistribution.length > 0 ? (
+                <div className={s.distList}>
+                  {intentDistribution.map((item, i) => {
+                    const totalI = intentDistribution.reduce((s, i) => s + i.value, 0) || 1;
+                    const pct = Math.round((item.value / totalI) * 100);
+                    const colors = ['var(--accent)', 'var(--teal)', 'var(--amber)', 'var(--purple)', 'var(--green)'];
+                    return (
+                      <div key={item.name} className={s.distRow}>
+                        <span className={s.distDot} style={{ background: colors[i % colors.length] }} />
+                        <span className={s.distName}>{INTENT_LABELS[item.name] || item.name}</span>
+                        <span className={s.distPct}>{pct}%</span>
+                        <span className={s.distValue}>{item.value}</span>
+                      </div>
+                    );
+                  })}
+                </div>
+              ) : (
+                <span className={s.noData}>No data</span>
+              )}
+            </Card>
+          </div>
+
+          {/* Top Products */}
+          <Card title="热门产品 Top 10">
+            {topProducts.length > 0 ? (
+              <DataTable
+                columns={['#', '产品', '业务线', '询盘数', 'Proof 率']}
+                rows={topProducts.map((p, i) => [
+                  i + 1,
+                  p.productName,
+                  <Tag key={p.productLine} variant={p.productLine === 'vehicle' ? 'proof' : p.productLine === 'auto_parts' ? 'avg' : 'good'}>
+                    {PRODUCT_LINES.find(pl => pl.key === p.productLine)?.label || p.productLine}
+                  </Tag>,
+                  p.inquiryCount,
+                  `${p.proofRate}%`,
+                ])}
+              />
+            ) : (
+              <span className={s.noData}>No data</span>
+            )}
+          </Card>
         </>
       )}
     </div>
