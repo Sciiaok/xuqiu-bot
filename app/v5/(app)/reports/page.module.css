@@ -1,4 +1,4 @@
-/* ── Reports Page ── */
+/* ── Reports List Page ── */
 
 .page {
   padding: 28px 32px 48px;
@@ -45,22 +45,14 @@
   gap: 8px;
 }
 
-/* ── Tab content wrapper ── */
-
-.tabContent {
-  padding-top: 20px;
-  display: flex;
-  flex-direction: column;
-  gap: 16px;
-}
-
-/* ── Filter row (Tab 1) ── */
+/* ── Filter row ── */
 
 .filterRow {
   display: flex;
   align-items: center;
   gap: 8px;
   flex-wrap: wrap;
+  margin-bottom: 20px;
 }
 
 .divider {
@@ -88,248 +80,219 @@
   border-color: var(--accent);
 }
 
-/* ── Metric cards row ── */
+/* ── Report list ── */
 
-.metricsRow {
-  display: grid;
-  grid-template-columns: repeat(4, 1fr);
-  gap: 12px;
-}
-
-/* ── Compare table ── */
-
-.compareTable {
+.reportList {
   display: flex;
   flex-direction: column;
+  gap: 10px;
 }
 
-.compareRow {
-  display: grid;
-  grid-template-columns: 80px 100px 80px 100px 90px 1fr 80px;
-  align-items: center;
-  gap: 12px;
-  padding: 10px 0;
-}
-
-.compareHeader {
-  border-bottom: 1px solid var(--border);
-  padding-bottom: 10px;
-  font-size: 10px;
-  font-weight: 500;
-  letter-spacing: 0.8px;
-  text-transform: uppercase;
+.emptyState {
+  text-align: center;
+  padding: 48px 0;
   color: var(--text3);
-  font-family: var(--font-mono);
+  font-size: 14px;
 }
 
-.compareDataRow {
-  border-bottom: 1px solid var(--border);
+.loadMore {
+  display: flex;
+  justify-content: center;
+  padding: 16px 0;
+}
+
+/* ── Report Card ── */
+
+.reportCard {
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  border-radius: var(--r2);
+  padding: 16px 20px;
   cursor: pointer;
-  border-radius: var(--r);
-  padding-left: 6px;
-  padding-right: 6px;
-  margin: 0 -6px;
-  transition: background 0.15s;
+  transition: border-color 0.15s, box-shadow 0.15s;
 }
 
-.compareDataRow:last-child {
-  border-bottom: none;
+.reportCard:hover {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent);
 }
 
-.compareDataRow:hover {
-  background: var(--bg3);
-}
-
-.compareRowActive {
-  background: var(--accent-dim) !important;
-}
-
-.chainName {
-  font-weight: 500;
-  font-size: 13px;
-  color: var(--text);
-}
-
-.monoVal {
-  font-family: var(--font-mono);
-  font-size: 12px;
-  color: var(--text2);
-}
-
-.efficiencyCell {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-
-.efficiencyBar {
-  flex: 1;
-  height: 5px;
-  background: var(--bg4);
-  border-radius: 3px;
-  overflow: hidden;
-  min-width: 60px;
-}
-
-.efficiencyFill {
-  height: 100%;
-  border-radius: 3px;
-  transition: width 0.4s ease;
-}
-
-.efficiencyPct {
-  font-family: var(--font-mono);
-  font-size: 11px;
-  color: var(--text3);
-  min-width: 28px;
-}
-
-/* Status tags (inline, not using Tag component) */
-
-.statusTag {
-  display: inline-block;
-  padding: 2px 8px;
-  border-radius: 4px;
-  font-size: 11px;
-  font-weight: 500;
-  letter-spacing: 0.2px;
-}
-
-.status_proof {
-  background: var(--green-dim);
-  color: var(--green);
-  border: 1px solid rgba(42, 140, 90, 0.2);
-}
-
-.status_amber {
-  background: var(--amber-dim);
-  color: var(--amber);
-  border: 1px solid rgba(184, 134, 11, 0.2);
-}
-
-.status_red {
-  background: var(--red-dim);
-  color: var(--red);
-  border: 1px solid rgba(196, 66, 48, 0.2);
-}
-
-.aiHint {
-  font-size: 11px;
-  color: var(--text3);
-  margin-top: 4px;
-  font-style: italic;
-}
-
-/* ── Market grid (Tab 3) ── */
-
-.marketGrid {
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 14px;
-}
-
-.marketList {
-  display: flex;
-  flex-direction: column;
-  gap: 14px;
-}
-
-.marketItem {
-  display: flex;
-  flex-direction: column;
-  gap: 5px;
-}
-
-.marketItemHeader {
+.cardTop {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  margin-bottom: 10px;
 }
 
-.marketName {
+.cardMeta {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.cardPeriod {
+  font-family: var(--font-mono);
   font-size: 13px;
   font-weight: 500;
   color: var(--text);
 }
 
-.marketValue {
-  font-family: var(--font-mono);
-  font-size: 12px;
+.cardTime {
+  font-size: 11px;
   color: var(--text3);
 }
 
-.growthBadge {
+.failedBadge {
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--red);
+  background: var(--red-dim);
+  border: 1px solid rgba(196, 66, 48, 0.15);
+  border-radius: 4px;
+  padding: 2px 8px;
+}
+
+.generatingBadge {
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--amber);
+  background: var(--amber-dim);
+  border: 1px solid rgba(184, 134, 11, 0.15);
+  border-radius: 4px;
+  padding: 2px 8px;
+}
+
+/* ── Card KPI row ── */
+
+.cardKpi {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+
+.kpiItem {
+  font-size: 12px;
+  color: var(--text2);
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.kpiItem strong {
   font-family: var(--font-mono);
+  font-weight: 600;
+  color: var(--text);
+}
+
+.kpiSep {
+  width: 1px;
+  height: 14px;
+  background: var(--border2);
+  flex-shrink: 0;
+}
+
+.kpiUp {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--green);
+}
+
+.kpiDown {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--red);
+}
+
+/* ── Card summary ── */
+
+.cardSummary {
+  font-size: 13px;
+  color: var(--text2);
+  line-height: 1.5;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+
+/* ── Generate Modal ── */
+
+.modalOverlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.5);
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  animation: fadeIn 0.15s ease;
+}
+
+.modal {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--r2);
+  padding: 24px;
+  width: 400px;
+  max-width: 90vw;
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.25);
+}
+
+.modalTitle {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text);
+  margin-bottom: 20px;
+}
+
+.modalField {
+  margin-bottom: 16px;
+}
+
+.modalLabel {
   font-size: 12px;
   font-weight: 500;
-  color: var(--green);
-  background: var(--green-dim);
-  border: 1px solid rgba(42, 140, 90, 0.15);
-  border-radius: 4px;
-  padding: 1px 6px;
+  color: var(--text2);
+  margin-bottom: 6px;
+  display: block;
 }
 
-.progressTrack {
-  height: 5px;
-  background: var(--bg4);
-  border-radius: 3px;
-  overflow: hidden;
-}
-
-.progressFill {
-  height: 100%;
-  border-radius: 3px;
-  transition: width 0.4s ease;
-}
-
-.watchList {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-}
-
-.watchItem {
+.modalDateRow {
   display: flex;
   align-items: center;
   gap: 8px;
 }
 
-.watchDot {
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background: var(--border2);
-  flex-shrink: 0;
+.modalDateSep {
+  color: var(--text3);
+  font-size: 13px;
 }
 
-.watchLabel {
-  font-size: 11px;
-  color: var(--text3);
-  margin-left: auto;
+.modalActions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 24px;
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
 }
 
 /* ── Responsive ── */
-
-@media (max-width: 1100px) {
-  .metricsRow {
-    grid-template-columns: repeat(2, 1fr);
-  }
-  .marketGrid {
-    grid-template-columns: 1fr;
-  }
-  .compareRow {
-    grid-template-columns: 70px 90px 70px 90px 80px 1fr 70px;
-  }
-}
 
 @media (max-width: 768px) {
   .page {
     padding: 20px 16px 32px;
   }
-  .metricsRow {
-    grid-template-columns: 1fr 1fr;
-  }
   .filterRow {
     gap: 6px;
+  }
+  .cardKpi {
+    flex-wrap: wrap;
+    gap: 8px;
   }
 }

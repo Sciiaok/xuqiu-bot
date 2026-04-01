@@ -35,9 +35,10 @@ export function extractBriefImages(brief) {
     results.push({ url, description });
   }
 
-  // 1. product_images — [{url, filename}] from intake attachment uploads
+  // 1. product_images — [{url, filename}] or string[] from intake attachment uploads / patch_brief
   for (const img of Array.isArray(brief.product_images) ? brief.product_images : []) {
-    add(img?.url, img?.filename || 'User uploaded product image');
+    if (typeof img === 'string') add(img, 'User uploaded product image');
+    else add(img?.url, img?.filename || 'User uploaded product image');
   }
 
   // 2. reference_images — string[] or [{url}] set by LLM via update_brief / patch_brief

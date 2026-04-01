@@ -52,5 +52,19 @@ module.exports = {
       watch: false,
       max_memory_restart: '256M',
     },
+    {
+      name: 'report-cron',
+      script: 'scripts/cron-generate-reports.js',
+      cwd: __dirname,
+      node_args: '--experimental-modules',
+      env: {
+        NODE_ENV: 'production',
+        API_BASE_URL: 'http://localhost:3002',
+      },
+      instances: 1,
+      autorestart: true,
+      watch: false,
+      max_memory_restart: '256M',
+    },
   ],
 };

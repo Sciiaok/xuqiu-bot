@@ -40,7 +40,7 @@ ${pdfText.slice(0, 12000)}`,
  * Generate an ad image via OpenRouter image-capable models.
  * Returns { imageBuffer, model, prompt }.
  */
-const IMAGE_MODEL_FALLBACKS = process.env.MIXAI_API_KEY
+const IMAGE_MODEL_FALLBACKS = (process.env.MIXAI_API_GEMINI_KEY || process.env.MIXAI_API_KEY)
   ? ['gemini-3.1-flash-image-preview', 'gemini-2.5-flash-image', 'gemini-2.5-flash-image-preview']
   : ['google/gemini-3.1-flash-image-preview', 'google/gemini-2.0-flash-exp:free', 'openai/gpt-image-1'];
 
