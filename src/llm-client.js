@@ -24,6 +24,7 @@ export const MODELS = {
   SONNET: 'claude-sonnet-4-6',
   HAIKU: 'claude-haiku-4-5-20251001',
   MINIMAX: 'minimax/minimax-m2.7',
+  GEMINI_FLASH: 'gemini-2.5-flash',
   GPT_MINI: 'gpt-4o-mini',
   EMBEDDING: 'text-embedding-3-small',
   WHISPER: 'whisper-1',
@@ -33,12 +34,21 @@ function isMiniMaxModel(model) {
   return model?.startsWith('minimax/');
 }
 
+function isGeminiModel(model) {
+  return !!model?.includes('gemini');
+}
+
 // ── Provider Config ──────────────────────────────────────────────────
 const MIXAI_KEY = process.env.MIXAI_API_KEY;
+const MIXAI_GEMINI_KEY = process.env.MIXAI_API_GEMINI_KEY;
 const MIXAI_URL = process.env.MIXAI_BASE_URL || 'https://us.mixaicloud.com';
 
 const mixaiClient = MIXAI_KEY
   ? new Anthropic({ apiKey: MIXAI_KEY, baseURL: MIXAI_URL })
+  : null;
+
+const mixaiGeminiClient = MIXAI_GEMINI_KEY
+  ? new OpenAI({ apiKey: MIXAI_GEMINI_KEY, baseURL: MIXAI_URL + '/v1', timeout: 120_000 })
   : null;
 
 const ANTHROPIC_KEY = process.env.ANTHROPIC_API_KEY;
@@ -81,7 +91,7 @@ function pickClaudeClient(params) {
 
 // ── Logging ──────────────────────────────────────────────────────────
 function logLlmCall({ method, provider, model, responseModel, tools, toolChoice, stopReason, inputTokens, outputTokens, durationMs }) {
-  const baseUrls = { mixai: MIXAI_URL, direct: 'https://api.anthropic.com', openrouter: 'https://openrouter.ai' };
+  const baseUrls = { mixai: MIXAI_URL, 'mixai-gemini': MIXAI_URL, direct: 'https://api.anthropic.com', openrouter: 'https://openrouter.ai' };
   console.log(`[llm-client] ${JSON.stringify({
     method, provider,
     base_url: baseUrls[provider] || provider,
@@ -365,6 +375,51 @@ async function callMiniMax(params) {
   return result;
 }
 
+// ── Gemini call handler (MixAI OpenAI-compatible) ──────────────────
+async function callGemini(params) {
+  if (!mixaiGeminiClient) {
+    throw new Error('[llm-client] MIXAI_API_GEMINI_KEY required for Gemini models');
+  }
+
+  const t0 = Date.now();
+  const logMeta = {
+    method: 'create',
+    provider: 'mixai-gemini',
+    model: params.model,
+    tools: params.tools?.length || 0,
+    toolChoice: params.tool_choice?.type || null,
+  };
+
+  const openaiParams = {
+    model: params.model,
+    max_tokens: params.max_tokens,
+    messages: [
+      ...translateSystemToOpenAI(params.system),
+      ...translateMessagesToOpenAI(params.messages),
+    ],
+  };
+
+  const openaiTools = translateToolsToOpenAI(params.tools);
+  if (openaiTools?.length) {
+    openaiParams.tools = openaiTools;
+    openaiParams.tool_choice = 'auto';
+  }
+
+  const raw = await mixaiGeminiClient.chat.completions.create(openaiParams);
+  const result = translateResponseToAnthropic(raw, params.model);
+
+  logLlmCall({
+    ...logMeta,
+    responseModel: result.model,
+    stopReason: result.stop_reason,
+    inputTokens: result.usage?.input_tokens,
+    outputTokens: result.usage?.output_tokens,
+    durationMs: Date.now() - t0,
+  });
+
+  return result;
+}
+
 // ══════════════════════════════════════════════════════════════════════
 // Unified Proxy (routes by model)
 // ══════════════════════════════════════════════════════════════════════
@@ -372,6 +427,11 @@ async function callMiniMax(params) {
 const anthropicProxy = {
   messages: {
     async create(params) {
+      // ── Gemini models → MixAI Gemini with translation ──
+      if (isGeminiModel(params.model)) {
+        return callGemini(params);
+      }
+
       // ── MiniMax models → OpenRouter with translation ──
       if (isMiniMaxModel(params.model)) {
         return callMiniMax(params);
@@ -488,4 +548,4 @@ function emitLlmEvent(event) {
 // ── Exports ──────────────────────────────────────────────────────────
 export const anthropic = anthropicProxy;
 export const openai = openaiClient;
-export { openaiModel };
+export { openaiModel, isGeminiModel };

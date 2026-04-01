@@ -56,13 +56,13 @@ export const config = {
     baseURL: process.env.FIRECRAWL_BASE_URL || 'https://api.firecrawl.dev/v1',
   },
 
-  // AIGC — image generation via MixAI (primary) or OpenRouter (fallback)
+  // AIGC — image generation via MixAI Gemini (primary) or OpenRouter (fallback)
   aigc: {
-    apiKey: process.env.MIXAI_API_KEY || process.env.OPENROUTER_API_KEY,
-    baseURL: process.env.MIXAI_API_KEY
+    apiKey: process.env.MIXAI_API_GEMINI_KEY || process.env.MIXAI_API_KEY || process.env.OPENROUTER_API_KEY,
+    baseURL: (process.env.MIXAI_API_GEMINI_KEY || process.env.MIXAI_API_KEY)
       ? (process.env.MIXAI_BASE_URL || 'https://us.mixaicloud.com')
       : (process.env.OPENROUTER_BASE_URL || 'https://openrouter.ai/api'),
-    imageModel: process.env.AIGC_IMAGE_MODEL || (process.env.MIXAI_API_KEY ? 'gemini-3.1-flash-image-preview' : 'google/gemini-3.1-flash-image-preview'),
+    imageModel: process.env.AIGC_IMAGE_MODEL || ((process.env.MIXAI_API_GEMINI_KEY || process.env.MIXAI_API_KEY) ? 'gemini-3.1-flash-image-preview' : 'google/gemini-3.1-flash-image-preview'),
     storageBucket: 'aigc-assets',
   },
 
