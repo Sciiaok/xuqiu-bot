@@ -41,3 +41,11 @@ tmp
 
 .agents
 .superpowers
+tests/eval/results/
+!tests/eval/results/.gitkeep
+
+# temporary test scripts & artifacts
+.playwright-mcp/
+test-v5-*.mjs
+scripts/test-*.mjs
+docs/superpowers/

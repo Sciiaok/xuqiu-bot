@@ -1,0 +1,35 @@
+{
+  "id": "golden-005",
+  "name": "no-materials-feedback",
+  "description": "No product images or website provided; must request user feedback before creative phase",
+  "brief": {
+    "company_name": "Kenya Agri Solutions",
+    "industry": "agricultural machinery",
+    "products": [
+      { "model": "KAS-30 Tractor", "category": "Tractor" }
+    ],
+    "target_countries": ["Kenya"],
+    "budget_total": 5000,
+    "budget_currency": "USD",
+    "campaign_duration_days": 30,
+    "objectives": ["lead_gen"],
+    "preferred_platforms": ["meta"],
+    "product_images": [],
+    "website": null
+  },
+  "expected_phases": ["strategy", "creative_plan"],
+  "assertions": {
+    "schema": true,
+    "business_rules": {},
+    "reference_handling": "must_request_feedback",
+    "tool_trace": {
+      "expected_sequence": ["run_phase('strategy')", "request_user_feedback(images)"],
+      "must_not": ["run_phase('creative') before feedback"]
+    }
+  },
+  "quality_rubric": {
+    "strategy": { "min_score": 3.0 },
+    "creative": { "min_score": 3.0 },
+    "overall": { "min_score": 3.0 }
+  }
+}

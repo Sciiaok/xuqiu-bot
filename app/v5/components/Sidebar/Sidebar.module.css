@@ -1,0 +1,89 @@
+.sidebar {
+  width: 216px;
+  background: var(--bg2);
+  border-right: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  flex-shrink: 0;
+  box-shadow: 1px 0 8px rgba(80, 50, 20, 0.04);
+}
+.logoWrap {
+  padding: 18px 16px 14px;
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  gap: 9px;
+}
+.logoGem {
+  width: 26px; height: 26px;
+  background: linear-gradient(135deg, #c06a2b, #d4873a);
+  border-radius: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 2px 8px rgba(192, 106, 43, 0.2);
+}
+.logoGem svg { width: 14px; height: 14px; fill: #fff; }
+.logoName {
+  font-family: var(--font-display);
+  font-size: 14px;
+  font-weight: 700;
+  letter-spacing: -0.2px;
+}
+.logoVer {
+  font-size: 10px;
+  color: var(--text3);
+  font-family: var(--font-mono);
+  margin-left: auto;
+  margin-top: 1px;
+}
+.navSection {
+  padding: 10px 8px 4px;
+  font-size: 10px;
+  font-family: var(--font-mono);
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  color: var(--text3);
+}
+.nav {
+  padding: 4px 8px;
+  flex: 1;
+  overflow-y: auto;
+}
+.ni {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 8px 9px;
+  border-radius: var(--r);
+  cursor: pointer;
+  color: var(--text2);
+  font-size: 13px;
+  transition: all 0.13s;
+  margin-bottom: 1px;
+  user-select: none;
+  position: relative;
+  text-decoration: none;
+}
+.ni:hover { background: var(--bg3); color: var(--text); }
+.ni.active { background: rgba(192, 106, 43, 0.08); color: var(--accent); }
+.ni svg { width: 15px; height: 15px; flex-shrink: 0; opacity: 0.6; }
+.ni.active svg { opacity: 1; }
+.badge {
+  margin-left: auto;
+  background: var(--accent);
+  color: #fff;
+  font-size: 10px;
+  font-family: var(--font-mono);
+  padding: 1px 5px;
+  border-radius: 10px;
+  min-width: 16px;
+  text-align: center;
+  line-height: 1.4;
+}
+.badgeNew { background: var(--purple); }
+.badgeWarn { background: var(--amber); }
+.foot {
+  padding: 8px 8px 14px;
+  border-top: 1px solid var(--border);
+}

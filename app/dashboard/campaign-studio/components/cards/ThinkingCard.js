@@ -58,19 +58,25 @@ export default function ThinkingCard({ steps, type, tool, content }) {
   // Grouped tool steps mode
   const items = steps || [{ type, tool, content }];
 
-  // Determine if there's an active (pending) tool call — a tool_call without a matching tool_result after it
+  // Determine if there's an active (pending) tool call or streaming reasoning
   const isActive = useMemo(() => {
     for (let i = items.length - 1; i >= 0; i--) {
       if (items[i].type === 'tool_result') return false;
       if (items[i].type === 'tool_call') return true;
+      if (items[i].tool === 'reasoning_delta') return true; // still streaming reasoning
     }
     return items.length === 0; // empty thinking_group = just started
   }, [items]);
 
   const summary = useMemo(() => {
-    const progressItems = items.filter(s => s.type === 'progress');
+    const progressItems = items.filter(s => s.type === 'progress' && s.tool !== 'reasoning_delta');
     const toolItems = items.filter(s => s.type === 'tool_call');
+    const reasoningStep = items.find(s => s.tool === 'reasoning_delta');
     const lastProgress = progressItems[progressItems.length - 1];
+    // Streaming reasoning — show "thinking"
+    if (isActive && reasoningStep && !toolItems.length) {
+      return '主控分析中';
+    }
     // Show the last active tool if still pending
     if (isActive && toolItems.length > 0) {
       const lastTool = toolItems[toolItems.length - 1];
@@ -95,16 +101,24 @@ export default function ThinkingCard({ steps, type, tool, content }) {
         <div className="border-t border-gray-100 divide-y divide-gray-100">
           {items.map((step, i) => (
             <div key={i} className="px-4 py-2">
-              <div className="text-[11px] text-gray-400 mb-1">
-                {step.type === 'tool_call' ? `调用 ${step.tool}`
-                  : step.type === 'progress' ? `📍 ${step.content}`
-                  : step.type === 'tool_result' ? `结果 ${step.tool}`
-                  : step.tool || '思考'}
-              </div>
-              {step.type !== 'progress' && (
-                <pre className="text-[11px] text-gray-500 whitespace-pre-wrap overflow-x-auto font-mono leading-relaxed max-h-40 overflow-y-auto">
+              {step.tool === 'reasoning_delta' ? (
+                <pre className="text-[11px] text-gray-500 whitespace-pre-wrap overflow-x-auto font-mono leading-relaxed max-h-60 overflow-y-auto">
                   {step.content}
                 </pre>
+              ) : (
+                <>
+                  <div className="text-[11px] text-gray-400 mb-1">
+                    {step.type === 'tool_call' ? `调用 ${step.tool}`
+                      : step.type === 'progress' ? `📍 ${step.content}`
+                      : step.type === 'tool_result' ? `结果 ${step.tool}`
+                      : step.tool || '思考'}
+                  </div>
+                  {step.type !== 'progress' && (
+                    <pre className="text-[11px] text-gray-500 whitespace-pre-wrap overflow-x-auto font-mono leading-relaxed max-h-40 overflow-y-auto">
+                      {step.content}
+                    </pre>
+                  )}
+                </>
               )}
             </div>
           ))}

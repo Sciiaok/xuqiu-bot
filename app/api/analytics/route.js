@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import supabase from '@/lib/supabase';
+import { getWaCountryLabel } from '@/lib/wa-country';
 
 export async function GET(request) {
   try {
@@ -322,6 +323,70 @@ export async function GET(request) {
       .limit(10000);
     const countries = [...new Set((allLeadsCountries || []).map(l => l.destination_country))].sort();
 
+    // Country distribution (all leads in period, sorted by count desc)
+    // For leads with missing destination_country, infer from contact phone prefix
+    const unknownContactIds = [...new Set(
+      leads.filter(l => !l.destination_country).map(l => l.contact_id).filter(Boolean),
+    )];
+    // Fetch contacts not already in contactMap
+    const missingContactIds = unknownContactIds.filter(id => !contactMap[id]);
+    if (missingContactIds.length > 0) {
+      const batchSize = 200;
+      for (let i = 0; i < missingContactIds.length; i += batchSize) {
+        const batch = missingContactIds.slice(i, i + batchSize);
+        const { data: extraContacts } = await supabase
+          .from('contacts')
+          .select('id, name, wa_id')
+          .in('id', batch);
+        if (extraContacts) {
+          extraContacts.forEach(c => { contactMap[c.id] = c; });
+        }
+      }
+    }
+
+    const countryDist = {};
+    leads.forEach(l => {
+      let c = l.destination_country;
+      if (!c && l.contact_id && contactMap[l.contact_id]?.wa_id) {
+        c = getWaCountryLabel(contactMap[l.contact_id].wa_id) || null;
+      }
+      c = c || 'Unknown';
+      countryDist[c] = (countryDist[c] || 0) + 1;
+    });
+    const countryDistribution = Object.entries(countryDist)
+      .map(([name, value]) => ({ name, value }))
+      .sort((a, b) => b.value - a.value);
+
+    // Supply chain distribution (leads by agent product_line in period)
+    // Need agent info — query conversations with agent product_line for lead conversation_ids
+    const leadConvIds = [...new Set(leads.map(l => l.conversation_id).filter(Boolean))];
+    let supplyChainDistribution = [];
+    if (leadConvIds.length > 0) {
+      const batchSize = 200;
+      const convAgentRows = [];
+      for (let i = 0; i < leadConvIds.length; i += batchSize) {
+        const batch = leadConvIds.slice(i, i + batchSize);
+        const { data } = await supabase
+          .from('conversations')
+          .select('id, agents(product_line)')
+          .in('id', batch);
+        if (data) convAgentRows.push(...data);
+      }
+      const convAgentMap = {};
+      convAgentRows.forEach(c => {
+        convAgentMap[c.id] = c.agents?.product_line || 'Unknown';
+      });
+
+      const chainDist = {};
+      leads.forEach(l => {
+        const line = convAgentMap[l.conversation_id] || 'Unknown';
+        chainDist[line] = (chainDist[line] || 0) + 1;
+      });
+      supplyChainDistribution = Object.entries(chainDist)
+        .map(([name, value]) => ({ name, value }))
+        .sort((a, b) => b.value - a.value);
+    }
+
     return NextResponse.json({
       kpi,
       dailyConversations,
@@ -334,6 +399,8 @@ export async function GET(request) {
       avgResponseTime,
       humanNowList,
       countries,
+      countryDistribution,
+      supplyChainDistribution,
     });
   } catch (error) {
     console.error('Analytics API error:', error);

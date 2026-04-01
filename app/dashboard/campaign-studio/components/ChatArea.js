@@ -92,7 +92,8 @@ export default function ChatArea({ briefId, sessionId, sessionStatus, onSessionU
     switch (event) {
       case 'orchestration_start':
       case 'orchestration_resumed':
-        addMessage({ id: nextMsgId(), type: 'thinking_group', steps: [] });
+        // Don't create empty thinking_group here — the orchestrator's
+        // first reasoning_delta or phase_progress will create one on demand
         break;
 
       case 'phase_start':
@@ -129,15 +130,40 @@ export default function ChatArea({ briefId, sessionId, sessionStatus, onSessionU
           setMessages(prev => prev.filter(m => m.type !== 'execution_progress'));
           addMessage({ type: 'execution_complete', result: data.result });
         }
-        onSessionUpdate?.();
+        // Don't refresh sessions mid-stream — deferred to finally block
         break;
 
       case 'phase_progress':
-        appendToolStep({
-          type: 'progress',
-          tool: data.step,
-          content: data.detail || data.step,
-        });
+        if (data.step === 'reasoning_delta') {
+          // Append to existing reasoning step instead of creating new one
+          setMessages(prev => {
+            for (let i = prev.length - 1; i >= Math.max(0, prev.length - 5); i--) {
+              if (prev[i].type === 'thinking_group') {
+                const steps = prev[i].steps;
+                const last = steps[steps.length - 1];
+                if (last?.tool === 'reasoning_delta') {
+                  // Append to existing reasoning delta step
+                  const updated = [...prev];
+                  const newSteps = [...steps];
+                  newSteps[newSteps.length - 1] = { ...last, content: last.content + data.detail };
+                  updated[i] = { ...updated[i], steps: newSteps };
+                  return updated;
+                }
+                // First delta — create new step
+                const updated = [...prev];
+                updated[i] = { ...updated[i], steps: [...steps, { type: 'progress', tool: 'reasoning_delta', content: data.detail }] };
+                return updated;
+              }
+            }
+            return [...prev, { id: nextMsgId(), type: 'thinking_group', steps: [{ type: 'progress', tool: 'reasoning_delta', content: data.detail }] }];
+          });
+        } else {
+          appendToolStep({
+            type: 'progress',
+            tool: data.step,
+            content: data.detail || data.step,
+          });
+        }
         if (data.phase === 'creative' && (data.step === 'creative_start' || data.step === 'creative_item' || data.step === 'creative_error' || data.step === 'creative_done')) {
           setMessages(prev => prev.map(m =>
             m.type === 'creative_progress'
@@ -153,7 +179,7 @@ export default function ChatArea({ briefId, sessionId, sessionStatus, onSessionU
       case 'approval_required':
         setMessages(prev => prev.filter(m => m.type !== 'execution_progress'));
         addMessage({ type: 'execution_approval', plan: data.plan });
-        onSessionUpdate?.();
+        // Don't refresh sessions mid-stream — deferred to finally block
         break;
 
       case 'feedback_required':
@@ -163,8 +189,7 @@ export default function ChatArea({ briefId, sessionId, sessionStatus, onSessionU
           message: data.message,
           options: data.options,
         });
-        onSessionUpdate?.();
-        return 'done'; // signal terminal event
+        return 'done'; // signal terminal event — session refresh in finally
 
       case 'phase_skipped':
         addMessage({ type: 'phase_skipped', phase: data.phase, reason: data.reason });
@@ -172,12 +197,10 @@ export default function ChatArea({ briefId, sessionId, sessionStatus, onSessionU
 
       case 'phase_error':
         addMessage({ type: 'error', content: `${phaseLabels[data.phase] || data.phase} ${t('phaseFailed')}: ${data.error}` });
-        onSessionUpdate?.();
         break;
 
       case 'done':
-        onSessionUpdate?.();
-        return 'done'; // signal terminal event
+        return 'done'; // signal terminal event — session refresh in finally
 
       case 'error':
         addMessage({ type: 'error', content: data.message });
@@ -245,8 +268,9 @@ export default function ChatArea({ briefId, sessionId, sessionStatus, onSessionU
   }, [sessionId, briefId]);
 
   // Load existing messages when session changes
+  // Sync ref immediately (not via useEffect) to avoid race with sessionId changes
   const isLoadingRef = useRef(false);
-  useEffect(() => { isLoadingRef.current = isLoading; }, [isLoading]);
+  isLoadingRef.current = isLoading;
 
   useEffect(() => {
     if (!briefId) {
@@ -560,12 +584,12 @@ export default function ChatArea({ briefId, sessionId, sessionStatus, onSessionU
           shouldStartOrchestration = true;
           break;
         case 'done':
-          onSessionUpdate?.();
           // If intake completed (save_brief was called), auto-start orchestration
           // Note: chatWithOrchestrator's done event has no status field, so this only fires for intake
           if (data.status === 'completed' && data.brief_id) {
             shouldStartOrchestration = true;
           }
+          // Session refresh deferred to finally block to avoid mid-stream reload
           break;
         case 'error':
           addMessage({ type: 'error', content: data.message });
@@ -638,6 +662,7 @@ export default function ChatArea({ briefId, sessionId, sessionStatus, onSessionU
       if (!reconnectTimerRef.current) {
         setIsLoading(false);
       }
+      onSessionUpdate?.();
     }
   }
 
@@ -690,6 +715,7 @@ export default function ChatArea({ briefId, sessionId, sessionStatus, onSessionU
       }
     } finally {
       setIsLoading(false);
+      onSessionUpdate?.();
     }
   }
 
@@ -737,7 +763,7 @@ export default function ChatArea({ briefId, sessionId, sessionStatus, onSessionU
     });
   }
 
-  // Image upload handlers
+  // File upload handlers (images + documents)
   function handleImageSelect(e) {
     const files = Array.from(e.target.files || []);
     if (!files.length) return;
@@ -763,9 +789,11 @@ export default function ChatArea({ briefId, sessionId, sessionStatus, onSessionU
 
   async function uploadImage(img) {
     try {
-      const compressed = await compressImage(img.file);
+      // Only compress image files; skip compression for documents (PDF, XLSX)
+      const isImage = img.file.type.startsWith('image/');
+      const fileToUpload = isImage ? await compressImage(img.file) : img.file;
       const formData = new FormData();
-      formData.append('file', compressed);
+      formData.append('file', fileToUpload);
       if (sessionId) formData.append('session_id', sessionId);
       else if (briefId) formData.append('session_id', briefId);
 
@@ -838,6 +866,7 @@ export default function ChatArea({ briefId, sessionId, sessionStatus, onSessionU
       }
     } finally {
       setIsLoading(false);
+      onSessionUpdate?.();
     }
   }
 
@@ -856,6 +885,7 @@ export default function ChatArea({ briefId, sessionId, sessionStatus, onSessionU
       if (!reconnectTimerRef.current) {
         setIsLoading(false);
       }
+      onSessionUpdate?.();
     }
   }
 
@@ -935,9 +965,18 @@ export default function ChatArea({ briefId, sessionId, sessionStatus, onSessionU
           {/* Image previews */}
           {pendingImages.length > 0 && (
             <div className="flex gap-2 mb-2 flex-wrap" data-testid="image-preview-bar">
-              {pendingImages.map(img => (
+              {pendingImages.map(img => {
+                const isImage = img.file?.type?.startsWith('image/');
+                return (
                 <div key={img.id} className="relative w-16 h-16 rounded-lg overflow-hidden border border-gray-200 bg-gray-100 group">
-                  <img src={img.preview} alt="" className="w-full h-full object-cover" />
+                  {isImage ? (
+                    <img src={img.preview} alt="" className="w-full h-full object-cover" />
+                  ) : (
+                    <div className="w-full h-full flex flex-col items-center justify-center text-gray-500">
+                      <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M7 21h10a2 2 0 002-2V9.414a1 1 0 00-.293-.707l-5.414-5.414A1 1 0 0012.586 3H7a2 2 0 00-2 2v14a2 2 0 002 2z" /></svg>
+                      <span className="text-[8px] mt-0.5 truncate max-w-[56px]">{img.file?.name?.split('.').pop()?.toUpperCase()}</span>
+                    </div>
+                  )}
                   {img.uploading && (
                     <div className="absolute inset-0 bg-black/40 flex items-center justify-center">
                       <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
@@ -951,14 +990,15 @@ export default function ChatArea({ briefId, sessionId, sessionStatus, onSessionU
                     ×
                   </button>
                 </div>
-              ))}
+                );
+              })}
             </div>
           )}
           <div className="bg-white border border-gray-300 rounded-full px-4 h-12 flex items-center gap-3 shadow-lg focus-within:border-indigo-400 focus-within:shadow-xl focus-within:shadow-indigo-100/40 transition-all">
             <input
               ref={fileInputRef}
               type="file"
-              accept="image/jpeg,image/png,image/gif,image/webp"
+              accept="image/jpeg,image/png,image/gif,image/webp,application/pdf,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,.xlsx"
               multiple
               className="hidden"
               onChange={handleImageSelect}

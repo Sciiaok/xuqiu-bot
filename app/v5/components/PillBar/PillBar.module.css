@@ -1,0 +1,43 @@
+.bar { display: flex; gap: 6px; flex-wrap: wrap; }
+.pill {
+  padding: 4px 13px;
+  border-radius: 20px;
+  cursor: pointer;
+  font-size: 12px;
+  border: 1px solid var(--border);
+  color: var(--text2);
+  transition: all 0.13s;
+  user-select: none;
+  white-space: nowrap;
+}
+.pill.active {
+  background: var(--accent-dim);
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.pill:hover:not(.active) {
+  border-color: var(--border2);
+  color: var(--text);
+}
+/* Time-range pill variant */
+.trPill {
+  padding: 5px 14px;
+  border-radius: 20px;
+  cursor: pointer;
+  font-size: 12px;
+  border: 1px solid var(--border);
+  color: var(--text2);
+  transition: all 0.13s;
+  user-select: none;
+  white-space: nowrap;
+}
+.trPill.active {
+  background: rgba(192, 106, 43, 0.08);
+  border-color: var(--accent);
+  color: var(--accent);
+  font-weight: 500;
+}
+.trPill:hover:not(.active) {
+  border-color: var(--border2);
+  color: var(--text);
+}

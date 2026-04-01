@@ -1,0 +1,38 @@
+{
+  "id": "golden-006",
+  "name": "ultra-low-budget",
+  "description": "Extremely low budget ($500 / 7 days) boundary case; strategy must still produce valid daily budgets >= $5",
+  "brief": {
+    "company_name": "SolarLite NG",
+    "industry": "energy storage",
+    "products": [
+      { "model": "SL-Mini", "category": "Portable Battery" }
+    ],
+    "target_countries": ["Nigeria"],
+    "budget_total": 500,
+    "budget_currency": "USD",
+    "campaign_duration_days": 7,
+    "objectives": ["traffic"],
+    "preferred_platforms": ["meta"],
+    "product_images": [
+      { "url": "https://example.com/sl-mini.jpg", "description": "SL-Mini portable battery" }
+    ]
+  },
+  "expected_phases": ["strategy", "creative_plan"],
+  "assertions": {
+    "schema": true,
+    "business_rules": {
+      "max_campaigns": 1,
+      "max_ad_sets": 2,
+      "daily_budget_min": 5,
+      "budget_allocation_sum": 100
+    },
+    "reference_handling": "must_proceed",
+    "tool_trace": {}
+  },
+  "quality_rubric": {
+    "strategy": { "min_score": 3.0 },
+    "creative": { "min_score": 3.0 },
+    "overall": { "min_score": 3.0 }
+  }
+}

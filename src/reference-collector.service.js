@@ -207,7 +207,7 @@ function extractImagesFromFirecrawl(data, sourceUrl) {
 }
 
 function prioritizeImages(images, products) {
-  if (!products?.length) return images;
+  if (!Array.isArray(products) || !products.length) return images;
 
   const keywords = products
     .flatMap(p => [p.model, p.name, p.category].filter(Boolean))

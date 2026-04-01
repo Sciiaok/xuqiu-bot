@@ -1,0 +1,73 @@
+/* ── V5 WARM LIGHT THEME ── */
+/* Scoped under .v5-root to avoid leaking into existing dashboard */
+
+.v5-root {
+  --bg: #f6f1ea;
+  --bg2: #ffffff;
+  --bg3: #efe9e0;
+  --bg4: #e6dfd5;
+  --bg5: #dbd3c7;
+  --border: #e0d8cc;
+  --border2: #cfc5b6;
+  --border3: #b8ad9c;
+  --text: #2c2418;
+  --text2: #6b5d4d;
+  --text3: #a09484;
+  --accent: #c06a2b;
+  --accent-dim: rgba(192, 106, 43, 0.07);
+  --green: #2a8c5a;
+  --green-dim: rgba(42, 140, 90, 0.06);
+  --amber: #b8860b;
+  --amber-dim: rgba(184, 134, 11, 0.06);
+  --red: #c44230;
+  --red-dim: rgba(196, 66, 48, 0.06);
+  --purple: #8b6abf;
+  --purple-dim: rgba(139, 106, 191, 0.06);
+  --teal: #2a7a74;
+  --teal-dim: rgba(42, 122, 116, 0.06);
+  --r: 8px;
+  --rl: 12px;
+  --rxl: 16px;
+  --shadow: 0 1px 4px rgba(80, 50, 20, 0.06);
+
+  /* Font families (set by next/font in layout.js) */
+  --font-sans: var(--font-inter), 'Inter', sans-serif;
+  --font-display: var(--font-syne), 'Syne', sans-serif;
+  --font-mono: var(--font-dm-mono), 'DM Mono', monospace;
+
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-sans);
+  font-size: 14px;
+  height: 100vh;
+  overflow: hidden;
+}
+
+/* Smooth transitions */
+.v5-root * {
+  transition: background-color 0.22s ease, border-color 0.22s ease, color 0.18s ease, box-shadow 0.22s ease;
+}
+
+/* Scrollbar */
+.v5-root ::-webkit-scrollbar { width: 4px; height: 4px; }
+.v5-root ::-webkit-scrollbar-track { background: transparent; }
+.v5-root ::-webkit-scrollbar-thumb { background: var(--border2); border-radius: 2px; }
+
+/* Animation */
+@keyframes v5-fadeUp {
+  from { opacity: 0; transform: translateY(5px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes v5-pulse {
+  0%, 100% { opacity: 0.5; }
+  50% { opacity: 1; }
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+@keyframes blink {
+  50% { opacity: 0; }
+}

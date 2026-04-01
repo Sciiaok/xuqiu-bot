@@ -1,0 +1,240 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "strategy-output.schema.json",
+  "title": "Strategy Phase Output",
+  "description": "Validates the nested media plan output from the strategy agent (after nestMediaPlan assembly)",
+  "type": "object",
+  "required": ["summary", "total_budget", "currency", "duration_days", "platforms"],
+  "properties": {
+    "summary": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Brief summary of the media plan (1-2 sentences)"
+    },
+    "total_budget": {
+      "type": "number",
+      "exclusiveMinimum": 0,
+      "description": "Total campaign budget"
+    },
+    "currency": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Budget currency code (e.g. USD)"
+    },
+    "duration_days": {
+      "type": "integer",
+      "minimum": 5,
+      "maximum": 365,
+      "description": "Campaign duration in days"
+    },
+    "platforms": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "$ref": "#/definitions/platform"
+      }
+    }
+  },
+  "additionalProperties": false,
+  "definitions": {
+    "platform": {
+      "type": "object",
+      "required": ["platform", "budget_allocation", "campaigns"],
+      "properties": {
+        "platform": {
+          "type": "string",
+          "enum": ["meta", "google", "tiktok", "linkedin", "reddit"]
+        },
+        "budget_allocation": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 100,
+          "description": "Percentage of total budget allocated to this platform"
+        },
+        "budget_amount": {
+          "type": "number",
+          "minimum": 0,
+          "description": "Absolute budget amount for this platform"
+        },
+        "rationale": {
+          "type": "string",
+          "description": "Rationale for platform selection"
+        },
+        "campaigns": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/definitions/campaign"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "campaign": {
+      "type": "object",
+      "required": ["name", "objective", "daily_budget", "ad_sets"],
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "objective": {
+          "type": "string",
+          "enum": [
+            "lead_gen", "leads",
+            "awareness", "reach", "brand_awareness",
+            "traffic", "link_clicks",
+            "conversions", "sales",
+            "engagement", "post_engagement",
+            "app_installs",
+            "video_views",
+            "messages",
+            "store_traffic"
+          ],
+          "description": "Campaign objective (Meta-compatible values)"
+        },
+        "daily_budget": {
+          "type": "number",
+          "minimum": 5,
+          "description": "Daily budget in campaign currency (Meta minimum $5)"
+        },
+        "ad_sets": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/definitions/ad_set"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "ad_set": {
+      "type": "object",
+      "required": ["name", "targeting"],
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "targeting": {
+          "$ref": "#/definitions/targeting"
+        },
+        "optimization_goal": {
+          "type": "string",
+          "description": "Ad set optimization goal (e.g. LEAD_GENERATION, LINK_CLICKS)"
+        },
+        "ads": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/definitions/ad"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "targeting": {
+      "type": "object",
+      "required": ["countries"],
+      "properties": {
+        "countries": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "description": "Target country names or codes"
+        },
+        "age_range": {
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "minimum": 13,
+            "maximum": 65
+          },
+          "minItems": 2,
+          "maxItems": 2,
+          "description": "[age_min, age_max]"
+        },
+        "interests": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Interest-based targeting keywords"
+        },
+        "gender": {
+          "type": "string",
+          "enum": ["all", "male", "female"]
+        },
+        "custom_audiences": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "lookalike_audiences": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "additionalProperties": true
+    },
+    "ad": {
+      "type": "object",
+      "required": ["name", "format"],
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "format": {
+          "type": "string",
+          "enum": ["image", "video", "carousel"],
+          "description": "Ad creative format"
+        },
+        "primary_text": {
+          "type": "string",
+          "description": "Main ad body text"
+        },
+        "headline": {
+          "type": "string",
+          "description": "Ad headline"
+        },
+        "description": {
+          "type": "string",
+          "description": "Ad description / link description"
+        },
+        "cta": {
+          "type": "string",
+          "enum": [
+            "Learn More",
+            "Shop Now",
+            "Sign Up",
+            "Contact Us",
+            "Get Quote",
+            "Apply Now",
+            "Download",
+            "Send WhatsApp",
+            "Subscribe",
+            "Book Now"
+          ],
+          "description": "Call-to-action button text"
+        },
+        "media_requirements": {
+          "type": "object",
+          "properties": {
+            "type": { "type": "string" },
+            "specs": { "type": "string" },
+            "suggested_content": { "type": "string" }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}

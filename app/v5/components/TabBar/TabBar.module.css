@@ -1,0 +1,25 @@
+.bar {
+  display: flex;
+  gap: 3px;
+  background: var(--bg3);
+  border-radius: var(--r);
+  padding: 3px;
+  width: fit-content;
+  margin-bottom: 18px;
+}
+.tab {
+  padding: 5px 13px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 12px;
+  color: var(--text2);
+  transition: all 0.13s;
+  user-select: none;
+  white-space: nowrap;
+}
+.tab.active {
+  background: var(--bg4);
+  color: var(--text);
+  font-weight: 500;
+}
+.tab:hover:not(.active) { color: var(--text); }

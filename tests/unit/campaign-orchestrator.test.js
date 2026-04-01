@@ -375,7 +375,7 @@ describe('Campaign Orchestrator (session-based)', () => {
     });
   });
 
-  describe('chatWithOrchestrator', () => {
+describe('chatWithOrchestrator', () => {
     it('streams response and persists conversation', async () => {
       mockSession.status = 'awaiting_approval';
       mockSession.phase_results = { research: MOCK_RESEARCH };
