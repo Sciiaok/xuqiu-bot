@@ -189,14 +189,14 @@ export default function ReportDetailPage() {
                   color="accent"
                 />
                 <MetricCard
-                  label="Proof 数"
+                  label="高质量询盘数"
                   value={kpi.proofCount?.value ?? '—'}
                   delta={deltaLabel(kpi.proofCount?.delta)}
                   trend={deltaTrend(kpi.proofCount?.delta)}
                   color="green"
                 />
                 <MetricCard
-                  label="Proof 率"
+                  label="高质量率"
                   value={`${kpi.proofRate?.value ?? '—'}%`}
                   delta={deltaLabel(kpi.proofRate?.delta)}
                   trend={deltaTrend(kpi.proofRate?.delta)}
@@ -257,11 +257,11 @@ export default function ReportDetailPage() {
                 columns={[
                   { key: 'name', label: '业务线' },
                   { key: 'total', label: '总询盘' },
-                  { key: 'PROOF', label: 'PROOF' },
-                  { key: 'QUALIFY', label: 'QUALIFY' },
-                  { key: 'GOOD', label: 'GOOD' },
-                  { key: 'BAD', label: 'BAD' },
-                  { key: 'rate', label: 'Proof率', render: r => r.total > 0 ? `${Math.round(r.PROOF / r.total * 100)}%` : '—' },
+                  { key: 'PROOF', label: '高质量' },
+                  { key: 'QUALIFY', label: '中质量' },
+                  { key: 'GOOD', label: '低质量' },
+                  { key: 'BAD', label: '无效' },
+                  { key: 'rate', label: '高质量率', render: r => r.total > 0 ? `${Math.round(r.PROOF / r.total * 100)}%` : '—' },
                 ]}
               />
               <AppendixTable
@@ -270,8 +270,8 @@ export default function ReportDetailPage() {
                 columns={[
                   { key: 'country', label: '国家' },
                   { key: 'total', label: '询盘数' },
-                  { key: 'PROOF', label: 'PROOF' },
-                  { key: 'rate', label: 'Proof率', render: r => r.total > 0 ? `${Math.round(r.PROOF / r.total * 100)}%` : '—' },
+                  { key: 'PROOF', label: '高质量' },
+                  { key: 'rate', label: '高质量率', render: r => r.total > 0 ? `${Math.round(r.PROOF / r.total * 100)}%` : '—' },
                 ]}
               />
               <AppendixTable

@@ -27,7 +27,7 @@ const DATE_TABS = [
   { key: '7d', label: '7D' },
   { key: '14d', label: '14D' },
   { key: '30d', label: '30D' },
-  { key: 'custom', label: 'Custom' },
+  { key: 'custom', label: '自定义' },
 ];
 
 const DATE_TAB_TO_DAYS = { '7d': 7, '14d': 14, '30d': 30 };
@@ -127,7 +127,7 @@ function DonutCard({ title, data, colorMap, labelMap }) {
   if (!data?.length) {
     return (
       <Card title={title}>
-        <span className={s.noData}>No data</span>
+        <span className={s.noData}>暂无数据</span>
       </Card>
     );
   }
@@ -342,13 +342,13 @@ export default function AnalyticsPage() {
       {loading && (
         <div className={s.loadingWrap}>
           <div className={s.spinner} />
-          Loading...
+          加载中…
         </div>
       )}
 
       {/* ── Error ── */}
       {!loading && error && (
-        <div className={s.errorWrap}>Failed to load: {error}</div>
+        <div className={s.errorWrap}>加载失败：{error}</div>
       )}
 
       {/* ── Content ── */}
@@ -363,14 +363,14 @@ export default function AnalyticsPage() {
               trend={calcTrend(kpi.totalInquiries?.current, kpi.totalInquiries?.previous)}
             />
             <MetricCard
-              label="Proof 询盘"
+              label="高质量询盘"
               value={String(kpi.proofInquiries?.current ?? 0)}
               delta={calcDelta(kpi.proofInquiries?.current, kpi.proofInquiries?.previous)}
               trend={calcTrend(kpi.proofInquiries?.current, kpi.proofInquiries?.previous)}
               color="green"
             />
             <MetricCard
-              label="Proof 率"
+              label="高质量率"
               value={`${kpi.proofRate?.current ?? 0}%`}
               delta={calcDelta(kpi.proofRate?.current, kpi.proofRate?.previous)}
               trend={calcTrend(kpi.proofRate?.current, kpi.proofRate?.previous)}
@@ -427,12 +427,12 @@ export default function AnalyticsPage() {
                   <YAxis tick={chartAxisStyle} tickLine={false} axisLine={false} width={32} />
                   <Tooltip content={<ChartTooltip />} />
                   <Area type="monotone" dataKey="total" stroke={AREA_TOTAL} fill="url(#gradTotal)" strokeWidth={2} name="总询盘" />
-                  <Area type="monotone" dataKey="proof" stroke={AREA_PROOF} fill="url(#gradProof)" strokeWidth={2} name="Proof" />
+                  <Area type="monotone" dataKey="proof" stroke={AREA_PROOF} fill="url(#gradProof)" strokeWidth={2} name="高质量询盘" />
                   <Legend iconType="circle" iconSize={8} wrapperStyle={{ fontSize: 11, fontFamily: 'var(--font-sans)' }} />
                 </AreaChart>
               </ResponsiveContainer>
             ) : (
-              <span className={s.noData}>No data</span>
+              <span className={s.noData}>暂无数据</span>
             )}
           </Card>
 
@@ -452,7 +452,7 @@ export default function AnalyticsPage() {
                             {PRODUCT_LINES.find(p => p.key === agent.productLine)?.label || agent.productLine}
                           </Tag>
                           <span className={s.agentStats}>
-                            {agent.inquiryCount} 询盘 · {agent.proofCount} Proof · {agent.proofRate}%
+                            {agent.inquiryCount} 询盘 · {agent.proofCount} 高质量 · {agent.proofRate}%
                           </span>
                         </div>
                         <div className={s.qualityBar}>
@@ -473,16 +473,19 @@ export default function AnalyticsPage() {
                     );
                   })}
                   <div className={s.qualityLegend}>
-                    {Object.entries(QUALITY_COLORS).map(([key, color]) => (
-                      <span key={key} className={s.legendItem}>
-                        <span className={s.legendDot} style={{ background: color }} />
-                        {key}
-                      </span>
-                    ))}
+                    {Object.entries(QUALITY_COLORS).map(([key, color]) => {
+                      const label = { PROOF: '高质量', QUALIFY: '中质量', GOOD: '低质量', BAD: '无效' }[key] || key;
+                      return (
+                        <span key={key} className={s.legendItem}>
+                          <span className={s.legendDot} style={{ background: color }} />
+                          {label}
+                        </span>
+                      );
+                    })}
                   </div>
                 </div>
               ) : (
-                <span className={s.noData}>No data</span>
+                <span className={s.noData}>暂无数据</span>
               )}
             </Card>
 
@@ -499,7 +502,7 @@ export default function AnalyticsPage() {
                   </BarChart>
                 </ResponsiveContainer>
               ) : (
-                <span className={s.noData}>No data</span>
+                <span className={s.noData}>暂无数据</span>
               )}
             </Card>
           </div>
@@ -510,6 +513,7 @@ export default function AnalyticsPage() {
               title="询盘质量分布"
               data={qualityDistribution}
               colorMap={QUALITY_COLORS}
+              labelMap={{ PROOF: '高质量', QUALIFY: '中质量', GOOD: '低质量', BAD: '无效' }}
             />
             <DonutCard
               title="买家类型分布"
@@ -527,7 +531,7 @@ export default function AnalyticsPage() {
           <Card title="热门产品 Top 10">
             {topProducts.length > 0 ? (
               <DataTable
-                columns={['#', '产品', '业务线', '询盘数', 'Proof 率']}
+                columns={['#', '产品', '业务线', '询盘数', '高质量率']}
                 rows={topProducts.map((p, i) => [
                   i + 1,
                   p.productName,
@@ -539,7 +543,7 @@ export default function AnalyticsPage() {
                 ])}
               />
             ) : (
-              <span className={s.noData}>No data</span>
+              <span className={s.noData}>暂无数据</span>
             )}
           </Card>
         </>

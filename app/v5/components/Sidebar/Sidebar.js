@@ -8,14 +8,14 @@ const NAV = [
   {
     section: '概览',
     items: [
-      { href: '/v5/analytics', label: 'Analytics', icon: 'analytics' },
-      { href: '/v5/reports', label: 'Reports', icon: 'reports', badge: 'AI', badgeType: 'new' },
+      { href: '/v5/analytics', label: '数据看板', icon: 'analytics' },
+      { href: '/v5/reports', label: 'AI 报告', icon: 'reports', badge: 'AI', badgeType: 'new' },
     ],
   },
   {
     section: '投放',
     items: [
-      { href: '/v5/campaign-studio', label: 'Campaign Studio', icon: 'campaign', badge: 'NEW', badgeType: 'new' },
+      { href: '/v5/campaign-studio', label: '广告数据', icon: 'campaign', badge: '新', badgeType: 'new' },
     ],
   },
   {
@@ -28,7 +28,7 @@ const NAV = [
   {
     section: '系统',
     items: [
-      { href: '/v5/agents', label: 'Agents', icon: 'agents' },
+      { href: '/v5/agents', label: '智能体', icon: 'agents' },
     ],
   },
 ];
@@ -127,14 +127,14 @@ export default function Sidebar() {
             <line x1="7.5" y1="5" x2="7.5" y2="7.5"/>
             <circle cx="7.5" cy="10" r=".5" fill="currentColor"/>
           </svg>
-          Help
+          帮助
         </div>
         <div className={s.ni}>
           <svg fill="none" stroke="currentColor" strokeWidth="1.4" viewBox="0 0 15 15">
             <circle cx="7.5" cy="7.5" r="2.5"/>
             <path d="M7.5 1v2M7.5 12v2M1 7.5h2M12 7.5h2M3.1 3.1l1.4 1.4M10.5 10.5l1.4 1.4M10.5 3.1l-1.4 1.4M4.5 10.5L3.1 11.9"/>
           </svg>
-          Settings
+          设置
         </div>
       </div>
     </div>

@@ -115,7 +115,7 @@ function AdRow({ ad, isExpanded, onToggle, metricsMap }) {
         <td className={s.adThumb}>💬</td>
         <td className={s.adName}>
           <div className={s.adNameMain}>{ad.metaAdId}</div>
-          <div className={s.adId}>Meta Ad ID</div>
+          <div className={s.adId}>Meta 广告 ID</div>
         </td>
         <td className={s.adNum}>{m ? `$${m.spend.toLocaleString()}` : '—'}</td>
         <td className={s.adNum}>{m ? m.impressions.toLocaleString() : '—'}</td>
@@ -152,10 +152,10 @@ function AdRow({ ad, isExpanded, onToggle, metricsMap }) {
                 <div className={s.metricsGrid}>
                   {[
                     ['WA 对话', ad.conversationCount.toLocaleString()],
-                    ['QUALIFY 对话', ad.qualifyConversationCount.toLocaleString()],
-                    ['PROOF 对话', ad.proofConversationCount.toLocaleString()],
-                    ['QUALIFY 率', `${ad.qualifyConversationRate}%`],
-                    ['PROOF 率', `${ad.proofConversationRate}%`],
+                    ['中质量对话', ad.qualifyConversationCount.toLocaleString()],
+                    ['高质量对话', ad.proofConversationCount.toLocaleString()],
+                    ['中质量率', `${ad.qualifyConversationRate}%`],
+                    ['高质量率', `${ad.proofConversationRate}%`],
                     ['最近对话', ad.lastConversationAt ? ad.lastConversationAt.split('T')[0] : '—'],
                     ['花费', m ? `$${m.spend.toLocaleString()}` : '—'],
                     ['展示', m ? m.impressions.toLocaleString() : '—'],
@@ -175,8 +175,8 @@ function AdRow({ ad, isExpanded, onToggle, metricsMap }) {
                   <div className={s.aiEvalText}>
                     <div className={s.aiEvalTitle}>AI 评估</div>
                     <div className={s.aiEvalBody}>
-                      PROOF 率 {ad.proofConversationRate}%，QUALIFY 率 {ad.qualifyConversationRate}%。
-                      共产生 {ad.conversationCount} 条 WA 对话，其中 {ad.proofConversationCount} 条进入 PROOF 阶段。
+                      高质量率 {ad.proofConversationRate}%，中质量率 {ad.qualifyConversationRate}%。
+                      共产生 {ad.conversationCount} 条 WA 对话，其中 {ad.proofConversationCount} 条达到高质量。
                       创意预览与深度 AI 评估需接入 Meta API 后启用。
                     </div>
                   </div>
@@ -256,7 +256,7 @@ function DayCard({ day, defaultExpanded, metricsMap, dailyMetrics }) {
                   <th className={s.thNum}>CTR</th>
                   <th className={s.thNum}>对话</th>
                   <th className={s.thNum}>CPA</th>
-                  <th className={s.thNum}>PROOF</th>
+                  <th className={s.thNum}>高质量询盘</th>
                   <th className={s.thNum}>趋势</th>
                   <th></th>
                 </tr>
@@ -1623,8 +1623,8 @@ function AttributionTab({ adsData, loading, daysFilter, metricsMap }) {
                     <th>业务线</th>
                     <th>花费</th>
                     <th>WA 对话</th>
-                    <th>QUALIFY 率</th>
-                    <th>PROOF 率</th>
+                    <th>中质量率</th>
+                    <th>高质量率</th>
                     <th>趋势</th>
                   </tr>
                 </thead>
@@ -1672,7 +1672,7 @@ function AttributionTab({ adsData, loading, daysFilter, metricsMap }) {
               return (
                 <div className={s.bizCompGrid}>
                   <div className={s.bizCompCell}>
-                    <div className={s.bizCompLabel}>最高 PROOF 率</div>
+                    <div className={s.bizCompLabel}>最高高质量率</div>
                     <div className={s.bizCompValue} style={{ color: 'var(--green)' }}>
                       {bestProofLine.line} {bestProofLine.conversations > 0
                         ? Math.round((bestProofLine.proofCount / bestProofLine.conversations) * 100)
@@ -1686,7 +1686,7 @@ function AttributionTab({ adsData, loading, daysFilter, metricsMap }) {
                     </div>
                   </div>
                   <div className={s.bizCompCell}>
-                    <div className={s.bizCompLabel}>最高 QUALIFY 率</div>
+                    <div className={s.bizCompLabel}>最高中质量率</div>
                     <div className={s.bizCompValue} style={{ color: 'var(--purple)' }}>
                       {bestQualLine.line} {bestQualLine.conversations > 0
                         ? Math.round((bestQualLine.qualifyCount / bestQualLine.conversations) * 100)
@@ -1901,7 +1901,7 @@ export default function CampaignStudioPage() {
         <MetricCard
           label="WA 对话"
           value={loadingAds ? '…' : (totals?.conversationCount?.toLocaleString() ?? '—')}
-          delta={totals ? `QUALIFY ${totals.qualifyConversationRate}%` : ''}
+          delta={totals ? `中质量率 ${totals.qualifyConversationRate}%` : ''}
           trend="up"
           color="green"
         />
@@ -1913,14 +1913,14 @@ export default function CampaignStudioPage() {
           color="teal"
         />
         <MetricCard
-          label="QUALIFY 对话"
+          label="中质量对话"
           value={loadingAds ? '…' : (totals?.qualifyConversationCount?.toLocaleString() ?? '—')}
           delta={totals ? `${totals.qualifyConversationRate}% 率` : ''}
           trend="neutral"
           color="purple"
         />
         <MetricCard
-          label="PROOF 对话"
+          label="高质量对话"
           value={loadingAds ? '…' : (totals?.proofConversationCount?.toLocaleString() ?? '—')}
           delta={totals ? `${totals.proofConversationRate}% 率` : ''}
           trend="up"

@@ -11,10 +11,10 @@ import { getWaCountry } from '../../../../lib/wa-country';
 
 const ROUTE_FILTERS = [
   { key: 'all', label: '全部' },
-  { key: 'HUMAN_NOW', label: 'HUMAN_NOW', variant: 'human' },
-  { key: 'CONTINUE', label: 'CONTINUE', variant: null },
-  { key: 'NURTURE', label: 'NURTURE', variant: 'teal' },
-  { key: 'FAQ_END', label: 'FAQ_END', variant: 'low' },
+  { key: 'HUMAN_NOW', label: '待转人工', variant: 'human' },
+  { key: 'CONTINUE', label: 'AI跟进中', variant: null },
+  { key: 'NURTURE', label: '待培育', variant: 'teal' },
+  { key: 'FAQ_END', label: '已结束', variant: 'low' },
 ];
 
 const DETAIL_TABS = [
@@ -25,6 +25,9 @@ const DETAIL_TABS = [
 
 const SUPPLY_CHAINS = ['全部供应链', 'agri', 'vehicle', 'auto_parts'];
 const QUALITY_OPTIONS = ['全部质量', 'PROOF', 'QUALIFY', 'GOOD'];
+
+const QUALITY_LABELS = { PROOF: '高质量', QUALIFY: '中质量', GOOD: '低质量', BAD: '无效' };
+const VALUE_LABELS = { HIGH: '高价值', AVERAGE: '中价值', LOW: '低价值' };
 
 const SEARCH_DEBOUNCE_MS = 300;
 
@@ -62,10 +65,12 @@ function mapGroupToCard(group) {
   const name = meta.company_name || '';
   const avatarText = (name || phone).slice(0, 2).toUpperCase();
   const quality = (meta.inquiry_quality || 'good').toLowerCase();
-  const qualityLabel = (meta.inquiry_quality || 'GOOD').toUpperCase();
+  const qualityRaw = (meta.inquiry_quality || 'GOOD').toUpperCase();
+  const qualityLabel = QUALITY_LABELS[qualityRaw] || qualityRaw;
   const route = meta.route || '';
   const value = (meta.business_value || 'low').toLowerCase();
-  const valueLabel = (meta.business_value || 'LOW').toUpperCase();
+  const valueRaw = (meta.business_value || 'LOW').toUpperCase();
+  const valueLabel = VALUE_LABELS[valueRaw] || valueRaw;
   const chain = meta.agent_product_line || '';
   const destCountry = leads[0]?.destination_country || country;
 
@@ -96,10 +101,10 @@ function mapGroupToCard(group) {
 /* ── Route Tag helper ──────────────────────────────────── */
 function RouteTag({ route }) {
   const map = {
-    HUMAN_NOW: { variant: 'human', label: 'HUMAN_NOW' },
-    CONTINUE: { variant: 'low', label: 'CONTINUE' },
-    NURTURE: { variant: 'qualify', label: 'NURTURE' },
-    FAQ_END: { variant: 'bad', label: 'FAQ_END' },
+    HUMAN_NOW: { variant: 'human', label: '待转人工' },
+    CONTINUE: { variant: 'low', label: 'AI跟进中' },
+    NURTURE: { variant: 'qualify', label: '待培育' },
+    FAQ_END: { variant: 'bad', label: '已结束' },
   };
   const cfg = map[route] || { variant: 'low', label: route || '—' };
   return <Tag variant={cfg.variant}>{cfg.label}</Tag>;
@@ -492,7 +497,7 @@ export default function LeadHubPage() {
                           <div className={s.leadRowTop}>
                             <span className={s.leadProduct}>{lead.car_model || lead.product_name || '—'}</span>
                             <Tag variant={(lead.inquiry_quality || 'good').toLowerCase()}>
-                              {lead.inquiry_quality || 'GOOD'}
+                              {QUALITY_LABELS[(lead.inquiry_quality || 'GOOD').toUpperCase()] || lead.inquiry_quality}
                             </Tag>
                           </div>
                           <div className={s.leadRowBottom}>
@@ -503,7 +508,7 @@ export default function LeadHubPage() {
                               <span className={s.leadMeta}>{lead.qty_bucket}</span>
                             )}
                             {lead.business_value && (
-                              <span className={s.leadMeta}>{lead.business_value}</span>
+                              <span className={s.leadMeta}>{VALUE_LABELS[lead.business_value?.toUpperCase()] || lead.business_value}</span>
                             )}
                           </div>
                         </div>

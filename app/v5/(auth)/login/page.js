@@ -53,19 +53,19 @@ export default function V5LoginPage() {
             {error && <div className={s.error}>{error}</div>}
 
             <div className={s.field}>
-              <label htmlFor="v5-email">Email</label>
+              <label htmlFor="v5-email">邮箱</label>
               <input
                 id="v5-email"
                 type="email"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
                 required
-                placeholder="you@example.com"
+                placeholder="请输入邮箱"
               />
             </div>
 
             <div className={s.field}>
-              <label htmlFor="v5-password">Password</label>
+              <label htmlFor="v5-password">密码</label>
               <input
                 id="v5-password"
                 type="password"
