@@ -61,12 +61,13 @@
   transition: border-color 0.15s;
 }
 
-.supplySelect:hover {
-  border-color: var(--border2);
-}
+.supplySelect:hover { border-color: var(--border2); }
+.supplySelect:focus { border-color: var(--accent); }
 
-.supplySelect:focus {
-  border-color: var(--accent);
+.dateRow {
+  display: flex;
+  align-items: center;
+  gap: 6px;
 }
 
 .dateInput {
@@ -77,6 +78,15 @@
   font-family: var(--font-sans);
   font-size: 13px;
   padding: 6px 10px;
+  outline: none;
+}
+
+.dateInput:focus { border-color: var(--accent); }
+
+.dateSep {
+  color: var(--text3);
+  font-family: var(--font-sans);
+  font-size: 13px;
 }
 
 /* ── Loading / Error ─────────────────────────────────── */
@@ -114,8 +124,9 @@
   font-size: 13px;
   color: var(--text3);
   font-family: var(--font-sans);
-  padding: 8px 0;
+  padding: 16px 0;
   display: block;
+  text-align: center;
 }
 
 /* ── Metric Cards ─────────────────────────────────────── */
@@ -126,96 +137,15 @@
 }
 
 @media (max-width: 900px) {
-  .metrics {
-    grid-template-columns: repeat(2, 1fr);
-  }
+  .metrics { grid-template-columns: repeat(2, 1fr); }
 }
 
 @media (max-width: 540px) {
-  .metrics {
-    grid-template-columns: 1fr;
-  }
+  .metrics { grid-template-columns: 1fr; }
 }
 
-/* ── Daily Trend ──────────────────────────────────────── */
-.trendWrap {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.trendChart {
-  display: flex;
-  align-items: flex-end;
-  gap: 3px;
-  height: 140px;
-  padding: 0 4px;
-}
-
-.trendCol {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 4px;
-  min-width: 0;
-}
-
-.trendBarWrap {
-  width: 100%;
-  height: 120px;
-  position: relative;
-  display: flex;
-  flex-direction: column;
-  justify-content: flex-end;
-}
-
-.trendBarTotal {
-  width: 100%;
-  background: var(--accent);
-  opacity: 0.25;
-  border-radius: 2px 2px 0 0;
-  position: absolute;
-  bottom: 0;
-  transition: height 0.3s ease;
-}
-
-.trendBarProof {
-  width: 100%;
-  background: var(--green);
-  border-radius: 2px 2px 0 0;
-  position: absolute;
-  bottom: 0;
-  transition: height 0.3s ease;
-}
-
-.trendDate {
-  font-size: 9px;
-  color: var(--text3);
-  font-family: var(--font-mono);
-  white-space: nowrap;
-}
-
-.trendLegend {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  font-size: 11px;
-  color: var(--text3);
-  font-family: var(--font-sans);
-  padding-left: 4px;
-}
-
-.legendDot {
-  display: inline-block;
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  margin-right: 3px;
-}
-
-/* ── Bottom Grid ──────────────────────────────────────── */
-.bottomGrid {
+/* ── Two Column Grid ──────────────────────────────────── */
+.twoCol {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 16px;
@@ -223,9 +153,62 @@
 }
 
 @media (max-width: 900px) {
-  .bottomGrid {
-    grid-template-columns: 1fr;
-  }
+  .twoCol { grid-template-columns: 1fr; }
+}
+
+/* ── Three Column Grid ────────────────────────────────── */
+.threeCol {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 16px;
+  align-items: start;
+}
+
+@media (max-width: 1100px) {
+  .threeCol { grid-template-columns: 1fr; }
+}
+
+/* ── Chart Tooltip ────────────────────────────────────── */
+.tooltip {
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  border-radius: var(--r);
+  padding: 10px 12px;
+  box-shadow: var(--shadow);
+  font-family: var(--font-sans);
+}
+
+.tooltipLabel {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text);
+  margin-bottom: 6px;
+}
+
+.tooltipRow {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--text2);
+  line-height: 1.8;
+}
+
+.tooltipDot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.tooltipName {
+  flex: 1;
+}
+
+.tooltipValue {
+  font-weight: 600;
+  color: var(--text);
+  font-family: var(--font-mono);
 }
 
 /* ── Agent Distribution ───────────────────────────────── */
@@ -233,7 +216,6 @@
   display: flex;
   flex-direction: column;
   gap: 14px;
-  padding: 4px 0;
 }
 
 .agentRow {
@@ -260,6 +242,7 @@
   font-size: 11px;
   color: var(--text3);
   font-family: var(--font-mono);
+  white-space: nowrap;
 }
 
 .qualityBar {
@@ -277,145 +260,82 @@
 
 .qualityLegend {
   display: flex;
-  gap: 12px;
+  gap: 14px;
   font-size: 10px;
   color: var(--text3);
-  font-family: var(--font-sans);
-  padding-top: 2px;
+  font-family: var(--font-mono);
+  padding-top: 4px;
 }
 
 .legendItem {
   display: flex;
   align-items: center;
-  gap: 3px;
+  gap: 4px;
 }
 
-/* ── Bar List (Country) ───────────────────────────────── */
-.barList {
+.legendDot {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+}
+
+/* ── Donut Card ───────────────────────────────────────── */
+.donutWrap {
   display: flex;
   flex-direction: column;
-  gap: 10px;
-  padding: 4px 0;
+  gap: 4px;
 }
 
-.barRow {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.barRank {
-  font-size: 11px;
-  color: var(--text3);
-  width: 16px;
-  flex-shrink: 0;
-  font-family: var(--font-mono);
-  text-align: right;
-}
-
-.barLabel {
-  font-size: 13px;
-  color: var(--text2);
-  width: 80px;
-  flex-shrink: 0;
-  font-family: var(--font-sans);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.barTrack {
+.donutLegend {
   flex: 1;
-  height: 8px;
-  background: var(--bg3);
-  border-radius: 4px;
-  overflow: hidden;
-}
-
-.barFill {
-  height: 100%;
-  border-radius: 4px;
-  transition: width 0.4s ease;
-}
-
-.barValue {
-  font-size: 12px;
-  color: var(--text);
-  width: 32px;
-  text-align: right;
-  flex-shrink: 0;
-  font-family: var(--font-mono);
-  font-weight: 600;
-}
-
-.barPct {
-  font-size: 12px;
-  color: var(--text3);
-  width: 36px;
-  text-align: right;
-  flex-shrink: 0;
-  font-family: var(--font-mono);
-}
-
-/* ── Three Column Grid ────────────────────────────────── */
-.threeCol {
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 16px;
-  align-items: start;
-}
-
-@media (max-width: 1100px) {
-  .threeCol {
-    grid-template-columns: 1fr;
-  }
-}
-
-/* ── Distribution List ────────────────────────────────── */
-.distList {
   display: flex;
   flex-direction: column;
   gap: 0;
+  min-width: 0;
 }
 
-.distRow {
+.donutLegendRow {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 8px 0;
+  gap: 6px;
+  padding: 5px 0;
   border-bottom: 1px solid var(--border);
   font-family: var(--font-sans);
 }
 
-.distRow:last-child {
+.donutLegendRow:last-child {
   border-bottom: none;
 }
 
-.distDot {
-  width: 8px;
-  height: 8px;
+.donutDot {
+  width: 7px;
+  height: 7px;
   border-radius: 50%;
   flex-shrink: 0;
 }
 
-.distName {
+.donutName {
   flex: 1;
-  font-size: 13px;
+  font-size: 12px;
   color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-.distPct {
-  font-size: 12px;
+.donutPct {
+  font-size: 11px;
   color: var(--text2);
   font-family: var(--font-mono);
-  width: 36px;
+  width: 32px;
   text-align: right;
 }
 
-.distValue {
-  font-size: 12px;
+.donutVal {
+  font-size: 11px;
   color: var(--text3);
   font-family: var(--font-mono);
-  width: 32px;
+  width: 28px;
   text-align: right;
 }

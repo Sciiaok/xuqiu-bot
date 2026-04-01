@@ -1,6 +1,10 @@
 'use client';
 
 import { useState, useEffect, useRef } from 'react';
+import {
+  AreaChart, Area, BarChart, Bar, PieChart, Pie, Cell,
+  XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend,
+} from 'recharts';
 import s from './page.module.css';
 import MetricCard from '../../components/MetricCard/MetricCard';
 import AIPanel from '../../components/AIPanel/AIPanel';
@@ -9,7 +13,8 @@ import DataTable from '../../components/DataTable/DataTable';
 import TabBar from '../../components/TabBar/TabBar';
 import Tag from '../../components/Tag/Tag';
 import Markdown from '../../components/Markdown/Markdown';
-import ScoreBar from '../../components/ScoreBar/ScoreBar';
+
+// ──────────── Constants ────────────
 
 const PRODUCT_LINES = [
   { key: 'all', label: '全部业务线' },
@@ -34,19 +39,38 @@ const INTENT_LABELS = {
   other: '其他',
 };
 
-const QUALITY_COLORS = {
-  PROOF: 'var(--green)',
-  QUALIFY: 'var(--accent)',
-  GOOD: 'var(--amber)',
-  BAD: 'var(--red)',
+// Chart palette — distinct, modern, dashboard-friendly
+const COLORS = {
+  blue: '#4C7FF0',
+  green: '#34B872',
+  amber: '#F0A030',
+  red: '#E85D4A',
+  purple: '#9270DB',
+  teal: '#2BBCB3',
+  pink: '#E770A8',
+  indigo: '#6C6CE0',
 };
 
-const PRODUCT_LINE_COLORS = {
-  vehicle: 'var(--accent)',
-  auto_parts: 'var(--amber)',
-  agri_machinery: 'var(--green)',
-  unknown: 'var(--text3)',
+// Area chart uses blue (total) + green (proof)
+const AREA_TOTAL = COLORS.blue;
+const AREA_PROOF = COLORS.green;
+
+const QUALITY_COLORS = {
+  PROOF: '#34B872',
+  QUALIFY: '#4C7FF0',
+  GOOD: '#F0A030',
+  BAD: '#E85D4A',
 };
+
+const DONUT_PALETTE = [COLORS.blue, COLORS.teal, COLORS.purple, COLORS.amber, COLORS.green, COLORS.pink, COLORS.indigo, COLORS.red];
+
+const PL_TAG_VARIANT = {
+  vehicle: 'proof',
+  auto_parts: 'avg',
+  agri_machinery: 'good',
+};
+
+// ──────────── Helpers ────────────
 
 function calcDelta(current, previous) {
   if (previous == null || previous === 0) return null;
@@ -61,8 +85,88 @@ function calcTrend(current, previous) {
   return current >= previous ? 'up' : 'down';
 }
 
+function fmtDate(dateStr) {
+  const d = new Date(dateStr + 'T00:00:00');
+  return `${d.getMonth() + 1}/${d.getDate()}`;
+}
+
+// ──────────── Chart sub-components ────────────
+
+function ChartTooltip({ active, payload, label, formatter }) {
+  if (!active || !payload?.length) return null;
+  return (
+    <div className={s.tooltip}>
+      <div className={s.tooltipLabel}>{label}</div>
+      {payload.map((entry, i) => (
+        <div key={i} className={s.tooltipRow}>
+          <span className={s.tooltipDot} style={{ background: entry.color }} />
+          <span className={s.tooltipName}>{entry.name}</span>
+          <span className={s.tooltipValue}>{formatter ? formatter(entry.value) : entry.value}</span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function DonutCard({ title, data, colorMap }) {
+  if (!data?.length) {
+    return (
+      <Card title={title}>
+        <span className={s.noData}>No data</span>
+      </Card>
+    );
+  }
+
+  const total = data.reduce((sum, d) => sum + d.value, 0) || 1;
+
+  return (
+    <Card title={title}>
+      <div className={s.donutWrap}>
+        <ResponsiveContainer width="100%" height={160}>
+          <PieChart>
+            <Pie
+              data={data}
+              cx="50%"
+              cy="50%"
+              innerRadius={42}
+              outerRadius={65}
+              paddingAngle={2}
+              dataKey="value"
+              stroke="none"
+            >
+              {data.map((item, i) => (
+                <Cell
+                  key={item.name}
+                  fill={colorMap?.[item.name] || DONUT_PALETTE[i % DONUT_PALETTE.length]}
+                />
+              ))}
+            </Pie>
+            <Tooltip content={<ChartTooltip />} />
+          </PieChart>
+        </ResponsiveContainer>
+        <div className={s.donutLegend}>
+          {data.map((item, i) => {
+            const pct = Math.round((item.value / total) * 100);
+            const color = colorMap?.[item.name] || DONUT_PALETTE[i % DONUT_PALETTE.length];
+            return (
+              <div key={item.name} className={s.donutLegendRow}>
+                <span className={s.donutDot} style={{ background: color }} />
+                <span className={s.donutName}>{item.name}</span>
+                <span className={s.donutPct}>{pct}%</span>
+                <span className={s.donutVal}>{item.value}</span>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    </Card>
+  );
+}
+
+// ──────────── Main Page ────────────
+
 export default function AnalyticsPage() {
-  const [selectedLines, setSelectedLines] = useState('all');
+  const [selectedLine, setSelectedLine] = useState('all');
   const [dateRange, setDateRange] = useState('7d');
   const [customFrom, setCustomFrom] = useState('');
   const [customTo, setCustomTo] = useState('');
@@ -75,9 +179,10 @@ export default function AnalyticsPage() {
   const [aiInsightLoading, setAiInsightLoading] = useState(false);
   const [aiStatus, setAiStatus] = useState(null);
 
-  const prevMainDepsRef = useRef(null);
+  const getProductLines = () =>
+    selectedLine === 'all' ? 'vehicle,auto_parts,agri_machinery' : selectedLine;
 
-  // Fetch AI Summary via SSE
+  // ── AI Summary SSE ──
   const fetchAiInsight = async (params) => {
     setAiInsightLoading(true);
     setAiInsight(null);
@@ -137,7 +242,7 @@ export default function AnalyticsPage() {
     }
   };
 
-  // Fetch main data
+  // ── Main data fetch ──
   useEffect(() => {
     let days;
     let startDate, endDate;
@@ -149,14 +254,7 @@ export default function AnalyticsPage() {
       days = DATE_TAB_TO_DAYS[dateRange] ?? 7;
     }
 
-    const productLines = selectedLines === 'all'
-      ? 'vehicle,auto_parts,agri_machinery'
-      : selectedLines;
-
-    const mainKey = `${dateRange}|${selectedLines}|${customFrom}|${customTo}`;
-    const isInitial = prevMainDepsRef.current === null;
-    prevMainDepsRef.current = mainKey;
-
+    const productLines = getProductLines();
     setLoading(true);
     setError(null);
 
@@ -174,35 +272,31 @@ export default function AnalyticsPage() {
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         return res.json();
       })
-      .then(json => {
-        setData(json);
-        setLoading(false);
-      })
-      .catch(err => {
-        setError(err.message);
-        setLoading(false);
-      });
+      .then(json => { setData(json); setLoading(false); })
+      .catch(err => { setError(err.message); setLoading(false); });
 
-    // Fetch AI insight
     fetchAiInsight({ days, startDate, endDate, productLines });
-  }, [dateRange, selectedLines, customFrom, customTo]);
+  }, [dateRange, selectedLine, customFrom, customTo]);
 
+  // ── Derived data ──
   const kpi = data?.kpi ?? {};
-  const dailyTrend = data?.dailyTrend ?? [];
+  const dailyTrend = (data?.dailyTrend ?? []).map(d => ({ ...d, date: fmtDate(d.date) }));
   const agentDistribution = data?.agentDistribution ?? [];
   const countryDistribution = data?.countryDistribution ?? [];
   const qualityDistribution = data?.qualityDistribution ?? [];
   const buyerTypeDistribution = data?.buyerTypeDistribution ?? [];
-  const intentDistribution = data?.intentDistribution ?? [];
+  const intentDistribution = (data?.intentDistribution ?? []).map(d => ({
+    ...d,
+    name: INTENT_LABELS[d.name] || d.name,
+  }));
   const topProducts = data?.topProducts ?? [];
 
-  // Find max for scaling bars
-  const maxCountryInquiry = Math.max(...countryDistribution.map(c => c.inquiryCount), 1);
-  const maxProductInquiry = Math.max(...topProducts.map(p => p.inquiryCount), 1);
+  const chartAxisStyle = { fontSize: 10, fill: '#a09484', fontFamily: 'var(--font-mono)' };
+  const gridStyle = { strokeDasharray: '3 3', stroke: '#e0d8cc', strokeOpacity: 0.6 };
 
   return (
     <div className={s.root}>
-      {/* Header */}
+      {/* ── Header ── */}
       <div className={s.header}>
         <div className={s.headerLeft}>
           <h1 className={s.title}>询盘数据看板</h1>
@@ -211,42 +305,25 @@ export default function AnalyticsPage() {
         <div className={s.headerRight}>
           <select
             className={s.supplySelect}
-            value={selectedLines}
-            onChange={e => setSelectedLines(e.target.value)}
+            value={selectedLine}
+            onChange={e => setSelectedLine(e.target.value)}
           >
             {PRODUCT_LINES.map(pl => (
               <option key={pl.key} value={pl.key}>{pl.label}</option>
             ))}
           </select>
-          <TabBar
-            tabs={DATE_TABS}
-            active={dateRange}
-            onChange={setDateRange}
-            style={{ flexShrink: 0 }}
-          />
+          <TabBar tabs={DATE_TABS} active={dateRange} onChange={setDateRange} />
           {dateRange === 'custom' && (
-            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-              <input
-                type="date"
-                value={customFrom}
-                onChange={e => setCustomFrom(e.target.value)}
-                className={s.dateInput}
-              />
-              <span style={{ color: 'var(--text3)', fontFamily: 'var(--font-sans)', fontSize: 13 }}>—</span>
-              <input
-                type="date"
-                value={customTo}
-                onChange={e => setCustomTo(e.target.value)}
-                className={s.dateInput}
-              />
+            <div className={s.dateRow}>
+              <input type="date" value={customFrom} onChange={e => setCustomFrom(e.target.value)} className={s.dateInput} />
+              <span className={s.dateSep}>—</span>
+              <input type="date" value={customTo} onChange={e => setCustomTo(e.target.value)} className={s.dateInput} />
             </div>
           )}
         </div>
       </div>
 
-      <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
-
-      {/* Loading */}
+      {/* ── Loading ── */}
       {loading && (
         <div className={s.loadingWrap}>
           <div className={s.spinner} />
@@ -254,14 +331,12 @@ export default function AnalyticsPage() {
         </div>
       )}
 
-      {/* Error */}
+      {/* ── Error ── */}
       {!loading && error && (
-        <div className={s.errorWrap}>
-          Failed to load data: {error}
-        </div>
+        <div className={s.errorWrap}>Failed to load: {error}</div>
       )}
 
-      {/* Main Content */}
+      {/* ── Content ── */}
       {!loading && !error && (
         <>
           {/* KPI Cards */}
@@ -295,19 +370,16 @@ export default function AnalyticsPage() {
             />
           </div>
 
-          {/* AI Summary Panel */}
+          {/* AI Summary */}
           <AIPanel
             title="AI 询盘洞察"
             tag={aiInsightLoading ? (aiStatus || '正在生成...') : aiInsight ? '自动生成' : '自动生成'}
             onRefresh={() => {
-              const productLines = selectedLines === 'all'
-                ? 'vehicle,auto_parts,agri_machinery'
-                : selectedLines;
+              const productLines = getProductLines();
               if (dateRange === 'custom' && customFrom && customTo) {
                 return fetchAiInsight({ startDate: customFrom, endDate: customTo, productLines });
               }
-              const days = DATE_TAB_TO_DAYS[dateRange] ?? 7;
-              return fetchAiInsight({ days, productLines });
+              return fetchAiInsight({ days: DATE_TAB_TO_DAYS[dateRange] ?? 7, productLines });
             }}
             refreshLabel="刷新"
           >
@@ -320,57 +392,54 @@ export default function AnalyticsPage() {
             ) : null}
           </AIPanel>
 
-          {/* Daily Trend (simple bar visualization) */}
+          {/* Daily Trend — AreaChart */}
           <Card title="每日询盘趋势">
             {dailyTrend.length > 0 ? (
-              <div className={s.trendWrap}>
-                <div className={s.trendChart}>
-                  {dailyTrend.map(day => {
-                    const maxVal = Math.max(...dailyTrend.map(d => d.total), 1);
-                    const totalPct = (day.total / maxVal) * 100;
-                    const proofPct = (day.proof / maxVal) * 100;
-                    const dateLabel = `${new Date(day.date + 'T00:00:00').getMonth() + 1}/${new Date(day.date + 'T00:00:00').getDate()}`;
-                    return (
-                      <div key={day.date} className={s.trendCol} title={`${day.date}\n总询盘: ${day.total}\nProof: ${day.proof}`}>
-                        <div className={s.trendBarWrap}>
-                          <div className={s.trendBarTotal} style={{ height: `${totalPct}%` }} />
-                          <div className={s.trendBarProof} style={{ height: `${proofPct}%` }} />
-                        </div>
-                        <span className={s.trendDate}>{dateLabel}</span>
-                      </div>
-                    );
-                  })}
-                </div>
-                <div className={s.trendLegend}>
-                  <span className={s.legendDot} style={{ background: 'var(--accent)' }} /> 总询盘
-                  <span className={s.legendDot} style={{ background: 'var(--green)', marginLeft: 12 }} /> Proof
-                </div>
-              </div>
+              <ResponsiveContainer width="100%" height={240}>
+                <AreaChart data={dailyTrend}>
+                  <defs>
+                    <linearGradient id="gradTotal" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="0%" stopColor={AREA_TOTAL} stopOpacity={0.18} />
+                      <stop offset="100%" stopColor={AREA_TOTAL} stopOpacity={0} />
+                    </linearGradient>
+                    <linearGradient id="gradProof" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="0%" stopColor={AREA_PROOF} stopOpacity={0.25} />
+                      <stop offset="100%" stopColor={AREA_PROOF} stopOpacity={0} />
+                    </linearGradient>
+                  </defs>
+                  <CartesianGrid {...gridStyle} />
+                  <XAxis dataKey="date" tick={chartAxisStyle} tickLine={false} axisLine={false} />
+                  <YAxis tick={chartAxisStyle} tickLine={false} axisLine={false} width={32} />
+                  <Tooltip content={<ChartTooltip />} />
+                  <Area type="monotone" dataKey="total" stroke={AREA_TOTAL} fill="url(#gradTotal)" strokeWidth={2} name="总询盘" />
+                  <Area type="monotone" dataKey="proof" stroke={AREA_PROOF} fill="url(#gradProof)" strokeWidth={2} name="Proof" />
+                  <Legend iconType="circle" iconSize={8} wrapperStyle={{ fontSize: 11, fontFamily: 'var(--font-sans)' }} />
+                </AreaChart>
+              </ResponsiveContainer>
             ) : (
               <span className={s.noData}>No data</span>
             )}
           </Card>
 
-          {/* Two-Column Grid: Agent Distribution + Country */}
-          <div className={s.bottomGrid}>
+          {/* Agent Distribution + Country Distribution */}
+          <div className={s.twoCol}>
             {/* Agent Distribution */}
             <Card title="业务线分布">
               {agentDistribution.length > 0 ? (
                 <div className={s.agentList}>
                   {agentDistribution.map(agent => {
-                    const total = Object.values(agent.quality).reduce((s, v) => s + v, 0);
+                    const total = Object.values(agent.quality).reduce((a, b) => a + b, 0);
                     return (
                       <div key={agent.agentName} className={s.agentRow}>
                         <div className={s.agentHeader}>
                           <span className={s.agentName}>{agent.agentName}</span>
-                          <Tag variant={agent.productLine === 'vehicle' ? 'proof' : agent.productLine === 'auto_parts' ? 'avg' : 'good'}>
+                          <Tag variant={PL_TAG_VARIANT[agent.productLine] || 'low'}>
                             {PRODUCT_LINES.find(p => p.key === agent.productLine)?.label || agent.productLine}
                           </Tag>
                           <span className={s.agentStats}>
-                            {agent.inquiryCount} / {agent.proofCount} ({agent.proofRate}%)
+                            {agent.inquiryCount} 询盘 · {agent.proofCount} Proof · {agent.proofRate}%
                           </span>
                         </div>
-                        {/* Stacked quality bar */}
                         <div className={s.qualityBar}>
                           {Object.entries(QUALITY_COLORS).map(([key, color]) => {
                             const pct = total > 0 ? (agent.quality[key] / total) * 100 : 0;
@@ -388,7 +457,6 @@ export default function AnalyticsPage() {
                       </div>
                     );
                   })}
-                  {/* Legend */}
                   <div className={s.qualityLegend}>
                     {Object.entries(QUALITY_COLORS).map(([key, color]) => (
                       <span key={key} className={s.legendItem}>
@@ -403,102 +471,39 @@ export default function AnalyticsPage() {
               )}
             </Card>
 
-            {/* Country Distribution */}
+            {/* Country Distribution — BarChart */}
             <Card title="国家分布 Top 10">
               {countryDistribution.length > 0 ? (
-                <div className={s.barList}>
-                  {countryDistribution.map((c, i) => (
-                    <div key={c.country} className={s.barRow}>
-                      <span className={s.barRank}>{i + 1}</span>
-                      <span className={s.barLabel}>{c.country}</span>
-                      <div className={s.barTrack}>
-                        <div
-                          className={s.barFill}
-                          style={{
-                            width: `${(c.inquiryCount / maxCountryInquiry) * 100}%`,
-                            background: 'var(--accent)',
-                          }}
-                        />
-                      </div>
-                      <span className={s.barValue}>{c.inquiryCount}</span>
-                    </div>
-                  ))}
-                </div>
+                <ResponsiveContainer width="100%" height={Math.max(200, countryDistribution.length * 30)}>
+                  <BarChart data={countryDistribution} layout="vertical" margin={{ left: 0, right: 16 }}>
+                    <CartesianGrid {...gridStyle} horizontal={false} />
+                    <XAxis type="number" tick={chartAxisStyle} tickLine={false} axisLine={false} />
+                    <YAxis type="category" dataKey="country" tick={chartAxisStyle} tickLine={false} axisLine={false} width={72} />
+                    <Tooltip content={<ChartTooltip />} />
+                    <Bar dataKey="inquiryCount" fill={COLORS.blue} radius={[0, 4, 4, 0]} name="询盘数" barSize={16} />
+                  </BarChart>
+                </ResponsiveContainer>
               ) : (
                 <span className={s.noData}>No data</span>
               )}
             </Card>
           </div>
 
-          {/* Three Distribution Cards */}
+          {/* Three Donut Charts */}
           <div className={s.threeCol}>
-            {/* Quality Distribution */}
-            <Card title="询盘质量分布">
-              {qualityDistribution.length > 0 ? (
-                <div className={s.distList}>
-                  {qualityDistribution.map(item => {
-                    const totalQ = qualityDistribution.reduce((s, i) => s + i.value, 0) || 1;
-                    const pct = Math.round((item.value / totalQ) * 100);
-                    return (
-                      <div key={item.name} className={s.distRow}>
-                        <span className={s.distDot} style={{ background: QUALITY_COLORS[item.name] || 'var(--text3)' }} />
-                        <span className={s.distName}>{item.name}</span>
-                        <span className={s.distPct}>{pct}%</span>
-                        <span className={s.distValue}>{item.value}</span>
-                      </div>
-                    );
-                  })}
-                </div>
-              ) : (
-                <span className={s.noData}>No data</span>
-              )}
-            </Card>
-
-            {/* Buyer Type Distribution */}
-            <Card title="买家类型分布">
-              {buyerTypeDistribution.length > 0 ? (
-                <div className={s.distList}>
-                  {buyerTypeDistribution.map((item, i) => {
-                    const totalB = buyerTypeDistribution.reduce((s, i) => s + i.value, 0) || 1;
-                    const pct = Math.round((item.value / totalB) * 100);
-                    const colors = ['var(--accent)', 'var(--purple)', 'var(--teal)', 'var(--amber)', 'var(--green)'];
-                    return (
-                      <div key={item.name} className={s.distRow}>
-                        <span className={s.distDot} style={{ background: colors[i % colors.length] }} />
-                        <span className={s.distName}>{item.name}</span>
-                        <span className={s.distPct}>{pct}%</span>
-                        <span className={s.distValue}>{item.value}</span>
-                      </div>
-                    );
-                  })}
-                </div>
-              ) : (
-                <span className={s.noData}>No data</span>
-              )}
-            </Card>
-
-            {/* Intent Distribution */}
-            <Card title="对话意图分布">
-              {intentDistribution.length > 0 ? (
-                <div className={s.distList}>
-                  {intentDistribution.map((item, i) => {
-                    const totalI = intentDistribution.reduce((s, i) => s + i.value, 0) || 1;
-                    const pct = Math.round((item.value / totalI) * 100);
-                    const colors = ['var(--accent)', 'var(--teal)', 'var(--amber)', 'var(--purple)', 'var(--green)'];
-                    return (
-                      <div key={item.name} className={s.distRow}>
-                        <span className={s.distDot} style={{ background: colors[i % colors.length] }} />
-                        <span className={s.distName}>{INTENT_LABELS[item.name] || item.name}</span>
-                        <span className={s.distPct}>{pct}%</span>
-                        <span className={s.distValue}>{item.value}</span>
-                      </div>
-                    );
-                  })}
-                </div>
-              ) : (
-                <span className={s.noData}>No data</span>
-              )}
-            </Card>
+            <DonutCard
+              title="询盘质量分布"
+              data={qualityDistribution}
+              colorMap={QUALITY_COLORS}
+            />
+            <DonutCard
+              title="买家类型分布"
+              data={buyerTypeDistribution}
+            />
+            <DonutCard
+              title="对话意图分布"
+              data={intentDistribution}
+            />
           </div>
 
           {/* Top Products */}
@@ -509,7 +514,7 @@ export default function AnalyticsPage() {
                 rows={topProducts.map((p, i) => [
                   i + 1,
                   p.productName,
-                  <Tag key={p.productLine} variant={p.productLine === 'vehicle' ? 'proof' : p.productLine === 'auto_parts' ? 'avg' : 'good'}>
+                  <Tag key={p.productLine} variant={PL_TAG_VARIANT[p.productLine] || 'low'}>
                     {PRODUCT_LINES.find(pl => pl.key === p.productLine)?.label || p.productLine}
                   </Tag>,
                   p.inquiryCount,
