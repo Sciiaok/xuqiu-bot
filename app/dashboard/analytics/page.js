@@ -1,12 +1,14 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
-import { useRouter } from 'next/navigation';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { useTranslations } from 'next-intl';
+import { useLocale } from 'next-intl';
 import {
-  LineChart, Line, AreaChart, Area, PieChart, Pie, Cell,
+  AreaChart, Area, BarChart, Bar, PieChart, Pie, Cell,
   XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend,
 } from 'recharts';
+
+// ──────────── CONSTANTS ────────────
 
 const CHART_COLORS = {
   blue: '#3B82F6',
@@ -28,56 +30,29 @@ const QUALITY_COLORS = {
   BAD: CHART_COLORS.red,
 };
 
-function useAnalytics() {
-  const [data, setData] = useState(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState(null);
+const PRODUCT_LINE_COLORS = {
+  vehicle: 'badge-blue',
+  auto_parts: 'badge-amber',
+  agri_machinery: 'badge-green',
+};
 
-  const fetch_ = useCallback(async (params = {}) => {
-    setLoading(true);
-    setError(null);
-    try {
-      const qs = new URLSearchParams();
-      if (params.days) qs.set('days', params.days);
-      if (params.country) qs.set('country', params.country);
-      if (params.startDate) qs.set('startDate', params.startDate);
-      if (params.endDate) qs.set('endDate', params.endDate);
-      if (params.humanNowDays) qs.set('humanNowDays', params.humanNowDays);
-      const res = await fetch(`/api/analytics?${qs}`);
-      if (!res.ok) throw new Error('Failed to fetch analytics');
-      const json = await res.json();
-      setData(json);
-    } catch (e) {
-      setError(e.message);
-    } finally {
-      setLoading(false);
-    }
-  }, []);
+const ALL_PRODUCT_LINES = ['vehicle', 'auto_parts', 'agri_machinery'];
 
-  return { data, loading, error, fetch: fetch_ };
-}
+// ──────────── HELPER COMPONENTS ────────────
 
-function formatDate(dateStr) {
-  const d = new Date(dateStr + 'T00:00:00');
-  return `${d.getMonth() + 1}/${d.getDate()}`;
-}
-
-function KpiCard({ label, value, prevValue, suffix = '', icon, vsText }) {
-  const diff = prevValue != null && prevValue !== 0
-    ? Math.round(((value - prevValue) / prevValue) * 100)
+function KpiCard({ label, current, previous, suffix = '' }) {
+  const change = previous != null && previous !== 0
+    ? Math.round(((current - previous) / previous) * 100)
     : null;
 
   return (
     <div className="card p-5 flex flex-col gap-1">
-      <div className="flex items-center justify-between">
-        <span className="text-xs font-medium text-text-tertiary uppercase tracking-wider">{label}</span>
-        <span className="text-text-muted">{icon}</span>
-      </div>
+      <span className="text-xs font-medium text-text-tertiary uppercase tracking-wider">{label}</span>
       <div className="flex items-end gap-2 mt-1">
-        <span className="text-3xl font-bold text-text-primary tabular-nums">{value}{suffix}</span>
-        {diff !== null && (
-          <span className={`text-xs font-medium pb-1 ${diff > 0 ? 'text-accent-green' : diff < 0 ? 'text-accent-red' : 'text-text-muted'}`}>
-            {vsText}
+        <span className="text-3xl font-bold text-text-primary tabular-nums">{current}{suffix}</span>
+        {change !== null && (
+          <span className={`text-xs font-medium pb-1 ${change > 0 ? 'text-accent-green' : change < 0 ? 'text-accent-red' : 'text-text-muted'}`}>
+            {change > 0 ? '+' : ''}{change}%
           </span>
         )}
       </div>
@@ -109,7 +84,7 @@ function CustomTooltip({ active, payload, label, formatter }) {
   );
 }
 
-function DonutChart({ data, title, noDataLabel, moreLabel }) {
+function DonutChart({ data, noDataLabel }) {
   if (!data?.length) return <div className="text-text-muted text-sm text-center py-8">{noDataLabel}</div>;
 
   return (
@@ -133,40 +108,247 @@ function DonutChart({ data, title, noDataLabel, moreLabel }) {
         </PieChart>
       </ResponsiveContainer>
       <div className="flex-1 space-y-1.5 text-xs min-w-0">
-        {data.slice(0, 6).map((item, i) => (
+        {data.map((item, i) => (
           <div key={item.name} className="flex items-center gap-2">
             <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ backgroundColor: PIE_PALETTE[i % PIE_PALETTE.length] }} />
             <span className="text-text-secondary truncate">{item.name}</span>
             <span className="text-text-primary font-medium ml-auto tabular-nums">{item.value}</span>
           </div>
         ))}
-        {data.length > 6 && (
-          <p className="text-text-muted pl-4.5">{moreLabel}</p>
-        )}
       </div>
     </div>
   );
 }
 
-export default function AnalyticsPage() {
-  const router = useRouter();
-  const { data, loading, error, fetch: fetchData } = useAnalytics();
-  const [days, setDays] = useState(30);
-  const [country, setCountry] = useState('');
-  const [customRange, setCustomRange] = useState({ start: '', end: '' });
-  const [isCustom, setIsCustom] = useState(false);
-  const [humanNowDays, setHumanNowDays] = useState(1);
-  const t = useTranslations('analytics');
-  const tc = useTranslations('common');
-  const tt = useTranslations('time');
+function QualityDonutChart({ data, noDataLabel }) {
+  if (!data?.length) return <div className="text-text-muted text-sm text-center py-8">{noDataLabel}</div>;
+
+  return (
+    <div className="flex items-center gap-4">
+      <ResponsiveContainer width="50%" height={180}>
+        <PieChart>
+          <Pie
+            data={data}
+            cx="50%"
+            cy="50%"
+            innerRadius={45}
+            outerRadius={70}
+            paddingAngle={2}
+            dataKey="value"
+          >
+            {data.map((item) => (
+              <Cell key={item.name} fill={QUALITY_COLORS[item.name] || '#6B7280'} />
+            ))}
+          </Pie>
+          <Tooltip content={<CustomTooltip />} />
+        </PieChart>
+      </ResponsiveContainer>
+      <div className="flex-1 space-y-1.5 text-xs min-w-0">
+        {data.map((item) => (
+          <div key={item.name} className="flex items-center gap-2">
+            <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ backgroundColor: QUALITY_COLORS[item.name] || '#6B7280' }} />
+            <span className="text-text-secondary truncate">{item.name}</span>
+            <span className="text-text-primary font-medium ml-auto tabular-nums">{item.value}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function AiSummaryCard({ productLines, days, startDate, endDate, isCustom, t, locale }) {
+  const [summary, setSummary] = useState('');
+  const [status, setStatus] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [cached, setCached] = useState(false);
+  const abortRef = useRef(null);
+
+  const fetchSummary = useCallback((forceRefresh = false) => {
+    if (abortRef.current) abortRef.current.abort();
+    const controller = new AbortController();
+    abortRef.current = controller;
+
+    setSummary('');
+    setStatus('');
+    setLoading(true);
+    setCached(false);
+
+    const qs = new URLSearchParams();
+    if (isCustom && startDate && endDate) {
+      qs.set('startDate', startDate);
+      qs.set('endDate', endDate);
+    } else {
+      qs.set('days', String(days));
+    }
+    qs.set('productLines', productLines.join(','));
+    qs.set('lang', locale);
+
+    const method = forceRefresh ? 'POST' : 'GET';
+    const url = `/api/inquiry-dashboard/summary?${qs}`;
+
+    fetch(url, { method, signal: controller.signal })
+      .then(async (res) => {
+        const reader = res.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
+        let accumulated = '';
+
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+
+          const lines = buffer.split('\n');
+          buffer = lines.pop() || '';
+
+          for (const line of lines) {
+            if (line.startsWith('event: ')) {
+              const event = line.slice(7);
+              // Next line should be data
+              continue;
+            }
+            if (line.startsWith('data: ')) {
+              const raw = line.slice(6);
+              if (raw === ':heartbeat') continue;
+              try {
+                const parsed = JSON.parse(raw);
+                // Determine event type from the data
+                if (parsed.cached !== undefined && parsed.text === undefined) {
+                  setCached(true);
+                } else if (parsed.message) {
+                  setStatus(parsed.message);
+                } else if (parsed.text && parsed.cached !== undefined) {
+                  // done event
+                  setSummary(parsed.text);
+                  setCached(parsed.cached);
+                  setLoading(false);
+                } else if (parsed.text) {
+                  // chunk event
+                  accumulated += parsed.text;
+                  setSummary(accumulated);
+                }
+              } catch {}
+            }
+          }
+        }
+        setLoading(false);
+      })
+      .catch((err) => {
+        if (err.name !== 'AbortError') {
+          setLoading(false);
+          setStatus(t('summaryError'));
+        }
+      });
+  }, [productLines, days, startDate, endDate, isCustom, locale, t]);
 
   useEffect(() => {
-    if (isCustom && customRange.start && customRange.end) {
-      fetchData({ startDate: customRange.start, endDate: customRange.end, country, humanNowDays });
-    } else if (!isCustom) {
-      fetchData({ days, country, humanNowDays });
+    fetchSummary();
+    return () => {
+      if (abortRef.current) abortRef.current.abort();
+    };
+  }, [fetchSummary]);
+
+  return (
+    <div className="card p-5">
+      <div className="flex items-center justify-between mb-3">
+        <h3 className="text-sm font-semibold text-text-secondary">{t('aiSummary')}</h3>
+        <button
+          onClick={() => fetchSummary(true)}
+          disabled={loading}
+          className="p-1.5 rounded-md text-text-muted hover:text-text-primary hover:bg-surface-hover transition-colors disabled:opacity-50"
+          title={t('refreshSummary')}
+        >
+          <svg className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+          </svg>
+        </button>
+      </div>
+
+      {loading && !summary && (
+        <div className="space-y-2">
+          <div className="h-4 bg-surface-hover rounded animate-pulse w-full" />
+          <div className="h-4 bg-surface-hover rounded animate-pulse w-5/6" />
+          <div className="h-4 bg-surface-hover rounded animate-pulse w-4/6" />
+          {status && <p className="text-xs text-text-muted mt-2">{status}</p>}
+        </div>
+      )}
+
+      {summary && (
+        <div className="text-sm text-text-secondary leading-relaxed prose prose-sm max-w-none dark:prose-invert"
+          dangerouslySetInnerHTML={{ __html: simpleMarkdown(summary) }}
+        />
+      )}
+
+      {!loading && !summary && !status && (
+        <p className="text-sm text-text-muted">{t('noSummary')}</p>
+      )}
+    </div>
+  );
+}
+
+function simpleMarkdown(md) {
+  return md
+    .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+    .replace(/\*(.+?)\*/g, '<em>$1</em>')
+    .replace(/\n/g, '<br/>');
+}
+
+// ──────────── MAIN PAGE ────────────
+
+function formatDate(dateStr) {
+  const d = new Date(dateStr + 'T00:00:00');
+  return `${d.getMonth() + 1}/${d.getDate()}`;
+}
+
+export default function AnalyticsPage() {
+  const t = useTranslations('inquiryDashboard');
+  const tc = useTranslations('common');
+  const locale = useLocale();
+
+  const [data, setData] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+  const [days, setDays] = useState(7);
+  const [isCustom, setIsCustom] = useState(false);
+  const [customRange, setCustomRange] = useState({ start: '', end: '' });
+  const [selectedLines, setSelectedLines] = useState([...ALL_PRODUCT_LINES]);
+
+  const fetchData = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const qs = new URLSearchParams();
+      if (isCustom && customRange.start && customRange.end) {
+        qs.set('startDate', customRange.start);
+        qs.set('endDate', customRange.end);
+      } else {
+        qs.set('days', String(days));
+      }
+      qs.set('productLines', selectedLines.join(','));
+      const res = await fetch(`/api/inquiry-dashboard?${qs}`);
+      if (!res.ok) throw new Error('Failed to fetch');
+      setData(await res.json());
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setLoading(false);
     }
-  }, [days, country, isCustom, customRange.start, customRange.end, humanNowDays, fetchData]);
+  }, [days, isCustom, customRange.start, customRange.end, selectedLines]);
+
+  useEffect(() => {
+    if (isCustom && (!customRange.start || !customRange.end)) return;
+    fetchData();
+  }, [fetchData]);
+
+  const toggleLine = (line) => {
+    setSelectedLines((prev) => {
+      if (prev.includes(line)) {
+        if (prev.length === 1) return prev; // prevent empty
+        return prev.filter((l) => l !== line);
+      }
+      return [...prev, line];
+    });
+  };
 
   const handleDays = (d) => {
     setIsCustom(false);
@@ -182,7 +364,7 @@ export default function AnalyticsPage() {
         <div className="card p-12">
           <div className="flex items-center justify-center gap-3">
             <div className="animate-spin rounded-full h-6 w-6 border-2 border-accent-blue border-t-transparent" />
-            <span className="text-text-secondary text-sm">{t('loadingAnalytics')}</span>
+            <span className="text-text-secondary text-sm">{t('loading')}</span>
           </div>
         </div>
       </div>
@@ -195,25 +377,19 @@ export default function AnalyticsPage() {
         <div className="card border-accent-red/30 bg-accent-red/5 p-8 text-center">
           <p className="text-accent-red font-medium">{t('failedToLoad')}</p>
           <p className="text-text-secondary text-sm mt-1">{error}</p>
-          <button onClick={() => {
-            if (isCustom && customRange.start && customRange.end) {
-              fetchData({ startDate: customRange.start, endDate: customRange.end, country });
-            } else {
-              fetchData({ days, country });
-            }
-          }} className="btn btn-primary mt-4 text-sm">{tc('retry')}</button>
+          <button onClick={fetchData} className="btn btn-primary mt-4 text-sm">{tc('retry')}</button>
         </div>
       </div>
     );
   }
 
-  const { kpi, dailyConversations, qualifyRate, dailyLeads, dailyTakeover, businessValueDist, intentDistribution, approvalRate, avgResponseTime, humanNowList, countries } = data || {};
+  const { kpi, dailyTrend, agentDistribution, countryDistribution, qualityDistribution, buyerTypeDistribution, intentDistribution, topProducts } = data || {};
 
-  const getVsText = (todayVal, yesterdayVal) => {
-    if (yesterdayVal == null || yesterdayVal === 0) return null;
-    const diff = Math.round(((todayVal - yesterdayVal) / yesterdayVal) * 100);
-    return t('vsYesterday', { diff: `${diff > 0 ? '+' : ''}${diff}` });
-  };
+  // Map intent keys to i18n labels
+  const intentData = intentDistribution?.map((item) => ({
+    ...item,
+    name: t(`intent_${item.name}`, { defaultMessage: item.name }),
+  }));
 
   return (
     <div className="p-6 space-y-5 max-w-[1400px] mx-auto">
@@ -221,7 +397,25 @@ export default function AnalyticsPage() {
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
         <h1 className="text-2xl font-semibold text-text-primary">{t('title')}</h1>
         <div className="flex items-center gap-2 flex-wrap">
-          {[7, 14, 30].map(d => (
+          {/* Product Line Toggles */}
+          {ALL_PRODUCT_LINES.map((line) => (
+            <button
+              key={line}
+              onClick={() => toggleLine(line)}
+              className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
+                selectedLines.includes(line)
+                  ? 'bg-accent-blue text-white'
+                  : 'bg-surface-hover text-text-secondary hover:text-text-primary'
+              }`}
+            >
+              {t(`line_${line}`)}
+            </button>
+          ))}
+
+          <span className="w-px h-5 bg-border mx-1" />
+
+          {/* Time Period */}
+          {[7, 14, 30].map((d) => (
             <button
               key={d}
               onClick={() => handleDays(d)}
@@ -249,28 +443,18 @@ export default function AnalyticsPage() {
               <input
                 type="date"
                 value={customRange.start}
-                onChange={e => setCustomRange(r => ({ ...r, start: e.target.value }))}
+                onChange={(e) => setCustomRange((r) => ({ ...r, start: e.target.value }))}
                 className="input text-xs !w-auto !py-1.5 !px-2"
               />
               <span className="text-text-muted text-xs">{tc('to')}</span>
               <input
                 type="date"
                 value={customRange.end}
-                onChange={e => setCustomRange(r => ({ ...r, end: e.target.value }))}
+                onChange={(e) => setCustomRange((r) => ({ ...r, end: e.target.value }))}
                 className="input text-xs !w-auto !py-1.5 !px-2"
               />
             </>
           )}
-          <select
-            value={country}
-            onChange={e => setCountry(e.target.value)}
-            className="input text-xs !w-auto !py-1.5 !px-2 !pr-7"
-          >
-            <option value="">{tc('allCountries')}</option>
-            {countries?.map(c => (
-              <option key={c} value={c}>{c}</option>
-            ))}
-          </select>
           {loading && (
             <div className="animate-spin rounded-full h-4 w-4 border-2 border-accent-blue border-t-transparent" />
           )}
@@ -280,223 +464,189 @@ export default function AnalyticsPage() {
       {/* KPI Cards */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
         <KpiCard
-          label={t('newConversations')}
-          value={kpi?.newConversations?.today ?? 0}
-          prevValue={kpi?.newConversations?.yesterday}
-          vsText={getVsText(kpi?.newConversations?.today, kpi?.newConversations?.yesterday)}
-          icon={<svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" /></svg>}
+          label={t('totalInquiries')}
+          current={kpi?.totalInquiries?.current ?? 0}
+          previous={kpi?.totalInquiries?.previous}
         />
         <KpiCard
-          label={t('qualifyRate')}
-          value={kpi?.qualifyRate?.today ?? 0}
-          prevValue={kpi?.qualifyRate?.yesterday}
-          vsText={getVsText(kpi?.qualifyRate?.today, kpi?.qualifyRate?.yesterday)}
+          label={t('proofInquiries')}
+          current={kpi?.proofInquiries?.current ?? 0}
+          previous={kpi?.proofInquiries?.previous}
+        />
+        <KpiCard
+          label={t('proofRate')}
+          current={kpi?.proofRate?.current ?? 0}
+          previous={kpi?.proofRate?.previous}
           suffix="%"
-          icon={<svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>}
         />
         <KpiCard
-          label={t('newLeads')}
-          value={kpi?.newLeads?.today ?? 0}
-          prevValue={kpi?.newLeads?.yesterday}
-          vsText={getVsText(kpi?.newLeads?.today, kpi?.newLeads?.yesterday)}
-          icon={<svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0z" /></svg>}
-        />
-        <KpiCard
-          label={t('humanNowQueue')}
-          value={kpi?.humanNowCount ?? 0}
-          icon={<svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4.5c-.77-.833-2.694-.833-3.464 0L3.34 16.5c-.77.833.192 2.5 1.732 2.5z" /></svg>}
+          label={t('highValueRate')}
+          current={kpi?.highValueRate?.current ?? 0}
+          previous={kpi?.highValueRate?.previous}
+          suffix="%"
         />
       </div>
 
-      {/* HUMAN_NOW Leads Table */}
-      <div className="card p-5 overflow-hidden">
-        <div className="flex items-center justify-between mb-4">
-          <h3 className="text-sm font-semibold text-text-secondary">{t('humanNowLeads', { count: humanNowList?.length || 0 })}</h3>
-          <div className="flex items-center gap-1">
-            {[{ label: tt('today'), value: 1 }, { label: tt('7d'), value: 7 }, { label: tt('30d'), value: 30 }].map(opt => (
-              <button
-                key={opt.value}
-                onClick={() => setHumanNowDays(opt.value)}
-                className={`px-2.5 py-1 rounded-md text-xs font-medium transition-colors ${
-                  humanNowDays === opt.value
-                    ? 'bg-accent-blue text-white'
-                    : 'bg-surface-hover text-text-secondary hover:text-text-primary'
-                }`}
-              >
-                {opt.label}
-              </button>
-            ))}
-          </div>
-        </div>
-        {humanNowList?.length > 0 ? (
-          <div className="overflow-x-auto -mx-5 -mb-5 mt-[-4px]">
+      {/* Daily Trend Chart */}
+      <ChartCard title={t('dailyTrend')}>
+        <ResponsiveContainer width="100%" height={280}>
+          <AreaChart data={dailyTrend?.map((d) => ({ ...d, date: formatDate(d.date) }))}>
+            <defs>
+              <linearGradient id="totalGrad" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0%" stopColor={CHART_COLORS.blue} stopOpacity={0.15} />
+                <stop offset="100%" stopColor={CHART_COLORS.blue} stopOpacity={0} />
+              </linearGradient>
+              <linearGradient id="proofGrad" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0%" stopColor={CHART_COLORS.green} stopOpacity={0.3} />
+                <stop offset="100%" stopColor={CHART_COLORS.green} stopOpacity={0} />
+              </linearGradient>
+            </defs>
+            <CartesianGrid {...gridStyle} />
+            <XAxis dataKey="date" tick={chartAxisStyle} tickLine={false} axisLine={false} />
+            <YAxis tick={chartAxisStyle} tickLine={false} axisLine={false} width={35} />
+            <Tooltip content={<CustomTooltip />} />
+            <Area type="monotone" dataKey="total" stroke={CHART_COLORS.blue} fill="url(#totalGrad)" strokeWidth={2} name={t('totalInquiries')} />
+            <Area type="monotone" dataKey="proof" stroke={CHART_COLORS.green} fill="url(#proofGrad)" strokeWidth={2} name={t('proofInquiries')} />
+            <Legend iconType="circle" iconSize={8} wrapperStyle={{ fontSize: 11 }} />
+          </AreaChart>
+        </ResponsiveContainer>
+      </ChartCard>
+
+      {/* Agent Distribution + Country Distribution */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        {/* Agent Distribution */}
+        <ChartCard title={t('agentDistribution')}>
+          {agentDistribution?.length > 0 ? (
+            <div className="space-y-3">
+              {agentDistribution.map((agent) => {
+                const total = Object.values(agent.quality).reduce((s, v) => s + v, 0);
+                return (
+                  <div key={agent.agentName} className="space-y-1">
+                    <div className="flex items-center justify-between text-xs">
+                      <div className="flex items-center gap-2">
+                        <span className="font-medium text-text-primary">{agent.agentName}</span>
+                        <span className={`badge ${PRODUCT_LINE_COLORS[agent.productLine] || 'badge-purple'} text-[10px]`}>
+                          {t(`line_${agent.productLine}`, { defaultMessage: agent.productLine })}
+                        </span>
+                      </div>
+                      <span className="text-text-muted tabular-nums">
+                        {agent.inquiryCount} / {agent.proofCount} ({agent.proofRate}%)
+                      </span>
+                    </div>
+                    {/* Stacked quality bar */}
+                    <div className="flex h-2 rounded-full overflow-hidden bg-surface-hover">
+                      {Object.entries(QUALITY_COLORS).map(([key, color]) => {
+                        const pct = total > 0 ? (agent.quality[key] / total) * 100 : 0;
+                        if (pct === 0) return null;
+                        return (
+                          <div
+                            key={key}
+                            className="h-full"
+                            style={{ width: `${pct}%`, backgroundColor: color }}
+                            title={`${key}: ${agent.quality[key]}`}
+                          />
+                        );
+                      })}
+                    </div>
+                  </div>
+                );
+              })}
+              {/* Quality legend */}
+              <div className="flex items-center gap-3 pt-1 text-[10px] text-text-muted">
+                {Object.entries(QUALITY_COLORS).map(([key, color]) => (
+                  <div key={key} className="flex items-center gap-1">
+                    <span className="w-2 h-2 rounded-full" style={{ backgroundColor: color }} />
+                    {key}
+                  </div>
+                ))}
+              </div>
+            </div>
+          ) : (
+            <div className="text-text-muted text-sm text-center py-8">{tc('noData')}</div>
+          )}
+        </ChartCard>
+
+        {/* Country Distribution */}
+        <ChartCard title={t('countryDistribution')}>
+          {countryDistribution?.length > 0 ? (
+            <ResponsiveContainer width="100%" height={Math.max(200, countryDistribution.length * 32)}>
+              <BarChart data={countryDistribution} layout="vertical" margin={{ left: 0, right: 20 }}>
+                <CartesianGrid {...gridStyle} horizontal={false} />
+                <XAxis type="number" tick={chartAxisStyle} tickLine={false} axisLine={false} />
+                <YAxis type="category" dataKey="country" tick={chartAxisStyle} tickLine={false} axisLine={false} width={80} />
+                <Tooltip content={<CustomTooltip />} />
+                <Bar dataKey="inquiryCount" fill={CHART_COLORS.blue} radius={[0, 4, 4, 0]} name={t('totalInquiries')} />
+              </BarChart>
+            </ResponsiveContainer>
+          ) : (
+            <div className="text-text-muted text-sm text-center py-8">{tc('noData')}</div>
+          )}
+        </ChartCard>
+      </div>
+
+      {/* Three Donut Charts */}
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+        <ChartCard title={t('qualityDistribution')}>
+          <QualityDonutChart data={qualityDistribution} noDataLabel={tc('noData')} />
+        </ChartCard>
+
+        <ChartCard title={t('buyerTypeDistribution')}>
+          <DonutChart data={buyerTypeDistribution} noDataLabel={tc('noData')} />
+        </ChartCard>
+
+        <ChartCard title={t('intentDistribution')}>
+          <DonutChart data={intentData} noDataLabel={tc('noData')} />
+        </ChartCard>
+      </div>
+
+      {/* Top Products */}
+      <ChartCard title={t('topProducts')}>
+        {topProducts?.length > 0 ? (
+          <div className="overflow-x-auto -mx-5 -mb-5">
             <table className="w-full text-sm">
               <thead>
-                <tr className="border-b border-border bg-background-secondary">
-                  <th className="text-left px-5 py-2.5 text-xs font-medium text-text-tertiary uppercase tracking-wider">{t('contact')}</th>
-                  <th className="text-left px-3 py-2.5 text-xs font-medium text-text-tertiary uppercase tracking-wider">{t('company')}</th>
-                  <th className="text-left px-3 py-2.5 text-xs font-medium text-text-tertiary uppercase tracking-wider">{t('country')}</th>
-                  <th className="text-left px-3 py-2.5 text-xs font-medium text-text-tertiary uppercase tracking-wider">{t('model')}</th>
-                  <th className="text-left px-3 py-2.5 text-xs font-medium text-text-tertiary uppercase tracking-wider">{t('qty')}</th>
-                  <th className="text-left px-3 py-2.5 text-xs font-medium text-text-tertiary uppercase tracking-wider">{t('quality')}</th>
-                  <th className="text-left px-3 py-2.5 text-xs font-medium text-text-tertiary uppercase tracking-wider">{t('value')}</th>
-                  <th className="text-left px-3 py-2.5 text-xs font-medium text-text-tertiary uppercase tracking-wider">{t('summary')}</th>
-                  <th className="text-left px-5 py-2.5 text-xs font-medium text-text-tertiary uppercase tracking-wider">{t('updated')}</th>
+                <tr className="border-b border-border">
+                  <th className="text-left px-5 py-2.5 text-xs font-medium text-text-tertiary uppercase tracking-wider">#</th>
+                  <th className="text-left px-3 py-2.5 text-xs font-medium text-text-tertiary uppercase tracking-wider">{t('product')}</th>
+                  <th className="text-left px-3 py-2.5 text-xs font-medium text-text-tertiary uppercase tracking-wider">{t('businessLine')}</th>
+                  <th className="text-right px-3 py-2.5 text-xs font-medium text-text-tertiary uppercase tracking-wider">{t('inquiryCount')}</th>
+                  <th className="text-right px-5 py-2.5 text-xs font-medium text-text-tertiary uppercase tracking-wider">{t('proofRate')}</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-border">
-                {humanNowList.map(lead => (
-                  <tr
-                    key={lead.id}
-                    onClick={() => router.push(`/dashboard/inbox?conversation_id=${lead.conversationId}`)}
-                    className="hover:bg-surface-hover cursor-pointer transition-colors"
-                  >
-                    <td className="px-5 py-3 text-text-primary font-medium whitespace-nowrap">{lead.contactName}</td>
-                    <td className="px-3 py-3 text-text-secondary whitespace-nowrap">{lead.companyName}</td>
-                    <td className="px-3 py-3 text-text-secondary whitespace-nowrap">{lead.country}</td>
-                    <td className="px-3 py-3 text-text-secondary whitespace-nowrap">{lead.carModel}</td>
-                    <td className="px-3 py-3 text-text-secondary whitespace-nowrap">{lead.qty}</td>
-                    <td className="px-3 py-3 whitespace-nowrap">
-                      <span className={`badge ${
-                        lead.inquiryQuality === 'PROOF' ? 'badge-green' :
-                        lead.inquiryQuality === 'QUALIFY' ? 'badge-blue' :
-                        lead.inquiryQuality === 'GOOD' ? 'badge-amber' : 'badge-red'
-                      }`}>{lead.inquiryQuality}</span>
+              <tbody className="divide-y divide-border-subtle">
+                {topProducts.map((p, i) => (
+                  <tr key={`${p.productName}-${p.productLine}`} className="hover:bg-surface-hover transition-colors">
+                    <td className="px-5 py-2.5 text-text-muted tabular-nums">{i + 1}</td>
+                    <td className="px-3 py-2.5 font-medium text-text-primary">{p.productName}</td>
+                    <td className="px-3 py-2.5">
+                      <span className={`badge ${PRODUCT_LINE_COLORS[p.productLine] || 'badge-purple'} text-[10px]`}>
+                        {t(`line_${p.productLine}`, { defaultMessage: p.productLine })}
+                      </span>
                     </td>
-                    <td className="px-3 py-3 whitespace-nowrap">
-                      <span className={`badge ${
-                        lead.businessValue === 'HIGH' ? 'badge-green' :
-                        lead.businessValue === 'MEDIUM' ? 'badge-amber' : 'badge-purple'
-                      }`}>{lead.businessValue}</span>
-                    </td>
-                    <td className="px-3 py-3 text-text-secondary max-w-xs truncate">{lead.handoffSummary}</td>
-                    <td className="px-5 py-3 text-text-muted whitespace-nowrap text-xs">
-                      {new Date(lead.updatedAt).toLocaleDateString()}
-                    </td>
+                    <td className="px-3 py-2.5 text-right tabular-nums text-text-secondary">{p.inquiryCount}</td>
+                    <td className="px-5 py-2.5 text-right tabular-nums text-text-secondary">{p.proofRate}%</td>
                   </tr>
                 ))}
               </tbody>
             </table>
           </div>
         ) : (
-          <p className="text-text-muted text-sm text-center py-6">{t('noHumanNowLeads')}</p>
+          <div className="text-text-muted text-sm text-center py-8">{tc('noData')}</div>
         )}
-      </div>
-
-      {/* Row 1: Conversations + Qualify Rate */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-        <ChartCard title={t('dailyConversations')}>
-          <ResponsiveContainer width="100%" height={240}>
-            <AreaChart data={dailyConversations?.map(d => ({ ...d, date: formatDate(d.date) }))}>
-              <defs>
-                <linearGradient id="convGrad" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="0%" stopColor={CHART_COLORS.blue} stopOpacity={0.2} />
-                  <stop offset="100%" stopColor={CHART_COLORS.blue} stopOpacity={0} />
-                </linearGradient>
-              </defs>
-              <CartesianGrid {...gridStyle} />
-              <XAxis dataKey="date" tick={chartAxisStyle} tickLine={false} axisLine={false} />
-              <YAxis tick={chartAxisStyle} tickLine={false} axisLine={false} width={35} />
-              <Tooltip content={<CustomTooltip />} />
-              <Area type="monotone" dataKey="count" stroke={CHART_COLORS.blue} fill="url(#convGrad)" strokeWidth={2} name={t('conversations')} />
-            </AreaChart>
-          </ResponsiveContainer>
-        </ChartCard>
-
-        <ChartCard title={t('qualifyConversionRate')}>
-          <ResponsiveContainer width="100%" height={240}>
-            <LineChart data={qualifyRate?.map(d => ({ ...d, date: formatDate(d.date) }))}>
-              <CartesianGrid {...gridStyle} />
-              <XAxis dataKey="date" tick={chartAxisStyle} tickLine={false} axisLine={false} />
-              <YAxis tick={chartAxisStyle} tickLine={false} axisLine={false} width={35} unit="%" />
-              <Tooltip content={<CustomTooltip formatter={v => `${v}%`} />} />
-              <Line type="monotone" dataKey="rate" stroke={CHART_COLORS.green} strokeWidth={2} dot={false} name={t('rate')} />
-            </LineChart>
-          </ResponsiveContainer>
-        </ChartCard>
-      </div>
-
-      {/* Row 2: Daily Leads by Quality */}
-      <ChartCard title={t('dailyLeadsByQuality')}>
-        <ResponsiveContainer width="100%" height={240}>
-          <AreaChart data={dailyLeads?.map(d => ({ ...d, date: formatDate(d.date) }))}>
-            <defs>
-              {Object.entries(QUALITY_COLORS).map(([key, color]) => (
-                <linearGradient key={key} id={`grad-${key}`} x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="0%" stopColor={color} stopOpacity={0.3} />
-                  <stop offset="100%" stopColor={color} stopOpacity={0} />
-                </linearGradient>
-              ))}
-            </defs>
-            <CartesianGrid {...gridStyle} />
-            <XAxis dataKey="date" tick={chartAxisStyle} tickLine={false} axisLine={false} />
-            <YAxis tick={chartAxisStyle} tickLine={false} axisLine={false} width={35} />
-            <Tooltip content={<CustomTooltip />} />
-            <Area type="monotone" dataKey="PROOF" stackId="1" stroke={QUALITY_COLORS.PROOF} fill={`url(#grad-PROOF)`} strokeWidth={1.5} name="PROOF" />
-            <Area type="monotone" dataKey="QUALIFY" stackId="1" stroke={QUALITY_COLORS.QUALIFY} fill={`url(#grad-QUALIFY)`} strokeWidth={1.5} name="QUALIFY" />
-            <Area type="monotone" dataKey="GOOD" stackId="1" stroke={QUALITY_COLORS.GOOD} fill={`url(#grad-GOOD)`} strokeWidth={1.5} name="GOOD" />
-            <Area type="monotone" dataKey="BAD" stackId="1" stroke={QUALITY_COLORS.BAD} fill={`url(#grad-BAD)`} strokeWidth={1.5} name="BAD" />
-            <Legend iconType="circle" iconSize={8} wrapperStyle={{ fontSize: 11 }} />
-          </AreaChart>
-        </ResponsiveContainer>
       </ChartCard>
 
-      {/* Row 3: Takeover + Business Value */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-        <ChartCard title={t('humanTakeoverTrend')}>
-          <ResponsiveContainer width="100%" height={200}>
-            <AreaChart data={dailyTakeover?.map(d => ({ ...d, date: formatDate(d.date) }))}>
-              <defs>
-                <linearGradient id="takeoverGrad" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="0%" stopColor={CHART_COLORS.amber} stopOpacity={0.2} />
-                  <stop offset="100%" stopColor={CHART_COLORS.amber} stopOpacity={0} />
-                </linearGradient>
-              </defs>
-              <CartesianGrid {...gridStyle} />
-              <XAxis dataKey="date" tick={chartAxisStyle} tickLine={false} axisLine={false} />
-              <YAxis tick={chartAxisStyle} tickLine={false} axisLine={false} width={30} />
-              <Tooltip content={<CustomTooltip />} />
-              <Area type="monotone" dataKey="count" stroke={CHART_COLORS.amber} fill="url(#takeoverGrad)" strokeWidth={2} name={t('takeovers')} />
-            </AreaChart>
-          </ResponsiveContainer>
-        </ChartCard>
+      {/* AI Summary */}
+      <AiSummaryCard
+        productLines={selectedLines}
+        days={days}
+        startDate={customRange.start}
+        endDate={customRange.end}
+        isCustom={isCustom}
+        t={t}
+        locale={locale}
+      />
 
-        <ChartCard title={t('businessValue')}>
-          <DonutChart data={businessValueDist} noDataLabel={tc('noData')} moreLabel={t('more', { count: (businessValueDist?.length || 0) - 6 })} />
-        </ChartCard>
-      </div>
-
-      {/* Row 4: Response Time + Approval Rate + Intent */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-        <ChartCard title={t('avgResponseTime')}>
-          <ResponsiveContainer width="100%" height={200}>
-            <LineChart data={avgResponseTime?.map(d => ({ ...d, date: formatDate(d.date) }))}>
-              <CartesianGrid {...gridStyle} />
-              <XAxis dataKey="date" tick={chartAxisStyle} tickLine={false} axisLine={false} />
-              <YAxis tick={chartAxisStyle} tickLine={false} axisLine={false} width={30} unit="s" />
-              <Tooltip content={<CustomTooltip formatter={v => `${v}s`} />} />
-              <Line type="monotone" dataKey="avgSeconds" stroke={CHART_COLORS.cyan} strokeWidth={2} dot={false} name={t('avgTime')} />
-            </LineChart>
-          </ResponsiveContainer>
-        </ChartCard>
-
-        <ChartCard title={t('leadApprovalRate')}>
-          <ResponsiveContainer width="100%" height={200}>
-            <LineChart data={approvalRate?.map(d => ({ ...d, date: formatDate(d.date) }))}>
-              <CartesianGrid {...gridStyle} />
-              <XAxis dataKey="date" tick={chartAxisStyle} tickLine={false} axisLine={false} />
-              <YAxis tick={chartAxisStyle} tickLine={false} axisLine={false} width={30} unit="%" />
-              <Tooltip content={<CustomTooltip formatter={v => `${v}%`} />} />
-              <Line type="monotone" dataKey="rate" stroke={CHART_COLORS.purple} strokeWidth={2} dot={false} name={t('approvalRate')} />
-            </LineChart>
-          </ResponsiveContainer>
-        </ChartCard>
-
-        <ChartCard title={t('conversationIntent')}>
-          <DonutChart data={intentDistribution} noDataLabel={tc('noData')} moreLabel={t('more', { count: (intentDistribution?.length || 0) - 6 })} />
-        </ChartCard>
-      </div>
-
+      <div className="h-8" />
     </div>
   );
 }
