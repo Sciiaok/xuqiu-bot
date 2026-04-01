@@ -1,0 +1,24 @@
+.btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 7px 13px;
+  border-radius: var(--r);
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  border: none;
+  transition: all 0.13s;
+  white-space: nowrap;
+  font-family: var(--font-sans);
+}
+.primary { background: var(--accent); color: #fff; }
+.primary:hover { filter: brightness(1.1); }
+.ghost { background: transparent; color: var(--text2); border: 1px solid var(--border2); }
+.ghost:hover { background: var(--bg3); color: var(--text); }
+.danger { background: var(--red-dim); color: var(--red); border: 1px solid rgba(196,66,48,0.15); }
+.danger:hover { background: rgba(196,66,48,0.12); }
+.purple { background: var(--purple-dim); color: var(--purple); border: 1px solid rgba(139,106,191,0.2); }
+.purple:hover { background: rgba(139,106,191,0.12); }
+.sm { padding: 5px 10px; font-size: 11px; }
+.xs { padding: 3px 8px; font-size: 10px; }

@@ -22,11 +22,12 @@ function parseDateRange(searchParams) {
   return { days, fromDate, toDate };
 }
 
-function toDateKey(value) {
-  return value ? value.split('T')[0] : null;
-}
+function buildDateSeries(fromDate, toDate, dailyCounts) {
+  const countsByDate = new Map();
+  for (const entry of dailyCounts || []) {
+    countsByDate.set(entry.date, entry.count);
+  }
 
-function buildDateSeries(fromDate, toDate, countsByDate) {
   const series = [];
   const cursor = new Date(fromDate);
 
@@ -42,31 +43,6 @@ function buildDateSeries(fromDate, toDate, countsByDate) {
   return series;
 }
 
-function ensureAdBucket(map, metaAdId) {
-  if (!map.has(metaAdId)) {
-    map.set(metaAdId, {
-      metaAdId,
-      conversationCount: 0,
-      qualifyConversationIds: new Set(),
-      proofConversationIds: new Set(),
-      lastConversationAt: null,
-      dailyConversationCounts: new Map(),
-    });
-  }
-
-  return map.get(metaAdId);
-}
-
-function chunkValues(values, size) {
-  const chunks = [];
-
-  for (let index = 0; index < values.length; index += size) {
-    chunks.push(values.slice(index, index + size));
-  }
-
-  return chunks;
-}
-
 export async function GET(request) {
   try {
     const { searchParams } = new URL(request.url);
@@ -74,93 +50,30 @@ export async function GET(request) {
     const fromISO = fromDate.toISOString();
     const toISO = toDate.toISOString();
 
-    const { data: conversations, error: conversationsError } = await supabase
-      .from('conversations')
-      .select('id, meta_ad_id, created_at')
-      .not('meta_ad_id', 'is', null)
-      .gte('created_at', fromISO)
-      .lte('created_at', toISO)
-      .order('created_at', { ascending: false })
-      .limit(10000);
+    const { data: rows, error } = await supabase.rpc('ad_conversation_stats', {
+      from_ts: fromISO,
+      to_ts: toISO,
+    });
 
-    if (conversationsError) throw conversationsError;
+    if (error) throw error;
 
-    const adMap = new Map();
-    const conversationMetaAdMap = new Map();
+    const summary = (rows || [])
+      .map((row) => {
+        const convCount = Number(row.conversation_count);
+        const qualifyCount = Number(row.qualify_count);
+        const proofCount = Number(row.proof_count);
 
-    for (const conversation of conversations || []) {
-      const metaAdId = String(conversation.meta_ad_id || '').trim();
-      if (!metaAdId) continue;
-
-      conversationMetaAdMap.set(conversation.id, metaAdId);
-
-      const bucket = ensureAdBucket(adMap, metaAdId);
-      bucket.conversationCount += 1;
-
-      const dateKey = toDateKey(conversation.created_at);
-      if (dateKey) {
-        bucket.dailyConversationCounts.set(
-          dateKey,
-          (bucket.dailyConversationCounts.get(dateKey) || 0) + 1
-        );
-      }
-
-      if (!bucket.lastConversationAt || conversation.created_at > bucket.lastConversationAt) {
-        bucket.lastConversationAt = conversation.created_at;
-      }
-    }
-
-    const conversationIds = Array.from(conversationMetaAdMap.keys());
-    const leadResponses = conversationIds.length > 0
-      ? await Promise.all(
-          chunkValues(conversationIds, 200).map((ids) => (
-            supabase
-              .from('leads')
-              .select('conversation_id, inquiry_quality')
-              .in('conversation_id', ids)
-              .limit(10000)
-          ))
-        )
-      : [];
-
-    for (const response of leadResponses) {
-      if (response.error) throw response.error;
-    }
-
-    const leads = leadResponses.flatMap((response) => response.data || []);
-
-    for (const lead of leads || []) {
-      const conversationId = lead.conversation_id || null;
-      const metaAdId = conversationId ? conversationMetaAdMap.get(conversationId) : null;
-      if (!metaAdId) continue;
-
-      const bucket = ensureAdBucket(adMap, metaAdId);
-      const normalizedQuality = String(lead.inquiry_quality || '').toUpperCase();
-
-      if (conversationId && normalizedQuality === 'QUALIFY') {
-        bucket.qualifyConversationIds.add(conversationId);
-      }
-
-      if (conversationId && normalizedQuality === 'PROOF') {
-        bucket.proofConversationIds.add(conversationId);
-      }
-    }
-
-    const summary = Array.from(adMap.values())
-      .map((bucket) => ({
-        metaAdId: bucket.metaAdId,
-        conversationCount: bucket.conversationCount,
-        qualifyConversationCount: bucket.qualifyConversationIds.size,
-        proofConversationCount: bucket.proofConversationIds.size,
-        qualifyConversationRate: bucket.conversationCount > 0
-          ? Math.round((bucket.qualifyConversationIds.size / bucket.conversationCount) * 100)
-          : 0,
-        proofConversationRate: bucket.conversationCount > 0
-          ? Math.round((bucket.proofConversationIds.size / bucket.conversationCount) * 100)
-          : 0,
-        lastConversationAt: bucket.lastConversationAt,
-        dailyConversations: buildDateSeries(fromDate, toDate, bucket.dailyConversationCounts),
-      }))
+        return {
+          metaAdId: row.meta_ad_id,
+          conversationCount: convCount,
+          qualifyConversationCount: qualifyCount,
+          proofConversationCount: proofCount,
+          qualifyConversationRate: convCount > 0 ? Math.round((qualifyCount / convCount) * 100) : 0,
+          proofConversationRate: convCount > 0 ? Math.round((proofCount / convCount) * 100) : 0,
+          lastConversationAt: row.last_conversation,
+          dailyConversations: buildDateSeries(fromDate, toDate, row.daily_counts),
+        };
+      })
       .sort((a, b) => {
         if (b.conversationCount !== a.conversationCount) {
           return b.conversationCount - a.conversationCount;

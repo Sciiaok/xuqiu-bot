@@ -1,0 +1,39 @@
+{
+  "id": "golden-007",
+  "name": "single-product-simple",
+  "description": "Simplest happy path: single country, single product, lead_gen with images provided",
+  "brief": {
+    "company_name": "Dubai Parts Co",
+    "industry": "auto parts",
+    "products": [
+      { "model": "DP-Brake", "category": "Brake Pads" }
+    ],
+    "target_countries": ["UAE"],
+    "budget_total": 2000,
+    "budget_currency": "USD",
+    "campaign_duration_days": 14,
+    "objectives": ["lead_gen"],
+    "preferred_platforms": ["meta"],
+    "product_images": [
+      { "url": "https://example.com/brake1.jpg", "description": "Brake pad front" },
+      { "url": "https://example.com/brake2.jpg", "description": "Brake pad installed" }
+    ]
+  },
+  "expected_phases": ["strategy", "creative_plan", "creative", "execution"],
+  "assertions": {
+    "schema": true,
+    "business_rules": {
+      "max_campaigns": 1,
+      "budget_allocation_sum": 100,
+      "objective": "lead_gen",
+      "cta_not_whatsapp": true
+    },
+    "reference_handling": "must_proceed",
+    "tool_trace": {}
+  },
+  "quality_rubric": {
+    "strategy": { "min_score": 3.5 },
+    "creative": { "min_score": 3.0 },
+    "overall": { "min_score": 3.5 }
+  }
+}

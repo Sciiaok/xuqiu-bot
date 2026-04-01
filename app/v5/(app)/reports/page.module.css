@@ -1,0 +1,335 @@
+/* ── Reports Page ── */
+
+.page {
+  padding: 28px 32px 48px;
+  min-height: 100%;
+  box-sizing: border-box;
+  animation: v5-fadeUp 0.25s ease;
+}
+
+/* ── Header ── */
+
+.header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  margin-bottom: 24px;
+}
+
+.headerLeft {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.title {
+  font-family: var(--font-display);
+  font-size: 26px;
+  font-weight: 700;
+  letter-spacing: -0.5px;
+  color: var(--text);
+  margin: 0;
+  line-height: 1;
+}
+
+.subtitle {
+  font-size: 12px;
+  color: var(--text3);
+  margin: 0;
+  letter-spacing: 0.2px;
+}
+
+.headerActions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* ── Tab content wrapper ── */
+
+.tabContent {
+  padding-top: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+/* ── Filter row (Tab 1) ── */
+
+.filterRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.divider {
+  width: 1px;
+  height: 24px;
+  background: var(--border2);
+  flex-shrink: 0;
+  margin: 0 4px;
+}
+
+.dateInput {
+  height: 30px;
+  padding: 0 10px;
+  border: 1px solid var(--border2);
+  border-radius: var(--r);
+  background: var(--bg2);
+  color: var(--text);
+  font-size: 12px;
+  font-family: var(--font-mono);
+  outline: none;
+  cursor: pointer;
+}
+
+.dateInput:focus {
+  border-color: var(--accent);
+}
+
+/* ── Metric cards row ── */
+
+.metricsRow {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 12px;
+}
+
+/* ── Compare table ── */
+
+.compareTable {
+  display: flex;
+  flex-direction: column;
+}
+
+.compareRow {
+  display: grid;
+  grid-template-columns: 80px 100px 80px 100px 90px 1fr 80px;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 0;
+}
+
+.compareHeader {
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 10px;
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.8px;
+  text-transform: uppercase;
+  color: var(--text3);
+  font-family: var(--font-mono);
+}
+
+.compareDataRow {
+  border-bottom: 1px solid var(--border);
+  cursor: pointer;
+  border-radius: var(--r);
+  padding-left: 6px;
+  padding-right: 6px;
+  margin: 0 -6px;
+  transition: background 0.15s;
+}
+
+.compareDataRow:last-child {
+  border-bottom: none;
+}
+
+.compareDataRow:hover {
+  background: var(--bg3);
+}
+
+.compareRowActive {
+  background: var(--accent-dim) !important;
+}
+
+.chainName {
+  font-weight: 500;
+  font-size: 13px;
+  color: var(--text);
+}
+
+.monoVal {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--text2);
+}
+
+.efficiencyCell {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.efficiencyBar {
+  flex: 1;
+  height: 5px;
+  background: var(--bg4);
+  border-radius: 3px;
+  overflow: hidden;
+  min-width: 60px;
+}
+
+.efficiencyFill {
+  height: 100%;
+  border-radius: 3px;
+  transition: width 0.4s ease;
+}
+
+.efficiencyPct {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text3);
+  min-width: 28px;
+}
+
+/* Status tags (inline, not using Tag component) */
+
+.statusTag {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.2px;
+}
+
+.status_proof {
+  background: var(--green-dim);
+  color: var(--green);
+  border: 1px solid rgba(42, 140, 90, 0.2);
+}
+
+.status_amber {
+  background: var(--amber-dim);
+  color: var(--amber);
+  border: 1px solid rgba(184, 134, 11, 0.2);
+}
+
+.status_red {
+  background: var(--red-dim);
+  color: var(--red);
+  border: 1px solid rgba(196, 66, 48, 0.2);
+}
+
+.aiHint {
+  font-size: 11px;
+  color: var(--text3);
+  margin-top: 4px;
+  font-style: italic;
+}
+
+/* ── Market grid (Tab 3) ── */
+
+.marketGrid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 14px;
+}
+
+.marketList {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.marketItem {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.marketItemHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.marketName {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text);
+}
+
+.marketValue {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--text3);
+}
+
+.growthBadge {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--green);
+  background: var(--green-dim);
+  border: 1px solid rgba(42, 140, 90, 0.15);
+  border-radius: 4px;
+  padding: 1px 6px;
+}
+
+.progressTrack {
+  height: 5px;
+  background: var(--bg4);
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.progressFill {
+  height: 100%;
+  border-radius: 3px;
+  transition: width 0.4s ease;
+}
+
+.watchList {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.watchItem {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.watchDot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--border2);
+  flex-shrink: 0;
+}
+
+.watchLabel {
+  font-size: 11px;
+  color: var(--text3);
+  margin-left: auto;
+}
+
+/* ── Responsive ── */
+
+@media (max-width: 1100px) {
+  .metricsRow {
+    grid-template-columns: repeat(2, 1fr);
+  }
+  .marketGrid {
+    grid-template-columns: 1fr;
+  }
+  .compareRow {
+    grid-template-columns: 70px 90px 70px 90px 80px 1fr 70px;
+  }
+}
+
+@media (max-width: 768px) {
+  .page {
+    padding: 20px 16px 32px;
+  }
+  .metricsRow {
+    grid-template-columns: 1fr 1fr;
+  }
+  .filterRow {
+    gap: 6px;
+  }
+}

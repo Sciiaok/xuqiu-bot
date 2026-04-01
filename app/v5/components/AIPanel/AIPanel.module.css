@@ -1,0 +1,104 @@
+.panel {
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--purple);
+  border-radius: var(--rl);
+  padding: 16px 18px;
+  margin-bottom: 18px;
+  box-shadow: var(--shadow);
+}
+.head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+  flex-wrap: wrap;
+}
+.icon {
+  width: 20px; height: 20px;
+  border-radius: 50%;
+  background: var(--purple-dim);
+  border: 1px solid rgba(139, 106, 191, 0.2);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 9px;
+  font-weight: 500;
+  color: var(--purple);
+  flex-shrink: 0;
+  font-family: var(--font-mono);
+}
+.title {
+  font-size: 13px;
+  font-weight: 500;
+}
+.tag {
+  font-size: 10px;
+  background: var(--purple-dim);
+  color: var(--purple);
+  padding: 2px 7px;
+  border-radius: 20px;
+  font-family: var(--font-mono);
+}
+.actions {
+  margin-left: auto;
+}
+.body {
+  font-size: 13px;
+  line-height: 1.85;
+  color: var(--text2);
+  overflow: hidden;
+}
+.body strong { color: var(--text); font-weight: 500; }
+.body p { margin-bottom: 10px; }
+.body p:last-child { margin-bottom: 0; }
+.body code {
+  background: var(--bg4);
+  padding: 1px 5px;
+  border-radius: 3px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text2);
+}
+
+/* Collapsed state with gradient fade */
+.collapsed {
+  position: relative;
+  overflow: hidden;
+}
+.collapsed::after {
+  content: '';
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  height: 40px;
+  background: linear-gradient(transparent, var(--bg2));
+  pointer-events: none;
+}
+
+/* Expand / collapse button */
+.expandBtn {
+  display: block;
+  width: 100%;
+  margin-top: 6px;
+  padding: 4px 0;
+  background: none;
+  border: none;
+  border-top: 1px solid var(--border);
+  color: var(--accent);
+  font-size: 11px;
+  font-family: var(--font-sans);
+  font-weight: 500;
+  cursor: pointer;
+  letter-spacing: 0.2px;
+}
+.expandBtn:hover {
+  color: var(--text);
+}
+
+.generating {
+  animation: v5-pulse 1.4s infinite;
+  color: var(--text3);
+  font-size: 13px;
+}

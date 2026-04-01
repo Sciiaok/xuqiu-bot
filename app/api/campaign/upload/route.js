@@ -23,8 +23,12 @@ export async function POST(request) {
       return Response.json({ error: 'file is required' }, { status: 400 });
     }
 
-    // Validate image type
-    const allowedTypes = ['image/jpeg', 'image/png', 'image/gif', 'image/webp'];
+    // Validate file type (images + documents)
+    const allowedTypes = [
+      'image/jpeg', 'image/png', 'image/gif', 'image/webp',
+      'application/pdf',
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    ];
     if (!allowedTypes.includes(file.type)) {
       return Response.json({ error: `Unsupported file type: ${file.type}` }, { status: 400 });
     }

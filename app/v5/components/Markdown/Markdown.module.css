@@ -1,0 +1,158 @@
+/* ── V5 Markdown — adapts to warm light theme ── */
+
+.root {
+  font-family: var(--font-sans);
+  font-size: 13px;
+  color: inherit;          /* inherit from container (text2 in AIPanel, text in ChatBubble) */
+  line-height: inherit;    /* inherit from container (1.85 in AIPanel, 1.6 in ChatBubble) */
+}
+
+.root > *:first-child {
+  margin-top: 0;
+}
+.root > *:last-child {
+  margin-bottom: 0;
+}
+
+/* Headings */
+.root h1 {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text);
+  margin: 14px 0 6px;
+}
+
+.root h2 {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text);
+  margin: 12px 0 4px;
+}
+
+.root h3 {
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--text);
+  margin: 10px 0 4px;
+}
+
+.root h4,
+.root h5,
+.root h6 {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+  margin: 8px 0 4px;
+}
+
+/* Paragraph */
+.root p {
+  margin-bottom: 8px;
+}
+
+/* Lists */
+.root ul,
+.root ol {
+  padding-left: 20px;
+  margin-bottom: 8px;
+}
+
+.root li {
+  margin-bottom: 2px;
+}
+
+/* Strong / em — match AIPanel body strong */
+.root strong {
+  font-weight: 500;
+  color: var(--text);
+}
+
+.root em {
+  font-style: italic;
+  color: var(--text3);
+}
+
+/* Inline code — use bg4 so it's visible on bg2 AND bg3 backgrounds */
+.root :not(pre) > code {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  background: var(--bg4);
+  color: var(--text2);
+  padding: 1px 5px;
+  border-radius: 3px;
+}
+
+/* Code block — same approach: bg4 + subtle border */
+.root pre {
+  background: var(--bg4);
+  border: 1px solid var(--border);
+  border-radius: var(--r, 8px);
+  padding: 10px 12px;
+  overflow-x: auto;
+  margin: 6px 0 8px;
+}
+
+.root pre code {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  background: transparent;
+  padding: 0;
+  border-radius: 0;
+  color: var(--text);
+  line-height: 1.6;
+}
+
+/* Blockquote */
+.root blockquote {
+  border-left: 2px solid var(--border2);
+  padding-left: 12px;
+  color: var(--text3);
+  font-style: italic;
+  margin: 6px 0;
+}
+
+/* Table */
+.root table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+  margin: 6px 0 8px;
+}
+
+.root thead {
+  background: var(--bg3);
+}
+
+.root th {
+  padding: 5px 8px;
+  text-align: left;
+  font-weight: 600;
+  color: var(--text);
+  border: 1px solid var(--border);
+}
+
+.root td {
+  padding: 5px 8px;
+  color: var(--text2);
+  border: 1px solid var(--border);
+}
+
+.root tr:hover td {
+  background: var(--bg3);
+}
+
+/* Link */
+.root a {
+  color: var(--accent);
+  text-decoration: none;
+}
+.root a:hover {
+  text-decoration: underline;
+}
+
+/* HR */
+.root hr {
+  border: none;
+  border-top: 1px solid var(--border);
+  margin: 10px 0;
+}
