@@ -36,7 +36,22 @@ const INTENT_LABELS = {
   business_inquiry: '业务咨询',
   business_cooperation: '商务合作',
   personal_consumer: '个人消费',
+  personal_farmer: '个体农户',
   other: '其他',
+};
+
+const AGENT_NAME_LABELS = {
+  'Vehicle Export Agent': '整车出口业务',
+  'Agricultural Machinery Export Agent': '农机出口业务',
+  'Japanese Auto Parts Export Agent': '汽配出口业务',
+};
+
+const BUYER_TYPE_LABELS = {
+  end_user: '终端用户',
+  dealer: '经销商',
+  contractor: '承包商',
+  cooperative: '合作社',
+  other: '未分类',
 };
 
 // Chart palette — distinct, modern, dashboard-friendly
@@ -57,9 +72,9 @@ const AREA_PROOF = COLORS.green;
 
 const QUALITY_COLORS = {
   PROOF: '#34B872',
-  QUALIFY: '#4C7FF0',
-  GOOD: '#F0A030',
-  BAD: '#E85D4A',
+  QUALIFY: '#6366F1',
+  GOOD: '#F59E0B',
+  BAD: '#EF4444',
 };
 
 const DONUT_PALETTE = [COLORS.blue, COLORS.teal, COLORS.purple, COLORS.amber, COLORS.green, COLORS.pink, COLORS.indigo, COLORS.red];
@@ -92,7 +107,7 @@ function fmtDate(dateStr) {
 
 // ──────────── Chart sub-components ────────────
 
-function ChartTooltip({ active, payload, label, formatter }) {
+function ChartTooltip({ active, payload, label, formatter, labelMap }) {
   if (!active || !payload?.length) return null;
   return (
     <div className={s.tooltip}>
@@ -100,7 +115,7 @@ function ChartTooltip({ active, payload, label, formatter }) {
       {payload.map((entry, i) => (
         <div key={i} className={s.tooltipRow}>
           <span className={s.tooltipDot} style={{ background: entry.color }} />
-          <span className={s.tooltipName}>{entry.name}</span>
+          <span className={s.tooltipName}>{labelMap?.[entry.name] || entry.name}</span>
           <span className={s.tooltipValue}>{formatter ? formatter(entry.value) : entry.value}</span>
         </div>
       ))}
@@ -108,7 +123,7 @@ function ChartTooltip({ active, payload, label, formatter }) {
   );
 }
 
-function DonutCard({ title, data, colorMap }) {
+function DonutCard({ title, data, colorMap, labelMap }) {
   if (!data?.length) {
     return (
       <Card title={title}>
@@ -141,7 +156,7 @@ function DonutCard({ title, data, colorMap }) {
                 />
               ))}
             </Pie>
-            <Tooltip content={<ChartTooltip />} />
+            <Tooltip content={<ChartTooltip labelMap={labelMap} />} />
           </PieChart>
         </ResponsiveContainer>
         <div className={s.donutLegend}>
@@ -151,7 +166,7 @@ function DonutCard({ title, data, colorMap }) {
             return (
               <div key={item.name} className={s.donutLegendRow}>
                 <span className={s.donutDot} style={{ background: color }} />
-                <span className={s.donutName}>{item.name}</span>
+                <span className={s.donutName}>{labelMap?.[item.name] || item.name}</span>
                 <span className={s.donutPct}>{pct}%</span>
                 <span className={s.donutVal}>{item.value}</span>
               </div>
@@ -432,7 +447,7 @@ export default function AnalyticsPage() {
                     return (
                       <div key={agent.agentName} className={s.agentRow}>
                         <div className={s.agentHeader}>
-                          <span className={s.agentName}>{agent.agentName}</span>
+                          <span className={s.agentName}>{AGENT_NAME_LABELS[agent.agentName] || agent.agentName}</span>
                           <Tag variant={PL_TAG_VARIANT[agent.productLine] || 'low'}>
                             {PRODUCT_LINES.find(p => p.key === agent.productLine)?.label || agent.productLine}
                           </Tag>
@@ -499,10 +514,12 @@ export default function AnalyticsPage() {
             <DonutCard
               title="买家类型分布"
               data={buyerTypeDistribution}
+              labelMap={BUYER_TYPE_LABELS}
             />
             <DonutCard
               title="对话意图分布"
               data={intentDistribution}
+              labelMap={INTENT_LABELS}
             />
           </div>
 
