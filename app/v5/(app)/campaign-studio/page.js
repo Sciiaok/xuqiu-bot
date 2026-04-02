@@ -455,11 +455,20 @@ function jsonToMarkdown(obj, depth) {
   return lines.join('\n');
 }
 
+const TOOL_LABELS = {
+  web_search: '正在搜集市场信息',
+  read_webpage: '正在分析资料',
+  update_brief: '正在整理需求',
+  save_brief: '正在保存需求',
+  parse_attachment: '正在解析文件',
+};
+
 function ThinkingGroup({ steps }) {
   const [open, setOpen] = useState(false);
+  const toolLabel = (name) => TOOL_LABELS[name] || name;
   const label = steps.length === 1
-    ? (steps[0].tool ? `调用 ${steps[0].tool}` : '思考中…')
-    : `${steps.length} 个处理步骤`;
+    ? (steps[0].tool ? toolLabel(steps[0].tool) : '思考中…')
+    : `${steps.filter(s => s.tool).map(s => toolLabel(s.tool)).join(' → ') || `${steps.length} 个处理步骤`}`;
 
   return (
     <div className={s.thinkingGroup}>
@@ -471,7 +480,7 @@ function ThinkingGroup({ steps }) {
         <div className={s.thinkingSteps}>
           {steps.map((step, i) => (
             <div key={step.id || i} className={s.thinkingStep}>
-              {step.tool && <span className={s.thinkingTool}>{step.tool}</span>}
+              {step.tool && <span className={s.thinkingTool}>{TOOL_LABELS[step.tool] || step.tool}</span>}
               {step.phase && <span className={s.thinkingPhase}>{step.phase}</span>}
               {step.content && (
                 <span className={s.thinkingContent}>{step.content.slice(0, 300)}</span>
@@ -510,12 +519,18 @@ function ChatTab() {
   const [streamingText, setStreamingText] = useState('');
   const [streamingSteps, setStreamingSteps] = useState([]);
   const [pendingImages, setPendingImages] = useState([]);
+  const [showReconnect, setShowReconnect] = useState(false);
+  const pendingImagesRef = useRef([]);
   // Ref to capture latest streamingSteps for flushing (avoids stale closure)
   const streamingStepsRef = useRef([]);
   const selectedSessionRef = useRef(null);
   const messageLoadSeqRef = useRef(0);
   useEffect(() => { streamingStepsRef.current = streamingSteps; }, [streamingSteps]);
   useEffect(() => { selectedSessionRef.current = selectedSession; }, [selectedSession]);
+  useEffect(() => { pendingImagesRef.current = pendingImages; }, [pendingImages]);
+  useEffect(() => {
+    return () => { pendingImagesRef.current.forEach(p => p.preview && URL.revokeObjectURL(p.preview)); };
+  }, []);
 
   function getSessionKey(session = selectedSessionRef.current) {
     return session?.session_id || session?.brief_id || null;
@@ -928,7 +943,8 @@ function ChatTab() {
       }
     } catch (err) {
       console.error('Error sending message:', err);
-      appendMessageForSession(sessionKey, { id: `err-${Date.now()}`, type: 'error', content: err.message });
+      appendMessageForSession(sessionKey, { id: `err-${Date.now()}`, type: 'error', content: `发送失败: ${err.message}` });
+      setShowReconnect(true);
     } finally {
       setSendingMsg(false);
       setStreamingTextForSession(sessionKey, '');
@@ -1193,9 +1209,23 @@ function ChatTab() {
               加载对话中…
             </div>
           ) : messages.length === 0 && selectedSession ? (
-            <div className={s.chatMessages} style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text3)', flexDirection: 'column', gap: 8 }}>
-              <span style={{ fontSize: '24px' }}>💬</span>
-              <span>暂无对话消息</span>
+            <div className={s.chatMessages} style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text3)', flexDirection: 'column', gap: 12 }}>
+              <span style={{ fontSize: '28px' }}>✦</span>
+              <span style={{ fontWeight: 600, color: 'var(--text)' }}>开始你的 AI 投放计划</span>
+              <span style={{ fontSize: 12 }}>试试以下提示，或直接输入你的推广需求</span>
+              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', justifyContent: 'center', marginTop: 4 }}>
+                {['帮我推广一款新能源汽车到东南亚市场', '分析我的竞品广告投放策略', '为我的农机产品生成 Facebook 广告素材'].map(hint => (
+                  <button
+                    key={hint}
+                    onClick={() => { setInputVal(hint); }}
+                    style={{ padding: '6px 12px', fontSize: 12, background: 'var(--bg3)', border: '1px solid var(--border)', borderRadius: 'var(--r)', cursor: 'pointer', color: 'var(--text2)', transition: 'background 0.12s' }}
+                    onMouseEnter={e => e.currentTarget.style.background = 'var(--bg4)'}
+                    onMouseLeave={e => e.currentTarget.style.background = 'var(--bg3)'}
+                  >
+                    {hint}
+                  </button>
+                ))}
+              </div>
             </div>
           ) : messages.length === 0 ? (
             <div className={s.chatMessages} style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text3)', flexDirection: 'column', gap: 8 }}>
@@ -1321,6 +1351,19 @@ function ChatTab() {
             </div>
           )}
 
+          {/* Reconnect bar */}
+          {showReconnect && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 0', fontSize: 12, color: 'var(--amber)' }}>
+              <span>⚠ 连接中断</span>
+              <button
+                onClick={() => { setShowReconnect(false); setRefreshKey(k => k + 1); }}
+                style={{ padding: '3px 10px', fontSize: 11, background: 'var(--bg3)', border: '1px solid var(--border)', borderRadius: 'var(--r)', cursor: 'pointer', color: 'var(--text2)' }}
+              >
+                🔄 重新连接
+              </button>
+            </div>
+          )}
+
           {/* Input bar */}
           <div className={s.chatInput}>
             <input
@@ -1408,6 +1451,10 @@ function ChatTab() {
                 ? new Date(session.created_at).toLocaleDateString('zh-CN', { month: 'short', day: 'numeric' })
                 : '';
 
+              const brief = session.brief_structured || {};
+              const tags = [brief.target_market, brief.product_type, brief.platform].filter(Boolean);
+              const thumbUrl = session.campaign_plan?.creatives?.[0]?.url;
+
               return (
                 <div
                   key={session.brief_id}
@@ -1423,7 +1470,11 @@ function ChatTab() {
                 >
                   <div style={{ display: 'flex', alignItems: 'center', gap: 6, width: '100%' }}>
                     <div className={s.previewThumb} style={{ flexShrink: 0 }}>
-                      <span className={s.previewEmoji}>✦</span>
+                      {thumbUrl ? (
+                        <img src={thumbUrl} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover', borderRadius: 'var(--r)' }} />
+                      ) : (
+                        <span className={s.previewEmoji}>✦</span>
+                      )}
                     </div>
                     <div className={s.previewInfo} style={{ flex: 1, minWidth: 0 }}>
                       <div className={s.previewTitle} style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
@@ -1432,6 +1483,13 @@ function ChatTab() {
                       <div className={s.previewMeta}>
                         {statusLabel} · {phaseLabel} · {createdDate}
                       </div>
+                      {tags.length > 0 && (
+                        <div style={{ display: 'flex', gap: 4, marginTop: 2, flexWrap: 'wrap' }}>
+                          {tags.map(tag => (
+                            <span key={tag} style={{ fontSize: 9, padding: '1px 5px', background: 'var(--bg3)', border: '1px solid var(--border)', borderRadius: 3, color: 'var(--text3)' }}>{tag}</span>
+                          ))}
+                        </div>
+                      )}
                     </div>
                   </div>
                   {session.completion_pct > 0 && (
@@ -1487,55 +1545,92 @@ function AttributionTab({ adsData, loading, daysFilter, metricsMap }) {
   }, [daysFilter]);
 
   useEffect(() => {
+    // Fix #8: Fetch current + previous period for real trend comparison
     async function fetchAttributionData() {
       try {
         const supabase = createClient();
-        const { data, error } = await supabase
-          .from('conversations')
-          .select('meta_ad_id, agent_id, agents(product_line), leads(inquiry_quality, destination_country)')
-          .not('meta_ad_id', 'is', null);
+        const effectiveDays = daysFilter || 30;
 
-        if (error) throw error;
+        // Build date ranges: current period + equal-length previous period
+        const toDate = new Date();
+        const fromDate = new Date();
+        fromDate.setDate(fromDate.getDate() - effectiveDays + 1);
+        fromDate.setHours(0, 0, 0, 0);
+        const prevTo = new Date(fromDate.getTime() - 1);
+        const prevFrom = new Date(prevTo);
+        prevFrom.setDate(prevFrom.getDate() - effectiveDays + 1);
+        prevFrom.setHours(0, 0, 0, 0);
 
-        // Group by country
-        const countryMap = new Map();
-        // Group by product line
-        const lineMap = new Map();
+        // Fetch both periods in parallel
+        const [currentRes, prevRes] = await Promise.all([
+          supabase
+            .from('conversations')
+            .select('meta_ad_id, agent_id, created_at, agents(product_line), leads(inquiry_quality, destination_country)')
+            .not('meta_ad_id', 'is', null)
+            .gte('created_at', fromDate.toISOString())
+            .lte('created_at', toDate.toISOString()),
+          supabase
+            .from('conversations')
+            .select('meta_ad_id, agent_id, created_at, agents(product_line), leads(inquiry_quality, destination_country)')
+            .not('meta_ad_id', 'is', null)
+            .gte('created_at', prevFrom.toISOString())
+            .lte('created_at', prevTo.toISOString()),
+        ]);
 
-        for (const conv of data || []) {
-          const leadsArr = Array.isArray(conv.leads) ? conv.leads : (conv.leads ? [conv.leads] : []);
-          const agentLine = conv.agents?.product_line || '其他';
+        if (currentRes.error) throw currentRes.error;
+        if (prevRes.error) throw prevRes.error;
 
-          // Update product line
-          if (!lineMap.has(agentLine)) {
-            lineMap.set(agentLine, { line: agentLine, conversations: 0, qualifyCount: 0, proofCount: 0, adIds: new Set() });
+        // Helper: aggregate conversations into line/country buckets
+        function aggregateConversations(convs) {
+          const countryMap = new Map();
+          const lineMap = new Map();
+
+          for (const conv of convs || []) {
+            const leadsArr = Array.isArray(conv.leads) ? conv.leads : (conv.leads ? [conv.leads] : []);
+            const agentLine = conv.agents?.product_line || '其他';
+
+            if (!lineMap.has(agentLine)) {
+              lineMap.set(agentLine, { line: agentLine, conversations: 0, qualifyCount: 0, proofCount: 0, adIds: new Set() });
+            }
+            const lineBucket = lineMap.get(agentLine);
+            lineBucket.conversations += 1;
+            if (conv.meta_ad_id) lineBucket.adIds.add(String(conv.meta_ad_id));
+
+            for (const lead of leadsArr) {
+              const country = lead.destination_country || '未知';
+              if (!countryMap.has(country)) {
+                countryMap.set(country, { country, conversationCount: 0, qualifyCount: 0, proofCount: 0 });
+              }
+              const bucket = countryMap.get(country);
+              bucket.conversationCount += 1;
+
+              const quality = String(lead.inquiry_quality || '').toUpperCase();
+              if (quality === 'QUALIFY') {
+                bucket.qualifyCount += 1;
+                lineBucket.qualifyCount += 1;
+              }
+              if (quality === 'PROOF') {
+                bucket.proofCount += 1;
+                lineBucket.proofCount += 1;
+              }
+            }
           }
-          const lineBucket = lineMap.get(agentLine);
-          lineBucket.conversations += 1;
-          if (conv.meta_ad_id) lineBucket.adIds.add(String(conv.meta_ad_id));
+          return { countryMap, lineMap };
+        }
 
-          for (const lead of leadsArr) {
-            const country = lead.destination_country || '未知';
-            if (!countryMap.has(country)) {
-              countryMap.set(country, { country, conversationCount: 0, qualifyCount: 0, proofCount: 0 });
-            }
-            const bucket = countryMap.get(country);
-            bucket.conversationCount += 1;
+        const currentAgg = aggregateConversations(currentRes.data);
+        const prevAgg = aggregateConversations(prevRes.data);
 
-            const quality = String(lead.inquiry_quality || '').toUpperCase();
-            if (quality === 'QUALIFY') {
-              bucket.qualifyCount += 1;
-              lineBucket.qualifyCount += 1;
-            }
-            if (quality === 'PROOF') {
-              bucket.proofCount += 1;
-              lineBucket.proofCount += 1;
-            }
-          }
+        // Build previous period proofRate lookup by product line
+        const prevProofRateByLine = {};
+        for (const [line, bucket] of prevAgg.lineMap) {
+          prevProofRateByLine[line] = bucket.conversations > 0
+            ? Math.round((bucket.proofCount / bucket.conversations) * 100)
+            : 0;
         }
 
         // Sort countries by conversation count desc
-        const sortedCountries = Array.from(countryMap.values())
+        const sortedCountries = Array.from(currentAgg.countryMap.values())
           .sort((a, b) => b.conversationCount - a.conversationCount)
           .slice(0, 10);
 
@@ -1554,7 +1649,7 @@ function AttributionTab({ adsData, loading, daysFilter, metricsMap }) {
 
         setCountryData(withPct);
 
-        const sortedLines = Array.from(lineMap.values())
+        const sortedLines = Array.from(currentAgg.lineMap.values())
           .map(line => {
             let spend = null;
             if (metricsMap && metricsMap.size > 0) {
@@ -1564,7 +1659,9 @@ function AttributionTab({ adsData, loading, daysFilter, metricsMap }) {
                 if (m) spend += m.spend;
               }
             }
-            return { ...line, adIds: undefined, spend };
+            // Attach previous period proofRate for trend comparison
+            const prevProofRate = prevProofRateByLine[line.line] ?? null;
+            return { ...line, adIds: undefined, spend, prevProofRate };
           })
           .sort((a, b) => b.conversations - a.conversations);
         setProductLineData(sortedLines);
@@ -1575,7 +1672,7 @@ function AttributionTab({ adsData, loading, daysFilter, metricsMap }) {
       }
     }
     fetchAttributionData();
-  }, []);
+  }, [daysFilter, metricsMap]);
 
   return (
     <div className={s.attrRoot}>
@@ -1636,6 +1733,18 @@ function AttributionTab({ adsData, loading, daysFilter, metricsMap }) {
                     const proofRate = row.conversations > 0
                       ? Math.round((row.proofCount / row.conversations) * 100)
                       : 0;
+                    // Fix #8: Compare current proofRate with previous period
+                    const prevRate = row.prevProofRate;
+                    let trendEl;
+                    if (prevRate == null) {
+                      trendEl = <span className={s.trendNeutral}>—</span>;
+                    } else if (proofRate > prevRate) {
+                      trendEl = <span className={s.trendUp}>↑ +{proofRate - prevRate}%</span>;
+                    } else if (proofRate < prevRate) {
+                      trendEl = <span className={s.trendDown}>↓ {proofRate - prevRate}%</span>;
+                    } else {
+                      trendEl = <span className={s.trendNeutral}>→ 持平</span>;
+                    }
                     return (
                       <tr key={row.line}>
                         <td className={s.bizLineName}>{row.line || '其他'}</td>
@@ -1643,11 +1752,7 @@ function AttributionTab({ adsData, loading, daysFilter, metricsMap }) {
                         <td>{row.conversations.toLocaleString()}</td>
                         <td><span className={s.roasVal}>{qualifyRate}%</span></td>
                         <td><span className={s.roasVal}>{proofRate}%</span></td>
-                        <td>
-                          {proofRate >= 50
-                            ? <span className={s.trendUp}>↑</span>
-                            : <span className={s.trendNeutral}>→</span>}
-                        </td>
+                        <td>{trendEl}</td>
                       </tr>
                     );
                   })}

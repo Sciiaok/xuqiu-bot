@@ -335,7 +335,24 @@
   margin: 6px 0;
 }
 .dividerLine { flex: 1; height: 1px; background: var(--border); }
-.dividerLabel { font-size: 10px; color: var(--text3); font-family: var(--font-sans); white-space: nowrap; }
+.dividerPill {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 10px;
+  background: var(--bg3);
+  border-radius: 999px;
+  font-size: 10px;
+  color: var(--text2);
+  font-family: var(--font-sans);
+  white-space: nowrap;
+}
+.dividerDot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent);
+}
 
 /* ── Raw JSON ────────────────────────────────────────────────── */
 .rawJson {

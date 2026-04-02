@@ -19,6 +19,10 @@
   border-bottom: 1px solid var(--border);
   font-size: 13px;
   vertical-align: middle;
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .table tr:last-child td { border-bottom: none; }
 .table tbody tr { transition: background 0.1s; cursor: pointer; }

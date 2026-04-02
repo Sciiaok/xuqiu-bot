@@ -573,7 +573,10 @@ export function PhaseDivider({ label }) {
   return (
     <div className={s.phaseDivider}>
       <div className={s.dividerLine} />
-      <span className={s.dividerLabel}>{label}</span>
+      <span className={s.dividerPill}>
+        <span className={s.dividerDot} />
+        {label}
+      </span>
       <div className={s.dividerLine} />
     </div>
   );
