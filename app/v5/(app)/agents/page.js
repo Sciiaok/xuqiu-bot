@@ -81,8 +81,8 @@ export default function AgentsPage() {
             ...meta,
             stats: [
               { label: '对话数', value: stats.convCount.toLocaleString() },
-              { label: 'PROOF线索', value: stats.proofCount.toLocaleString() },
-              { label: 'Qualify率', value: stats.qualifyRate },
+              { label: '高质量线索', value: stats.proofCount.toLocaleString() },
+              { label: '中质量率', value: stats.qualifyRate },
               { label: '平均响应', value: '1.2s' },
             ],
           };
@@ -154,10 +154,10 @@ export default function AgentsPage() {
       {/* Header */}
       <div className={s.header}>
         <div className={s.headerLeft}>
-          <h1 className={s.title}>Agents</h1>
+          <h1 className={s.title}>智能体</h1>
           <span className={s.subtitle}>WhatsApp 自动对话代理 · 7×24 运行中</span>
         </div>
-        <Button variant="primary" onClick={openCreate}>✦ 新建 Agent</Button>
+        <Button variant="primary" onClick={openCreate}>✦ 新建智能体</Button>
       </div>
 
       {/* Loading state */}
@@ -184,7 +184,7 @@ export default function AgentsPage() {
               <div className={s.agentContent}>
                 {/* Name row */}
                 <div className={s.nameRow}>
-                  <span className={s.agentName}>{agent.name} Agent</span>
+                  <span className={s.agentName}>{agent.name}</span>
                   {agent.is_active && (
                     <span className={s.liveStatus}>
                       <span className={s.liveDot} />
@@ -230,14 +230,14 @@ export default function AgentsPage() {
           <div className={s.addCardTitle}>光伏 / 新能源 / 其他供应链 Agent</div>
           <div className={s.addCardSub}>新增供应链后在此配置对应 AI 代理</div>
         </div>
-        <Button variant="ghost" onClick={openCreate}>+ 新建 Agent</Button>
+        <Button variant="ghost" onClick={openCreate}>+ 新建智能体</Button>
       </div>
 
       {/* Create / Edit form */}
       {showForm && (
         <div className={s.modalOverlay}>
           <div className={s.modal}>
-            <h2 className={s.modalTitle}>{editingAgent ? '编辑 Agent' : '新建 Agent'}</h2>
+            <h2 className={s.modalTitle}>{editingAgent ? '编辑智能体' : '新建智能体'}</h2>
             <form onSubmit={handleSubmit} className={s.form}>
               <label className={s.formLabel}>
                 名称

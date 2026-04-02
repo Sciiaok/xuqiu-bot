@@ -147,7 +147,7 @@ function ReportCard({ report, onClick }) {
           </span>
           <span className={s.kpiSep} />
           <span className={s.kpiItem}>
-            Proof率 <strong>{kpi.proofRate?.value ?? '—'}%</strong>
+            高质量率 <strong>{kpi.proofRate?.value ?? '—'}%</strong>
             {kpi.proofRate?.delta != null && (
               <span className={kpi.proofRate.delta >= 0 ? s.kpiUp : s.kpiDown}>
                 {deltaLabel(kpi.proofRate.delta)}
@@ -156,7 +156,7 @@ function ReportCard({ report, onClick }) {
           </span>
           <span className={s.kpiSep} />
           <span className={s.kpiItem}>
-            Proof <strong>{kpi.proofCount?.value ?? '—'}</strong>
+            高质量询盘 <strong>{kpi.proofCount?.value ?? '—'}</strong>
           </span>
         </div>
       )}
@@ -270,7 +270,7 @@ export default function ReportsPage() {
       {/* Header */}
       <div className={s.header}>
         <div className={s.headerLeft}>
-          <h1 className={s.title}>AI Reports</h1>
+          <h1 className={s.title}>AI 报告</h1>
           <p className={s.subtitle}>AI 智能分析报告 · 自动生成日报 / 周报 / 月报</p>
         </div>
         <div className={s.headerActions}>

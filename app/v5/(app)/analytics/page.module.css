@@ -61,12 +61,72 @@
   transition: border-color 0.15s;
 }
 
-.supplySelect:hover {
-  border-color: var(--border2);
+.supplySelect:hover { border-color: var(--border2); }
+.supplySelect:focus { border-color: var(--accent); }
+
+.dateRow {
+  display: flex;
+  align-items: center;
+  gap: 6px;
 }
 
-.supplySelect:focus {
-  border-color: var(--accent);
+.dateInput {
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  border-radius: var(--r, 6px);
+  color: var(--text);
+  font-family: var(--font-sans);
+  font-size: 13px;
+  padding: 6px 10px;
+  outline: none;
+}
+
+.dateInput:focus { border-color: var(--accent); }
+
+.dateSep {
+  color: var(--text3);
+  font-family: var(--font-sans);
+  font-size: 13px;
+}
+
+/* ── Loading / Error ─────────────────────────────────── */
+.loadingWrap {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 48px 0;
+  gap: 10px;
+  color: var(--text3);
+  font-family: var(--font-sans);
+  font-size: 13px;
+}
+
+.spinner {
+  width: 18px;
+  height: 18px;
+  border: 2px solid var(--border);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 0.7s linear infinite;
+}
+
+.errorWrap {
+  padding: 16px;
+  background: var(--red-dim);
+  border: 1px solid var(--red);
+  border-radius: var(--r);
+  color: var(--red);
+  font-family: var(--font-sans);
+  font-size: 13px;
+}
+
+.noData {
+  font-size: 13px;
+  color: var(--text3);
+  font-family: var(--font-sans);
+  padding: 16px 0;
+  display: block;
+  text-align: center;
 }
 
 /* ── Metric Cards ─────────────────────────────────────── */
@@ -77,120 +137,205 @@
 }
 
 @media (max-width: 900px) {
-  .metrics {
-    grid-template-columns: repeat(2, 1fr);
-  }
+  .metrics { grid-template-columns: repeat(2, 1fr); }
 }
 
 @media (max-width: 540px) {
-  .metrics {
-    grid-template-columns: 1fr;
-  }
+  .metrics { grid-template-columns: 1fr; }
 }
 
-/* ── Bottom Grid ──────────────────────────────────────── */
-.bottomGrid {
+/* ── Two Column Grid ──────────────────────────────────── */
+.twoCol {
   display: grid;
-  grid-template-columns: 1fr 360px;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+  align-items: start;
+}
+
+@media (max-width: 900px) {
+  .twoCol { grid-template-columns: 1fr; }
+}
+
+/* ── Three Column Grid ────────────────────────────────── */
+.threeCol {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
   gap: 16px;
   align-items: start;
 }
 
 @media (max-width: 1100px) {
-  .bottomGrid {
-    grid-template-columns: 1fr;
-  }
+  .threeCol { grid-template-columns: 1fr; }
 }
 
-.rightCol {
-  display: flex;
-  flex-direction: column;
-  gap: 16px;
-}
-
-/* ── Supply Chain Bars ────────────────────────────────── */
-.barList {
-  display: flex;
-  flex-direction: column;
-  gap: 14px;
-  padding: 4px 0;
-}
-
-.barRow {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-}
-
-.barLabel {
-  font-size: 13px;
-  color: var(--text2);
-  width: 58px;
-  flex-shrink: 0;
+/* ── Chart Tooltip ────────────────────────────────────── */
+.tooltip {
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  border-radius: var(--r);
+  padding: 10px 12px;
+  box-shadow: var(--shadow);
   font-family: var(--font-sans);
 }
 
-.barTrack {
-  flex: 1;
-  height: 8px;
-  background: var(--bg3);
-  border-radius: 4px;
-  overflow: hidden;
-}
-
-.barFill {
-  height: 100%;
-  border-radius: 4px;
-  transition: width 0.4s ease;
-}
-
-.barPct {
-  font-size: 12px;
-  color: var(--text3);
-  width: 36px;
-  text-align: right;
-  flex-shrink: 0;
-  font-family: var(--font-mono);
-}
-
-/* ── Top Markets ──────────────────────────────────────── */
-.marketList {
-  display: flex;
-  flex-direction: column;
-  gap: 0;
-}
-
-.marketRow {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 9px 0;
-  border-bottom: 1px solid var(--border);
-}
-
-.marketRow:last-child {
-  border-bottom: none;
-}
-
-.marketRank {
+.tooltipLabel {
   font-size: 11px;
-  color: var(--text3);
-  width: 16px;
-  flex-shrink: 0;
-  font-family: var(--font-mono);
-}
-
-.marketName {
-  flex: 1;
-  font-size: 13px;
+  font-weight: 600;
   color: var(--text);
-  font-family: var(--font-sans);
+  margin-bottom: 6px;
 }
 
-.marketValue {
-  font-size: 14px;
+.tooltipRow {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--text2);
+  line-height: 1.8;
+}
+
+.tooltipDot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.tooltipName {
+  flex: 1;
+}
+
+.tooltipValue {
   font-weight: 600;
   color: var(--text);
   font-family: var(--font-mono);
+}
+
+/* ── Agent Distribution ───────────────────────────────── */
+.agentList {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.agentRow {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.agentHeader {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  font-family: var(--font-sans);
+}
+
+.agentName {
+  font-weight: 600;
+  color: var(--text);
+}
+
+.agentStats {
   margin-left: auto;
+  font-size: 11px;
+  color: var(--text3);
+  font-family: var(--font-mono);
+  white-space: nowrap;
+}
+
+.qualityBar {
+  display: flex;
+  height: 8px;
+  border-radius: 4px;
+  overflow: hidden;
+  background: var(--bg3);
+}
+
+.qualitySegment {
+  height: 100%;
+  transition: width 0.3s ease;
+}
+
+.qualityLegend {
+  display: flex;
+  gap: 14px;
+  font-size: 10px;
+  color: var(--text3);
+  font-family: var(--font-mono);
+  padding-top: 4px;
+}
+
+.legendItem {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.legendDot {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+}
+
+/* ── Donut Card ───────────────────────────────────────── */
+.donutWrap {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.donutLegend {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  min-width: 0;
+}
+
+.donutLegendRow {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 0;
+  border-bottom: 1px solid var(--border);
+  font-family: var(--font-sans);
+}
+
+.donutLegendRow:last-child {
+  border-bottom: none;
+}
+
+.donutDot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.donutName {
+  flex: 1;
+  font-size: 12px;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.donutPct {
+  font-size: 11px;
+  color: var(--text2);
+  font-family: var(--font-mono);
+  width: 32px;
+  text-align: right;
+}
+
+.donutVal {
+  font-size: 11px;
+  color: var(--text3);
+  font-family: var(--font-mono);
+  width: 28px;
+  text-align: right;
 }
