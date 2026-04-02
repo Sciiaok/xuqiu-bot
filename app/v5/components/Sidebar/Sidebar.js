@@ -29,6 +29,7 @@ const NAV = [
     section: '系统',
     items: [
       { href: '/v5/agents', label: '智能体', icon: 'agents' },
+      { href: '/v5/knowledge-base', label: '知识库', icon: 'knowledge' },
     ],
   },
 ];
@@ -74,6 +75,12 @@ const ICONS = {
       <circle cx="5.5" cy="7" r="1"/>
       <circle cx="9.5" cy="7" r="1"/>
       <path d="M5.5 11v2M9.5 11v2"/>
+    </svg>
+  ),
+  knowledge: (
+    <svg fill="none" stroke="currentColor" strokeWidth="1.4" viewBox="0 0 15 15">
+      <path d="M2 2h4.5l1 1.5L8.5 2H13v11H8.5l-1-1.5-1 1.5H2V2z"/>
+      <line x1="7.5" y1="3.5" x2="7.5" y2="11.5"/>
     </svg>
   ),
 };
