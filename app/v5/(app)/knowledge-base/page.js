@@ -444,6 +444,11 @@ function UploadTab({ agentId }) {
                       ({r.data.knowledge_points_created} 知识点)
                     </span>
                   )}
+                  {!r.ok && (r.data?.error || r.error) && (
+                    <span style={{ color: 'var(--red)', marginLeft: 4, fontSize: 11 }}>
+                      {r.data?.error || r.error}
+                    </span>
+                  )}
                 </div>
               ))}
             </div>
