@@ -880,8 +880,6 @@ function ChatTab() {
           case 'tool_result':
             pushStreamingStepForSession(sessionKey, { tool: data.tool, content: JSON.stringify(data.result, null, 2).slice(0, 200), phase: null });
             break;
-          case 'brief_update':
-            break;
           // ── Orchestration events (chained from intake via yield*) ──
           case 'orchestration_start':
             // Flush intake text before orchestration begins
