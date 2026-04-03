@@ -985,6 +985,7 @@ async function* runToolUseLoop(sessionId, brief, messages, initialPhaseResults, 
     }
 
     if (pendingFeedback) {
+      // Save state for crash recovery (still needed if server restarts while waiting)
       await updateSessionIfStatus(sessionId, 'running', {
         status: 'awaiting_feedback',
         orchestrator_state: {
@@ -1001,7 +1002,44 @@ async function* runToolUseLoop(sessionId, brief, messages, initialPhaseResults, 
         message_index: await getNextMessageIndex(sessionId),
       }]);
       yield { event: 'feedback_required', data: { message: pendingFeedback.message, options: pendingFeedback.options, tool_use_id: pendingFeedback.id } };
-      return;
+
+      // Wait for user response via Redis queue (up to 30 min)
+      const redis = getRedis();
+      const inputKey = userInputKey(sessionId);
+      const waitResult = await redis.brpop(inputKey, 1800);
+      if (!waitResult) {
+        // Timeout — leave session in awaiting_feedback for manual resume via /feedback
+        yield { event: 'error', data: { message: '等待反馈超时 (30分钟)', recoverable: true } };
+        return;
+      }
+
+      const userInput = JSON.parse(waitResult[1]);
+      const feedbackPayload = { user_response: userInput.content };
+      if (userInput.attachments?.length) {
+        feedbackPayload.uploaded_images = userInput.attachments
+          .filter(a => a.content_type?.startsWith('image/'))
+          .map(a => ({ url: a.url, filename: a.filename }));
+      }
+
+      // Append completed tool results + feedback as tool_result
+      messages.push({
+        role: 'user',
+        content: [
+          ...toolResults,
+          {
+            type: 'tool_result',
+            tool_use_id: pendingFeedback.id,
+            content: JSON.stringify(feedbackPayload),
+          },
+        ],
+      });
+
+      // Resume
+      await updateSessionIfStatus(sessionId, 'awaiting_feedback', {
+        status: 'running',
+        orchestrator_state: null,
+      });
+      continue; // next iteration of the tool-use loop
     }
     if (shouldTerminate) {
       yield { event: 'done', data: { session_id: sessionId, phases_completed: Object.keys(phaseResults), summary: terminateSummary } };
