@@ -34,6 +34,24 @@ const PHASES = [
   { key: 'execution',          name: '投放执行', description: 'Creating campaigns on Meta Ads', needsApproval: true },
 ];
 
+// Map brief fields to the earliest phase they feed into.
+// Used by patch_brief to warn that completed phases are now stale.
+const BRIEF_FIELD_TO_PHASE = {
+  budget_total:           'strategy',
+  budget_currency:        'strategy',
+  campaign_duration_days: 'strategy',
+  target_countries:       'strategy',
+  target_audience:        'strategy',
+  preferred_platforms:    'strategy',
+  objectives:             'strategy',
+  products:               'strategy',
+  product_images:         'creative_plan',
+  reference_images:       'creative_plan',
+  reference_image_url:    'creative_plan',
+  website:                'creative_plan',
+  existing_landing_pages: 'execution',
+};
+
 // Downstream phases that must be invalidated when an upstream phase is rerun.
 // creative reads ad names from strategy; execution reads image keys from creative.
 const PHASE_DOWNSTREAM = {
@@ -863,7 +881,24 @@ async function* runToolUseLoop(sessionId, brief, messages, initialPhaseResults, 
               message_index: await getNextMessageIndex(sessionId),
             }]);
             yield { event: 'brief_patched', data: { fields: Object.keys(fields), reason } };
-            result = { patched: true, fields: Object.keys(fields), reason };
+
+            // Detect phases that are already completed but now stale due to this patch
+            const stalePhases = new Set();
+            for (const f of Object.keys(sanitized)) {
+              const earliest = BRIEF_FIELD_TO_PHASE[f];
+              if (!earliest) continue;
+              // Add the earliest phase and all its downstream dependents
+              if (phaseResults[earliest]) stalePhases.add(earliest);
+              for (const dk of (PHASE_DOWNSTREAM[earliest] || [])) {
+                if (phaseResults[dk]) stalePhases.add(dk);
+              }
+            }
+
+            result = { patched: true, fields: Object.keys(sanitized), reason };
+            if (stalePhases.size > 0) {
+              result.stale_phases = [...stalePhases];
+              result.warning = `以下已完成的阶段使用了旧数据，建议 retry_phase 重跑: ${[...stalePhases].join(', ')}`;
+            }
           } catch (err) {
             result = { error: `修复失败: ${err.message}` };
           }
@@ -1514,9 +1549,11 @@ function summarizePhaseResult(phaseKey, result) {
         status: result?.status,
         campaigns_created: result?.campaigns?.length || 0,
         errors_count: result?.errors?.length || 0,
-        error_details: (result?.errors || []).slice(0, 8).map(e =>
-          `[${e.level}] ${e.name}: ${e.error}`
-        ),
+        error_details: (result?.errors || []).slice(0, 8).map(e => {
+          const base = `[${e.level}] ${e.name}: ${e.error}`;
+          if (e.sent_params) return `${base} (sent: daily_budget=$${e.sent_params.daily_budget_dollars}/day = ${e.sent_params.daily_budget_cents} cents, objective=${e.sent_params.objective})`;
+          return base;
+        }),
       };
     default:
       return {};
