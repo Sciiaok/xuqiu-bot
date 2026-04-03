@@ -845,7 +845,8 @@ function ChatTab() {
     let streamDone = false;
     const { consumeSSE } = await import('../../../../lib/consume-sse');
 
-    const handleEvent = (event, data) => {
+    const handleEvent = (event, data, eventId) => {
+      if (eventId) saveLastEventId(sessionId, eventId);
       if (!isActiveSessionKey(sessionKey)) return;
       switch (event) {
         case 'delta':
@@ -921,8 +922,7 @@ function ChatTab() {
     try {
       const streamRes = await fetch(streamUrl);
       if (streamRes.ok) {
-        const lastId = await consumeSSE(streamRes, handleEvent);
-        if (lastId) saveLastEventId(sessionId, lastId);
+        await consumeSSE(streamRes, handleEvent);
       }
     } catch (err) {
       console.warn('Stream connection failed:', err.message);
