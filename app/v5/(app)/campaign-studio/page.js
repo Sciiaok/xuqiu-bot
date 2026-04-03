@@ -387,8 +387,10 @@ function groupChatMessages(messages) {
     } else if (kind === 'assistant') {
       const hasContent = msg.content && msg.content.trim().length > 0;
       const isTool = Boolean(msg.tool_name || msg.tool_result);
+      // Detect raw JSON responses (tool results rendered as assistant messages) — collapse into thinking
+      const isJsonBlob = hasContent && !isTool && /^\s*[\[{]/.test(msg.content);
 
-      if (hasContent && !isTool) {
+      if (hasContent && !isTool && !isJsonBlob) {
         flushThinking();
         result.push({ type: 'assistant', id: msg.id, content: msg.content });
       } else {
