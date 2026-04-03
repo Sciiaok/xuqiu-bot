@@ -993,7 +993,9 @@ function ChatTab() {
       }
 
       // All paths now return JSON + fire-and-forget; connect to /stream for events
-      await connectToStream(sessionKey, session.session_id, baseId, '0-0');
+      // Use saved lastEventId to avoid replaying already-seen events from earlier requests
+      const startId = loadLastEventId(session.session_id);
+      await connectToStream(sessionKey, session.session_id, baseId, startId);
     } catch (err) {
       console.error('Error sending message:', err);
       appendMessageForSession(sessionKey, { id: `err-${Date.now()}`, type: 'error', content: `发送失败: ${err.message}` });
@@ -1040,7 +1042,8 @@ function ChatTab() {
         return;
       }
       // Connect to /stream to receive events from the fire-and-forget generator
-      await connectToStream(sessionKey, session.session_id, baseId, '0-0');
+      const fbStartId = loadLastEventId(session.session_id);
+      await connectToStream(sessionKey, session.session_id, baseId, fbStartId);
     } catch (err) {
       appendMessageForSession(sessionKey, { id: `err-${Date.now()}`, type: 'error', content: err.message });
     } finally {
