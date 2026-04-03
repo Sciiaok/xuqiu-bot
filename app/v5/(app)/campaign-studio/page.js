@@ -387,8 +387,10 @@ function groupChatMessages(messages) {
     } else if (kind === 'assistant') {
       const hasContent = msg.content && msg.content.trim().length > 0;
       const isTool = Boolean(msg.tool_name || msg.tool_result);
+      // Detect raw JSON responses (tool results rendered as assistant messages) — collapse into thinking
+      const isJsonBlob = hasContent && !isTool && /^\s*[\[{]/.test(msg.content);
 
-      if (hasContent && !isTool) {
+      if (hasContent && !isTool && !isJsonBlob) {
         flushThinking();
         result.push({ type: 'assistant', id: msg.id, content: msg.content });
       } else {
@@ -466,9 +468,21 @@ const TOOL_LABELS = {
 function ThinkingGroup({ steps }) {
   const [open, setOpen] = useState(false);
   const toolLabel = (name) => TOOL_LABELS[name] || name;
+  // Deduplicate consecutive tool names and hide noisy internal steps
+  const HIDDEN_STEPS = new Set(['thinking', 'reasoning_delta']);
+  const toolSteps = steps.filter(s => s.tool && !HIDDEN_STEPS.has(s.tool));
+  const deduped = toolSteps.reduce((acc, s) => {
+    const name = toolLabel(s.tool);
+    if (acc.length === 0 || acc[acc.length - 1] !== name) acc.push(name);
+    return acc;
+  }, []);
+  const MAX_BREADCRUMB = 5;
+  const truncated = deduped.length > MAX_BREADCRUMB
+    ? [...deduped.slice(0, MAX_BREADCRUMB), `+${deduped.length - MAX_BREADCRUMB}`]
+    : deduped;
   const label = steps.length === 1
     ? (steps[0].tool ? toolLabel(steps[0].tool) : '思考中…')
-    : `${steps.filter(s => s.tool).map(s => toolLabel(s.tool)).join(' → ') || `${steps.length} 个处理步骤`}`;
+    : `${truncated.join(' → ') || `${steps.length} 个处理步骤`}`;
 
   return (
     <div className={s.thinkingGroup}>
@@ -520,6 +534,7 @@ function ChatTab() {
   const [streamingSteps, setStreamingSteps] = useState([]);
   const [pendingImages, setPendingImages] = useState([]);
   const [showReconnect, setShowReconnect] = useState(false);
+  const [lightboxUrl, setLightboxUrl] = useState(null);
   const pendingImagesRef = useRef([]);
   // Ref to capture latest streamingSteps for flushing (avoids stale closure)
   const streamingStepsRef = useRef([]);
@@ -573,6 +588,16 @@ function ChatTab() {
     streamingStepsRef.current = [];
     setStreamingSteps([]);
   }
+  // ── Persist lastEventId to sessionStorage for reconnect after refresh ──
+  function saveLastEventId(sessionId, eventId) {
+    if (sessionId && eventId) {
+      try { sessionStorage.setItem(`sse_last_id:${sessionId}`, eventId); } catch {}
+    }
+  }
+  function loadLastEventId(sessionId) {
+    try { return sessionStorage.getItem(`sse_last_id:${sessionId}`) || '0-0'; } catch { return '0-0'; }
+  }
+
   const fileInputRef = useRef(null);
 
   async function handleNewSession() {
@@ -750,10 +775,11 @@ function ChatTab() {
 
         replaceMessagesForSession(sessionKey, reconstructed);
 
-        // Recovery: if brief is completed but orchestration never started, auto-trigger
-        const hasPhaseResults = Object.keys(phaseResults).some(k => k !== 'meta_assets');
-        if (orchData.status === 'brief_completed' && !hasPhaseResults) {
-          runOrchestration(selectedSession);
+        // Auto-reconnect to stream if pipeline is still running
+        if (orchData.status === 'running' || orchData.status === 'awaiting_feedback') {
+          const savedId = loadLastEventId(selectedSession.session_id);
+          const reconnectBaseId = selectedSession.session_id || selectedSession.brief_id;
+          connectToStream(sessionKey, selectedSession.session_id, reconnectBaseId, savedId);
         }
       } catch (err) {
         console.error('Error fetching messages:', err);
@@ -772,28 +798,22 @@ function ChatTab() {
 
   // Auto-scroll only when user is already near the bottom (not browsing history)
   const chatContainerRef = useRef(null);
+
   const autoFollowRef = useRef(true);
-  const lastScrollTopRef = useRef(0);
+  const programmaticScrollRef = useRef(false);
 
   useEffect(() => {
     const el = chatContainerRef.current;
     if (!el) return;
     const distanceFromBottom = () => el.scrollHeight - el.scrollTop - el.clientHeight;
     const onScroll = () => {
-      const currentScrollTop = el.scrollTop;
-      const scrollingUp = currentScrollTop < lastScrollTopRef.current;
+      // Ignore scroll events triggered by programmatic scrollTop assignment
+      if (programmaticScrollRef.current) return;
+
       const nearBottom = distanceFromBottom() <= 80;
-
-      if (nearBottom) {
-        autoFollowRef.current = true;
-      } else if (scrollingUp) {
-        autoFollowRef.current = false;
-      }
-
-      lastScrollTopRef.current = currentScrollTop;
+      autoFollowRef.current = nearBottom;
     };
 
-    onScroll();
     el.addEventListener('scroll', onScroll, { passive: true });
     return () => el.removeEventListener('scroll', onScroll);
   }, []);
@@ -801,21 +821,117 @@ function ChatTab() {
   useEffect(() => {
     const el = chatContainerRef.current;
     if (el && autoFollowRef.current) {
+      programmaticScrollRef.current = true;
       el.scrollTop = el.scrollHeight;
-      lastScrollTopRef.current = el.scrollTop;
+      requestAnimationFrame(() => { programmaticScrollRef.current = false; });
     }
   }, [messages, streamingText, streamingSteps]);
 
   useEffect(() => {
     autoFollowRef.current = true;
-    lastScrollTopRef.current = 0;
     const el = chatContainerRef.current;
     if (!el) return;
     requestAnimationFrame(() => {
+      programmaticScrollRef.current = true;
       el.scrollTop = el.scrollHeight;
-      lastScrollTopRef.current = el.scrollTop;
+      requestAnimationFrame(() => { programmaticScrollRef.current = false; });
     });
   }, [selectedSession?.session_id]);
+
+  // ── Shared stream connection — used by handleSend, handleFeedbackRespond, and reconnect ──
+  async function connectToStream(sessionKey, sessionId, baseId, startEventId) {
+    let assistantText = '';
+    let streamDone = false;
+    const { consumeSSE } = await import('../../../../lib/consume-sse');
+
+    const handleEvent = (event, data) => {
+      if (!isActiveSessionKey(sessionKey)) return;
+      switch (event) {
+        case 'delta':
+          assistantText += data.text;
+          setStreamingTextForSession(sessionKey, assistantText);
+          break;
+        case 'thinking':
+          pushStreamingStepForSession(sessionKey, { tool: null, content: data.text, phase: null });
+          break;
+        case 'tool_start':
+          pushStreamingStepForSession(sessionKey, { tool: data.tool, content: '', phase: null });
+          break;
+        case 'tool_call':
+          pushStreamingStepForSession(sessionKey, { tool: data.tool, content: JSON.stringify(data.input, null, 2).slice(0, 200), phase: null });
+          break;
+        case 'tool_result':
+          pushStreamingStepForSession(sessionKey, { tool: data.tool, content: JSON.stringify(data.result, null, 2).slice(0, 200), phase: null });
+          break;
+        case 'orchestration_start':
+          if (assistantText) {
+            appendMessageForSession(sessionKey, { id: `ai-${Date.now()}`, type: 'assistant', content: assistantText });
+            setStreamingTextForSession(sessionKey, '');
+            assistantText = '';
+          }
+          flushStreamingSteps(sessionKey);
+          pushStreamingStepForSession(sessionKey, { tool: null, content: '▶ 投放流程启动' });
+          updateSessionStatus(sessionKey, { status: 'running', current_phase: 'orchestrating' });
+          break;
+        case 'phase_start':
+          pushStreamingStepForSession(sessionKey, { tool: null, content: `▶ ${PHASE_LABELS[data.phase] || data.phase}`, phase: data.phase });
+          updateSessionStatus(sessionKey, { current_phase: data.phase });
+          break;
+        case 'phase_progress':
+          pushStreamingStepForSession(sessionKey, { tool: data.step, content: data.detail || data.step, phase: data.phase });
+          break;
+        case 'phase_complete': {
+          pushStreamingStepForSession(sessionKey, { tool: null, content: `✓ ${PHASE_LABELS[data.phase] || data.phase} 完成`, phase: data.phase });
+          const builder = phaseResultBuilders[data.phase];
+          if (builder && data.result) {
+            const card = builder(data.result);
+            if (card) appendMessageForSession(sessionKey, { id: `phase-${data.phase}-${Date.now()}`, ...card });
+          }
+          break;
+        }
+        case 'approval_required':
+          appendMessageForSession(sessionKey, { id: `approval-${Date.now()}`, type: 'execution_approval', plan: data.plan, status: 'awaiting_approval' });
+          updateSessionStatus(sessionKey, { status: 'awaiting_approval' });
+          break;
+        case 'feedback_required':
+          appendMessageForSession(sessionKey, { id: `fb-${Date.now()}`, type: 'feedback_required', message: data.message || '需要您的确认', options: data.options || [] });
+          updateSessionStatus(sessionKey, { status: 'awaiting_feedback' });
+          break;
+        case 'user_injected':
+          break;
+        case 'phase_error':
+          appendMessageForSession(sessionKey, { id: `err-${Date.now()}`, type: 'error', content: `${PHASE_LABELS[data.phase] || data.phase} 失败: ${data.error}` });
+          break;
+        case 'error':
+          appendMessageForSession(sessionKey, { id: `err-${Date.now()}`, type: 'error', content: data.message || '发生错误' });
+          streamDone = true;
+          break;
+        case 'done':
+          if (data.phases_completed?.length) {
+            appendMessageForSession(sessionKey, { id: `done-${Date.now()}`, type: 'assistant', content: `投放方案已完成！共执行 ${data.phases_completed.length} 个阶段：${data.phases_completed.join(' → ')}` });
+            updateSessionStatus(sessionKey, { status: 'completed', current_phase: 'done' });
+          }
+          streamDone = true;
+          break;
+      }
+    };
+
+    const streamUrl = `/api/campaign/orchestrate/${baseId}/stream?lastEventId=${encodeURIComponent(startEventId)}`;
+    try {
+      const streamRes = await fetch(streamUrl);
+      if (streamRes.ok) {
+        const lastId = await consumeSSE(streamRes, handleEvent);
+        if (lastId) saveLastEventId(sessionId, lastId);
+      }
+    } catch (err) {
+      console.warn('Stream connection failed:', err.message);
+    }
+
+    if (assistantText) {
+      appendMessageForSession(sessionKey, { id: `ai-${Date.now()}`, type: 'assistant', content: assistantText });
+      setStreamingTextForSession(sessionKey, '');
+    }
+  }
 
   async function handleSend() {
     const hasImages = pendingImages.some(p => p.uploaded);
@@ -839,8 +955,26 @@ function ChatTab() {
     }
 
     try {
-      const isFeedbackMode = session.status === 'awaiting_feedback' || session.status === 'awaiting_approval';
       const baseId = session.session_id || session.brief_id;
+
+      // If pipeline is running, send via /message endpoint (non-blocking injection)
+      if (session.status === 'running') {
+        try {
+          const res = await fetch(`/api/campaign/orchestrate/${baseId}/message`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ message: text, attachments }),
+          });
+          if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        } catch (err) {
+          appendMessageForSession(sessionKey, { id: `err-${Date.now()}`, type: 'error', content: `发送失败: ${err.message}` });
+        } finally {
+          setSendingMsg(false);
+        }
+        return;
+      }
+
+      const isFeedbackMode = session.status === 'awaiting_feedback' || session.status === 'awaiting_approval';
       const endpoint = isFeedbackMode
         ? `/api/campaign/orchestrate/${baseId}/feedback`
         : `/api/campaign/orchestrate/${baseId}`;
@@ -857,89 +991,46 @@ function ChatTab() {
         throw new Error(errBody || `Server error (${res.status})`);
       }
 
-      let assistantText = '';
+      const contentType = res.headers.get('content-type') || '';
 
-      const { consumeSSE } = await import('../../../../lib/consume-sse');
-      await consumeSSE(res, (event, data) => {
-        if (!isActiveSessionKey(sessionKey)) return;
-        switch (event) {
-          // ── Intake / chat events ──
-          case 'delta':
-            assistantText += data.text;
-            setStreamingTextForSession(sessionKey, assistantText);
-            break;
-          case 'thinking':
-            pushStreamingStepForSession(sessionKey, { tool: null, content: data.text, phase: null });
-            break;
-          case 'tool_start':
-            pushStreamingStepForSession(sessionKey, { tool: data.tool, content: '', phase: null });
-            break;
-          case 'tool_call':
-            pushStreamingStepForSession(sessionKey, { tool: data.tool, content: JSON.stringify(data.input, null, 2).slice(0, 200), phase: null });
-            break;
-          case 'tool_result':
-            pushStreamingStepForSession(sessionKey, { tool: data.tool, content: JSON.stringify(data.result, null, 2).slice(0, 200), phase: null });
-            break;
-          case 'brief_update':
-            break;
-          // ── Orchestration events (chained from intake via yield*) ──
-          case 'orchestration_start':
-            // Flush intake text before orchestration begins
-            if (assistantText) {
-              appendMessageForSession(sessionKey, { id: `ai-${Date.now()}`, type: 'assistant', content: assistantText });
-              setStreamingTextForSession(sessionKey, '');
-              assistantText = '';
-            }
-            flushStreamingSteps(sessionKey);
-            pushStreamingStepForSession(sessionKey, { tool: null, content: '▶ 投放流程启动' });
-            updateSessionStatus(sessionKey, { status: 'running', current_phase: 'orchestrating' });
-            break;
-          case 'phase_start':
-            pushStreamingStepForSession(sessionKey, { tool: null, content: `▶ ${PHASE_LABELS[data.phase] || data.phase}`, phase: data.phase });
-            updateSessionStatus(sessionKey, { current_phase: data.phase });
-            break;
-          case 'phase_progress':
-            pushStreamingStepForSession(sessionKey, { tool: data.step, content: data.detail || data.step, phase: data.phase });
-            break;
-          case 'phase_complete': {
-            pushStreamingStepForSession(sessionKey, { tool: null, content: `✓ ${PHASE_LABELS[data.phase] || data.phase} 完成`, phase: data.phase });
-            const builder = phaseResultBuilders[data.phase];
-            if (builder && data.result) {
-              const card = builder(data.result);
-              if (card) appendMessageForSession(sessionKey, { id: `phase-${data.phase}-${Date.now()}`, ...card });
-            }
-            break;
+      if (contentType.includes('text/event-stream')) {
+        // Intake path — still direct SSE stream
+        let assistantText = '';
+        const { consumeSSE } = await import('../../../../lib/consume-sse');
+        const lastId = await consumeSSE(res, (event, data) => {
+          if (!isActiveSessionKey(sessionKey)) return;
+          switch (event) {
+            case 'delta':
+              assistantText += data.text;
+              setStreamingTextForSession(sessionKey, assistantText);
+              break;
+            case 'thinking':
+              pushStreamingStepForSession(sessionKey, { tool: null, content: data.text, phase: null });
+              break;
+            case 'tool_start':
+              pushStreamingStepForSession(sessionKey, { tool: data.tool, content: '', phase: null });
+              break;
+            case 'tool_call':
+              pushStreamingStepForSession(sessionKey, { tool: data.tool, content: JSON.stringify(data.input, null, 2).slice(0, 200), phase: null });
+              break;
+            case 'tool_result':
+              pushStreamingStepForSession(sessionKey, { tool: data.tool, content: JSON.stringify(data.result, null, 2).slice(0, 200), phase: null });
+              break;
+            case 'brief_update':
+              if (data.completion) updateSessionStatus(sessionKey, { completion: data.completion });
+              break;
+            case 'done':
+              break;
           }
-          case 'approval_required':
-            appendMessageForSession(sessionKey, { id: `approval-${Date.now()}`, type: 'execution_approval', plan: data.plan, status: 'awaiting_approval' });
-            updateSessionStatus(sessionKey, { status: 'awaiting_approval' });
-            break;
-          case 'feedback_required':
-            appendMessageForSession(sessionKey, { id: `fb-${Date.now()}`, type: 'feedback_required', message: data.message || '需要您的确认', options: data.options || [] });
-            updateSessionStatus(sessionKey, { status: 'awaiting_feedback' });
-            break;
-          case 'phase_error':
-            appendMessageForSession(sessionKey, { id: `err-${Date.now()}`, type: 'error', content: `${PHASE_LABELS[data.phase] || data.phase} 失败: ${data.error}` });
-            break;
-          case 'error':
-            appendMessageForSession(sessionKey, { id: `err-${Date.now()}`, type: 'error', content: data.message || '发生错误' });
-            break;
-          case 'done':
-            // Orchestration done (has phases_completed) or intake done
-            if (data.phases_completed?.length) {
-              appendMessageForSession(sessionKey, { id: `done-${Date.now()}`, type: 'assistant', content: `投放方案已完成！共执行 ${data.phases_completed.length} 个阶段：${data.phases_completed.join(' → ')}` });
-              updateSessionStatus(sessionKey, { status: 'completed', current_phase: 'done' });
-            }
-            break;
-          case 'heartbeat':
-            break;
+        });
+        if (lastId) saveLastEventId(session.session_id, lastId);
+        if (assistantText) {
+          appendMessageForSession(sessionKey, { id: `ai-${Date.now()}`, type: 'assistant', content: assistantText });
+          setStreamingTextForSession(sessionKey, '');
         }
-      });
-
-      // Flush any remaining streaming text
-      if (assistantText) {
-        appendMessageForSession(sessionKey, { id: `ai-${Date.now()}`, type: 'assistant', content: assistantText });
-        setStreamingTextForSession(sessionKey, '');
+      } else {
+        // Orchestrator/feedback path — JSON response, then connect to /stream
+        await connectToStream(sessionKey, session.session_id, baseId, '0-0');
       }
     } catch (err) {
       console.error('Error sending message:', err);
@@ -952,100 +1043,13 @@ function ChatTab() {
     }
   }
 
-  /** Run orchestration pipeline and stream phase events */
-  async function runOrchestration(session = selectedSessionRef.current) {
-    const sessionKey = getSessionKey(session);
-    // Show spinner immediately before SSE events arrive
-    if (isActiveSessionKey(sessionKey)) {
-      setStreamingSteps([{ tool: null, content: '', phase: null }]);
-    }
-    updateSessionStatus(sessionKey, { status: 'running', current_phase: 'orchestrating' });
-
-    const endpoint = session.session_id
-      ? `/api/campaign/orchestrate/${session.session_id}`
-      : `/api/campaign/orchestrate/${session.brief_id}`;
-
-    const res = await fetch(endpoint, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({}),
-    });
-    if (!res.ok) {
-      const errBody = await res.text().catch(() => '');
-      appendMessageForSession(sessionKey, { id: `err-${Date.now()}`, type: 'error', content: `启动投放流程失败: ${errBody || res.status}` });
-      return;
-    }
-
-    const { consumeSSE } = await import('../../../../lib/consume-sse');
-    await consumeSSE(res, (event, data) => {
-      if (!isActiveSessionKey(sessionKey)) return;
-      switch (event) {
-        case 'orchestration_start':
-          pushStreamingStepForSession(sessionKey, { tool: null, content: '▶ 投放流程启动' });
-          updateSessionStatus(sessionKey, { status: 'running', current_phase: 'orchestrating' });
-          break;
-        case 'phase_start':
-          pushStreamingStepForSession(sessionKey, { tool: null, content: `▶ ${PHASE_LABELS[data.phase] || data.phase}`, phase: data.phase });
-          updateSessionStatus(sessionKey, { current_phase: data.phase });
-          break;
-        case 'phase_progress':
-          pushStreamingStepForSession(sessionKey, { tool: data.step, content: data.detail || data.step, phase: data.phase });
-          break;
-        case 'phase_complete': {
-          pushStreamingStepForSession(sessionKey, { tool: null, content: `✓ ${PHASE_LABELS[data.phase] || data.phase} 完成`, phase: data.phase });
-          const builder = phaseResultBuilders[data.phase];
-          if (builder && data.result) {
-            const card = builder(data.result);
-            if (card) appendMessageForSession(sessionKey, { id: `phase-${data.phase}-${Date.now()}`, ...card });
-          }
-          break;
-        }
-        case 'approval_required': {
-          appendMessageForSession(sessionKey, {
-            id: `approval-${Date.now()}`, type: 'execution_approval',
-            plan: data.plan, status: 'awaiting_approval',
-          });
-          updateSessionStatus(sessionKey, { status: 'awaiting_approval' });
-          break;
-        }
-        case 'feedback_required':
-          appendMessageForSession(sessionKey, {
-            id: `fb-${Date.now()}`, type: 'feedback_required',
-            message: data.message || '需要您的确认',
-            options: data.options || [],
-          });
-          updateSessionStatus(sessionKey, { status: 'awaiting_feedback' });
-          break;
-        case 'phase_error':
-          appendMessageForSession(sessionKey, { id: `err-${Date.now()}`, type: 'error', content: `${PHASE_LABELS[data.phase] || data.phase} 失败: ${data.error}` });
-          break;
-        case 'error':
-          appendMessageForSession(sessionKey, { id: `err-${Date.now()}`, type: 'error', content: data.message || '发生错误' });
-          break;
-        case 'done':
-          if (data.phases_completed?.length) {
-            appendMessageForSession(sessionKey, {
-              id: `done-${Date.now()}`,
-              type: 'assistant',
-              content: `投放方案已完成！共执行 ${data.phases_completed.length} 个阶段：${data.phases_completed.join(' → ')}`
-            });
-          }
-          updateSessionStatus(sessionKey, { status: 'completed', current_phase: 'done' });
-          break;
-        case 'heartbeat':
-          break;
-      }
-    });
-    flushStreamingSteps(sessionKey);
-  }
+  // Pipeline auto-starts from intake via yield* orchestrate() — no separate frontend trigger needed
 
   async function handleFeedbackRespond(response) {
     const session = selectedSession;
     const sessionKey = getSessionKey(session);
     const attachments = pendingImages.filter(p => p.uploaded).map(p => p.uploaded);
-    const endpoint = session.session_id
-      ? `/api/campaign/orchestrate/${session.session_id}/feedback`
-      : `/api/campaign/orchestrate/${session.brief_id}/feedback`;
+    const baseId = session.session_id || session.brief_id;
 
     // Mark feedback card as resolved (keep content visible, disable buttons)
     if (isActiveSessionKey(sessionKey)) {
@@ -1063,7 +1067,8 @@ function ChatTab() {
     setPendingImages([]);
 
     try {
-      const res = await fetch(endpoint, {
+      // POST to /feedback — fires a fresh generator from saved orchestrator_state
+      const res = await fetch(`/api/campaign/orchestrate/${baseId}/feedback`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ response, attachments }),
@@ -1072,42 +1077,8 @@ function ChatTab() {
         appendMessageForSession(sessionKey, { id: `err-${Date.now()}`, type: 'error', content: `反馈提交失败: ${res.status}` });
         return;
       }
-
-      const { consumeSSE } = await import('../../../../lib/consume-sse');
-      await consumeSSE(res, (event, data) => {
-        if (!isActiveSessionKey(sessionKey)) return;
-        switch (event) {
-          case 'phase_start':
-            pushStreamingStepForSession(sessionKey, { tool: null, content: `▶ ${PHASE_LABELS[data.phase] || data.phase}`, phase: data.phase });
-            break;
-          case 'phase_progress':
-            pushStreamingStepForSession(sessionKey, { tool: data.step, content: data.detail || data.step, phase: data.phase });
-            break;
-          case 'phase_complete': {
-            pushStreamingStepForSession(sessionKey, { tool: null, content: `✓ ${PHASE_LABELS[data.phase] || data.phase} 完成`, phase: data.phase });
-            const builder = phaseResultBuilders[data.phase];
-            if (builder && data.result) {
-              const card = builder(data.result);
-              if (card) appendMessageForSession(sessionKey, { id: `phase-${data.phase}-${Date.now()}`, ...card });
-            }
-            break;
-          }
-          case 'approval_required':
-            appendMessageForSession(sessionKey, { id: `approval-${Date.now()}`, type: 'execution_approval', plan: data.plan, status: 'awaiting_approval' });
-            break;
-          case 'feedback_required':
-            appendMessageForSession(sessionKey, { id: `fb-${Date.now()}`, type: 'feedback_required', message: data.message || '需要您的确认', options: data.options || [] });
-            break;
-          case 'phase_error':
-            appendMessageForSession(sessionKey, { id: `err-${Date.now()}`, type: 'error', content: `${PHASE_LABELS[data.phase] || data.phase} 失败: ${data.error}` });
-            break;
-          case 'done':
-            if (data.phases_completed?.length) {
-              appendMessageForSession(sessionKey, { id: `done-${Date.now()}`, type: 'assistant', content: `投放方案已完成！共执行 ${data.phases_completed.length} 个阶段：${data.phases_completed.join(' → ')}` });
-            }
-            break;
-        }
-      });
+      // Connect to /stream to receive events from the fire-and-forget generator
+      await connectToStream(sessionKey, session.session_id, baseId, '0-0');
     } catch (err) {
       appendMessageForSession(sessionKey, { id: `err-${Date.now()}`, type: 'error', content: err.message });
     } finally {
@@ -1200,6 +1171,7 @@ function ChatTab() {
   }
 
   return (
+    <>
     <div className={s.chatLayout}>
       {/* Session sidebar list */}
       <div className={s.chatMain}>
@@ -1242,7 +1214,10 @@ function ChatTab() {
                         {item.attachments?.length > 0 && (
                           <div style={{ display: 'flex', gap: 6, marginBottom: 6, flexWrap: 'wrap' }}>
                             {item.attachments.map((att, j) => (
-                              <img key={j} src={att.url} alt={att.filename || ''} style={{ width: 80, height: 80, objectFit: 'cover', borderRadius: 8, border: '1px solid var(--border)' }} />
+                              <div key={j} style={{ position: 'relative', cursor: 'pointer' }} onClick={() => setLightboxUrl(att.url)}>
+                                <img src={att.url} alt={att.filename || ''} style={{ width: 80, height: 80, objectFit: 'cover', borderRadius: 8, border: '1px solid var(--border)' }} />
+                                <span style={{ position: 'absolute', top: 2, right: 2, background: 'rgba(0,0,0,0.5)', color: '#fff', borderRadius: 4, fontSize: 10, padding: '1px 4px', lineHeight: 1.2 }}>⤢</span>
+                              </div>
                             ))}
                           </div>
                         )}
@@ -1510,6 +1485,17 @@ function ChatTab() {
         </div>
       </div>
     </div>
+
+    {/* Lightbox overlay */}
+    {lightboxUrl && (
+      <div
+        onClick={() => setLightboxUrl(null)}
+        style={{ position: 'fixed', inset: 0, zIndex: 9999, background: 'rgba(0,0,0,0.8)', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'zoom-out' }}
+      >
+        <img src={lightboxUrl} alt="" style={{ maxWidth: '90vw', maxHeight: '90vh', objectFit: 'contain', borderRadius: 8 }} />
+      </div>
+    )}
+    </>
   );
 }
 

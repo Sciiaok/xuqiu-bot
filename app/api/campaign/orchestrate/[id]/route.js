@@ -1,5 +1,5 @@
 import { createClient } from '../../../../../lib/supabase-server.js';
-import { orchestrate, chatWithOrchestrator } from '../../../../../src/campaign-orchestrator.service.js';
+import { chatWithOrchestrator } from '../../../../../src/campaign-orchestrator.service.js';
 import { processIntakeMessage } from '../../../../../src/campaign-intake.service.js';
 import {
   createSession,
@@ -9,23 +9,19 @@ import {
   getMessages,
 } from '../../../../../lib/repositories/orchestrator.repository.js';
 import { getBrief } from '../../../../../lib/repositories/campaign-brief.repository.js';
-import { streamSSE } from '../../../../../lib/sse.js';
+import { after } from 'next/server';
+import { streamSSE, drainToRedis } from '../../../../../lib/sse.js';
 import { streamKey } from '../../../../../lib/redis.js';
-
-function isBriefReadyForOrchestration(brief) {
-  const briefData = brief?.brief || {};
-  return Boolean(briefData.company_name && briefData.industry);
-}
 
 /**
  * POST /api/campaign/orchestrate/[id]
  *
  * [id] can be a brief_id or session_id.
+ * Unified entry: all requests go through chatWithOrchestrator.
+ * The LLM decides whether to answer a question or run pipeline phases.
  *
- * Body: {}             → start/resume orchestration pipeline (SSE stream)
- * Body: {message: "…"} → chat with orchestrator about current results (SSE stream)
- *
- * Query: ?start_phase=research → resume from specific phase
+ * Body: {message: "…"}  → user message (LLM decides action)
+ * Body: {}              → auto-start (LLM sees brief + state, starts phases)
  */
 export async function POST(request, { params }) {
   const supabase = await createClient();
@@ -37,34 +33,19 @@ export async function POST(request, { params }) {
   const { id } = await params;
 
   let body = {};
-  try { body = await request.json(); } catch { /* empty body = run pipeline */ }
-  const hasMessageField = typeof body.message === 'string';
-  const hasAttachments = Array.isArray(body.attachments) && body.attachments.length > 0;
-  const isChatMode = hasMessageField || hasAttachments;
+  try { body = await request.json(); } catch { /* empty body */ }
 
   // Resolve session: id could be session_id or brief_id
   let session = await getSession(id);
   let brief = null;
   if (!session) {
-    // Try as brief_id — find or create session
     brief = await getBrief(id);
     if (!brief) {
       return Response.json({ error: 'Brief or session not found' }, { status: 404 });
     }
     session = await getLatestSession(id);
-
-    if (isChatMode) {
-      if (!session) {
-        session = await createSession(id, { status: 'intake', current_phase: 'intake' });
-      }
-    } else if (!session || session.status === 'completed' || session.status === 'failed') {
-      session = await createSession(id, {
-        status: isBriefReadyForOrchestration(brief) ? 'brief_completed' : 'intake',
-        current_phase: 'intake',
-      });
-    } else if (session.status === 'running') {
-      const { data } = await updateSessionIfStatus(session.id, 'running', { status: 'interrupted' });
-      session = data || await getSession(session.id);
+    if (!session) {
+      session = await createSession(id, { status: 'intake', current_phase: 'intake' });
     }
   }
 
@@ -75,31 +56,31 @@ export async function POST(request, { params }) {
     return Response.json({ error: 'Brief not found' }, { status: 404 });
   }
 
-  // Chat mode: user sends a message
-  if (isChatMode) {
-    // Intake phase: use dedicated intake agent (has web_search, confidence checks, etc.)
-    if (session.status === 'intake' && session.current_phase === 'intake') {
-      return streamSSE(
-        processIntakeMessage(brief.id, body.message || '', { attachments: body.attachments }),
-        { heartbeatIntervalMs: 5000, streamKey: streamKey(brief.id) },
-      );
-    }
-    // Post-intake: use orchestrator chat handler
+  // Intake phase: dedicated intake agent (web_search, confidence checks, etc.)
+  if (session.status === 'intake' && session.current_phase === 'intake' && (body.message || body.attachments)) {
     return streamSSE(
-      chatWithOrchestrator(session.id, body.message || '', { attachments: body.attachments }),
+      processIntakeMessage(brief.id, body.message || '', { attachments: body.attachments }),
       { heartbeatIntervalMs: 5000, streamKey: streamKey(brief.id) },
     );
   }
 
-  // Pipeline mode: run orchestration (heartbeat keeps connection alive during long phases)
-  const sessionId = session.id;
-  return streamSSE(orchestrate(sessionId, { phases: body.phases }), {
-    heartbeatIntervalMs: 5000,
-    streamKey: streamKey(brief.id),
-    onAbort: async () => {
-      await updateSessionIfStatus(sessionId, 'running', { status: 'interrupted' });
-    },
+  // Require a message
+  if (!body.message && !body.attachments?.length) {
+    return Response.json({ error: 'Message or attachments required' }, { status: 400 });
+  }
+
+  // Unified orchestrator: fire-and-forget via after() + drainToRedis
+  const generator = chatWithOrchestrator(session.id, body.message || '', { attachments: body.attachments });
+  const key = streamKey(brief.id);
+  after(async () => {
+    try {
+      await drainToRedis(generator, key);
+    } catch (err) {
+      console.error('[orchestrate POST] drainToRedis failed:', err.message);
+      await updateSessionIfStatus(session.id, 'running', { status: 'interrupted' });
+    }
   });
+  return Response.json({ session_id: session.id, brief_id: brief.id, stream_key: key });
 }
 
 /**

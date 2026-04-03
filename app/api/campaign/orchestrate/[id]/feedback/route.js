@@ -1,17 +1,11 @@
+import { after } from 'next/server';
 import { createClient } from '../../../../../../lib/supabase-server.js';
 import { resumeAfterFeedback } from '../../../../../../src/campaign-orchestrator.service.js';
 import { getSession, getLatestSession, updateSessionIfStatus } from '../../../../../../lib/repositories/orchestrator.repository.js';
-import { streamSSE } from '../../../../../../lib/sse.js';
+import { drainToRedis } from '../../../../../../lib/sse.js';
 import { streamKey } from '../../../../../../lib/redis.js';
 import { getBrief } from '../../../../../../lib/repositories/campaign-brief.repository.js';
 
-/**
- * POST /api/campaign/orchestrate/[id]/feedback
- *
- * Resume orchestration after user feedback.
- * Body: { response: "用户回应" }
- * Returns: SSE stream
- */
 export async function POST(request, { params }) {
   const supabase = await createClient();
   const { data: { user } } = await supabase.auth.getUser();
@@ -32,7 +26,6 @@ export async function POST(request, { params }) {
     return Response.json({ error: 'Missing response field' }, { status: 400 });
   }
 
-  // If user only sent images, synthesize a text response
   const responseText = body.response || '用户上传了参考图片';
 
   let session = await getSession(id);
@@ -44,13 +37,20 @@ export async function POST(request, { params }) {
   }
 
   const brief = await getBrief(session.brief_id);
-
+  const key = brief ? streamKey(brief.id) : undefined;
   const sessionId = session.id;
-  return streamSSE(resumeAfterFeedback(sessionId, responseText, { attachments: body.attachments }), {
-    heartbeatIntervalMs: 5000,
-    streamKey: brief ? streamKey(brief.id) : undefined,
-    onAbort: async () => {
-      await updateSessionIfStatus(sessionId, 'running', { status: 'interrupted' });
-    },
-  });
+
+  if (key) {
+    const generator = resumeAfterFeedback(sessionId, responseText, { attachments: body.attachments });
+    after(async () => {
+      try {
+        await drainToRedis(generator, key);
+      } catch (err) {
+        console.error('[feedback] drainToRedis failed:', err.message);
+        await updateSessionIfStatus(sessionId, 'running', { status: 'interrupted' });
+      }
+    });
+  }
+
+  return Response.json({ session_id: sessionId, brief_id: session.brief_id });
 }

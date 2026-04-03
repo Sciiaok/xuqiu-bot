@@ -25,11 +25,11 @@ export async function GET(request, { params }) {
 
   const { id } = await params;
   const { searchParams } = new URL(request.url);
-  const lastEventId = searchParams.get('lastEventId');
+  const lastEventId = searchParams.get('lastEventId') || '0-0';
 
-  if (!lastEventId || !VALID_STREAM_ID.test(lastEventId)) {
+  if (!VALID_STREAM_ID.test(lastEventId)) {
     return Response.json(
-      { error: 'Missing or invalid lastEventId query parameter (expected format: digits-digits)' },
+      { error: 'Invalid lastEventId format (expected: digits-digits, e.g. 0-0)' },
       { status: 400 },
     );
   }
@@ -62,7 +62,9 @@ export async function GET(request, { params }) {
         const redis = getRedis();
 
         // Phase 1: Replay missed events via XRANGE (exclusive start via '(' prefix)
-        const replayEvents = await redis.xrange(key, '(' + lastEventId, '+');
+        // Use '-' for 0-0 (read from start), otherwise exclusive start
+        const rangeStart = lastEventId === '0-0' ? '-' : '(' + lastEventId;
+        const replayEvents = await redis.xrange(key, rangeStart, '+');
         let lastId = lastEventId;
 
         for (const [eventId, fields] of replayEvents) {

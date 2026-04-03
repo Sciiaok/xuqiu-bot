@@ -1,4 +1,5 @@
 import { anthropic, MODELS, onLlmEvent } from './llm-client.js';
+import { getRedis, createBlockingClient, userInputKey } from '../lib/redis.js';
 import { config } from './config.js';
 import { getBrief, updateBriefFields, sanitizeBriefFields } from '../lib/repositories/campaign-brief.repository.js';
 
@@ -33,6 +34,24 @@ const PHASES = [
   { key: 'creative',           name: '素材生成', description: 'Generating ad creatives from product docs' },
   { key: 'execution',          name: '投放执行', description: 'Creating campaigns on Meta Ads', needsApproval: true },
 ];
+
+// Map brief fields to the earliest phase they feed into.
+// Used by patch_brief to warn that completed phases are now stale.
+const BRIEF_FIELD_TO_PHASE = {
+  budget_total:           'strategy',
+  budget_currency:        'strategy',
+  campaign_duration_days: 'strategy',
+  target_countries:       'strategy',
+  target_audience:        'strategy',
+  preferred_platforms:    'strategy',
+  objectives:             'strategy',
+  products:               'strategy',
+  product_images:         'creative_plan',
+  reference_images:       'creative_plan',
+  reference_image_url:    'creative_plan',
+  website:                'creative_plan',
+  existing_landing_pages: 'execution',
+};
 
 // Downstream phases that must be invalidated when an upstream phase is rerun.
 // creative reads ad names from strategy; execution reads image keys from creative.
@@ -443,117 +462,65 @@ const ORCHESTRATOR_TOOLS = [
 
 const PROMPT_CORE = `你是数字广告投放主控 Agent。根据 Campaign Brief 智能编排投放流程。
 
-## 默认流程
-1. get_meta_assets — 获取广告账户可用资产（WhatsApp 号码、Page 等），了解账户能力
-2. strategy — 基于账户资产规划媒体投放方案
-3. creative_plan — 基于投放方案生成素材制作任务
+## 阶段
+- get_meta_assets → strategy → creative_plan → creative → execution
+- research 阶段可选，根据 brief 复杂度自行判断是否需要
+- creative 需用户确认素材计划后再执行
+- execution 需用户明确要求，创建的广告为 PAUSED 状态，用户确认后 activate_campaigns 激活
+- execution 目前仅支持 Meta Ads，其他平台输出手动操作指南
 
-strategy 和 creative_plan 是独立阶段，分开运行。如果其中一个失败，可以单独 retry_phase 而不影响另一个。
-
-## 可选阶段（需要理由才执行）
-- research：仅在大预算(>$500)、用户明确要求、或 brief 信息严重不足时执行
-- creative：素材生成，在用户确认素材计划后执行
-- execution：投放执行，仅在用户明确要求投放时执行
-
-## 平台支持
-- 方案规划(strategy)不限制平台 — 可以为 Meta、Google、TikTok 等多平台规划
-- 自动执行(execution)目前仅支持 Meta Ads — 其他平台的执行方案以手动操作指南输出
-- 调用 get_meta_assets 可获取 Meta 账户的可用资产（WhatsApp 号码、Page、Instagram 等），据此判断能力范围
-
-## 指导原则
-- run_phase 返回 quality.score 和 quality.issues，据此判断是否 retry
-- quality.score 低且 issues 明确时，用 retry_phase 并给出针对性反馈
-- execution 创建的广告是 PAUSED 状态，需用户确认后 activate_campaigns 激活
+## 工具使用
+- run_phase 返回 quality.score 和 quality.issues，据此判断是否 retry_phase
+- 阶段出错时先 search_fix_knowledge 查历史方案，修复成功后 save_fix_knowledge 记录
+- patch_brief 修改 brief 字段后，注意返回的 stale_phases 提示，先重跑上游阶段
 
 ## 强制规则
-- 只有在已尝试修复仍失败、或用户明确要求跳过时，才可 submit_final`;
-
-const PROMPT_CREATIVE_FLOW = `
-
-## 参考图片检查（在 creative_plan 之前，强制执行）
-运行 creative_plan 之前，先检查 Brief 中的素材来源：
-1. 检查 brief 中是否有 product_images（用户上传的图片）
-2. 检查 brief 中是否有 website（可自动抓取产品图片）
-3. 检查 brief 中是否有 products 信息（产品关键词可辅助搜索）
-
-- 如果有 product_images 或 website → 直接运行 creative_plan，系统会自动提取参考图片
-- 如果都没有 → 在运行 creative_plan 之前，先 request_user_feedback：
-  - 告知用户：需要产品参考图片才能生成高质量广告素材
-  - 建议：上传产品图片，或提供产品网站链接
-  - 用户提供后，用 patch_brief 更新，再运行 creative_plan
-
-重要：product_images 中的 Supabase Storage URL（含 /object/public/ 路径）是公开可访问的，所有 agent 可直接使用，无需额外处理或询问用户。
-
-## 素材策划流程
-- creative_plan 完成后，检查 references_count：
-  - references_count > 0 → 展示素材计划，告知参考图片来源，提示用户也可上传更精准的产品图片
-  - references_count === 0 → request_user_feedback 告知用户系统未能自动找到参考图片，请上传产品图片或提供更详细的网站链接
-- 用户确认素材计划后再运行 creative 阶段生成实际图片
-- creative 阶段在没有参考图片时会返回 blocked: true，必须先补充参考图片`;
-
-const PROMPT_ERROR_HANDLING = `
-
-## 错误处理流程
-当阶段返回错误时：
-
-1. 先调用 search_fix_knowledge 查找历史修复方案
-   - similarity > 0.8 且 success_count > 0 → 按历史方案修复
-   - 未找到或失败 → 进入第 2 步
-
-2. 按错误类型处理：
-   A. 需用户信息（如无效 URL）→ request_user_feedback 向用户索取 → patch_brief → retry_phase
-   B. 可自动修复（如缺素材、受众过窄）→ 直接 retry_phase 或补跑前置阶段
-   C. 不可修复（如 API 权限不足）→ request_user_feedback 告知用户
-
-3. 修复成功后调用 save_fix_knowledge 记录经验
-
-限制：每阶段最多自动修复 1 次，不要猜测用户私有信息`;
+- 向用户解释错误时用通俗语言，不要只列原始英文错误信息
+- 不要建议用户使用外部工具（Midjourney/DALL·E/Canva）— 本系统自动生成素材
+- 不要让用户手动操作后台 — 所有操作通过工具调用完成
+- Supabase Storage URL（含 /object/public/）是公开可访问的，无需额外处理`;
 
 const PROMPT_EXECUTION_ERRORS = `
 
-## Execution 错误处理（强制）
-execution 返回 partial/failed 时，**禁止**直接调用 submit_final。必须分析 error_details，然后执行以下之一：
-1. 可自动修复 → retry_phase('execution', '修复说明')
-2. 需要用户信息 → request_user_feedback 用通俗语言解释问题 + 需要什么操作
-3. 前置阶段数据有问题 → 先修复前置阶段再 retry_phase
-
-### 错误分类
-- URL 无效（"not a valid URI"、"invalid URL"）→ request_user_feedback 向用户索取正确的网站/落地页地址，然后 patch_brief + retry_phase
-- 受众过窄（"audience too small"、"targeting"）→ retry_phase 并指示放宽受众条件
-- 参数缺失（"missing field"、"invalid parameter"）→ 分析是 brief 缺数据还是方案配置错误，前者问用户，后者 retry_phase
-- 权限/Token 错误（"permission"、"token"、"OAuthException"）→ request_user_feedback 告知用户需检查 Meta 账号权限配置
-- 素材缺失（"No image_hash"、"No creative"）→ 检查 creative 阶段是否成功，必要时 retry_phase('creative')
-
-重要：向用户解释时，用通俗语言说明问题和需要的操作，不要只列出原始英文错误信息`;
+## Execution 错误分类（Meta API 领域知识）
+- "预算太低" / "daily budget" → 检查 error_details 中的 sent_params，确认 strategy 是否需要 retry_phase 更新预算
+- "not a valid URI" / "invalid URL" → request_user_feedback 向用户索取正确的落地页地址
+- "audience too small" → retry_phase 放宽受众条件
+- "permission" / "OAuthException" → request_user_feedback 告知用户检查 Meta 账号权限
+- "No image_hash" / "No creative" → 检查 creative 阶段是否成功，必要时 retry_phase('creative')`;
 
 /**
  * Build system prompt dynamically based on current orchestration state.
- * Only injects modules relevant to the current phase.
+ * Injects real-time state snapshot so the agent never loses awareness.
  */
-function buildOrchestratorPrompt(phaseResults) {
-  const completed = new Set(Object.keys(phaseResults));
+function buildOrchestratorPrompt(phaseResults, { retryCounts, cascadeInvalidated } = {}) {
   let prompt = PROMPT_CORE;
 
-  // Inject pending phase descriptions
-  const pending = PHASES.filter(p => !completed.has(p.key));
-  if (pending.length > 0) {
-    prompt += `\n\n## 待执行阶段\n${pending.map(p => `- ${p.key}: ${p.description}`).join('\n')}`;
+  // ── Real-time state snapshot (refreshed every LLM call) ──
+  const stateLines = [];
+  for (const phase of PHASES) {
+    const result = phaseResults[phase.key];
+    if (!result) {
+      // Check if this phase was just cascade-invalidated
+      if (cascadeInvalidated?.has(phase.key)) {
+        stateLines.push(`- ${phase.key}: ⚠️ 已失效（上游阶段重跑），需要重新执行`);
+      } else {
+        stateLines.push(`- ${phase.key}: 待执行`);
+      }
+      continue;
+    }
+    const eval_ = evaluateOutput(phase.key, result);
+    const retries = retryCounts?.[phase.key] || 0;
+    const scoreTag = eval_.score >= 75 ? '✅' : eval_.score >= 50 ? '⚠️' : '❌';
+    let line = `- ${phase.key}: ${scoreTag} 已完成 (质量=${eval_.score}/100`;
+    if (retries > 0) line += `, 已重试${retries}次`;
+    line += ')';
+    if (eval_.issues.length > 0) line += ` — 问题: ${eval_.issues.join('; ')}`;
+    stateLines.push(line);
   }
+  prompt += `\n\n## 当前状态\n${stateLines.join('\n')}`;
 
-  // Inject creative flow rules only when creative phases are pending
-  if (!completed.has('creative')) {
-    prompt += PROMPT_CREATIVE_FLOW;
-  }
-
-  // Inject error handling only when phase results contain errors
-  const hasErrors = Object.values(phaseResults).some(
-    r => r?.errors?.length || r?.status === 'error'
-  );
-  if (hasErrors || completed.size > 0) {
-    prompt += PROMPT_ERROR_HANDLING;
-  }
-
-  // Inject execution error classification only when execution actually has errors
+  // ── Execution error classification (only when relevant) ──
   const execResult = phaseResults.execution;
   if (execResult && (execResult.status !== 'completed' || execResult.errors?.length)) {
     prompt += PROMPT_EXECUTION_ERRORS;
@@ -562,7 +529,7 @@ function buildOrchestratorPrompt(phaseResults) {
   return prompt;
 }
 
-const MAX_ORCHESTRATOR_ITERATIONS = 25;
+const MAX_ORCHESTRATOR_ITERATIONS = 40;
 
 // ── Deterministic evaluation ──────────────────────────────────────────
 
@@ -616,6 +583,25 @@ function evaluateOutput(phase, result) {
 // ── Shared tool-use loop ───────────────────────────────────────────────
 
 /**
+ * Check Redis queue for user messages sent during pipeline execution.
+ * Returns array of messages (may be empty). Non-blocking, non-fatal.
+ */
+async function consumeUserInput(sessionId) {
+  try {
+    const redis = getRedis();
+    const key = userInputKey(sessionId);
+    const items = await redis.lrange(key, 0, -1);
+    if (items.length > 0) {
+      await redis.del(key);
+      return items.map(raw => JSON.parse(raw)).reverse(); // LPUSH stores newest first, reverse to chronological
+    }
+  } catch (err) {
+    console.warn('[orchestrator] consumeUserInput failed:', err.message);
+  }
+  return [];
+}
+
+/**
  * Shared tool-use loop for orchestrate() and resumeAfterFeedback().
  * @param {string} sessionId
  * @param {Object} brief - The full brief object from DB
@@ -627,6 +613,9 @@ async function* runToolUseLoop(sessionId, brief, messages, initialPhaseResults, 
   let phaseResults = { ...initialPhaseResults };
   const MAX_FIX_LOG = 50;
   let fixLog = [...(initialFixLog || [])].slice(-MAX_FIX_LOG);
+  const MAX_PHASE_RETRIES = 3;
+  const retryCounts = {};  // { [phaseKey]: number } — tracks retry attempts per phase
+  const cascadeInvalidated = new Set();  // phases invalidated by upstream reruns this session
   for (let iteration = 0; iteration < MAX_ORCHESTRATOR_ITERATIONS; iteration++) {
     // Save checkpoint before each Claude call — enables recovery after crashes
     await updateSession(sessionId, {
@@ -640,12 +629,22 @@ async function* runToolUseLoop(sessionId, brief, messages, initialPhaseResults, 
     });
 
     yield { event: 'phase_progress', data: { phase: 'orchestrator', step: 'thinking', detail: '主控 Agent 分析中…' } };
+
+    // ── Check for user messages sent during pipeline execution ──
+    const userInputs = await consumeUserInput(sessionId);
+    if (userInputs.length > 0) {
+      for (const input of userInputs) {
+        messages.push({ role: 'user', content: input.content });
+        yield { event: 'user_injected', data: { content: input.content } };
+      }
+    }
+
     let response;
     try {
       const llmStream = anthropic.messages.stream({
         model: MODELS.SONNET,
         max_tokens: 4096,
-        system: buildOrchestratorPrompt(phaseResults),
+        system: buildOrchestratorPrompt(phaseResults, { retryCounts, cascadeInvalidated }),
         messages,
         tools: ORCHESTRATOR_TOOLS,
         tool_choice: { type: 'auto' },
@@ -683,7 +682,7 @@ async function* runToolUseLoop(sessionId, brief, messages, initialPhaseResults, 
     const toolUseBlocks = response.content.filter(c => c.type === 'tool_use');
     // Surface orchestrator tool calls so the frontend ThinkingCard shows them
     for (const block of toolUseBlocks) {
-      yield { event: 'phase_progress', data: { phase: 'orchestrator', step: 'tool_call', detail: `调用 ${block.name}`, tool: block.name, input: block.input } };
+      yield { event: 'phase_progress', data: { phase: 'orchestrator', step: 'tool_call', detail: block.name === 'request_user_feedback' ? '等待您的反馈' : `调用 ${block.name}`, tool: block.name, input: block.input } };
     }
     messages.push({ role: 'assistant', content: response.content });
 
@@ -708,6 +707,29 @@ async function* runToolUseLoop(sessionId, brief, messages, initialPhaseResults, 
         case 'retry_phase': {
           const phaseKey = input.phase;
           const phaseDef = PHASES.find(p => p.key === phaseKey);
+
+          // ── Hard constraint: retry limit ──
+          if (name === 'retry_phase') {
+            retryCounts[phaseKey] = (retryCounts[phaseKey] || 0) + 1;
+            if (retryCounts[phaseKey] > MAX_PHASE_RETRIES) {
+              result = { status: 'blocked', error: `${phaseKey} 已重试 ${MAX_PHASE_RETRIES} 次仍失败，请 request_user_feedback 让用户介入` };
+              break;
+            }
+          }
+
+          // ── Hard constraint: block execution if upstream phases are invalidated ──
+          if (phaseKey === 'execution') {
+            const missingUpstream = ['strategy', 'creative'].filter(p => !phaseResults[p]);
+            if (missingUpstream.length > 0) {
+              result = { status: 'blocked', error: `前置阶段 [${missingUpstream.join(', ')}] 未完成或已失效，必须先重跑这些阶段再执行 execution` };
+              break;
+            }
+          }
+          if (phaseKey === 'creative' && !phaseResults.strategy) {
+            result = { status: 'blocked', error: '前置阶段 strategy 未完成或已失效，必须先重跑 strategy 再执行 creative' };
+            break;
+          }
+
           await addMessages(sessionId, [{
             phase: phaseKey, role: 'event', tool_name: 'phase_start',
             content: phaseDef?.name || phaseKey, message_index: await getNextMessageIndex(sessionId),
@@ -745,12 +767,17 @@ async function* runToolUseLoop(sessionId, brief, messages, initialPhaseResults, 
             phaseResults = { ...(freshSession?.phase_results || {}), [phaseKey]: phaseResult };
             // Cascade: invalidate downstream phases whose inputs just changed
             const stale = PHASE_DOWNSTREAM[phaseKey] || [];
+            const invalidatedNow = [];
             for (const dk of stale) {
               if (phaseResults[dk]) {
                 console.log(`[orchestrator] cascade: invalidating ${dk} (upstream ${phaseKey} rerun)`);
                 delete phaseResults[dk];
+                cascadeInvalidated.add(dk);
+                invalidatedNow.push(dk);
               }
             }
+            // Clear invalidation flag for the phase we just completed
+            cascadeInvalidated.delete(phaseKey);
             await updateSession(sessionId, { phase_results: phaseResults, current_phase: phaseKey });
             const duration = Math.round((Date.now() - phaseStartTime) / 1000);
             const resultSummary = summarizePhaseResult(phaseKey, phaseResult);
@@ -771,6 +798,10 @@ async function* runToolUseLoop(sessionId, brief, messages, initialPhaseResults, 
               ...(fixLog.length > 0 ? { fix_attempts: fixLog.length } : {}),
               ...(hasPhaseErrors && phaseResult.errors?.length && {
                 error_details: phaseResult.errors.slice(0, 8),
+              }),
+              ...(invalidatedNow.length > 0 && {
+                cascade_invalidated: invalidatedNow,
+                cascade_warning: `⚠️ 以下阶段的结果已失效，必须按顺序重跑后才能继续: ${invalidatedNow.join(' → ')}`,
               }),
             };
           } catch (err) {
@@ -863,7 +894,24 @@ async function* runToolUseLoop(sessionId, brief, messages, initialPhaseResults, 
               message_index: await getNextMessageIndex(sessionId),
             }]);
             yield { event: 'brief_patched', data: { fields: Object.keys(fields), reason } };
-            result = { patched: true, fields: Object.keys(fields), reason };
+
+            // Detect phases that are already completed but now stale due to this patch
+            const stalePhases = new Set();
+            for (const f of Object.keys(sanitized)) {
+              const earliest = BRIEF_FIELD_TO_PHASE[f];
+              if (!earliest) continue;
+              // Add the earliest phase and all its downstream dependents
+              if (phaseResults[earliest]) stalePhases.add(earliest);
+              for (const dk of (PHASE_DOWNSTREAM[earliest] || [])) {
+                if (phaseResults[dk]) stalePhases.add(dk);
+              }
+            }
+
+            result = { patched: true, fields: Object.keys(sanitized), reason };
+            if (stalePhases.size > 0) {
+              result.stale_phases = [...stalePhases];
+              result.warning = `以下已完成的阶段使用了旧数据，建议 retry_phase 重跑: ${[...stalePhases].join(', ')}`;
+            }
           } catch (err) {
             result = { error: `修复失败: ${err.message}` };
           }
@@ -910,12 +958,24 @@ async function* runToolUseLoop(sessionId, brief, messages, initialPhaseResults, 
           break;
         }
 
-        case 'submit_final':
+        case 'submit_final': {
+          // ── Hard constraint: block submit if execution has unresolved errors ──
+          const execForSubmit = phaseResults.execution;
+          if (execForSubmit && execForSubmit.status !== 'completed' && execForSubmit.errors?.length) {
+            result = { error: `execution 阶段有 ${execForSubmit.errors.length} 个未解决错误，禁止提交。请先修复或 request_user_feedback 告知用户。` };
+            break;
+          }
+          // Block if any phase was cascade-invalidated but not re-run
+          if (cascadeInvalidated.size > 0) {
+            result = { error: `以下阶段已失效未重跑: ${[...cascadeInvalidated].join(', ')}。请先重跑这些阶段再提交。` };
+            break;
+          }
           await updateSessionIfStatus(sessionId, 'running', { status: 'completed', current_phase: 'done', orchestrator_state: null });
           shouldTerminate = true;
           terminateSummary = input.summary;
           result = { completed: true };
           break;
+        }
 
         default:
           result = { error: `Unknown tool: ${name}` };
@@ -925,6 +985,7 @@ async function* runToolUseLoop(sessionId, brief, messages, initialPhaseResults, 
     }
 
     if (pendingFeedback) {
+      // Save state for crash recovery (still needed if server restarts while waiting)
       await updateSessionIfStatus(sessionId, 'running', {
         status: 'awaiting_feedback',
         orchestrator_state: {
@@ -941,7 +1002,50 @@ async function* runToolUseLoop(sessionId, brief, messages, initialPhaseResults, 
         message_index: await getNextMessageIndex(sessionId),
       }]);
       yield { event: 'feedback_required', data: { message: pendingFeedback.message, options: pendingFeedback.options, tool_use_id: pendingFeedback.id } };
-      return;
+
+      // Wait for user response via Redis queue (up to 30 min)
+      // Must use dedicated blocking client — BRPOP blocks the connection
+      const blockingRedis = createBlockingClient();
+      const inputKey = userInputKey(sessionId);
+      let waitResult;
+      try {
+        waitResult = await blockingRedis.brpop(inputKey, 1800);
+      } finally {
+        blockingRedis.disconnect();
+      }
+      if (!waitResult) {
+        // Timeout — leave session in awaiting_feedback for manual resume via /feedback
+        yield { event: 'error', data: { message: '等待反馈超时 (30分钟)', recoverable: true } };
+        return;
+      }
+
+      const userInput = JSON.parse(waitResult[1]);
+      const feedbackPayload = { user_response: userInput.content };
+      if (userInput.attachments?.length) {
+        feedbackPayload.uploaded_images = userInput.attachments
+          .filter(a => a.content_type?.startsWith('image/'))
+          .map(a => ({ url: a.url, filename: a.filename }));
+      }
+
+      // Append completed tool results + feedback as tool_result
+      messages.push({
+        role: 'user',
+        content: [
+          ...toolResults,
+          {
+            type: 'tool_result',
+            tool_use_id: pendingFeedback.id,
+            content: JSON.stringify(feedbackPayload),
+          },
+        ],
+      });
+
+      // Resume
+      await updateSessionIfStatus(sessionId, 'awaiting_feedback', {
+        status: 'running',
+        orchestrator_state: null,
+      });
+      continue; // next iteration of the tool-use loop
     }
     if (shouldTerminate) {
       yield { event: 'done', data: { session_id: sessionId, phases_completed: Object.keys(phaseResults), summary: terminateSummary } };
@@ -975,12 +1079,6 @@ export async function* orchestrate(sessionId, options = {}) {
     return;
   }
 
-  const briefData = brief.brief || {};
-  if (!briefData.company_name || !briefData.industry) {
-    yield { event: 'error', data: { message: 'Brief is incomplete — finish intake first' } };
-    return;
-  }
-
   // Resume from checkpoint if server crashed mid-orchestration
   if (session.status === 'running' && session.orchestrator_state?.type === 'checkpoint') {
     const state = session.orchestrator_state;
@@ -1001,11 +1099,11 @@ export async function* orchestrate(sessionId, options = {}) {
     return;
   }
 
+  const briefData = brief.brief || {};
   const phaseResults = session.phase_results || {};
-  // Only start if session is in a valid starting state
-  const validStartStatuses = ['brief_completed', 'interrupted'];
-  if (!validStartStatuses.includes(session.status)) {
-    yield { event: 'error', data: { message: `Cannot start orchestration: session status is '${session.status}'` } };
+  // Block only if already running (prevents concurrent orchestration)
+  if (session.status === 'running') {
+    yield { event: 'error', data: { message: 'Orchestration is already running' } };
     return;
   }
   const { updated } = await updateSessionIfStatus(sessionId, session.status, { status: 'running', current_phase: 'orchestrating' });
@@ -1143,147 +1241,21 @@ export async function* orchestrateAfterApproval(sessionId) {
   yield* resumeAfterFeedback(sessionId, '确认执行投放方案');
 }
 
-// ── User chat with orchestrator ────────────────────────────────────────
+// ── Unified orchestrator entry ─────────────────────────────────────────
 
-const ORCHESTRATOR_CHAT_TOOLS = [
-  {
-    name: 'restart_pipeline',
-    description: '启动/重启投放流程。当 brief 核心字段齐全需要启动流程，或用户要求重跑、继续执行、重新生成素材、开始投放等操作性请求时调用。',
-    input_schema: {
-      type: 'object',
-      required: ['reason'],
-      properties: {
-        reason: { type: 'string', description: '启动原因，简短描述' },
-      },
-    },
-  },
-  {
-    name: 'update_brief',
-    description: '更新 Campaign Brief 字段。从用户消息中提取信息后调用。',
-    input_schema: {
-      type: 'object',
-      required: ['fields'],
-      properties: {
-        fields: { type: 'object', description: '要更新的 brief 字段' },
-      },
-    },
-  },
-];
+// Tools that can be handled in the lightweight chat loop without pipeline state
+const CHAT_SAFE_TOOLS = new Set([
+  'get_meta_assets', 'read_phase_detail', 'patch_brief',
+  'preview_execution', 'search_fix_knowledge', 'save_fix_knowledge',
+]);
 
 /**
- * Build chat system prompt dynamically based on session state.
- * Instead of listing edge-case rules, give the agent a clear picture of
- * WHERE we are in the pipeline and WHAT the next step should be.
- */
-function buildChatSystemPrompt(session, brief) {
-  const briefData = brief?.brief || {};
-  const completed = Object.keys(session.phase_results || {}).filter(k => k !== 'meta_assets');
-  const completedSet = new Set(completed);
-
-  // Check brief readiness
-  const coreFields = ['company_name', 'industry', 'products', 'target_countries', 'budget_total', 'budget_currency'];
-  const coreFilled = coreFields.filter(f => {
-    const v = briefData[f];
-    return v !== undefined && v !== null && v !== '' && !(Array.isArray(v) && v.length === 0);
-  });
-  const coreMissing = coreFields.filter(f => !coreFilled.includes(f));
-  // Use session status as SSOT: only enter intake mode if session is actually in intake
-  // AND core fields are missing. If session has progressed past intake, stay in orchestration mode.
-  const isIntakePhase = session.status === 'intake' && coreMissing.length > 0;
-
-  const phaseLabels = {
-    research: '市场调研',
-    strategy: '方案规划（含素材策划）',
-    creative: '素材生成（AI 自动生成广告图片）',
-    execution: '投放执行（在 Meta Ads 创建广告）',
-  };
-
-  // ── Intake mode: collect brief info ──
-  if (isIntakePhase) {
-    const filledSummary = coreFilled.map(f => `✅ ${f}: ${JSON.stringify(briefData[f]).slice(0, 80)}`).join('\n');
-    const missingSummary = coreMissing.map(f => `❌ ${f}`).join('\n');
-
-    return `你是数字广告投放主控 Agent。当前处于**需求收集阶段**。
-
-## 当前 Brief 状态
-已收集：
-${filledSummary || '暂无'}
-
-待收集（核心必填）：
-${missingSummary}
-
-## 你的职责
-1. 从用户消息中提取 brief 字段，调用 update_brief 保存
-2. 对缺失的核心字段进行**简短追问**（每次最多 2 个问题）
-3. 当所有核心字段齐全时，立即调用 restart_pipeline 启动投放流程
-
-## 严格规则
-- 只围绕缺失的核心字段追问，不发散
-- 不输出策略方案、素材创意、预算分配等下游内容
-- 回复控制在 150 字以内
-- 用户说"继续/开始/下一步"且 company_name + industry 已填 → 直接 restart_pipeline`;
-  }
-
-  // ── Orchestration mode: manage pipeline ──
-  const pipelineOrder = ['research', 'strategy', 'creative', 'execution'];
-  const nextPhase = pipelineOrder.find(p => !completedSet.has(p));
-
-  const statusLabels = {
-    interrupted: '已中断 — 需要恢复',
-    completed: '已完成',
-    failed: '执行失败',
-    running: '正在运行',
-    awaiting_feedback: '等待用户确认',
-    awaiting_approval: '等待用户批准',
-  };
-
-  let progress = '## 当前流程进度\n';
-  for (const phase of pipelineOrder) {
-    const label = phaseLabels[phase];
-    if (completedSet.has(phase)) {
-      progress += `- ✅ ${label}\n`;
-    } else if (phase === nextPhase) {
-      progress += `- 👉 **${label}** ← 下一步\n`;
-    } else {
-      progress += `- ⬜ ${label}\n`;
-    }
-  }
-  progress += `\n会话状态: ${statusLabels[session.status] || session.status}`;
-
-  const phaseContext = Object.entries(session.phase_results || {})
-    .filter(([k]) => k !== 'meta_assets')
-    .map(([phase, result]) => `=== ${phase.toUpperCase()} 结果摘要 ===\n${JSON.stringify(summarizePhaseResult(phase, result), null, 2)}`)
-    .join('\n\n');
-
-  return `你是数字投放主控 Agent。本系统是全自动化平台，所有阶段由后端自动执行。
-
-${progress}
-
-## 你的职责
-1. **回答问题** — 基于已完成阶段的结果，回答用户关于方案、调研、预算等问题
-2. **推进流程** — 当用户要求执行下一步、生成素材、开始投放等操作时，调用 restart_pipeline
-
-## 关键认知
-- 你自己没有图片生成、广告创建等能力 — 这些由后端 AIGC 管线和 Meta API 自动完成
-- 调用 restart_pipeline 后，系统会从「${nextPhase ? phaseLabels[nextPhase] : '已全部完成'}」开始自动执行
-- 不要建议用户使用 Midjourney/DALL·E/Canva 等外部工具，也不要输出 Prompt 或设计 Brief 作为替代
-- 不要让用户手动操作任何后台
-
-## 回复规则
-- 用户问方案细节 → 直接回答，简洁专业
-- 用户要求任何操作（生成/执行/继续/重跑）→ 一句话回应 + 调用 restart_pipeline
-- 300字以内
-
-${phaseContext || '暂无阶段结果'}`;
-}
-
-/**
- * Process a user chat message within an orchestrator session.
- * Supports tool_use — can trigger pipeline restart via restart_pipeline tool.
+ * Unified entry: handles user messages.
+ * LLM decides whether to answer, query tools, or run pipeline phases.
  *
  * @param {string} sessionId
- * @param {string} message
- * @yields {{ event: string, data: Object }} SSE events (delta, done, trigger_orchestration)
+ * @param {string} message - User message
+ * @yields {{ event: string, data: Object }} SSE events
  */
 export async function* chatWithOrchestrator(sessionId, message, { attachments } = {}) {
   const session = await getSession(sessionId);
@@ -1292,22 +1264,24 @@ export async function* chatWithOrchestrator(sessionId, message, { attachments } 
     return;
   }
 
-  // Load user conversation history (phase=null)
-  const history = await getMessagesForClaude(sessionId, { phase: null });
+  const brief = await getBrief(session.brief_id);
+  if (!brief) {
+    yield { event: 'error', data: { message: `Brief ${session.brief_id} not found` } };
+    return;
+  }
+
   let messageIndex = await getNextMessageIndex(sessionId);
 
-  // Store user message
-  await addMessages(sessionId, [{
-    phase: null,
-    role: 'user',
-    content: message,
-    message_index: messageIndex++,
-    attachments: attachments?.length ? attachments : undefined,
-  }]);
+  // Persist user message (if any)
+  if (message) {
+    await addMessages(sessionId, [{
+      phase: null, role: 'user', content: message,
+      message_index: messageIndex++,
+      attachments: attachments?.length ? attachments : undefined,
+    }]);
+  }
 
-  const brief = await getBrief(session.brief_id);
-
-  // Persist uploaded images to brief.product_images (same as intake step 5a)
+  // Persist uploaded images to brief.product_images
   if (attachments?.length) {
     const newImages = attachments
       .filter(a => a.content_type?.startsWith('image/'))
@@ -1317,49 +1291,78 @@ export async function* chatWithOrchestrator(sessionId, message, { attachments } 
       const existingUrls = new Set(existing.map(img => img.url));
       const deduped = newImages.filter(img => !existingUrls.has(img.url));
       if (deduped.length) {
-        await updateBriefFields(brief.id, {
-          product_images: [...existing, ...deduped],
-        });
+        await updateBriefFields(brief.id, { product_images: [...existing, ...deduped] });
       }
     }
   }
 
-  const systemPrompt = buildChatSystemPrompt(session, brief);
-
-  // Build multimodal content if attachments exist
-  let userContent;
-  if (attachments?.length) {
-    const imageBlocks = await attachmentsToContentBlocks(attachments);
-    userContent = [
-      ...imageBlocks,
-      ...(message ? [{ type: 'text', text: message }] : []),
-    ];
-  } else {
-    userContent = message;
+  // Resume interrupted pipeline if checkpoint exists
+  if (session.status === 'running' && session.orchestrator_state?.type === 'checkpoint') {
+    yield* orchestrate(sessionId);
+    return;
   }
 
-  const messages = [
-    ...history,
-    { role: 'user', content: userContent },
-  ];
+  // Build context
+  const briefData = brief.brief || {};
+  const phaseResults = session.phase_results || {};
 
-  // Stream response for real-time output (supports tool_use via multi-turn)
+  const existingResults = Object.keys(phaseResults).length > 0
+    ? `\n\n已完成阶段结果:\n${Object.entries(phaseResults).map(([k, v]) => `${k}: ${JSON.stringify(summarizePhaseResult(k, v))}`).join('\n')}`
+    : '';
+
+  const refSources = [];
+  if (briefData.product_images?.length) refSources.push(`${briefData.product_images.length} 张用户上传的产品图片`);
+  if (briefData.reference_images?.length) refSources.push(`${briefData.reference_images.length} 张参考图片`);
+  if (briefData.website) refSources.push(`产品网站 ${briefData.website}`);
+  const imageNote = refSources.length
+    ? `\n\n可用素材来源：${refSources.join('、')}。`
+    : '\n\n⚠️ Brief 中没有产品图片、参考图片或产品网站，在运行 creative_plan 之前需要向用户索取。';
+
+  // Build messages: context + chat history + current message
+  const currentMessages = [];
+  currentMessages.push({
+    role: 'user',
+    content: `CAMPAIGN BRIEF:\n${JSON.stringify(briefData)}${existingResults}${imageNote}`,
+  });
+
+  // Load chat history
+  let chatHistory = await getMessagesForClaude(sessionId, { phase: null });
+  // Drop the current message (just persisted above) to avoid duplication
+  if (message && chatHistory.length > 0 && chatHistory[chatHistory.length - 1].role === 'user') {
+    chatHistory = chatHistory.slice(0, -1);
+  }
+  if (chatHistory.length > 0) {
+    currentMessages.push({ role: 'assistant', content: '已了解当前 Brief 和投放进度，请问有什么需要？' });
+    currentMessages.push(...chatHistory);
+  }
+
+  currentMessages.push({ role: 'user', content: message });
+
+  // Lightweight LLM loop — handles queries directly, delegates pipeline tools to orchestrate()
+  const systemPrompt = buildOrchestratorPrompt(phaseResults);
   let assistantText = '';
-  let shouldRestart = false;
-  let restartReason = '';
-  let currentMessages = [...messages];
 
-  for (let turn = 0; turn < 5; turn++) {
+  for (let turn = 0; turn < 8; turn++) {
+    // Check for user messages sent while chat loop is running
+    const userInputs = await consumeUserInput(sessionId);
+    if (userInputs.length > 0) {
+      for (const input of userInputs) {
+        currentMessages.push({ role: 'user', content: input.content });
+        yield { event: 'user_injected', data: { content: input.content } };
+      }
+    }
+
     const stream = anthropic.messages.stream({
       model: MODELS.SONNET,
-      max_tokens: 2048,
+      max_tokens: 4096*3,
       system: systemPrompt,
       messages: currentMessages,
-      tools: ORCHESTRATOR_CHAT_TOOLS,
+      tools: ORCHESTRATOR_TOOLS,
       tool_choice: { type: 'auto' },
     });
 
-    const toolUseBlocks = []; // { id, name, input }
+    // Stream text to frontend
+    const toolUseBlocks = [];
     let currentBlockType = null;
     let currentToolInput = '';
     let currentToolName = '';
@@ -1373,60 +1376,128 @@ export async function* chatWithOrchestrator(sessionId, message, { attachments } 
           currentToolName = block.name;
           currentToolUseId = block.id;
           currentToolInput = '';
-          yield { event: 'tool_start', data: { tool: currentToolName } };
         } else if (block.type === 'text') {
           currentBlockType = 'text';
-        } else if (block.type === 'thinking') {
-          currentBlockType = 'thinking';
         }
       } else if (event.type === 'content_block_delta') {
-        const delta = event.delta;
-        if (delta.type === 'text_delta') {
-          assistantText += delta.text;
-          yield { event: 'delta', data: { text: delta.text } };
-        } else if (delta.type === 'thinking_delta') {
-          yield { event: 'thinking', data: { text: delta.thinking } };
-        } else if (delta.type === 'input_json_delta') {
-          currentToolInput += delta.partial_json;
+        if (event.delta?.type === 'text_delta') {
+          assistantText += event.delta.text;
+          yield { event: 'delta', data: { text: event.delta.text } };
+        } else if (event.delta?.type === 'input_json_delta') {
+          currentToolInput += event.delta.partial_json;
         }
       } else if (event.type === 'content_block_stop') {
         if (currentBlockType === 'tool_use') {
           let parsedInput = {};
           try { parsedInput = JSON.parse(currentToolInput); } catch { /* empty */ }
-          yield { event: 'tool_call', data: { tool: currentToolName, input: parsedInput } };
           toolUseBlocks.push({ id: currentToolUseId, name: currentToolName, input: parsedInput });
         }
         currentBlockType = null;
       }
     }
 
+    // No tool calls → done
     if (toolUseBlocks.length === 0) break;
 
-    // Process tool calls
     const finalMessage = await stream.finalMessage();
     currentMessages.push({ role: 'assistant', content: finalMessage.content });
-    const toolResults = [];
 
-    for (const block of toolUseBlocks) {
-      if (block.name === 'restart_pipeline') {
-        shouldRestart = true;
-        restartReason = block.input?.reason || '启动流程';
-        toolResults.push({ type: 'tool_result', tool_use_id: block.id, content: JSON.stringify({ ok: true }) });
-      } else if (block.name === 'update_brief') {
-        try {
-          const sanitized = sanitizeBriefFields(block.input.fields, brief.brief);
-          await updateBriefFields(brief.id, sanitized);
-          yield { event: 'brief_update', data: { fields: Object.keys(sanitized) } };
-          toolResults.push({ type: 'tool_result', tool_use_id: block.id, content: JSON.stringify({ updated: true, fields: Object.keys(block.input.fields) }) });
-        } catch (err) {
-          toolResults.push({ type: 'tool_result', tool_use_id: block.id, content: JSON.stringify({ error: err.message }) });
-        }
-      } else {
-        toolResults.push({ type: 'tool_result', tool_use_id: block.id, content: JSON.stringify({ error: `Unknown tool: ${block.name}` }) });
+    // Check if any tool requires the pipeline
+    const needsPipeline = toolUseBlocks.some(b => !CHAT_SAFE_TOOLS.has(b.name));
+    if (needsPipeline) {
+      // Persist assistant text so far, then hand off to pipeline
+      if (assistantText) {
+        await addMessages(sessionId, [{
+          phase: null, role: 'assistant', content: assistantText,
+          message_index: messageIndex++,
+        }]);
       }
+      yield* orchestrate(sessionId);
+      return;
     }
 
-    if (shouldRestart) break;
+    // Handle chat-safe tools directly
+    const toolResults = [];
+    for (const block of toolUseBlocks) {
+      yield { event: 'tool_start', data: { tool: block.name } };
+      let result;
+      switch (block.name) {
+        case 'get_meta_assets': {
+          if (phaseResults.meta_assets?.available) {
+            result = phaseResults.meta_assets;
+          } else {
+            try {
+              const assets = await fetchAccountAssets();
+              result = assets;
+            } catch (err) {
+              result = { available: false, error: err.message };
+            }
+          }
+          break;
+        }
+        case 'read_phase_detail': {
+          const phaseData = phaseResults[block.input.phase];
+          if (!phaseData) {
+            result = { error: `${block.input.phase} 阶段尚未完成` };
+          } else {
+            const value = getNestedField(phaseData, block.input.field);
+            result = value !== undefined ? { field: block.input.field, value } : { error: `字段 "${block.input.field}" 不存在` };
+          }
+          break;
+        }
+        case 'patch_brief': {
+          try {
+            const sanitized = sanitizeBriefFields(block.input.fields, brief.brief);
+            await updateBriefFields(brief.id, sanitized);
+            brief.brief = { ...(brief.brief || {}), ...sanitized };
+            const stalePhases = new Set();
+            for (const f of Object.keys(sanitized)) {
+              const earliest = BRIEF_FIELD_TO_PHASE[f];
+              if (!earliest) continue;
+              if (phaseResults[earliest]) stalePhases.add(earliest);
+              for (const dk of (PHASE_DOWNSTREAM[earliest] || [])) {
+                if (phaseResults[dk]) stalePhases.add(dk);
+              }
+            }
+            result = { patched: true, fields: Object.keys(sanitized), reason: block.input.reason };
+            if (stalePhases.size > 0) {
+              result.stale_phases = [...stalePhases];
+              result.warning = `以下已完成的阶段使用了旧数据，建议 retry_phase 重跑: ${[...stalePhases].join(', ')}`;
+            }
+          } catch (err) {
+            result = { error: err.message };
+          }
+          break;
+        }
+        case 'preview_execution': {
+          const strategyResult = phaseResults.strategy;
+          result = strategyResult ? previewExecution(strategyResult) : { error: 'strategy 阶段尚未完成' };
+          break;
+        }
+        case 'search_fix_knowledge': {
+          try {
+            const fixes = await searchFixes(`${block.input.error_text} ${block.input.phase || ''}`);
+            result = fixes.length > 0
+              ? { found: true, matches: fixes.map(f => ({ error_pattern: f.error_pattern, solution: f.solution, success_count: f.success_count, similarity: f.similarity })) }
+              : { found: false };
+          } catch (err) {
+            result = { found: false, error: err.message };
+          }
+          break;
+        }
+        case 'save_fix_knowledge': {
+          try {
+            result = await saveFix({ errorPattern: block.input.error_pattern, errorContext: block.input.error_context, solution: block.input.solution, solutionType: block.input.solution_type || 'auto' });
+          } catch (err) {
+            result = { action: 'failed', error: err.message };
+          }
+          break;
+        }
+        default:
+          result = { error: `Unknown tool: ${block.name}` };
+      }
+      toolResults.push({ type: 'tool_result', tool_use_id: block.id, content: JSON.stringify(result) });
+    }
 
     currentMessages.push({ role: 'user', content: toolResults });
   }
@@ -1434,17 +1505,9 @@ export async function* chatWithOrchestrator(sessionId, message, { attachments } 
   // Persist assistant response
   if (assistantText) {
     await addMessages(sessionId, [{
-      phase: null,
-      role: 'assistant',
-      content: assistantText,
+      phase: null, role: 'assistant', content: assistantText,
       message_index: messageIndex++,
     }]);
-  }
-
-  if (shouldRestart) {
-    // Backend-driven: chain directly into orchestrate(), no frontend round-trip
-    yield* orchestrate(sessionId);
-    return; // orchestrate yields its own done event
   }
 
   yield { event: 'done', data: { session_id: sessionId } };
@@ -1514,9 +1577,11 @@ function summarizePhaseResult(phaseKey, result) {
         status: result?.status,
         campaigns_created: result?.campaigns?.length || 0,
         errors_count: result?.errors?.length || 0,
-        error_details: (result?.errors || []).slice(0, 8).map(e =>
-          `[${e.level}] ${e.name}: ${e.error}`
-        ),
+        error_details: (result?.errors || []).slice(0, 8).map(e => {
+          const base = `[${e.level}] ${e.name}: ${e.error}`;
+          if (e.sent_params) return `${base} (sent: daily_budget=$${e.sent_params.daily_budget_dollars}/day = ${e.sent_params.daily_budget_cents} cents, objective=${e.sent_params.objective})`;
+          return base;
+        }),
       };
     default:
       return {};

@@ -457,7 +457,16 @@ export async function createFullCampaign(input, options = {}) {
     if (!campaignId) throw new Error(`No campaign ID returned: ${JSON.stringify(campaignRes).slice(0, 200)}`);
     onProgress?.({ step: 'create_campaign', name: input.name, campaign_id: campaignId });
   } catch (err) {
-    errors.push({ level: 'campaign', name: input.name, error: err.message });
+    errors.push({
+      level: 'campaign',
+      name: input.name,
+      error: err.message,
+      sent_params: {
+        daily_budget_dollars: input.daily_budget || 0,
+        daily_budget_cents: Math.round((input.daily_budget || 0) * 100),
+        objective: metaObjective,
+      },
+    });
     return { status: 'failed', campaign_id: null, ad_sets: [], errors };
   }
 
