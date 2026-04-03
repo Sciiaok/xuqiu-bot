@@ -871,12 +871,13 @@ function ChatTab() {
       }
 
       let assistantText = '';
+      let streamDone = false;
 
       const { consumeSSE } = await import('../../../../lib/consume-sse');
-      await consumeSSE(res, (event, data) => {
+
+      const handleSSEEvent = (event, data) => {
         if (!isActiveSessionKey(sessionKey)) return;
         switch (event) {
-          // ── Intake / chat events ──
           case 'delta':
             assistantText += data.text;
             setStreamingTextForSession(sessionKey, assistantText);
@@ -893,9 +894,7 @@ function ChatTab() {
           case 'tool_result':
             pushStreamingStepForSession(sessionKey, { tool: data.tool, content: JSON.stringify(data.result, null, 2).slice(0, 200), phase: null });
             break;
-          // ── Orchestration events (chained from intake via yield*) ──
           case 'orchestration_start':
-            // Flush intake text before orchestration begins
             if (assistantText) {
               appendMessageForSession(sessionKey, { id: `ai-${Date.now()}`, type: 'assistant', content: assistantText });
               setStreamingTextForSession(sessionKey, '');
@@ -934,18 +933,34 @@ function ChatTab() {
             break;
           case 'error':
             appendMessageForSession(sessionKey, { id: `err-${Date.now()}`, type: 'error', content: data.message || '发生错误' });
+            streamDone = true;
             break;
           case 'done':
-            // Orchestration done (has phases_completed) or intake done
             if (data.phases_completed?.length) {
               appendMessageForSession(sessionKey, { id: `done-${Date.now()}`, type: 'assistant', content: `投放方案已完成！共执行 ${data.phases_completed.length} 个阶段：${data.phases_completed.join(' → ')}` });
               updateSessionStatus(sessionKey, { status: 'completed', current_phase: 'done' });
             }
+            streamDone = true;
             break;
           case 'heartbeat':
             break;
         }
-      });
+      };
+
+      let lastEventId = await consumeSSE(res, handleSSEEvent);
+
+      // Reconnect via /stream if SSE dropped without a terminal event
+      if (!streamDone && lastEventId && isActiveSessionKey(sessionKey)) {
+        const streamEndpoint = `/api/campaign/orchestrate/${baseId}/stream?lastEventId=${lastEventId}`;
+        try {
+          const reconnRes = await fetch(streamEndpoint);
+          if (reconnRes.ok) {
+            await consumeSSE(reconnRes, handleSSEEvent);
+          }
+        } catch (reconnErr) {
+          console.warn('SSE reconnect failed:', reconnErr.message);
+        }
+      }
 
       // Flush any remaining streaming text
       if (assistantText) {
@@ -999,8 +1014,10 @@ function ChatTab() {
         return;
       }
 
+      let fbStreamDone = false;
       const { consumeSSE } = await import('../../../../lib/consume-sse');
-      await consumeSSE(res, (event, data) => {
+
+      const handleFbEvent = (event, data) => {
         if (!isActiveSessionKey(sessionKey)) return;
         switch (event) {
           case 'phase_start':
@@ -1031,9 +1048,26 @@ function ChatTab() {
             if (data.phases_completed?.length) {
               appendMessageForSession(sessionKey, { id: `done-${Date.now()}`, type: 'assistant', content: `投放方案已完成！共执行 ${data.phases_completed.length} 个阶段：${data.phases_completed.join(' → ')}` });
             }
+            fbStreamDone = true;
+            break;
+          case 'error':
+            fbStreamDone = true;
             break;
         }
-      });
+      };
+
+      const fbBaseId = session.session_id || session.brief_id;
+      let fbLastEventId = await consumeSSE(res, handleFbEvent);
+
+      // Reconnect if stream dropped without terminal event
+      if (!fbStreamDone && fbLastEventId && isActiveSessionKey(sessionKey)) {
+        try {
+          const reconnRes = await fetch(`/api/campaign/orchestrate/${fbBaseId}/stream?lastEventId=${fbLastEventId}`);
+          if (reconnRes.ok) await consumeSSE(reconnRes, handleFbEvent);
+        } catch (reconnErr) {
+          console.warn('Feedback SSE reconnect failed:', reconnErr.message);
+        }
+      }
     } catch (err) {
       appendMessageForSession(sessionKey, { id: `err-${Date.now()}`, type: 'error', content: err.message });
     } finally {
