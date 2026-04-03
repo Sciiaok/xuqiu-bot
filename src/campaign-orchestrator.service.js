@@ -1203,6 +1203,14 @@ const ORCHESTRATOR_CHAT_TOOLS = [
       },
     },
   },
+  {
+    name: 'get_meta_assets',
+    description: '获取 Meta 广告账户的可用资产（WhatsApp 号码、Page、Instagram 账户等）。当用户询问账户资产、WhatsApp 号码、主页信息时调用。',
+    input_schema: {
+      type: 'object',
+      properties: {},
+    },
+  },
 ];
 
 /**
@@ -1453,6 +1461,14 @@ export async function* chatWithOrchestrator(sessionId, message, { attachments } 
           await updateBriefFields(brief.id, sanitized);
           yield { event: 'brief_update', data: { fields: Object.keys(sanitized) } };
           toolResults.push({ type: 'tool_result', tool_use_id: block.id, content: JSON.stringify({ updated: true, fields: Object.keys(block.input.fields) }) });
+        } catch (err) {
+          toolResults.push({ type: 'tool_result', tool_use_id: block.id, content: JSON.stringify({ error: err.message }) });
+        }
+      } else if (block.name === 'get_meta_assets') {
+        try {
+          const assets = await fetchAccountAssets();
+          yield { event: 'meta_assets', data: assets };
+          toolResults.push({ type: 'tool_result', tool_use_id: block.id, content: JSON.stringify(assets) });
         } catch (err) {
           toolResults.push({ type: 'tool_result', tool_use_id: block.id, content: JSON.stringify({ error: err.message }) });
         }
