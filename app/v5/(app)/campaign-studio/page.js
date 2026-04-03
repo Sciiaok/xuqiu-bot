@@ -534,6 +534,7 @@ function ChatTab() {
   const [streamingSteps, setStreamingSteps] = useState([]);
   const [pendingImages, setPendingImages] = useState([]);
   const [showReconnect, setShowReconnect] = useState(false);
+  const [lightboxUrl, setLightboxUrl] = useState(null);
   const pendingImagesRef = useRef([]);
   // Ref to capture latest streamingSteps for flushing (avoids stale closure)
   const streamingStepsRef = useRef([]);
@@ -1123,6 +1124,7 @@ function ChatTab() {
   }
 
   return (
+    <>
     <div className={s.chatLayout}>
       {/* Session sidebar list */}
       <div className={s.chatMain}>
@@ -1165,7 +1167,10 @@ function ChatTab() {
                         {item.attachments?.length > 0 && (
                           <div style={{ display: 'flex', gap: 6, marginBottom: 6, flexWrap: 'wrap' }}>
                             {item.attachments.map((att, j) => (
-                              <img key={j} src={att.url} alt={att.filename || ''} style={{ width: 80, height: 80, objectFit: 'cover', borderRadius: 8, border: '1px solid var(--border)' }} />
+                              <div key={j} style={{ position: 'relative', cursor: 'pointer' }} onClick={() => setLightboxUrl(att.url)}>
+                                <img src={att.url} alt={att.filename || ''} style={{ width: 80, height: 80, objectFit: 'cover', borderRadius: 8, border: '1px solid var(--border)' }} />
+                                <span style={{ position: 'absolute', top: 2, right: 2, background: 'rgba(0,0,0,0.5)', color: '#fff', borderRadius: 4, fontSize: 10, padding: '1px 4px', lineHeight: 1.2 }}>⤢</span>
+                              </div>
                             ))}
                           </div>
                         )}
@@ -1433,6 +1438,17 @@ function ChatTab() {
         </div>
       </div>
     </div>
+
+    {/* Lightbox overlay */}
+    {lightboxUrl && (
+      <div
+        onClick={() => setLightboxUrl(null)}
+        style={{ position: 'fixed', inset: 0, zIndex: 9999, background: 'rgba(0,0,0,0.8)', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'zoom-out' }}
+      >
+        <img src={lightboxUrl} alt="" style={{ maxWidth: '90vw', maxHeight: '90vh', objectFit: 'contain', borderRadius: 8 }} />
+      </div>
+    )}
+    </>
   );
 }
 
