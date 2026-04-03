@@ -375,23 +375,30 @@ async function callMiniMax(params) {
   return result;
 }
 
-// ── Gemini call handler (MixAI OpenAI-compatible) ──────────────────
-async function callGemini(params) {
-  if (!mixaiGeminiClient) {
-    throw new Error('[llm-client] MIXAI_API_GEMINI_KEY required for Gemini models');
-  }
+// ── Gemini call handler (OpenRouter primary, MixAI fallback) ───────
 
+function isGeminiImageModel(model) {
+  return !!model?.match(/gemini.*image/i);
+}
+
+function geminiOpenRouterModel(model) {
+  // OpenRouter requires google/ prefix
+  return model.startsWith('google/') ? model : 'google/' + model;
+}
+
+async function callGeminiWith(client, provider, params) {
   const t0 = Date.now();
+  const model = provider === 'openrouter' ? geminiOpenRouterModel(params.model) : params.model;
   const logMeta = {
     method: 'create',
-    provider: 'mixai-gemini',
+    provider,
     model: params.model,
     tools: params.tools?.length || 0,
     toolChoice: params.tool_choice?.type || null,
   };
 
   const openaiParams = {
-    model: params.model,
+    model,
     max_tokens: params.max_tokens,
     messages: [
       ...translateSystemToOpenAI(params.system),
@@ -399,13 +406,18 @@ async function callGemini(params) {
     ],
   };
 
+  // Image models on OpenRouter need modalities
+  if (provider === 'openrouter' && isGeminiImageModel(params.model)) {
+    openaiParams.modalities = ['image', 'text'];
+  }
+
   const openaiTools = translateToolsToOpenAI(params.tools);
   if (openaiTools?.length) {
     openaiParams.tools = openaiTools;
     openaiParams.tool_choice = 'auto';
   }
 
-  const raw = await mixaiGeminiClient.chat.completions.create(openaiParams);
+  const raw = await client.chat.completions.create(openaiParams);
   const result = translateResponseToAnthropic(raw, params.model);
 
   logLlmCall({
@@ -418,6 +430,26 @@ async function callGemini(params) {
   });
 
   return result;
+}
+
+async function callGemini(params) {
+  // Primary: OpenRouter
+  if (openrouterClient) {
+    try {
+      return await callGeminiWith(openrouterClient, 'openrouter', params);
+    } catch (err) {
+      if (mixaiGeminiClient && !process.env.LLM_NO_FALLBACK) {
+        console.warn('[llm-client] OpenRouter Gemini failed, falling back to MixAI:', err.message);
+        return await callGeminiWith(mixaiGeminiClient, 'mixai-gemini', params);
+      }
+      throw err;
+    }
+  }
+  // Fallback: MixAI only
+  if (mixaiGeminiClient) {
+    return await callGeminiWith(mixaiGeminiClient, 'mixai-gemini', params);
+  }
+  throw new Error('[llm-client] No Gemini provider configured (set OPENROUTER_API_KEY or MIXAI_API_GEMINI_KEY)');
 }
 
 // ══════════════════════════════════════════════════════════════════════
