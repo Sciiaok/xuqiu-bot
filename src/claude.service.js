@@ -6,6 +6,7 @@ import {
 } from './whatsapp-media.service.js';
 import { createTraceLogger } from '../lib/core-trace.js';
 import { buildProductTools, executeProductTool } from './product-search.service.js';
+import { buildKbTools, executeKbTool, isKbTool } from './kb-tools.service.js';
 
 const SYSTEM_PROMPT = `You are a B2B lead qualification assistant for a vehicle export company specializing in BYD/Changan/GSC and other vehicles worldwide.
 
@@ -616,18 +617,25 @@ export async function getResponse(conversationHistory, userMessage, contextInfo 
     context_info: buildTraceContextInfo(contextInfo),
   });
 
-  // Check if this agent has product knowledge tools
+  // Check if this agent has product knowledge tools or KB tools
   const agentId = agentConfig?.id;
   let productTools = [];
+  let kbTools = [];
   if (agentId) {
     try {
       productTools = await buildProductTools(agentId);
     } catch (e) {
       logger.warn('claude.product_tools.failed', { error: e.message });
     }
+    try {
+      kbTools = await buildKbTools(agentId);
+    } catch (e) {
+      logger.warn('claude.kb_tools.failed', { error: e.message });
+    }
   }
 
-  const hasProductTools = productTools.length > 0;
+  const allAgentTools = [...productTools, ...kbTools];
+  const hasProductTools = allAgentTools.length > 0;
   let parsed;
 
   if (hasProductTools) {
@@ -639,9 +647,9 @@ export async function getResponse(conversationHistory, userMessage, contextInfo 
       input_schema: outputSchema,
       cache_control: { type: 'ephemeral' },
     };
-    // Add cache_control to the last product tool so all tool definitions are cached together
-    const cachedProductTools = productTools.map((tool, i) =>
-      i === productTools.length - 1
+    // Add cache_control to the last agent tool so all tool definitions are cached together
+    const cachedProductTools = allAgentTools.map((tool, i) =>
+      i === allAgentTools.length - 1
         ? { ...tool, cache_control: { type: 'ephemeral' } }
         : tool
     );
@@ -684,12 +692,14 @@ export async function getResponse(conversationHistory, userMessage, contextInfo 
         break;
       }
 
-      // Execute product tool
+      // Execute product or knowledge base tool
       logger.info('claude.tool_use.call', {
         tool: toolUse.name,
         iteration: iterations,
       });
-      const toolResult = await executeProductTool(toolUse.name, toolUse.input, agentId);
+      const toolResult = isKbTool(toolUse.name)
+        ? await executeKbTool(toolUse.name, toolUse.input, agentId)
+        : await executeProductTool(toolUse.name, toolUse.input, agentId);
       messages.push({ role: 'assistant', content: response.content });
       messages.push({
         role: 'user',
