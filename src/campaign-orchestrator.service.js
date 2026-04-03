@@ -1070,15 +1070,20 @@ export async function* orchestrate(sessionId, options = {}, { userMessage, attac
     ? `\n\n可用素材来源：${refSources.join('、')}。`
     : '\n\n⚠️ Brief 中没有产品图片、参考图片或产品网站，在运行 creative_plan 之前需要向用户索取。';
 
-  let userMessageNote = '';
+  const messages = [];
   if (userMessage) {
-    userMessageNote = `\n\n用户消息: ${userMessage}`;
+    // Chat-initiated: user sent a message, respond to it first
+    messages.push({
+      role: 'user',
+      content: `CAMPAIGN BRIEF:\n${JSON.stringify(briefData)}${existingResults}${imageNote}\n\n---\n用户消息: ${userMessage}\n\n请先回应用户的消息。如果用户在询问信息（如查看资产、方案细节），直接回答即可，不要启动阶段执行。只有当用户明确要求执行操作（如"开始投放"、"生成素材"、"继续"）时，才调用 run_phase。`,
+    });
+  } else {
+    // Pipeline-initiated: auto-start orchestration
+    messages.push({
+      role: 'user',
+      content: `请根据以下 Campaign Brief 编排投放流程。\n\nCAMPAIGN BRIEF:\n${JSON.stringify(briefData)}${existingResults}${phaseInstruction}${imageNote}`,
+    });
   }
-
-  const messages = [{
-    role: 'user',
-    content: `请根据以下 Campaign Brief 编排投放流程。\n\nCAMPAIGN BRIEF:\n${JSON.stringify(briefData)}${existingResults}${phaseInstruction}${imageNote}${userMessageNote}`,
-  }];
 
   yield* runToolUseLoop(sessionId, brief, messages, phaseResults, session.fix_log || []);
 }
