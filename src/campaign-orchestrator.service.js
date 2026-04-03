@@ -1209,7 +1209,7 @@ export async function* chatWithOrchestrator(sessionId, message, { attachments } 
   for (let turn = 0; turn < 8; turn++) {
     const stream = anthropic.messages.stream({
       model: MODELS.SONNET,
-      max_tokens: 4096,
+      max_tokens: 4096*3,
       system: systemPrompt,
       messages: currentMessages,
       tools: ORCHESTRATOR_TOOLS,
@@ -1274,6 +1274,7 @@ export async function* chatWithOrchestrator(sessionId, message, { attachments } 
     // Handle chat-safe tools directly
     const toolResults = [];
     for (const block of toolUseBlocks) {
+      yield { event: 'tool_start', data: { tool: block.name } };
       let result;
       switch (block.name) {
         case 'get_meta_assets': {
