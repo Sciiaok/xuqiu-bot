@@ -1,4 +1,5 @@
 import { anthropic, MODELS, onLlmEvent } from './llm-client.js';
+import { getRedis, userInputKey } from '../lib/redis.js';
 import { config } from './config.js';
 import { getBrief, updateBriefFields, sanitizeBriefFields } from '../lib/repositories/campaign-brief.repository.js';
 
@@ -471,11 +472,9 @@ const PROMPT_CORE = `你是数字广告投放主控 Agent。根据 Campaign Brie
 ## 工具使用
 - run_phase 返回 quality.score 和 quality.issues，据此判断是否 retry_phase
 - 阶段出错时先 search_fix_knowledge 查历史方案，修复成功后 save_fix_knowledge 记录
-- 每阶段最多自动修复 1 次，不要猜测用户私有信息
 - patch_brief 修改 brief 字段后，注意返回的 stale_phases 提示，先重跑上游阶段
 
 ## 强制规则
-- execution 失败时**禁止**直接 submit_final，必须分析错误并尝试修复或告知用户
 - 向用户解释错误时用通俗语言，不要只列原始英文错误信息
 - 不要建议用户使用外部工具（Midjourney/DALL·E/Canva）— 本系统自动生成素材
 - 不要让用户手动操作后台 — 所有操作通过工具调用完成
@@ -492,19 +491,36 @@ const PROMPT_EXECUTION_ERRORS = `
 
 /**
  * Build system prompt dynamically based on current orchestration state.
- * Only injects modules relevant to the current phase.
+ * Injects real-time state snapshot so the agent never loses awareness.
  */
-function buildOrchestratorPrompt(phaseResults) {
-  const completed = new Set(Object.keys(phaseResults));
+function buildOrchestratorPrompt(phaseResults, { retryCounts, cascadeInvalidated } = {}) {
   let prompt = PROMPT_CORE;
 
-  // Inject pending phase descriptions
-  const pending = PHASES.filter(p => !completed.has(p.key));
-  if (pending.length > 0) {
-    prompt += `\n\n## 待执行阶段\n${pending.map(p => `- ${p.key}: ${p.description}`).join('\n')}`;
+  // ── Real-time state snapshot (refreshed every LLM call) ──
+  const stateLines = [];
+  for (const phase of PHASES) {
+    const result = phaseResults[phase.key];
+    if (!result) {
+      // Check if this phase was just cascade-invalidated
+      if (cascadeInvalidated?.has(phase.key)) {
+        stateLines.push(`- ${phase.key}: ⚠️ 已失效（上游阶段重跑），需要重新执行`);
+      } else {
+        stateLines.push(`- ${phase.key}: 待执行`);
+      }
+      continue;
+    }
+    const eval_ = evaluateOutput(phase.key, result);
+    const retries = retryCounts?.[phase.key] || 0;
+    const scoreTag = eval_.score >= 75 ? '✅' : eval_.score >= 50 ? '⚠️' : '❌';
+    let line = `- ${phase.key}: ${scoreTag} 已完成 (质量=${eval_.score}/100`;
+    if (retries > 0) line += `, 已重试${retries}次`;
+    line += ')';
+    if (eval_.issues.length > 0) line += ` — 问题: ${eval_.issues.join('; ')}`;
+    stateLines.push(line);
   }
+  prompt += `\n\n## 当前状态\n${stateLines.join('\n')}`;
 
-  // Inject execution error classification only when execution actually has errors
+  // ── Execution error classification (only when relevant) ──
   const execResult = phaseResults.execution;
   if (execResult && (execResult.status !== 'completed' || execResult.errors?.length)) {
     prompt += PROMPT_EXECUTION_ERRORS;
@@ -567,6 +583,25 @@ function evaluateOutput(phase, result) {
 // ── Shared tool-use loop ───────────────────────────────────────────────
 
 /**
+ * Check Redis queue for user messages sent during pipeline execution.
+ * Returns array of messages (may be empty). Non-blocking, non-fatal.
+ */
+async function consumeUserInput(sessionId) {
+  try {
+    const redis = getRedis();
+    const key = userInputKey(sessionId);
+    const items = await redis.lrange(key, 0, -1);
+    if (items.length > 0) {
+      await redis.del(key);
+      return items.map(raw => JSON.parse(raw)).reverse(); // LPUSH stores newest first, reverse to chronological
+    }
+  } catch (err) {
+    console.warn('[orchestrator] consumeUserInput failed:', err.message);
+  }
+  return [];
+}
+
+/**
  * Shared tool-use loop for orchestrate() and resumeAfterFeedback().
  * @param {string} sessionId
  * @param {Object} brief - The full brief object from DB
@@ -578,6 +613,9 @@ async function* runToolUseLoop(sessionId, brief, messages, initialPhaseResults, 
   let phaseResults = { ...initialPhaseResults };
   const MAX_FIX_LOG = 50;
   let fixLog = [...(initialFixLog || [])].slice(-MAX_FIX_LOG);
+  const MAX_PHASE_RETRIES = 3;
+  const retryCounts = {};  // { [phaseKey]: number } — tracks retry attempts per phase
+  const cascadeInvalidated = new Set();  // phases invalidated by upstream reruns this session
   for (let iteration = 0; iteration < MAX_ORCHESTRATOR_ITERATIONS; iteration++) {
     // Save checkpoint before each Claude call — enables recovery after crashes
     await updateSession(sessionId, {
@@ -591,12 +629,22 @@ async function* runToolUseLoop(sessionId, brief, messages, initialPhaseResults, 
     });
 
     yield { event: 'phase_progress', data: { phase: 'orchestrator', step: 'thinking', detail: '主控 Agent 分析中…' } };
+
+    // ── Check for user messages sent during pipeline execution ──
+    const userInputs = await consumeUserInput(sessionId);
+    if (userInputs.length > 0) {
+      for (const input of userInputs) {
+        messages.push({ role: 'user', content: input.content });
+        yield { event: 'user_injected', data: { content: input.content } };
+      }
+    }
+
     let response;
     try {
       const llmStream = anthropic.messages.stream({
         model: MODELS.SONNET,
         max_tokens: 4096,
-        system: buildOrchestratorPrompt(phaseResults),
+        system: buildOrchestratorPrompt(phaseResults, { retryCounts, cascadeInvalidated }),
         messages,
         tools: ORCHESTRATOR_TOOLS,
         tool_choice: { type: 'auto' },
@@ -634,7 +682,7 @@ async function* runToolUseLoop(sessionId, brief, messages, initialPhaseResults, 
     const toolUseBlocks = response.content.filter(c => c.type === 'tool_use');
     // Surface orchestrator tool calls so the frontend ThinkingCard shows them
     for (const block of toolUseBlocks) {
-      yield { event: 'phase_progress', data: { phase: 'orchestrator', step: 'tool_call', detail: `调用 ${block.name}`, tool: block.name, input: block.input } };
+      yield { event: 'phase_progress', data: { phase: 'orchestrator', step: 'tool_call', detail: block.name === 'request_user_feedback' ? '等待您的反馈' : `调用 ${block.name}`, tool: block.name, input: block.input } };
     }
     messages.push({ role: 'assistant', content: response.content });
 
@@ -659,6 +707,29 @@ async function* runToolUseLoop(sessionId, brief, messages, initialPhaseResults, 
         case 'retry_phase': {
           const phaseKey = input.phase;
           const phaseDef = PHASES.find(p => p.key === phaseKey);
+
+          // ── Hard constraint: retry limit ──
+          if (name === 'retry_phase') {
+            retryCounts[phaseKey] = (retryCounts[phaseKey] || 0) + 1;
+            if (retryCounts[phaseKey] > MAX_PHASE_RETRIES) {
+              result = { status: 'blocked', error: `${phaseKey} 已重试 ${MAX_PHASE_RETRIES} 次仍失败，请 request_user_feedback 让用户介入` };
+              break;
+            }
+          }
+
+          // ── Hard constraint: block execution if upstream phases are invalidated ──
+          if (phaseKey === 'execution') {
+            const missingUpstream = ['strategy', 'creative'].filter(p => !phaseResults[p]);
+            if (missingUpstream.length > 0) {
+              result = { status: 'blocked', error: `前置阶段 [${missingUpstream.join(', ')}] 未完成或已失效，必须先重跑这些阶段再执行 execution` };
+              break;
+            }
+          }
+          if (phaseKey === 'creative' && !phaseResults.strategy) {
+            result = { status: 'blocked', error: '前置阶段 strategy 未完成或已失效，必须先重跑 strategy 再执行 creative' };
+            break;
+          }
+
           await addMessages(sessionId, [{
             phase: phaseKey, role: 'event', tool_name: 'phase_start',
             content: phaseDef?.name || phaseKey, message_index: await getNextMessageIndex(sessionId),
@@ -696,12 +767,17 @@ async function* runToolUseLoop(sessionId, brief, messages, initialPhaseResults, 
             phaseResults = { ...(freshSession?.phase_results || {}), [phaseKey]: phaseResult };
             // Cascade: invalidate downstream phases whose inputs just changed
             const stale = PHASE_DOWNSTREAM[phaseKey] || [];
+            const invalidatedNow = [];
             for (const dk of stale) {
               if (phaseResults[dk]) {
                 console.log(`[orchestrator] cascade: invalidating ${dk} (upstream ${phaseKey} rerun)`);
                 delete phaseResults[dk];
+                cascadeInvalidated.add(dk);
+                invalidatedNow.push(dk);
               }
             }
+            // Clear invalidation flag for the phase we just completed
+            cascadeInvalidated.delete(phaseKey);
             await updateSession(sessionId, { phase_results: phaseResults, current_phase: phaseKey });
             const duration = Math.round((Date.now() - phaseStartTime) / 1000);
             const resultSummary = summarizePhaseResult(phaseKey, phaseResult);
@@ -722,6 +798,10 @@ async function* runToolUseLoop(sessionId, brief, messages, initialPhaseResults, 
               ...(fixLog.length > 0 ? { fix_attempts: fixLog.length } : {}),
               ...(hasPhaseErrors && phaseResult.errors?.length && {
                 error_details: phaseResult.errors.slice(0, 8),
+              }),
+              ...(invalidatedNow.length > 0 && {
+                cascade_invalidated: invalidatedNow,
+                cascade_warning: `⚠️ 以下阶段的结果已失效，必须按顺序重跑后才能继续: ${invalidatedNow.join(' → ')}`,
               }),
             };
           } catch (err) {
@@ -878,12 +958,24 @@ async function* runToolUseLoop(sessionId, brief, messages, initialPhaseResults, 
           break;
         }
 
-        case 'submit_final':
+        case 'submit_final': {
+          // ── Hard constraint: block submit if execution has unresolved errors ──
+          const execForSubmit = phaseResults.execution;
+          if (execForSubmit && execForSubmit.status !== 'completed' && execForSubmit.errors?.length) {
+            result = { error: `execution 阶段有 ${execForSubmit.errors.length} 个未解决错误，禁止提交。请先修复或 request_user_feedback 告知用户。` };
+            break;
+          }
+          // Block if any phase was cascade-invalidated but not re-run
+          if (cascadeInvalidated.size > 0) {
+            result = { error: `以下阶段已失效未重跑: ${[...cascadeInvalidated].join(', ')}。请先重跑这些阶段再提交。` };
+            break;
+          }
           await updateSessionIfStatus(sessionId, 'running', { status: 'completed', current_phase: 'done', orchestrator_state: null });
           shouldTerminate = true;
           terminateSummary = input.summary;
           result = { completed: true };
           break;
+        }
 
         default:
           result = { error: `Unknown tool: ${name}` };
@@ -1207,6 +1299,15 @@ export async function* chatWithOrchestrator(sessionId, message, { attachments } 
   let assistantText = '';
 
   for (let turn = 0; turn < 8; turn++) {
+    // Check for user messages sent while chat loop is running
+    const userInputs = await consumeUserInput(sessionId);
+    if (userInputs.length > 0) {
+      for (const input of userInputs) {
+        currentMessages.push({ role: 'user', content: input.content });
+        yield { event: 'user_injected', data: { content: input.content } };
+      }
+    }
+
     const stream = anthropic.messages.stream({
       model: MODELS.SONNET,
       max_tokens: 4096*3,
