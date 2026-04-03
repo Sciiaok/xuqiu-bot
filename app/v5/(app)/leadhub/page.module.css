@@ -498,6 +498,26 @@
   font-weight: 500;
 }
 
+.msgSender {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text3);
+  margin-bottom: 2px;
+}
+
+.attachBtn {
+  height: 36px;
+  padding: 0 12px;
+  background: var(--bg3);
+  border: 1px solid var(--border);
+  border-radius: var(--r);
+  color: var(--text3);
+  font-size: 12px;
+  cursor: not-allowed;
+  opacity: 0.5;
+  flex-shrink: 0;
+}
+
 /* Input Area */
 .inputArea {
   display: flex;
