@@ -466,9 +466,21 @@ const TOOL_LABELS = {
 function ThinkingGroup({ steps }) {
   const [open, setOpen] = useState(false);
   const toolLabel = (name) => TOOL_LABELS[name] || name;
+  // Deduplicate consecutive tool names and hide noisy internal steps
+  const HIDDEN_STEPS = new Set(['thinking', 'reasoning_delta']);
+  const toolSteps = steps.filter(s => s.tool && !HIDDEN_STEPS.has(s.tool));
+  const deduped = toolSteps.reduce((acc, s) => {
+    const name = toolLabel(s.tool);
+    if (acc.length === 0 || acc[acc.length - 1] !== name) acc.push(name);
+    return acc;
+  }, []);
+  const MAX_BREADCRUMB = 5;
+  const truncated = deduped.length > MAX_BREADCRUMB
+    ? [...deduped.slice(0, MAX_BREADCRUMB), `+${deduped.length - MAX_BREADCRUMB}`]
+    : deduped;
   const label = steps.length === 1
     ? (steps[0].tool ? toolLabel(steps[0].tool) : '思考中…')
-    : `${steps.filter(s => s.tool).map(s => toolLabel(s.tool)).join(' → ') || `${steps.length} 个处理步骤`}`;
+    : `${truncated.join(' → ') || `${steps.length} 个处理步骤`}`;
 
   return (
     <div className={s.thinkingGroup}>
