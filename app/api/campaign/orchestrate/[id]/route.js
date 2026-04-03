@@ -9,7 +9,8 @@ import {
   getMessages,
 } from '../../../../../lib/repositories/orchestrator.repository.js';
 import { getBrief } from '../../../../../lib/repositories/campaign-brief.repository.js';
-import { streamSSE } from '../../../../../lib/sse.js';
+import { after } from 'next/server';
+import { streamSSE, drainToRedis } from '../../../../../lib/sse.js';
 import { streamKey } from '../../../../../lib/redis.js';
 
 /**
@@ -68,17 +69,18 @@ export async function POST(request, { params }) {
     return Response.json({ error: 'Message or attachments required' }, { status: 400 });
   }
 
-  // Unified orchestrator: LLM decides whether to answer or run phases
-  return streamSSE(
-    chatWithOrchestrator(session.id, body.message || '', { attachments: body.attachments }),
-    {
-      heartbeatIntervalMs: 5000,
-      streamKey: streamKey(brief.id),
-      onAbort: async () => {
-        await updateSessionIfStatus(session.id, 'running', { status: 'interrupted' });
-      },
-    },
-  );
+  // Unified orchestrator: fire-and-forget via after() + drainToRedis
+  const generator = chatWithOrchestrator(session.id, body.message || '', { attachments: body.attachments });
+  const key = streamKey(brief.id);
+  after(async () => {
+    try {
+      await drainToRedis(generator, key);
+    } catch (err) {
+      console.error('[orchestrate POST] drainToRedis failed:', err.message);
+      await updateSessionIfStatus(session.id, 'running', { status: 'interrupted' });
+    }
+  });
+  return Response.json({ session_id: session.id, brief_id: brief.id, stream_key: key });
 }
 
 /**
