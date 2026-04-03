@@ -316,6 +316,12 @@ const CTA_MAP = {
   '获取详细资料': 'LEARN_MORE',
 };
 
+// CTA types that support lead_gen_form_id attachment (Meta API constraint)
+// Source: https://developers.facebook.com/docs/marketing-api/guides/lead-ads/create/
+const LEAD_FORM_COMPATIBLE_CTAS = new Set([
+  'SIGN_UP', 'LEARN_MORE', 'APPLY_NOW', 'DOWNLOAD', 'GET_QUOTE', 'SUBSCRIBE',
+]);
+
 // Countries with higher minimum ad age than Meta's default (18)
 // Source: Meta Ads policies + local regulations
 const COUNTRY_MIN_AGE = {
@@ -353,7 +359,7 @@ function buildBatchTargeting(targeting = {}) {
   const spec = {
     geo_locations: { countries: isoCodes },
     age_min: effectiveMin,
-    age_max: Math.max(ageMax, 65),
+    age_max: 65,  // Advantage+ requires age_max=65; Meta API rejects higher values
     targeting_automation: { advantage_audience: 1 },
   };
   if (targeting.gender === 'male') spec.genders = [1];
@@ -526,9 +532,11 @@ export async function createFullCampaign(input, options = {}) {
         const isMessagingCta = messagingCtas.has(resolvedCta);
 
         // Lead gen + messaging CTA = WhatsApp lead capture (no form, uses WhatsApp conversation)
-        // Lead gen + other CTA = Lead form capture (attach form_id)
+        // Lead gen + form-compatible CTA = Lead form capture (attach form_id)
+        // Lead gen + incompatible CTA (e.g. CONTACT_US) = no form attachment
+        const canAttachForm = LEAD_FORM_COMPATIBLE_CTAS.has(resolvedCta);
         const callToAction = { type: resolvedCta };
-        if (isLeadGen && ad.lead_gen_form_id && !isMessagingCta) {
+        if (isLeadGen && ad.lead_gen_form_id && canAttachForm && !isMessagingCta) {
           callToAction.value = { lead_gen_form_id: ad.lead_gen_form_id };
         }
 
@@ -545,7 +553,7 @@ export async function createFullCampaign(input, options = {}) {
             link_url: ad.link_url || input.link_url,
             call_to_action_type: resolvedCta,
           };
-          if (isLeadGen && ad.lead_gen_form_id && !isMessagingCta) mcpParams.lead_gen_form_id = ad.lead_gen_form_id;
+          if (isLeadGen && ad.lead_gen_form_id && canAttachForm && !isMessagingCta) mcpParams.lead_gen_form_id = ad.lead_gen_form_id;
           const creativeRes = await callTool('create_ad_creative', mcpParams);
           creativeId = creativeRes.id || creativeRes.creative_id;
         } else {
