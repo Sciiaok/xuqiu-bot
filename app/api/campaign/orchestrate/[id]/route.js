@@ -10,7 +10,7 @@ import {
 } from '../../../../../lib/repositories/orchestrator.repository.js';
 import { getBrief } from '../../../../../lib/repositories/campaign-brief.repository.js';
 import { after } from 'next/server';
-import { streamSSE, drainToRedis } from '../../../../../lib/sse.js';
+import { drainToRedis } from '../../../../../lib/sse.js';
 import { streamKey } from '../../../../../lib/redis.js';
 
 /**
@@ -58,10 +58,16 @@ export async function POST(request, { params }) {
 
   // Intake phase: dedicated intake agent (web_search, confidence checks, etc.)
   if (session.status === 'intake' && session.current_phase === 'intake' && (body.message || body.attachments)) {
-    return streamSSE(
-      processIntakeMessage(brief.id, body.message || '', { attachments: body.attachments }),
-      { heartbeatIntervalMs: 5000, streamKey: streamKey(brief.id) },
-    );
+    const key = streamKey(brief.id);
+    const generator = processIntakeMessage(brief.id, body.message || '', { attachments: body.attachments });
+    after(async () => {
+      try {
+        await drainToRedis(generator, key);
+      } catch (err) {
+        console.error('[orchestrate POST] intake drainToRedis failed:', err.message);
+      }
+    });
+    return Response.json({ session_id: session.id, brief_id: brief.id, stream_key: key });
   }
 
   // Require a message

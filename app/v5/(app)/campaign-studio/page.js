@@ -991,47 +991,8 @@ function ChatTab() {
         throw new Error(errBody || `Server error (${res.status})`);
       }
 
-      const contentType = res.headers.get('content-type') || '';
-
-      if (contentType.includes('text/event-stream')) {
-        // Intake path — still direct SSE stream
-        let assistantText = '';
-        const { consumeSSE } = await import('../../../../lib/consume-sse');
-        const lastId = await consumeSSE(res, (event, data) => {
-          if (!isActiveSessionKey(sessionKey)) return;
-          switch (event) {
-            case 'delta':
-              assistantText += data.text;
-              setStreamingTextForSession(sessionKey, assistantText);
-              break;
-            case 'thinking':
-              pushStreamingStepForSession(sessionKey, { tool: null, content: data.text, phase: null });
-              break;
-            case 'tool_start':
-              pushStreamingStepForSession(sessionKey, { tool: data.tool, content: '', phase: null });
-              break;
-            case 'tool_call':
-              pushStreamingStepForSession(sessionKey, { tool: data.tool, content: JSON.stringify(data.input, null, 2).slice(0, 200), phase: null });
-              break;
-            case 'tool_result':
-              pushStreamingStepForSession(sessionKey, { tool: data.tool, content: JSON.stringify(data.result, null, 2).slice(0, 200), phase: null });
-              break;
-            case 'brief_update':
-              if (data.completion) updateSessionStatus(sessionKey, { completion: data.completion });
-              break;
-            case 'done':
-              break;
-          }
-        });
-        if (lastId) saveLastEventId(session.session_id, lastId);
-        if (assistantText) {
-          appendMessageForSession(sessionKey, { id: `ai-${Date.now()}`, type: 'assistant', content: assistantText });
-          setStreamingTextForSession(sessionKey, '');
-        }
-      } else {
-        // Orchestrator/feedback path — JSON response, then connect to /stream
-        await connectToStream(sessionKey, session.session_id, baseId, '0-0');
-      }
+      // All paths now return JSON + fire-and-forget; connect to /stream for events
+      await connectToStream(sessionKey, session.session_id, baseId, '0-0');
     } catch (err) {
       console.error('Error sending message:', err);
       appendMessageForSession(sessionKey, { id: `err-${Date.now()}`, type: 'error', content: `发送失败: ${err.message}` });
