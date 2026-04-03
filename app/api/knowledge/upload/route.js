@@ -67,20 +67,20 @@ export async function POST(request) {
       return NextResponse.json({ error: 'Agent not found' }, { status: 404 });
     }
 
-    // Upload file to Supabase Storage
+    // Upload file to Supabase Storage (optional — skip if bucket not available)
     const buffer = Buffer.from(await file.arrayBuffer());
     const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, '_');
     const storagePath = `${agentId}/${layer}/${Date.now()}_${safeName}`;
 
-    const { error: uploadError } = await authClient.storage
-      .from('kb-assets')
-      .upload(storagePath, buffer, { contentType: file.type });
-
-    if (uploadError) {
-      return NextResponse.json(
-        { error: `Upload failed: ${uploadError.message}` },
-        { status: 500 }
-      );
+    let storageOk = false;
+    try {
+      const { error: uploadError } = await authClient.storage
+        .from('kb-assets')
+        .upload(storagePath, buffer, { contentType: file.type });
+      if (!uploadError) storageOk = true;
+      else console.warn(`[knowledge/upload] Storage upload skipped: ${uploadError.message}`);
+    } catch (storageErr) {
+      console.warn(`[knowledge/upload] Storage upload skipped: ${storageErr.message}`);
     }
 
     // Create document record
@@ -90,7 +90,7 @@ export async function POST(request) {
       .insert({
         agent_id: agentId,
         filename: file.name,
-        storage_path: storagePath,
+        storage_path: storageOk ? storagePath : null,
         layer,
         source_type: 'file',
         description,
