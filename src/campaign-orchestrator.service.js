@@ -495,7 +495,7 @@ const PROMPT_EXECUTION_ERRORS = `
  * Build system prompt dynamically based on current orchestration state.
  * Only injects modules relevant to the current phase.
  */
-function buildOrchestratorPrompt(phaseResults, { chatMode } = {}) {
+function buildOrchestratorPrompt(phaseResults) {
   const completed = new Set(Object.keys(phaseResults));
   let prompt = PROMPT_CORE;
 
@@ -509,13 +509,6 @@ function buildOrchestratorPrompt(phaseResults, { chatMode } = {}) {
   const execResult = phaseResults.execution;
   if (execResult && (execResult.status !== 'completed' || execResult.errors?.length)) {
     prompt += PROMPT_EXECUTION_ERRORS;
-  }
-
-  if (chatMode) {
-    prompt += `\n\n## 用户对话模式
-- 用户提问 → 直接回答，不调用 run_phase
-- 用户要求操作（开始/继续/重跑/生成素材/投放）→ 直接执行对应工具调用
-- 回复简洁，300字以内`;
   }
 
   return prompt;
@@ -582,7 +575,7 @@ function evaluateOutput(phase, result) {
  * @param {Object} initialPhaseResults - Starting phase results
  * @yields {{ event: string, data: Object }}
  */
-async function* runToolUseLoop(sessionId, brief, messages, initialPhaseResults, initialFixLog, { chatMode } = {}) {
+async function* runToolUseLoop(sessionId, brief, messages, initialPhaseResults, initialFixLog) {
   let phaseResults = { ...initialPhaseResults };
   const MAX_FIX_LOG = 50;
   let fixLog = [...(initialFixLog || [])].slice(-MAX_FIX_LOG);
@@ -604,7 +597,7 @@ async function* runToolUseLoop(sessionId, brief, messages, initialPhaseResults, 
       const llmStream = anthropic.messages.stream({
         model: MODELS.SONNET,
         max_tokens: 4096,
-        system: buildOrchestratorPrompt(phaseResults, { chatMode }),
+        system: buildOrchestratorPrompt(phaseResults),
         messages,
         tools: ORCHESTRATOR_TOOLS,
         tool_choice: { type: 'auto' },
@@ -1036,7 +1029,7 @@ export async function* orchestrate(sessionId, options = {}, { userMessage, attac
     });
   }
 
-  yield* runToolUseLoop(sessionId, brief, messages, phaseResults, session.fix_log || [], { chatMode: !!userMessage });
+  yield* runToolUseLoop(sessionId, brief, messages, phaseResults, session.fix_log || []);
 }
 
 /**
