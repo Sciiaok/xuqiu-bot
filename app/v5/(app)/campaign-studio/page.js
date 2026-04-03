@@ -775,8 +775,9 @@ function ChatTab() {
 
         replaceMessagesForSession(sessionKey, reconstructed);
 
-        // Auto-reconnect to stream if pipeline is still running
-        if (orchData.status === 'running' || orchData.status === 'awaiting_feedback') {
+        // Auto-reconnect to stream if backend task is actively running
+        const activeStatuses = new Set(['intake', 'running', 'awaiting_feedback']);
+        if (activeStatuses.has(orchData.status)) {
           const savedId = loadLastEventId(selectedSession.session_id);
           const reconnectBaseId = selectedSession.session_id || selectedSession.brief_id;
           connectToStream(sessionKey, selectedSession.session_id, reconnectBaseId, savedId);
