@@ -765,7 +765,8 @@ function ChatTab() {
 
         replaceMessagesForSession(sessionKey, reconstructed);
 
-        // Note: orchestration auto-starts from intake via yield* orchestrate() — no frontend trigger needed
+        // Stalled pipeline recovery: user sends any message → chatWithOrchestrator detects
+        // running + checkpoint and auto-resumes via yield* orchestrate()
       } catch (err) {
         console.error('Error fetching messages:', err);
         if (cancelled || messageLoadSeqRef.current !== requestSeq || !isActiveSessionKey(sessionKey)) return;
@@ -783,6 +784,7 @@ function ChatTab() {
 
   // Auto-scroll only when user is already near the bottom (not browsing history)
   const chatContainerRef = useRef(null);
+
   const autoFollowRef = useRef(true);
   const lastScrollTopRef = useRef(0);
 

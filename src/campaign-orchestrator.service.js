@@ -513,7 +513,7 @@ function buildOrchestratorPrompt(phaseResults) {
   return prompt;
 }
 
-const MAX_ORCHESTRATOR_ITERATIONS = 25;
+const MAX_ORCHESTRATOR_ITERATIONS = 40;
 
 // ── Deterministic evaluation ──────────────────────────────────────────
 
@@ -1158,6 +1158,12 @@ export async function* chatWithOrchestrator(sessionId, message, { attachments } 
         await updateBriefFields(brief.id, { product_images: [...existing, ...deduped] });
       }
     }
+  }
+
+  // Resume interrupted pipeline if checkpoint exists
+  if (session.status === 'running' && session.orchestrator_state?.type === 'checkpoint') {
+    yield* orchestrate(sessionId);
+    return;
   }
 
   // Build context
