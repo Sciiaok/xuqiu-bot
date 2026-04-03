@@ -21,6 +21,7 @@ const DETAIL_TABS = [
   { key: 'chat', label: '对话' },
   { key: 'leads', label: '线索详情' },
   { key: 'profile', label: '客户档案' },
+  { key: 'notes', label: '备注' },
 ];
 
 const SUPPLY_CHAINS = ['全部供应链', 'agri', 'vehicle', 'auto_parts'];
@@ -138,25 +139,43 @@ function InquiryCard({ item, active, onClick }) {
 }
 
 /* ── Chat Message ──────────────────────────────────────── */
-function ChatMessage({ msg }) {
-  const dir = msg.role === 'assistant' ? 'out' : 'in';
+function ChatMessage({ msg, contactName }) {
+  const isIn = msg.role === 'user';
+  const isOperator = msg.sent_by === 'operator';
+  const dir = isIn ? 'in' : 'out';
+  const senderName = isIn ? (contactName || '客户') : isOperator ? '人工客服' : 'AI Agent';
   const ts = msg.sent_at
     ? new Date(msg.sent_at).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })
     : '';
 
-  let text = msg.content;
-  if (text && typeof text === 'object') {
-    text = JSON.stringify(text);
+  const media = msg.metadata;
+
+  let content;
+  if (media?.media_url) {
+    if (media.media_type === 'image') {
+      content = <img src={media.media_url} alt={media.filename || 'image'} style={{ maxWidth: '100%', borderRadius: 8 }} />;
+    } else if (media.media_type === 'video') {
+      content = <video src={media.media_url} controls style={{ maxWidth: '100%', borderRadius: 8 }} />;
+    } else if (media.media_type === 'audio') {
+      content = <audio src={media.media_url} controls style={{ width: '100%' }} />;
+    } else {
+      content = <a href={media.media_url} target="_blank" rel="noopener noreferrer" style={{ color: 'inherit', textDecoration: 'underline' }}>{media.filename || '附件'}</a>;
+    }
+  } else {
+    let text = msg.content;
+    if (text && typeof text === 'object') text = JSON.stringify(text);
+    content = text;
   }
 
   return (
     <div className={`${s.msgRow} ${dir === 'out' ? s.msgOut : s.msgIn}`}>
       {dir === 'in' && <div className={s.msgAvatar}>C</div>}
-      <div className={s.msgBubble}>
-        <div className={s.msgText}>{text}</div>
+      <div className={s.msgBubble} style={isOperator && !isIn ? { background: 'var(--amber)', opacity: 0.95 } : {}}>
+        <div className={s.msgSender} style={isOperator ? { color: 'var(--amber)' } : {}}>{senderName}</div>
+        <div className={s.msgText}>{content}</div>
         <div className={s.msgTs}>{ts}</div>
       </div>
-      {dir === 'out' && <div className={`${s.msgAvatar} ${s.msgAvatarAI}`}>AI</div>}
+      {dir === 'out' && <div className={`${s.msgAvatar} ${s.msgAvatarAI}`}>{isOperator ? '人' : 'AI'}</div>}
     </div>
   );
 }
@@ -183,6 +202,16 @@ export default function LeadHubPage() {
 
   const [messages, setMessages] = useState([]);
   const [loadingMessages, setLoadingMessages] = useState(false);
+  const [isHumanTakeover, setIsHumanTakeover] = useState(false);
+  const [msgText, setMsgText] = useState('');
+  const [sending, setSending] = useState(false);
+  const [confirmAction, setConfirmAction] = useState(null);
+  const [selectedFile, setSelectedFile] = useState(null);
+  const [error, setError] = useState(null);
+  const [notes, setNotes] = useState([]);
+  const [notesLoading, setNotesLoading] = useState(false);
+  const [noteText, setNoteText] = useState('');
+  const fileRef = useRef(null);
 
   const [convLeads, setConvLeads] = useState([]);
   const [loadingLeads, setLoadingLeads] = useState(false);
@@ -273,17 +302,20 @@ export default function LeadHubPage() {
     return () => observer.disconnect();
   }, [loadMore]);
 
-  // Fetch messages when selected conversation changes
+  // Fetch messages + takeover status when selected conversation changes
   useEffect(() => {
     if (!selectedId) return;
     let cancelled = false;
     setLoadingMessages(true);
     setMessages([]);
+    setIsHumanTakeover(false);
+    setMsgText('');
 
     const supabase = createClient();
+    // Fetch messages
     supabase
       .from('messages')
-      .select('id, role, content, sent_at, sent_by')
+      .select('id, role, content, sent_at, sent_by, metadata')
       .eq('conversation_id', selectedId)
       .order('sent_at', { ascending: true })
       .limit(50)
@@ -293,7 +325,32 @@ export default function LeadHubPage() {
         setLoadingMessages(false);
       });
 
-    return () => { cancelled = true; };
+    // Fetch takeover status
+    supabase
+      .from('conversations')
+      .select('is_human_takeover')
+      .eq('id', selectedId)
+      .single()
+      .then(({ data }) => {
+        if (cancelled) return;
+        if (data) setIsHumanTakeover(!!data.is_human_takeover);
+      });
+
+    // Subscribe to new messages in real-time
+    const channel = supabase
+      .channel(`leadhub-msgs-${selectedId}`)
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'messages', filter: `conversation_id=eq.${selectedId}` },
+        (payload) => {
+          if (cancelled) return;
+          setMessages(prev => {
+            if (prev.some(m => m.id === payload.new.id)) return prev;
+            return [...prev, payload.new];
+          });
+        }
+      )
+      .subscribe();
+
+    return () => { cancelled = true; supabase.removeChannel(channel); };
   }, [selectedId]);
 
   // Fetch leads when Leads tab is active and conversation changes
@@ -335,6 +392,126 @@ export default function LeadHubPage() {
 
     return () => { cancelled = true; };
   }, [selectedId, detailTab, cards]);
+
+  // Fetch notes when Notes tab is active
+  useEffect(() => {
+    if (detailTab !== 'notes') return;
+    const contactId = cards.find(c => c.id === selectedId)?.contactId;
+    if (!contactId) return;
+    setNotes([]);
+    fetchNotes(contactId);
+  }, [selectedId, detailTab, cards]);
+
+  // Auto-dismiss error toast
+  useEffect(() => {
+    if (!error) return;
+    const t = setTimeout(() => setError(null), 4000);
+    return () => clearTimeout(t);
+  }, [error]);
+
+  // ── Takeover handler ──
+  async function handleTakeover() {
+    if (!selectedId) return;
+    const method = isHumanTakeover ? 'DELETE' : 'POST';
+    try {
+      const res = await fetch(`/api/conversations/${selectedId}/takeover`, { method });
+      const data = await res.json();
+      if (data.success) {
+        setIsHumanTakeover(!isHumanTakeover);
+      }
+    } catch (err) {
+      console.error('Takeover error:', err);
+    }
+  }
+
+  // ── Send message handler ──
+  async function handleSendMessage() {
+    if (!selectedId || (!msgText.trim() && !selectedFile) || sending) return;
+    setSending(true);
+    try {
+      let res;
+      if (selectedFile) {
+        const fd = new FormData();
+        fd.append('conversationId', selectedId);
+        fd.append('file', selectedFile);
+        if (msgText.trim()) fd.append('caption', msgText.trim());
+        res = await fetch('/api/send-message', { method: 'POST', body: fd });
+      } else {
+        res = await fetch('/api/send-message', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ conversationId: selectedId, message: msgText.trim() }),
+        });
+      }
+      const data = await res.json();
+      if (data.success) {
+        setMsgText('');
+        setSelectedFile(null);
+      } else {
+        setError(data.message || '发送失败');
+      }
+    } catch (err) {
+      console.error('Send error:', err);
+      setError('发送消息失败，请重试');
+    } finally {
+      setSending(false);
+    }
+  }
+
+  // ── Notes CRUD ──
+  async function fetchNotes(contactId) {
+    if (!contactId) return;
+    setNotesLoading(true);
+    try {
+      const res = await fetch(`/api/contacts/${contactId}/notes`);
+      const data = await res.json();
+      if (data.notes) setNotes(data.notes);
+    } catch (err) {
+      console.error('Fetch notes error:', err);
+      setError('加载备注失败');
+    } finally {
+      setNotesLoading(false);
+    }
+  }
+
+  async function handleAddNote() {
+    const contactId = selected?.contactId;
+    if (!contactId || !noteText.trim()) return;
+    try {
+      const res = await fetch(`/api/contacts/${contactId}/notes`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ content: noteText.trim(), type: 'manual' }),
+      });
+      const data = await res.json();
+      if (data.note) {
+        setNotes(prev => [data.note, ...prev]);
+        setNoteText('');
+      } else {
+        setError(data.error || '添加备注失败');
+      }
+    } catch (err) {
+      console.error('Add note error:', err);
+      setError('添加备注失败');
+    }
+  }
+
+  async function handleDeleteNote(noteId) {
+    const contactId = selected?.contactId;
+    if (!contactId) return;
+    try {
+      const res = await fetch(`/api/contacts/${contactId}/notes/${noteId}`, { method: 'DELETE' });
+      const data = await res.json();
+      if (data.success) {
+        setNotes(prev => prev.filter(n => n.id !== noteId));
+      } else {
+        setError(data.error || '删除备注失败');
+      }
+    } catch (err) {
+      console.error('Delete note error:', err);
+      setError('删除备注失败');
+    }
+  }
 
   const selected = cards.find(c => c.id === selectedId) || null;
 
@@ -435,7 +612,13 @@ export default function LeadHubPage() {
                   <Tag variant={selected.quality}>{selected.qualityLabel}</Tag>
                   <RouteTag route={selected.route} />
                 </div>
-                <Button variant="ghost" size="sm">接管对话</Button>
+                <Button
+                  variant={isHumanTakeover ? 'danger' : 'ghost'}
+                  size="sm"
+                  onClick={() => setConfirmAction({ type: isHumanTakeover ? 'release' : 'takeover' })}
+                >
+                  {isHumanTakeover ? '结束接管' : '接管对话'}
+                </Button>
               </div>
 
               {/* Sub-tabs */}
@@ -462,7 +645,7 @@ export default function LeadHubPage() {
                         <div className={s.emptyState}>暂无消息记录</div>
                       ) : (
                         messages.map(msg => (
-                          <ChatMessage key={msg.id} msg={msg} />
+                          <ChatMessage key={msg.id} msg={msg} contactName={selected?.name || selected?.phone} />
                         ))
                       )}
                     </div>
@@ -473,14 +656,67 @@ export default function LeadHubPage() {
                       <span className={s.aiBarLabel}>AI 自动回复中</span>
                     </div>
 
+                    {/* Takeover status bar */}
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '6px 12px', fontSize: 11, color: 'var(--text3)', borderTop: '1px solid var(--border)' }}>
+                      <span style={{ width: 6, height: 6, borderRadius: '50%', background: isHumanTakeover ? 'var(--amber)' : 'var(--purple)' }} />
+                      {isHumanTakeover ? '人工接管中 · 可手动输入消息' : 'AI 自动回复中 · 接管后可手动输入'}
+                    </div>
+
+                    {/* File preview strip */}
+                    {selectedFile && isHumanTakeover && (
+                      <div style={{
+                        display: 'flex', alignItems: 'center', gap: 6, padding: '4px 12px',
+                        background: 'var(--bg2)', borderTop: '1px solid var(--border)',
+                        fontSize: 12, color: 'var(--text2)',
+                      }}>
+                        <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                          {selectedFile.name}
+                        </span>
+                        <button
+                          onClick={() => setSelectedFile(null)}
+                          style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text3)', fontSize: 14, lineHeight: 1, padding: '0 2px' }}
+                        >
+                          x
+                        </button>
+                      </div>
+                    )}
+
                     {/* Input area */}
                     <div className={s.inputArea}>
                       <input
-                        className={s.chatInput}
-                        placeholder="AI 正在处理，人工接管后可输入…"
-                        disabled
+                        type="file"
+                        ref={fileRef}
+                        style={{ display: 'none' }}
+                        accept="image/*,video/*,audio/*,.pdf,.doc,.docx"
+                        onChange={e => setSelectedFile(e.target.files?.[0] || null)}
                       />
-                      <Button variant="primary" size="sm">发送</Button>
+                      <button
+                        className={s.attachBtn}
+                        disabled={!isHumanTakeover || sending}
+                        onClick={() => fileRef.current?.click()}
+                        style={isHumanTakeover ? { cursor: 'pointer', opacity: 1 } : {}}
+                      >
+                        附件
+                      </button>
+                      <input
+                        className={s.chatInput}
+                        placeholder={isHumanTakeover ? '输入消息...' : '接管后输入消息...'}
+                        disabled={!isHumanTakeover || sending}
+                        value={msgText}
+                        onChange={e => setMsgText(e.target.value)}
+                        onKeyDown={e => {
+                          if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSendMessage(); }
+                        }}
+                        style={isHumanTakeover ? { opacity: 1, color: 'var(--text)' } : {}}
+                      />
+                      <Button
+                        variant="primary"
+                        size="sm"
+                        onClick={handleSendMessage}
+                        disabled={!isHumanTakeover || (!msgText.trim() && !selectedFile) || sending}
+                      >
+                        {sending ? '发送中…' : '发送'}
+                      </Button>
                     </div>
                   </div>
                 )}
@@ -557,11 +793,96 @@ export default function LeadHubPage() {
                     )}
                   </div>
                 )}
+
+                {detailTab === 'notes' && (
+                  <div className={s.tabScrollPane}>
+                    {/* Add note input */}
+                    <div style={{ display: 'flex', gap: 8, padding: '0 0 12px', borderBottom: '1px solid var(--border)', marginBottom: 12 }}>
+                      <input
+                        className={s.chatInput}
+                        style={{ flex: 1, fontSize: 13 }}
+                        placeholder="添加备注..."
+                        value={noteText}
+                        onChange={e => setNoteText(e.target.value)}
+                        onKeyDown={e => {
+                          if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleAddNote(); }
+                        }}
+                      />
+                      <Button variant="primary" size="sm" disabled={!noteText.trim()} onClick={handleAddNote}>
+                        添加
+                      </Button>
+                    </div>
+                    {/* Notes list */}
+                    {notesLoading ? (
+                      <div className={s.emptyState}>加载备注中…</div>
+                    ) : notes.length === 0 ? (
+                      <div className={s.emptyState}>暂无备注</div>
+                    ) : (
+                      notes.map(note => (
+                        <div key={note.id} style={{ padding: '10px 0', borderBottom: '1px solid var(--border)' }}>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 8 }}>
+                            <p style={{ margin: 0, fontSize: 13, color: 'var(--text)', lineHeight: 1.5, flex: 1 }}>{note.content}</p>
+                            <button
+                              onClick={() => handleDeleteNote(note.id)}
+                              style={{ flexShrink: 0, background: 'none', border: 'none', color: 'var(--text3)', cursor: 'pointer', fontSize: 16, padding: '0 2px', lineHeight: 1 }}
+                              title="删除备注"
+                            >
+                              x
+                            </button>
+                          </div>
+                          <div style={{ display: 'flex', gap: 8, marginTop: 6, fontSize: 11, color: 'var(--text3)', fontFamily: 'var(--font-mono)' }}>
+                            {note.created_by && <span>{note.created_by}</span>}
+                            <span style={{ marginLeft: 'auto' }}>{note.created_at ? new Date(note.created_at).toLocaleString('zh-CN') : ''}</span>
+                          </div>
+                        </div>
+                      ))
+                    )}
+                  </div>
+                )}
               </div>
             </>
           )}
         </div>
       </div>
+
+      {/* Error toast */}
+      {error && (
+        <div
+          style={{
+            position: 'fixed', bottom: 24, left: '50%', transform: 'translateX(-50%)',
+            background: 'var(--red)', color: '#fff', padding: '10px 20px',
+            borderRadius: 8, fontSize: 13, fontWeight: 600, zIndex: 9999,
+            boxShadow: '0 4px 12px rgba(0,0,0,0.15)', cursor: 'pointer',
+          }}
+          onClick={() => setError(null)}
+        >
+          {error}
+        </div>
+      )}
+
+      {/* Confirm takeover dialog */}
+      {confirmAction && (
+        <div style={{ position: 'fixed', inset: 0, zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(0,0,0,0.4)' }}>
+          <div style={{ background: 'var(--bg)', borderRadius: 12, padding: 24, maxWidth: 360, width: '90%', boxShadow: '0 8px 32px rgba(0,0,0,0.2)' }}>
+            <p style={{ fontSize: 15, fontWeight: 600, color: 'var(--text)', margin: '0 0 8px' }}>
+              {confirmAction.type === 'takeover' ? '确认接管对话？' : '确认结束接管？'}
+            </p>
+            <p style={{ fontSize: 13, color: 'var(--text2)', margin: '0 0 20px' }}>
+              {confirmAction.type === 'takeover'
+                ? 'AI 将暂停自动回复，您可以手动发送消息。'
+                : 'AI 将恢复自动回复，您将无法手动发送消息。'}
+            </p>
+            <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+              <button onClick={() => setConfirmAction(null)} style={{ padding: '8px 16px', border: '1px solid var(--border)', borderRadius: 6, background: 'var(--bg2)', color: 'var(--text2)', fontSize: 13, cursor: 'pointer' }}>取消</button>
+              <button onClick={() => { handleTakeover(); setConfirmAction(null); }} style={{
+                padding: '8px 16px', border: 'none', borderRadius: 6,
+                background: confirmAction.type === 'takeover' ? 'var(--red)' : 'var(--green)',
+                color: '#fff', fontSize: 13, fontWeight: 600, cursor: 'pointer',
+              }}>{confirmAction.type === 'takeover' ? '确认接管' : '确认结束'}</button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
