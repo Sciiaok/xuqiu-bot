@@ -588,6 +588,16 @@ function ChatTab() {
     streamingStepsRef.current = [];
     setStreamingSteps([]);
   }
+  // ── Persist lastEventId to sessionStorage for reconnect after refresh ──
+  function saveLastEventId(sessionId, eventId) {
+    if (sessionId && eventId) {
+      try { sessionStorage.setItem(`sse_last_id:${sessionId}`, eventId); } catch {}
+    }
+  }
+  function loadLastEventId(sessionId) {
+    try { return sessionStorage.getItem(`sse_last_id:${sessionId}`) || '0-0'; } catch { return '0-0'; }
+  }
+
   const fileInputRef = useRef(null);
 
   async function handleNewSession() {
@@ -765,8 +775,12 @@ function ChatTab() {
 
         replaceMessagesForSession(sessionKey, reconstructed);
 
-        // Stalled pipeline recovery: user sends any message → chatWithOrchestrator detects
-        // running + checkpoint and auto-resumes via yield* orchestrate()
+        // Auto-reconnect to stream if pipeline is still running
+        if (orchData.status === 'running' || orchData.status === 'awaiting_feedback') {
+          const savedId = loadLastEventId(selectedSession.session_id);
+          const reconnectBaseId = selectedSession.session_id || selectedSession.brief_id;
+          connectToStream(sessionKey, selectedSession.session_id, reconnectBaseId, savedId);
+        }
       } catch (err) {
         console.error('Error fetching messages:', err);
         if (cancelled || messageLoadSeqRef.current !== requestSeq || !isActiveSessionKey(sessionKey)) return;
@@ -830,6 +844,101 @@ function ChatTab() {
     });
   }, [selectedSession?.session_id]);
 
+  // ── Shared stream connection — used by handleSend, handleFeedbackRespond, and reconnect ──
+  async function connectToStream(sessionKey, sessionId, baseId, startEventId) {
+    let assistantText = '';
+    let streamDone = false;
+    const { consumeSSE } = await import('../../../../lib/consume-sse');
+
+    const handleEvent = (event, data) => {
+      if (!isActiveSessionKey(sessionKey)) return;
+      switch (event) {
+        case 'delta':
+          assistantText += data.text;
+          setStreamingTextForSession(sessionKey, assistantText);
+          break;
+        case 'thinking':
+          pushStreamingStepForSession(sessionKey, { tool: null, content: data.text, phase: null });
+          break;
+        case 'tool_start':
+          pushStreamingStepForSession(sessionKey, { tool: data.tool, content: '', phase: null });
+          break;
+        case 'tool_call':
+          pushStreamingStepForSession(sessionKey, { tool: data.tool, content: JSON.stringify(data.input, null, 2).slice(0, 200), phase: null });
+          break;
+        case 'tool_result':
+          pushStreamingStepForSession(sessionKey, { tool: data.tool, content: JSON.stringify(data.result, null, 2).slice(0, 200), phase: null });
+          break;
+        case 'orchestration_start':
+          if (assistantText) {
+            appendMessageForSession(sessionKey, { id: `ai-${Date.now()}`, type: 'assistant', content: assistantText });
+            setStreamingTextForSession(sessionKey, '');
+            assistantText = '';
+          }
+          flushStreamingSteps(sessionKey);
+          pushStreamingStepForSession(sessionKey, { tool: null, content: '▶ 投放流程启动' });
+          updateSessionStatus(sessionKey, { status: 'running', current_phase: 'orchestrating' });
+          break;
+        case 'phase_start':
+          pushStreamingStepForSession(sessionKey, { tool: null, content: `▶ ${PHASE_LABELS[data.phase] || data.phase}`, phase: data.phase });
+          updateSessionStatus(sessionKey, { current_phase: data.phase });
+          break;
+        case 'phase_progress':
+          pushStreamingStepForSession(sessionKey, { tool: data.step, content: data.detail || data.step, phase: data.phase });
+          break;
+        case 'phase_complete': {
+          pushStreamingStepForSession(sessionKey, { tool: null, content: `✓ ${PHASE_LABELS[data.phase] || data.phase} 完成`, phase: data.phase });
+          const builder = phaseResultBuilders[data.phase];
+          if (builder && data.result) {
+            const card = builder(data.result);
+            if (card) appendMessageForSession(sessionKey, { id: `phase-${data.phase}-${Date.now()}`, ...card });
+          }
+          break;
+        }
+        case 'approval_required':
+          appendMessageForSession(sessionKey, { id: `approval-${Date.now()}`, type: 'execution_approval', plan: data.plan, status: 'awaiting_approval' });
+          updateSessionStatus(sessionKey, { status: 'awaiting_approval' });
+          break;
+        case 'feedback_required':
+          appendMessageForSession(sessionKey, { id: `fb-${Date.now()}`, type: 'feedback_required', message: data.message || '需要您的确认', options: data.options || [] });
+          updateSessionStatus(sessionKey, { status: 'awaiting_feedback' });
+          break;
+        case 'user_injected':
+          break;
+        case 'phase_error':
+          appendMessageForSession(sessionKey, { id: `err-${Date.now()}`, type: 'error', content: `${PHASE_LABELS[data.phase] || data.phase} 失败: ${data.error}` });
+          break;
+        case 'error':
+          appendMessageForSession(sessionKey, { id: `err-${Date.now()}`, type: 'error', content: data.message || '发生错误' });
+          streamDone = true;
+          break;
+        case 'done':
+          if (data.phases_completed?.length) {
+            appendMessageForSession(sessionKey, { id: `done-${Date.now()}`, type: 'assistant', content: `投放方案已完成！共执行 ${data.phases_completed.length} 个阶段：${data.phases_completed.join(' → ')}` });
+            updateSessionStatus(sessionKey, { status: 'completed', current_phase: 'done' });
+          }
+          streamDone = true;
+          break;
+      }
+    };
+
+    const streamUrl = `/api/campaign/orchestrate/${baseId}/stream?lastEventId=${encodeURIComponent(startEventId)}`;
+    try {
+      const streamRes = await fetch(streamUrl);
+      if (streamRes.ok) {
+        const lastId = await consumeSSE(streamRes, handleEvent);
+        if (lastId) saveLastEventId(sessionId, lastId);
+      }
+    } catch (err) {
+      console.warn('Stream connection failed:', err.message);
+    }
+
+    if (assistantText) {
+      appendMessageForSession(sessionKey, { id: `ai-${Date.now()}`, type: 'assistant', content: assistantText });
+      setStreamingTextForSession(sessionKey, '');
+    }
+  }
+
   async function handleSend() {
     const hasImages = pendingImages.some(p => p.uploaded);
     if (!selectedSession || (!inputVal.trim() && !hasImages) || sendingMsg) return;
@@ -852,8 +961,26 @@ function ChatTab() {
     }
 
     try {
-      const isFeedbackMode = session.status === 'awaiting_feedback' || session.status === 'awaiting_approval';
       const baseId = session.session_id || session.brief_id;
+
+      // If pipeline is running, send via /message endpoint (non-blocking injection)
+      if (session.status === 'running') {
+        try {
+          const res = await fetch(`/api/campaign/orchestrate/${baseId}/message`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ message: text, attachments }),
+          });
+          if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        } catch (err) {
+          appendMessageForSession(sessionKey, { id: `err-${Date.now()}`, type: 'error', content: `发送失败: ${err.message}` });
+        } finally {
+          setSendingMsg(false);
+        }
+        return;
+      }
+
+      const isFeedbackMode = session.status === 'awaiting_feedback' || session.status === 'awaiting_approval';
       const endpoint = isFeedbackMode
         ? `/api/campaign/orchestrate/${baseId}/feedback`
         : `/api/campaign/orchestrate/${baseId}`;
@@ -870,102 +997,46 @@ function ChatTab() {
         throw new Error(errBody || `Server error (${res.status})`);
       }
 
-      let assistantText = '';
-      let streamDone = false;
+      const contentType = res.headers.get('content-type') || '';
 
-      const { consumeSSE } = await import('../../../../lib/consume-sse');
-
-      const handleSSEEvent = (event, data) => {
-        if (!isActiveSessionKey(sessionKey)) return;
-        switch (event) {
-          case 'delta':
-            assistantText += data.text;
-            setStreamingTextForSession(sessionKey, assistantText);
-            break;
-          case 'thinking':
-            pushStreamingStepForSession(sessionKey, { tool: null, content: data.text, phase: null });
-            break;
-          case 'tool_start':
-            pushStreamingStepForSession(sessionKey, { tool: data.tool, content: '', phase: null });
-            break;
-          case 'tool_call':
-            pushStreamingStepForSession(sessionKey, { tool: data.tool, content: JSON.stringify(data.input, null, 2).slice(0, 200), phase: null });
-            break;
-          case 'tool_result':
-            pushStreamingStepForSession(sessionKey, { tool: data.tool, content: JSON.stringify(data.result, null, 2).slice(0, 200), phase: null });
-            break;
-          case 'orchestration_start':
-            if (assistantText) {
-              appendMessageForSession(sessionKey, { id: `ai-${Date.now()}`, type: 'assistant', content: assistantText });
-              setStreamingTextForSession(sessionKey, '');
-              assistantText = '';
-            }
-            flushStreamingSteps(sessionKey);
-            pushStreamingStepForSession(sessionKey, { tool: null, content: '▶ 投放流程启动' });
-            updateSessionStatus(sessionKey, { status: 'running', current_phase: 'orchestrating' });
-            break;
-          case 'phase_start':
-            pushStreamingStepForSession(sessionKey, { tool: null, content: `▶ ${PHASE_LABELS[data.phase] || data.phase}`, phase: data.phase });
-            updateSessionStatus(sessionKey, { current_phase: data.phase });
-            break;
-          case 'phase_progress':
-            pushStreamingStepForSession(sessionKey, { tool: data.step, content: data.detail || data.step, phase: data.phase });
-            break;
-          case 'phase_complete': {
-            pushStreamingStepForSession(sessionKey, { tool: null, content: `✓ ${PHASE_LABELS[data.phase] || data.phase} 完成`, phase: data.phase });
-            const builder = phaseResultBuilders[data.phase];
-            if (builder && data.result) {
-              const card = builder(data.result);
-              if (card) appendMessageForSession(sessionKey, { id: `phase-${data.phase}-${Date.now()}`, ...card });
-            }
-            break;
+      if (contentType.includes('text/event-stream')) {
+        // Intake path — still direct SSE stream
+        let assistantText = '';
+        const { consumeSSE } = await import('../../../../lib/consume-sse');
+        const lastId = await consumeSSE(res, (event, data) => {
+          if (!isActiveSessionKey(sessionKey)) return;
+          switch (event) {
+            case 'delta':
+              assistantText += data.text;
+              setStreamingTextForSession(sessionKey, assistantText);
+              break;
+            case 'thinking':
+              pushStreamingStepForSession(sessionKey, { tool: null, content: data.text, phase: null });
+              break;
+            case 'tool_start':
+              pushStreamingStepForSession(sessionKey, { tool: data.tool, content: '', phase: null });
+              break;
+            case 'tool_call':
+              pushStreamingStepForSession(sessionKey, { tool: data.tool, content: JSON.stringify(data.input, null, 2).slice(0, 200), phase: null });
+              break;
+            case 'tool_result':
+              pushStreamingStepForSession(sessionKey, { tool: data.tool, content: JSON.stringify(data.result, null, 2).slice(0, 200), phase: null });
+              break;
+            case 'brief_update':
+              if (data.completion) updateSessionStatus(sessionKey, { completion: data.completion });
+              break;
+            case 'done':
+              break;
           }
-          case 'approval_required':
-            appendMessageForSession(sessionKey, { id: `approval-${Date.now()}`, type: 'execution_approval', plan: data.plan, status: 'awaiting_approval' });
-            updateSessionStatus(sessionKey, { status: 'awaiting_approval' });
-            break;
-          case 'feedback_required':
-            appendMessageForSession(sessionKey, { id: `fb-${Date.now()}`, type: 'feedback_required', message: data.message || '需要您的确认', options: data.options || [] });
-            updateSessionStatus(sessionKey, { status: 'awaiting_feedback' });
-            break;
-          case 'phase_error':
-            appendMessageForSession(sessionKey, { id: `err-${Date.now()}`, type: 'error', content: `${PHASE_LABELS[data.phase] || data.phase} 失败: ${data.error}` });
-            break;
-          case 'error':
-            appendMessageForSession(sessionKey, { id: `err-${Date.now()}`, type: 'error', content: data.message || '发生错误' });
-            streamDone = true;
-            break;
-          case 'done':
-            if (data.phases_completed?.length) {
-              appendMessageForSession(sessionKey, { id: `done-${Date.now()}`, type: 'assistant', content: `投放方案已完成！共执行 ${data.phases_completed.length} 个阶段：${data.phases_completed.join(' → ')}` });
-              updateSessionStatus(sessionKey, { status: 'completed', current_phase: 'done' });
-            }
-            streamDone = true;
-            break;
-          case 'heartbeat':
-            break;
+        });
+        if (lastId) saveLastEventId(session.session_id, lastId);
+        if (assistantText) {
+          appendMessageForSession(sessionKey, { id: `ai-${Date.now()}`, type: 'assistant', content: assistantText });
+          setStreamingTextForSession(sessionKey, '');
         }
-      };
-
-      let lastEventId = await consumeSSE(res, handleSSEEvent);
-
-      // Reconnect via /stream if SSE dropped without a terminal event
-      if (!streamDone && lastEventId && isActiveSessionKey(sessionKey)) {
-        const streamEndpoint = `/api/campaign/orchestrate/${baseId}/stream?lastEventId=${lastEventId}`;
-        try {
-          const reconnRes = await fetch(streamEndpoint);
-          if (reconnRes.ok) {
-            await consumeSSE(reconnRes, handleSSEEvent);
-          }
-        } catch (reconnErr) {
-          console.warn('SSE reconnect failed:', reconnErr.message);
-        }
-      }
-
-      // Flush any remaining streaming text
-      if (assistantText) {
-        appendMessageForSession(sessionKey, { id: `ai-${Date.now()}`, type: 'assistant', content: assistantText });
-        setStreamingTextForSession(sessionKey, '');
+      } else {
+        // Orchestrator/feedback path — JSON response, then connect to /stream
+        await connectToStream(sessionKey, session.session_id, baseId, '0-0');
       }
     } catch (err) {
       console.error('Error sending message:', err);
@@ -984,9 +1055,7 @@ function ChatTab() {
     const session = selectedSession;
     const sessionKey = getSessionKey(session);
     const attachments = pendingImages.filter(p => p.uploaded).map(p => p.uploaded);
-    const endpoint = session.session_id
-      ? `/api/campaign/orchestrate/${session.session_id}/feedback`
-      : `/api/campaign/orchestrate/${session.brief_id}/feedback`;
+    const baseId = session.session_id || session.brief_id;
 
     // Mark feedback card as resolved (keep content visible, disable buttons)
     if (isActiveSessionKey(sessionKey)) {
@@ -1004,70 +1073,16 @@ function ChatTab() {
     setPendingImages([]);
 
     try {
-      const res = await fetch(endpoint, {
+      // Send feedback via /message — the orchestrator's BRPOP picks it up
+      const res = await fetch(`/api/campaign/orchestrate/${baseId}/message`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ response, attachments }),
+        body: JSON.stringify({ message: response, attachments }),
       });
       if (!res.ok) {
         appendMessageForSession(sessionKey, { id: `err-${Date.now()}`, type: 'error', content: `反馈提交失败: ${res.status}` });
-        return;
       }
-
-      let fbStreamDone = false;
-      const { consumeSSE } = await import('../../../../lib/consume-sse');
-
-      const handleFbEvent = (event, data) => {
-        if (!isActiveSessionKey(sessionKey)) return;
-        switch (event) {
-          case 'phase_start':
-            pushStreamingStepForSession(sessionKey, { tool: null, content: `▶ ${PHASE_LABELS[data.phase] || data.phase}`, phase: data.phase });
-            break;
-          case 'phase_progress':
-            pushStreamingStepForSession(sessionKey, { tool: data.step, content: data.detail || data.step, phase: data.phase });
-            break;
-          case 'phase_complete': {
-            pushStreamingStepForSession(sessionKey, { tool: null, content: `✓ ${PHASE_LABELS[data.phase] || data.phase} 完成`, phase: data.phase });
-            const builder = phaseResultBuilders[data.phase];
-            if (builder && data.result) {
-              const card = builder(data.result);
-              if (card) appendMessageForSession(sessionKey, { id: `phase-${data.phase}-${Date.now()}`, ...card });
-            }
-            break;
-          }
-          case 'approval_required':
-            appendMessageForSession(sessionKey, { id: `approval-${Date.now()}`, type: 'execution_approval', plan: data.plan, status: 'awaiting_approval' });
-            break;
-          case 'feedback_required':
-            appendMessageForSession(sessionKey, { id: `fb-${Date.now()}`, type: 'feedback_required', message: data.message || '需要您的确认', options: data.options || [] });
-            break;
-          case 'phase_error':
-            appendMessageForSession(sessionKey, { id: `err-${Date.now()}`, type: 'error', content: `${PHASE_LABELS[data.phase] || data.phase} 失败: ${data.error}` });
-            break;
-          case 'done':
-            if (data.phases_completed?.length) {
-              appendMessageForSession(sessionKey, { id: `done-${Date.now()}`, type: 'assistant', content: `投放方案已完成！共执行 ${data.phases_completed.length} 个阶段：${data.phases_completed.join(' → ')}` });
-            }
-            fbStreamDone = true;
-            break;
-          case 'error':
-            fbStreamDone = true;
-            break;
-        }
-      };
-
-      const fbBaseId = session.session_id || session.brief_id;
-      let fbLastEventId = await consumeSSE(res, handleFbEvent);
-
-      // Reconnect if stream dropped without terminal event
-      if (!fbStreamDone && fbLastEventId && isActiveSessionKey(sessionKey)) {
-        try {
-          const reconnRes = await fetch(`/api/campaign/orchestrate/${fbBaseId}/stream?lastEventId=${fbLastEventId}`);
-          if (reconnRes.ok) await consumeSSE(reconnRes, handleFbEvent);
-        } catch (reconnErr) {
-          console.warn('Feedback SSE reconnect failed:', reconnErr.message);
-        }
-      }
+      // Events will arrive via the already-connected /stream
     } catch (err) {
       appendMessageForSession(sessionKey, { id: `err-${Date.now()}`, type: 'error', content: err.message });
     } finally {
