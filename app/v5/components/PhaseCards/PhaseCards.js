@@ -22,8 +22,9 @@ class CardErrorBoundary extends Component {
 
 // ── Shared helpers ──────────────────────────────────────────────
 
-function Bullet({ items, color = 'green' }) {
-  if (!items?.length) return null;
+function Bullet({ items: raw, color = 'green' }) {
+  const items = Array.isArray(raw) ? raw : raw ? [raw] : [];
+  if (!items.length) return null;
   return (
     <div className={s.bulletList}>
       {items.map((item, i) => (
@@ -376,6 +377,7 @@ function normalizeCreatives(raw) {
 
 export function CreativeCard({ creatives: raw, inProgress, completed, total, errors, lastDetail }) {
   const [expanded, setExpanded] = useState(false);
+  const [lightboxUrl, setLightboxUrl] = useState(null);
   const creatives = normalizeCreatives(raw);
 
   if (inProgress) {
@@ -411,7 +413,14 @@ export function CreativeCard({ creatives: raw, inProgress, completed, total, err
         {creatives.slice(0, expanded ? undefined : 4).map((c, i) => (
           <div key={i} className={s.creativeItem}>
             {c.url && c.url.startsWith('https://') ? (
-              <img src={c.url} alt={c.name || `素材 ${i + 1}`} className={s.creativeImg} />
+              <div className={s.creativeImgWrap}>
+                <img src={c.url} alt={c.name || `素材 ${i + 1}`} className={s.creativeImg} />
+                <button className={s.zoomBtn} onClick={() => setLightboxUrl(c.url)} title="放大查看">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/><line x1="11" y1="8" x2="11" y2="14"/><line x1="8" y1="11" x2="14" y2="11"/>
+                  </svg>
+                </button>
+              </div>
             ) : (
               <div className={s.creativePlaceholder}>{c.format || '图片'}</div>
             )}
@@ -428,6 +437,11 @@ export function CreativeCard({ creatives: raw, inProgress, completed, total, err
         <button className={s.moreBtn} onClick={() => setExpanded(!expanded)}>
           {expanded ? '收起' : `查看全部 (${creatives.length} 个)`}
         </button>
+      )}
+      {lightboxUrl && (
+        <div className={s.lightboxOverlay} onClick={() => setLightboxUrl(null)}>
+          <img src={lightboxUrl} alt="" className={s.lightboxImg} />
+        </div>
       )}
     </CardShell>
   );
