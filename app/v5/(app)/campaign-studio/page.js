@@ -800,27 +800,20 @@ function ChatTab() {
   const chatContainerRef = useRef(null);
 
   const autoFollowRef = useRef(true);
-  const lastScrollTopRef = useRef(0);
+  const programmaticScrollRef = useRef(false);
 
   useEffect(() => {
     const el = chatContainerRef.current;
     if (!el) return;
     const distanceFromBottom = () => el.scrollHeight - el.scrollTop - el.clientHeight;
     const onScroll = () => {
-      const currentScrollTop = el.scrollTop;
-      const scrollingUp = currentScrollTop < lastScrollTopRef.current;
+      // Ignore scroll events triggered by programmatic scrollTop assignment
+      if (programmaticScrollRef.current) return;
+
       const nearBottom = distanceFromBottom() <= 80;
-
-      if (nearBottom) {
-        autoFollowRef.current = true;
-      } else if (scrollingUp) {
-        autoFollowRef.current = false;
-      }
-
-      lastScrollTopRef.current = currentScrollTop;
+      autoFollowRef.current = nearBottom;
     };
 
-    onScroll();
     el.addEventListener('scroll', onScroll, { passive: true });
     return () => el.removeEventListener('scroll', onScroll);
   }, []);
@@ -828,19 +821,20 @@ function ChatTab() {
   useEffect(() => {
     const el = chatContainerRef.current;
     if (el && autoFollowRef.current) {
+      programmaticScrollRef.current = true;
       el.scrollTop = el.scrollHeight;
-      lastScrollTopRef.current = el.scrollTop;
+      requestAnimationFrame(() => { programmaticScrollRef.current = false; });
     }
   }, [messages, streamingText, streamingSteps]);
 
   useEffect(() => {
     autoFollowRef.current = true;
-    lastScrollTopRef.current = 0;
     const el = chatContainerRef.current;
     if (!el) return;
     requestAnimationFrame(() => {
+      programmaticScrollRef.current = true;
       el.scrollTop = el.scrollHeight;
-      lastScrollTopRef.current = el.scrollTop;
+      requestAnimationFrame(() => { programmaticScrollRef.current = false; });
     });
   }, [selectedSession?.session_id]);
 
@@ -1073,16 +1067,18 @@ function ChatTab() {
     setPendingImages([]);
 
     try {
-      // Send feedback via /message — the orchestrator's BRPOP picks it up
-      const res = await fetch(`/api/campaign/orchestrate/${baseId}/message`, {
+      // POST to /feedback — fires a fresh generator from saved orchestrator_state
+      const res = await fetch(`/api/campaign/orchestrate/${baseId}/feedback`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message: response, attachments }),
+        body: JSON.stringify({ response, attachments }),
       });
       if (!res.ok) {
         appendMessageForSession(sessionKey, { id: `err-${Date.now()}`, type: 'error', content: `反馈提交失败: ${res.status}` });
+        return;
       }
-      // Events will arrive via the already-connected /stream
+      // Connect to /stream to receive events from the fire-and-forget generator
+      await connectToStream(sessionKey, session.session_id, baseId, '0-0');
     } catch (err) {
       appendMessageForSession(sessionKey, { id: `err-${Date.now()}`, type: 'error', content: err.message });
     } finally {

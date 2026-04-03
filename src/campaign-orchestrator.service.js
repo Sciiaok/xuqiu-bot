@@ -1,5 +1,5 @@
 import { anthropic, MODELS, onLlmEvent } from './llm-client.js';
-import { getRedis, userInputKey } from '../lib/redis.js';
+import { getRedis, createBlockingClient, userInputKey } from '../lib/redis.js';
 import { config } from './config.js';
 import { getBrief, updateBriefFields, sanitizeBriefFields } from '../lib/repositories/campaign-brief.repository.js';
 
@@ -1004,9 +1004,15 @@ async function* runToolUseLoop(sessionId, brief, messages, initialPhaseResults, 
       yield { event: 'feedback_required', data: { message: pendingFeedback.message, options: pendingFeedback.options, tool_use_id: pendingFeedback.id } };
 
       // Wait for user response via Redis queue (up to 30 min)
-      const redis = getRedis();
+      // Must use dedicated blocking client — BRPOP blocks the connection
+      const blockingRedis = createBlockingClient();
       const inputKey = userInputKey(sessionId);
-      const waitResult = await redis.brpop(inputKey, 1800);
+      let waitResult;
+      try {
+        waitResult = await blockingRedis.brpop(inputKey, 1800);
+      } finally {
+        blockingRedis.disconnect();
+      }
       if (!waitResult) {
         // Timeout — leave session in awaiting_feedback for manual resume via /feedback
         yield { event: 'error', data: { message: '等待反馈超时 (30分钟)', recoverable: true } };
