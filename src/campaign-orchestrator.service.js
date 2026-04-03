@@ -463,7 +463,6 @@ const PROMPT_CORE = `你是数字广告投放主控 Agent。根据 Campaign Brie
 
 ## 阶段
 - get_meta_assets → strategy → creative_plan → creative → execution
-- 各阶段独立，失败时单独 retry_phase，不影响其他阶段
 - research 阶段可选，根据 brief 复杂度自行判断是否需要
 - creative 需用户确认素材计划后再执行
 - execution 需用户明确要求，创建的广告为 PAUSED 状态，用户确认后 activate_campaigns 激活
@@ -931,7 +930,7 @@ async function* runToolUseLoop(sessionId, brief, messages, initialPhaseResults, 
  * @param {string} sessionId - Orchestrator session UUID
  * @yields {{ event: string, data: Object }}
  */
-export async function* orchestrate(sessionId, options = {}, { userMessage, attachments } = {}) {
+export async function* orchestrate(sessionId, options = {}) {
   const session = await getSession(sessionId);
   if (!session) {
     yield { event: 'error', data: { message: `Session ${sessionId} not found` } };
@@ -1002,32 +1001,10 @@ export async function* orchestrate(sessionId, options = {}, { userMessage, attac
     ? `\n\n可用素材来源：${refSources.join('、')}。`
     : '\n\n⚠️ Brief 中没有产品图片、参考图片或产品网站，在运行 creative_plan 之前需要向用户索取。';
 
-  const messages = [];
-  if (userMessage) {
-    // Chat-initiated: load conversation history (phase=null user/assistant messages,
-    // excluding the current message which was just persisted by chatWithOrchestrator)
-    let chatHistory = await getMessagesForClaude(sessionId, { phase: null });
-    // Drop the last user message (it's the current one we'll add below)
-    if (chatHistory.length > 0 && chatHistory[chatHistory.length - 1].role === 'user') {
-      chatHistory = chatHistory.slice(0, -1);
-    }
-    // Build: context → history → current user message
-    messages.push({
-      role: 'user',
-      content: `CAMPAIGN BRIEF:\n${JSON.stringify(briefData)}${existingResults}${imageNote}\n\n(以上是当前投放 Brief 和进度概览)`,
-    });
-    if (chatHistory.length > 0) {
-      messages.push({ role: 'assistant', content: '已了解当前 Brief 和投放进度，请问有什么需要？' });
-      messages.push(...chatHistory);
-    }
-    messages.push({ role: 'user', content: userMessage });
-  } else {
-    // Pipeline-initiated: auto-start orchestration
-    messages.push({
-      role: 'user',
-      content: `请根据以下 Campaign Brief 编排投放流程。\n\nCAMPAIGN BRIEF:\n${JSON.stringify(briefData)}${existingResults}${phaseInstruction}${imageNote}`,
-    });
-  }
+  const messages = [{
+    role: 'user',
+    content: `请根据以下 Campaign Brief 编排投放流程。\n\nCAMPAIGN BRIEF:\n${JSON.stringify(briefData)}${existingResults}${phaseInstruction}${imageNote}`,
+  }];
 
   yield* runToolUseLoop(sessionId, brief, messages, phaseResults, session.fix_log || []);
 }
@@ -1128,14 +1105,20 @@ export async function* orchestrateAfterApproval(sessionId) {
   yield* resumeAfterFeedback(sessionId, '确认执行投放方案');
 }
 
-// ── User chat with orchestrator ────────────────────────────────────────
+// ── Unified orchestrator entry ─────────────────────────────────────────
+
+// Tools that can be handled in the lightweight chat loop without pipeline state
+const CHAT_SAFE_TOOLS = new Set([
+  'get_meta_assets', 'read_phase_detail', 'patch_brief',
+  'preview_execution', 'search_fix_knowledge', 'save_fix_knowledge',
+]);
 
 /**
- * Process a user chat message within an orchestrator session.
- * Persists the message and uploaded images, then delegates to orchestrate().
+ * Unified entry: handles user messages and auto-start.
+ * LLM decides whether to answer, query tools, or run pipeline phases.
  *
  * @param {string} sessionId
- * @param {string} message
+ * @param {string|null} message - User message (null = auto-start)
  * @yields {{ event: string, data: Object }} SSE events
  */
 export async function* chatWithOrchestrator(sessionId, message, { attachments } = {}) {
@@ -1145,36 +1128,243 @@ export async function* chatWithOrchestrator(sessionId, message, { attachments } 
     return;
   }
 
-  // Persist user message
-  const messageIndex = await getNextMessageIndex(sessionId);
-  await addMessages(sessionId, [{
-    phase: null,
-    role: 'user',
-    content: message,
-    message_index: messageIndex,
-    attachments: attachments?.length ? attachments : undefined,
-  }]);
+  const brief = await getBrief(session.brief_id);
+  if (!brief) {
+    yield { event: 'error', data: { message: `Brief ${session.brief_id} not found` } };
+    return;
+  }
+
+  let messageIndex = await getNextMessageIndex(sessionId);
+
+  // Persist user message (if any)
+  if (message) {
+    await addMessages(sessionId, [{
+      phase: null, role: 'user', content: message,
+      message_index: messageIndex++,
+      attachments: attachments?.length ? attachments : undefined,
+    }]);
+  }
 
   // Persist uploaded images to brief.product_images
   if (attachments?.length) {
-    const brief = await getBrief(session.brief_id);
     const newImages = attachments
       .filter(a => a.content_type?.startsWith('image/'))
       .map(a => ({ url: a.url, filename: a.filename }));
     if (newImages.length) {
-      const existing = brief?.brief?.product_images || [];
+      const existing = brief.brief?.product_images || [];
       const existingUrls = new Set(existing.map(img => img.url));
       const deduped = newImages.filter(img => !existingUrls.has(img.url));
       if (deduped.length) {
-        await updateBriefFields(brief.id, {
-          product_images: [...existing, ...deduped],
-        });
+        await updateBriefFields(brief.id, { product_images: [...existing, ...deduped] });
       }
     }
   }
 
-  // Delegate to unified orchestrate() with user message context
-  yield* orchestrate(sessionId, {}, { userMessage: message, attachments });
+  // Build context
+  const briefData = brief.brief || {};
+  const phaseResults = session.phase_results || {};
+
+  const existingResults = Object.keys(phaseResults).length > 0
+    ? `\n\n已完成阶段结果:\n${Object.entries(phaseResults).map(([k, v]) => `${k}: ${JSON.stringify(summarizePhaseResult(k, v))}`).join('\n')}`
+    : '';
+
+  const refSources = [];
+  if (briefData.product_images?.length) refSources.push(`${briefData.product_images.length} 张用户上传的产品图片`);
+  if (briefData.reference_images?.length) refSources.push(`${briefData.reference_images.length} 张参考图片`);
+  if (briefData.website) refSources.push(`产品网站 ${briefData.website}`);
+  const imageNote = refSources.length
+    ? `\n\n可用素材来源：${refSources.join('、')}。`
+    : '\n\n⚠️ Brief 中没有产品图片、参考图片或产品网站，在运行 creative_plan 之前需要向用户索取。';
+
+  // Build messages: context + chat history + current message
+  const currentMessages = [];
+  currentMessages.push({
+    role: 'user',
+    content: `CAMPAIGN BRIEF:\n${JSON.stringify(briefData)}${existingResults}${imageNote}`,
+  });
+
+  // Load chat history
+  let chatHistory = await getMessagesForClaude(sessionId, { phase: null });
+  // Drop the current message (just persisted above) to avoid duplication
+  if (message && chatHistory.length > 0 && chatHistory[chatHistory.length - 1].role === 'user') {
+    chatHistory = chatHistory.slice(0, -1);
+  }
+  if (chatHistory.length > 0) {
+    currentMessages.push({ role: 'assistant', content: '已了解当前 Brief 和投放进度，请问有什么需要？' });
+    currentMessages.push(...chatHistory);
+  }
+
+  if (message) {
+    currentMessages.push({ role: 'user', content: message });
+  } else {
+    // Auto-start: no user message, instruct LLM to begin orchestration
+    currentMessages.push({ role: 'assistant', content: '已了解 Brief，开始编排投放流程。' });
+    currentMessages.push({ role: 'user', content: '请开始执行投放流程。' });
+  }
+
+  // Lightweight LLM loop — handles queries directly, delegates pipeline tools to orchestrate()
+  const systemPrompt = buildOrchestratorPrompt(phaseResults);
+  let assistantText = '';
+
+  for (let turn = 0; turn < 8; turn++) {
+    const stream = anthropic.messages.stream({
+      model: MODELS.SONNET,
+      max_tokens: 4096,
+      system: systemPrompt,
+      messages: currentMessages,
+      tools: ORCHESTRATOR_TOOLS,
+      tool_choice: { type: 'auto' },
+    });
+
+    // Stream text to frontend
+    const toolUseBlocks = [];
+    let currentBlockType = null;
+    let currentToolInput = '';
+    let currentToolName = '';
+    let currentToolUseId = '';
+
+    for await (const event of stream) {
+      if (event.type === 'content_block_start') {
+        const block = event.content_block;
+        if (block.type === 'tool_use') {
+          currentBlockType = 'tool_use';
+          currentToolName = block.name;
+          currentToolUseId = block.id;
+          currentToolInput = '';
+        } else if (block.type === 'text') {
+          currentBlockType = 'text';
+        }
+      } else if (event.type === 'content_block_delta') {
+        if (event.delta?.type === 'text_delta') {
+          assistantText += event.delta.text;
+          yield { event: 'delta', data: { text: event.delta.text } };
+        } else if (event.delta?.type === 'input_json_delta') {
+          currentToolInput += event.delta.partial_json;
+        }
+      } else if (event.type === 'content_block_stop') {
+        if (currentBlockType === 'tool_use') {
+          let parsedInput = {};
+          try { parsedInput = JSON.parse(currentToolInput); } catch { /* empty */ }
+          toolUseBlocks.push({ id: currentToolUseId, name: currentToolName, input: parsedInput });
+        }
+        currentBlockType = null;
+      }
+    }
+
+    // No tool calls → done
+    if (toolUseBlocks.length === 0) break;
+
+    const finalMessage = await stream.finalMessage();
+    currentMessages.push({ role: 'assistant', content: finalMessage.content });
+
+    // Check if any tool requires the pipeline
+    const needsPipeline = toolUseBlocks.some(b => !CHAT_SAFE_TOOLS.has(b.name));
+    if (needsPipeline) {
+      // Persist assistant text so far, then hand off to pipeline
+      if (assistantText) {
+        await addMessages(sessionId, [{
+          phase: null, role: 'assistant', content: assistantText,
+          message_index: messageIndex++,
+        }]);
+      }
+      yield* orchestrate(sessionId);
+      return;
+    }
+
+    // Handle chat-safe tools directly
+    const toolResults = [];
+    for (const block of toolUseBlocks) {
+      let result;
+      switch (block.name) {
+        case 'get_meta_assets': {
+          if (phaseResults.meta_assets?.available) {
+            result = phaseResults.meta_assets;
+          } else {
+            try {
+              const assets = await fetchAccountAssets();
+              result = assets;
+            } catch (err) {
+              result = { available: false, error: err.message };
+            }
+          }
+          break;
+        }
+        case 'read_phase_detail': {
+          const phaseData = phaseResults[block.input.phase];
+          if (!phaseData) {
+            result = { error: `${block.input.phase} 阶段尚未完成` };
+          } else {
+            const value = getNestedField(phaseData, block.input.field);
+            result = value !== undefined ? { field: block.input.field, value } : { error: `字段 "${block.input.field}" 不存在` };
+          }
+          break;
+        }
+        case 'patch_brief': {
+          try {
+            const sanitized = sanitizeBriefFields(block.input.fields, brief.brief);
+            await updateBriefFields(brief.id, sanitized);
+            brief.brief = { ...(brief.brief || {}), ...sanitized };
+            const stalePhases = new Set();
+            for (const f of Object.keys(sanitized)) {
+              const earliest = BRIEF_FIELD_TO_PHASE[f];
+              if (!earliest) continue;
+              if (phaseResults[earliest]) stalePhases.add(earliest);
+              for (const dk of (PHASE_DOWNSTREAM[earliest] || [])) {
+                if (phaseResults[dk]) stalePhases.add(dk);
+              }
+            }
+            result = { patched: true, fields: Object.keys(sanitized), reason: block.input.reason };
+            if (stalePhases.size > 0) {
+              result.stale_phases = [...stalePhases];
+              result.warning = `以下已完成的阶段使用了旧数据，建议 retry_phase 重跑: ${[...stalePhases].join(', ')}`;
+            }
+          } catch (err) {
+            result = { error: err.message };
+          }
+          break;
+        }
+        case 'preview_execution': {
+          const strategyResult = phaseResults.strategy;
+          result = strategyResult ? previewExecution(strategyResult) : { error: 'strategy 阶段尚未完成' };
+          break;
+        }
+        case 'search_fix_knowledge': {
+          try {
+            const fixes = await searchFixes(`${block.input.error_text} ${block.input.phase || ''}`);
+            result = fixes.length > 0
+              ? { found: true, matches: fixes.map(f => ({ error_pattern: f.error_pattern, solution: f.solution, success_count: f.success_count, similarity: f.similarity })) }
+              : { found: false };
+          } catch (err) {
+            result = { found: false, error: err.message };
+          }
+          break;
+        }
+        case 'save_fix_knowledge': {
+          try {
+            result = await saveFix({ errorPattern: block.input.error_pattern, errorContext: block.input.error_context, solution: block.input.solution, solutionType: block.input.solution_type || 'auto' });
+          } catch (err) {
+            result = { action: 'failed', error: err.message };
+          }
+          break;
+        }
+        default:
+          result = { error: `Unknown tool: ${block.name}` };
+      }
+      toolResults.push({ type: 'tool_result', tool_use_id: block.id, content: JSON.stringify(result) });
+    }
+
+    currentMessages.push({ role: 'user', content: toolResults });
+  }
+
+  // Persist assistant response
+  if (assistantText) {
+    await addMessages(sessionId, [{
+      phase: null, role: 'assistant', content: assistantText,
+      message_index: messageIndex++,
+    }]);
+  }
+
+  yield { event: 'done', data: { session_id: sessionId } };
 }
 
 // ── Utilities ──────────────────────────────────────────────────────────
