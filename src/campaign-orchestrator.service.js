@@ -1072,10 +1072,25 @@ export async function* orchestrate(sessionId, options = {}, { userMessage, attac
 
   const messages = [];
   if (userMessage) {
-    // Chat-initiated: user sent a message, respond to it first
+    // Chat-initiated: load conversation history (phase=null user/assistant messages,
+    // excluding the current message which was just persisted by chatWithOrchestrator)
+    let chatHistory = await getMessagesForClaude(sessionId, { phase: null });
+    // Drop the last user message (it's the current one we'll add below)
+    if (chatHistory.length > 0 && chatHistory[chatHistory.length - 1].role === 'user') {
+      chatHistory = chatHistory.slice(0, -1);
+    }
+    // Build: context → history → current user message
     messages.push({
       role: 'user',
-      content: `CAMPAIGN BRIEF:\n${JSON.stringify(briefData)}${existingResults}${imageNote}\n\n---\n用户消息: ${userMessage}\n\n请先回应用户的消息。如果用户在询问信息（如查看资产、方案细节），直接回答即可，不要启动阶段执行。只有当用户明确要求执行操作（如"开始投放"、"生成素材"、"继续"）时，才调用 run_phase。`,
+      content: `CAMPAIGN BRIEF:\n${JSON.stringify(briefData)}${existingResults}${imageNote}\n\n(以上是当前投放 Brief 和进度概览)`,
+    });
+    if (chatHistory.length > 0) {
+      messages.push({ role: 'assistant', content: '已了解当前 Brief 和投放进度，请问有什么需要？' });
+      messages.push(...chatHistory);
+    }
+    messages.push({
+      role: 'user',
+      content: `${userMessage}\n\n请先回应用户的消息。如果用户在询问信息（如查看资产、方案细节），直接回答即可，不要启动阶段执行。只有当用户明确要求执行操作（如"开始投放"、"生成素材"、"继续"）时，才调用 run_phase。`,
     });
   } else {
     // Pipeline-initiated: auto-start orchestration
