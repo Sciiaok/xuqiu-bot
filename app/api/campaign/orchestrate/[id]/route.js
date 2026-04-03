@@ -63,9 +63,14 @@ export async function POST(request, { params }) {
     );
   }
 
+  // Require a message
+  if (!body.message && !body.attachments?.length) {
+    return Response.json({ error: 'Message or attachments required' }, { status: 400 });
+  }
+
   // Unified orchestrator: LLM decides whether to answer or run phases
   return streamSSE(
-    chatWithOrchestrator(session.id, body.message || null, { attachments: body.attachments }),
+    chatWithOrchestrator(session.id, body.message || '', { attachments: body.attachments }),
     {
       heartbeatIntervalMs: 5000,
       streamKey: streamKey(brief.id),

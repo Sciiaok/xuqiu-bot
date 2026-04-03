@@ -1114,11 +1114,11 @@ const CHAT_SAFE_TOOLS = new Set([
 ]);
 
 /**
- * Unified entry: handles user messages and auto-start.
+ * Unified entry: handles user messages.
  * LLM decides whether to answer, query tools, or run pipeline phases.
  *
  * @param {string} sessionId
- * @param {string|null} message - User message (null = auto-start)
+ * @param {string} message - User message
  * @yields {{ event: string, data: Object }} SSE events
  */
 export async function* chatWithOrchestrator(sessionId, message, { attachments } = {}) {
@@ -1194,13 +1194,7 @@ export async function* chatWithOrchestrator(sessionId, message, { attachments } 
     currentMessages.push(...chatHistory);
   }
 
-  if (message) {
-    currentMessages.push({ role: 'user', content: message });
-  } else {
-    // Auto-start: no user message, instruct LLM to begin orchestration
-    currentMessages.push({ role: 'assistant', content: '已了解 Brief，开始编排投放流程。' });
-    currentMessages.push({ role: 'user', content: '请开始执行投放流程。' });
-  }
+  currentMessages.push({ role: 'user', content: message });
 
   // Lightweight LLM loop — handles queries directly, delegates pipeline tools to orchestrate()
   const systemPrompt = buildOrchestratorPrompt(phaseResults);

@@ -762,11 +762,7 @@ function ChatTab() {
 
         replaceMessagesForSession(sessionKey, reconstructed);
 
-        // Recovery: if brief is completed but orchestration never started, auto-trigger
-        const hasPhaseResults = Object.keys(phaseResults).some(k => k !== 'meta_assets');
-        if (orchData.status === 'brief_completed' && !hasPhaseResults) {
-          runOrchestration(selectedSession);
-        }
+        // Note: orchestration auto-starts from intake via yield* orchestrate() — no frontend trigger needed
       } catch (err) {
         console.error('Error fetching messages:', err);
         if (cancelled || messageLoadSeqRef.current !== requestSeq || !isActiveSessionKey(sessionKey)) return;
@@ -962,92 +958,7 @@ function ChatTab() {
     }
   }
 
-  /** Run orchestration pipeline and stream phase events */
-  async function runOrchestration(session = selectedSessionRef.current) {
-    const sessionKey = getSessionKey(session);
-    // Show spinner immediately before SSE events arrive
-    if (isActiveSessionKey(sessionKey)) {
-      setStreamingSteps([{ tool: null, content: '', phase: null }]);
-    }
-    updateSessionStatus(sessionKey, { status: 'running', current_phase: 'orchestrating' });
-
-    const endpoint = session.session_id
-      ? `/api/campaign/orchestrate/${session.session_id}`
-      : `/api/campaign/orchestrate/${session.brief_id}`;
-
-    const res = await fetch(endpoint, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({}),
-    });
-    if (!res.ok) {
-      const errBody = await res.text().catch(() => '');
-      appendMessageForSession(sessionKey, { id: `err-${Date.now()}`, type: 'error', content: `启动投放流程失败: ${errBody || res.status}` });
-      return;
-    }
-
-    const { consumeSSE } = await import('../../../../lib/consume-sse');
-    await consumeSSE(res, (event, data) => {
-      if (!isActiveSessionKey(sessionKey)) return;
-      switch (event) {
-        case 'orchestration_start':
-          pushStreamingStepForSession(sessionKey, { tool: null, content: '▶ 投放流程启动' });
-          updateSessionStatus(sessionKey, { status: 'running', current_phase: 'orchestrating' });
-          break;
-        case 'phase_start':
-          pushStreamingStepForSession(sessionKey, { tool: null, content: `▶ ${PHASE_LABELS[data.phase] || data.phase}`, phase: data.phase });
-          updateSessionStatus(sessionKey, { current_phase: data.phase });
-          break;
-        case 'phase_progress':
-          pushStreamingStepForSession(sessionKey, { tool: data.step, content: data.detail || data.step, phase: data.phase });
-          break;
-        case 'phase_complete': {
-          pushStreamingStepForSession(sessionKey, { tool: null, content: `✓ ${PHASE_LABELS[data.phase] || data.phase} 完成`, phase: data.phase });
-          const builder = phaseResultBuilders[data.phase];
-          if (builder && data.result) {
-            const card = builder(data.result);
-            if (card) appendMessageForSession(sessionKey, { id: `phase-${data.phase}-${Date.now()}`, ...card });
-          }
-          break;
-        }
-        case 'approval_required': {
-          appendMessageForSession(sessionKey, {
-            id: `approval-${Date.now()}`, type: 'execution_approval',
-            plan: data.plan, status: 'awaiting_approval',
-          });
-          updateSessionStatus(sessionKey, { status: 'awaiting_approval' });
-          break;
-        }
-        case 'feedback_required':
-          appendMessageForSession(sessionKey, {
-            id: `fb-${Date.now()}`, type: 'feedback_required',
-            message: data.message || '需要您的确认',
-            options: data.options || [],
-          });
-          updateSessionStatus(sessionKey, { status: 'awaiting_feedback' });
-          break;
-        case 'phase_error':
-          appendMessageForSession(sessionKey, { id: `err-${Date.now()}`, type: 'error', content: `${PHASE_LABELS[data.phase] || data.phase} 失败: ${data.error}` });
-          break;
-        case 'error':
-          appendMessageForSession(sessionKey, { id: `err-${Date.now()}`, type: 'error', content: data.message || '发生错误' });
-          break;
-        case 'done':
-          if (data.phases_completed?.length) {
-            appendMessageForSession(sessionKey, {
-              id: `done-${Date.now()}`,
-              type: 'assistant',
-              content: `投放方案已完成！共执行 ${data.phases_completed.length} 个阶段：${data.phases_completed.join(' → ')}`
-            });
-          }
-          updateSessionStatus(sessionKey, { status: 'completed', current_phase: 'done' });
-          break;
-        case 'heartbeat':
-          break;
-      }
-    });
-    flushStreamingSteps(sessionKey);
-  }
+  // Pipeline auto-starts from intake via yield* orchestrate() — no separate frontend trigger needed
 
   async function handleFeedbackRespond(response) {
     const session = selectedSession;
