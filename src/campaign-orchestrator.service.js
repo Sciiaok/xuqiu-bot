@@ -234,36 +234,50 @@ async function runCreative(sessionId, brief, phaseResults, _instructions, onProg
     }
   }
 
-  // Generate all creatives in parallel
-  onProgress?.({ step: 'creative_start', detail: `开始生成 ${adJobs.length} 张广告素材`, total: adJobs.length, completed: 0 });
+  // Generate creatives with concurrency limit to avoid API rate limits
+  const CREATIVE_CONCURRENCY = parseInt(process.env.CREATIVE_CONCURRENCY, 10) || 10;
+  onProgress?.({ step: 'creative_start', detail: `开始生成 ${adJobs.length} 张广告素材 (并发${CREATIVE_CONCURRENCY})`, total: adJobs.length, completed: 0 });
   let completedCount = 0;
   let errorCount = 0;
-  const results = await Promise.allSettled(
-    adJobs.map(({ ad, targetProduct, language }) =>
-      generateFromDocument({
-        pdfText: productText,
-        userPrompt: ad.media_requirements.suggested_content,
-        targetProduct,
-        language,
-        website: briefData.website,
-        referenceImages,
-        authClient: supabase,
-      }).then(result => {
+
+  // Concurrency-limited execution
+  const results = [];
+  const executing = new Set();
+  for (const job of adJobs) {
+    const p = (async () => {
+      const { ad, targetProduct, language } = job;
+      try {
+        const result = await generateFromDocument({
+          pdfText: productText,
+          userPrompt: ad.media_requirements.suggested_content,
+          targetProduct,
+          language,
+          website: briefData.website,
+          referenceImages,
+          authClient: supabase,
+        });
         completedCount++;
         onProgress?.({ step: 'creative_item', detail: `✓ ${ad.name} 生成完成 (${completedCount}/${adJobs.length})`, name: ad.name, completed: completedCount, total: adJobs.length, errors: errorCount });
-        return { name: ad.name, result };
-      }).catch(err => {
+        return { status: 'fulfilled', value: { name: ad.name, result } };
+      } catch (err) {
         completedCount++;
         errorCount++;
         onProgress?.({ step: 'creative_error', detail: `✗ ${ad.name} 失败: ${err.message} (${completedCount}/${adJobs.length})`, name: ad.name, error: err.message, completed: completedCount, total: adJobs.length, errors: errorCount });
-        throw err;
-      })
-    )
-  );
+        return { status: 'rejected', reason: err };
+      }
+    })();
+    results.push(p);
+    executing.add(p);
+    p.finally(() => executing.delete(p));
+    if (executing.size >= CREATIVE_CONCURRENCY) {
+      await Promise.race(executing);
+    }
+  }
+  const settled = await Promise.all(results);
 
   const creatives = {};
-  for (let i = 0; i < results.length; i++) {
-    const r = results[i];
+  for (let i = 0; i < settled.length; i++) {
+    const r = settled[i];
     if (r.status === 'fulfilled') {
       const { name, result } = r.value;
       creatives[name] = { url: result.url, storage_path: result.storage_path, asset_id: result.id };
@@ -1166,12 +1180,9 @@ export async function* resumeAfterFeedback(sessionId, userResponse, { attachment
 
   const state = session.orchestrator_state;
   if (!state || !state.pending_tool_use_id) {
-    // Backward compat: old-style awaiting_approval sessions have no orchestrator_state
-    if (session.status === 'awaiting_approval') {
-      yield* orchestrate(sessionId);
-      return;
-    }
-    yield { event: 'error', data: { message: 'No pending feedback state found' } };
+    // State is missing or is a stale checkpoint (server crashed between checkpoint save
+    // and feedback state save). Fall back to orchestrate() which handles checkpoint recovery.
+    yield* orchestrate(sessionId);
     return;
   }
 
