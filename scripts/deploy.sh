@@ -52,8 +52,16 @@ echo -e "\n${GREEN}[6/7] Restarting PM2 lead-sync cron...${NC}"
 ssh $SERVER "pm2 restart lead-sync-cron || pm2 start $REMOTE_DIR/ecosystem.config.cjs --only lead-sync-cron"
 
 # Step 7: Restart PM2 queue-cron service
-echo -e "\n${GREEN}[7/7] Restarting PM2 queue cron...${NC}"
+echo -e "\n${GREEN}[7/9] Restarting PM2 queue cron...${NC}"
 ssh $SERVER "pm2 restart queue-cron || pm2 start $REMOTE_DIR/ecosystem.config.cjs --only queue-cron"
+
+# Step 8: Restart PM2 report-cron service
+echo -e "\n${GREEN}[8/9] Restarting PM2 report cron...${NC}"
+ssh $SERVER "pm2 restart report-cron || pm2 start $REMOTE_DIR/ecosystem.config.cjs --only report-cron"
+
+# Step 9: Restart PM2 orchestrator-recovery service
+echo -e "\n${GREEN}[9/9] Restarting PM2 orchestrator recovery cron...${NC}"
+ssh $SERVER "pm2 restart orchestrator-recovery || pm2 start $REMOTE_DIR/ecosystem.config.cjs --only orchestrator-recovery"
 
 # Cleanup local temp file
 rm -f $TMP_FILE
@@ -75,7 +83,10 @@ echo "  - Webhook:        http://ec2-3-145-93-205.us-east-2.compute.amazonaws.co
 echo "  - Health:         http://ec2-3-145-93-205.us-east-2.compute.amazonaws.com/api/health"
 echo "  - Cron Sync:      http://ec2-3-145-93-205.us-east-2.compute.amazonaws.com/api/cron/sync-leads"
 echo "  - Cron Queue:     http://ec2-3-145-93-205.us-east-2.compute.amazonaws.com/api/cron/process-queue"
+echo "  - Cron Recovery:  http://ec2-3-145-93-205.us-east-2.compute.amazonaws.com/api/cron/recover-orchestrator"
 
 echo -e "\n${YELLOW}Cron Logs:${NC}"
 echo "  ssh $SERVER 'pm2 logs lead-sync-cron'"
 echo "  ssh $SERVER 'pm2 logs queue-cron'"
+echo "  ssh $SERVER 'pm2 logs report-cron'"
+echo "  ssh $SERVER 'pm2 logs orchestrator-recovery'"

@@ -538,6 +538,10 @@ function ChatTab() {
   const pendingImagesRef = useRef([]);
   // Ref to capture latest streamingSteps for flushing (avoids stale closure)
   const streamingStepsRef = useRef([]);
+  // AbortController for active SSE stream — ensures only one connection at a time
+  const streamAbortRef = useRef(null);
+  // Whether a stream connection is currently active (reading events)
+  const streamActiveRef = useRef(false);
   const selectedSessionRef = useRef(null);
   const messageLoadSeqRef = useRef(0);
   useEffect(() => { streamingStepsRef.current = streamingSteps; }, [streamingSteps]);
@@ -565,9 +569,22 @@ function ChatTab() {
     setMessages(nextMessages);
   }
 
+  const MAX_STREAMING_STEPS = 200;
   function pushStreamingStepForSession(sessionKey, step) {
     if (!isActiveSessionKey(sessionKey)) return;
-    setStreamingSteps(prev => [...prev, step]);
+    setStreamingSteps(prev => {
+      const next = [...prev, step];
+      // Auto-flush to messages if buffer gets too large to prevent unbounded growth
+      if (next.length >= MAX_STREAMING_STEPS) {
+        const meaningful = next.filter(s => s.tool || s.phase || (s.content && s.content.trim()));
+        if (meaningful.length > 0) {
+          setMessages(msgs => [...msgs, { id: `tg-${Date.now()}`, type: 'thinking', steps: meaningful }]);
+        }
+        streamingStepsRef.current = [];
+        return [];
+      }
+      return next;
+    });
   }
 
   function setStreamingTextForSession(sessionKey, value) {
@@ -652,7 +669,11 @@ function ChatTab() {
     const sessionKey = getSessionKey(selectedSession);
     const requestSeq = ++messageLoadSeqRef.current;
 
-    // Clear previous session view immediately to avoid cross-session flash
+    // Abort previous SSE stream and clear previous session view
+    if (streamAbortRef.current) {
+      streamAbortRef.current.abort();
+      streamAbortRef.current = null;
+    }
     setMessages([]);
     setStreamingText('');
     setStreamingSteps([]);
@@ -819,7 +840,7 @@ function ChatTab() {
         if (prev && stuckStates.has(prev) && data.status !== prev) {
           // Status changed — full reload to pick up new phase results
           setRefreshKey(k => k + 1);
-        } else if (data.status === 'running' && !streamingText && streamingStepsRef.current.length === 0) {
+        } else if (data.status === 'running' && !streamActiveRef.current) {
           // Session is running but we have no active stream — reconnect
           const sessionKey = getSessionKey(selectedSession);
           const savedId = loadLastEventId(sessionId);
@@ -881,6 +902,14 @@ function ChatTab() {
 
   // ── Shared stream connection — used by handleSend, handleFeedbackRespond, and reconnect ──
   async function connectToStream(sessionKey, sessionId, baseId, startEventId) {
+    // Abort any previous stream connection before starting a new one
+    if (streamAbortRef.current) {
+      streamAbortRef.current.abort();
+    }
+    const abortController = new AbortController();
+    streamAbortRef.current = abortController;
+    streamActiveRef.current = true;
+
     let assistantText = '';
     let streamDone = false;
     const { consumeSSE } = await import('../../../../lib/consume-sse');
@@ -924,6 +953,9 @@ function ChatTab() {
           break;
         case 'phase_complete': {
           pushStreamingStepForSession(sessionKey, { tool: null, content: `✓ ${PHASE_LABELS[data.phase] || data.phase} 完成`, phase: data.phase });
+          // Flush accumulated thinking steps BEFORE appending the result card,
+          // so the card always appears after the thinking group in the message list.
+          flushStreamingSteps(sessionKey);
           const builder = phaseResultBuilders[data.phase];
           if (builder && data.result) {
             const card = builder(data.result);
@@ -936,6 +968,7 @@ function ChatTab() {
           updateSessionStatus(sessionKey, { status: 'awaiting_approval' });
           break;
         case 'feedback_required':
+          flushStreamingSteps(sessionKey);
           appendMessageForSession(sessionKey, { id: `fb-${Date.now()}`, type: 'feedback_required', message: data.message || '需要您的确认', options: data.options || [] });
           updateSessionStatus(sessionKey, { status: 'awaiting_feedback' });
           break;
@@ -960,12 +993,19 @@ function ChatTab() {
 
     const streamUrl = `/api/campaign/orchestrate/${baseId}/stream?lastEventId=${encodeURIComponent(startEventId)}`;
     try {
-      const streamRes = await fetch(streamUrl);
+      const streamRes = await fetch(streamUrl, { signal: abortController.signal });
       if (streamRes.ok) {
         await consumeSSE(streamRes, handleEvent);
       }
     } catch (err) {
+      if (err.name === 'AbortError') return; // Expected when switching sessions
       console.warn('Stream connection failed:', err.message);
+    } finally {
+      // Only clear active flag if this connection is still the current one.
+      // A newer connectToStream() may have already replaced streamAbortRef.
+      if (streamAbortRef.current === abortController) {
+        streamActiveRef.current = false;
+      }
     }
 
     if (assistantText) {
