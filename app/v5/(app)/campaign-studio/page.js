@@ -797,22 +797,64 @@ function ChatTab() {
     };
   }, [selectedSession?.session_id, refreshKey]);
 
+  // ── Poll for stale sessions that may have been recovered by cron ──
+  // If the session was 'running' but SSE dropped, the cron may resume it.
+  // Poll every 15s to detect status changes and reconnect to the stream.
+  const lastKnownStatusRef = useRef(null);
+  useEffect(() => {
+    if (!selectedSession?.session_id) return;
+    // Only poll when the session looks stuck (no active SSE stream)
+    const sessionId = selectedSession.session_id;
+    const interval = setInterval(async () => {
+      try {
+        const res = await fetch(`/api/campaign/orchestrate/${sessionId}`);
+        if (!res.ok) return;
+        const data = await res.json();
+        const prev = lastKnownStatusRef.current;
+        lastKnownStatusRef.current = data.status;
+
+        // If session transitioned from a stuck state, reload messages + reconnect
+        const stuckStates = new Set(['running', 'interrupted']);
+        const activeStates = new Set(['running', 'awaiting_feedback']);
+        if (prev && stuckStates.has(prev) && data.status !== prev) {
+          // Status changed — full reload to pick up new phase results
+          setRefreshKey(k => k + 1);
+        } else if (data.status === 'running' && !streamingText && streamingStepsRef.current.length === 0) {
+          // Session is running but we have no active stream — reconnect
+          const sessionKey = getSessionKey(selectedSession);
+          const savedId = loadLastEventId(sessionId);
+          connectToStream(sessionKey, sessionId, sessionId, savedId);
+        }
+      } catch {}
+    }, 15_000);
+    return () => clearInterval(interval);
+  }, [selectedSession?.session_id]);
+
   // Auto-scroll only when user is already near the bottom (not browsing history)
   const chatContainerRef = useRef(null);
 
   const autoFollowRef = useRef(true);
-  const programmaticScrollRef = useRef(false);
+  const lastScrollTopRef = useRef(0);
 
   useEffect(() => {
     const el = chatContainerRef.current;
     if (!el) return;
-    const distanceFromBottom = () => el.scrollHeight - el.scrollTop - el.clientHeight;
     const onScroll = () => {
-      // Ignore scroll events triggered by programmatic scrollTop assignment
-      if (programmaticScrollRef.current) return;
+      const currentTop = el.scrollTop;
+      const prevTop = lastScrollTopRef.current;
+      lastScrollTopRef.current = currentTop;
 
-      const nearBottom = distanceFromBottom() <= 80;
-      autoFollowRef.current = nearBottom;
+      // User scrolled UP → stop auto-follow
+      if (currentTop < prevTop - 2) {
+        autoFollowRef.current = false;
+        return;
+      }
+
+      // Near bottom → resume auto-follow
+      const nearBottom = el.scrollHeight - currentTop - el.clientHeight <= 80;
+      if (nearBottom) {
+        autoFollowRef.current = true;
+      }
     };
 
     el.addEventListener('scroll', onScroll, { passive: true });
@@ -822,9 +864,8 @@ function ChatTab() {
   useEffect(() => {
     const el = chatContainerRef.current;
     if (el && autoFollowRef.current) {
-      programmaticScrollRef.current = true;
       el.scrollTop = el.scrollHeight;
-      requestAnimationFrame(() => { programmaticScrollRef.current = false; });
+      lastScrollTopRef.current = el.scrollTop;
     }
   }, [messages, streamingText, streamingSteps]);
 
@@ -833,9 +874,8 @@ function ChatTab() {
     const el = chatContainerRef.current;
     if (!el) return;
     requestAnimationFrame(() => {
-      programmaticScrollRef.current = true;
       el.scrollTop = el.scrollHeight;
-      requestAnimationFrame(() => { programmaticScrollRef.current = false; });
+      lastScrollTopRef.current = el.scrollTop;
     });
   }, [selectedSession?.session_id]);
 
