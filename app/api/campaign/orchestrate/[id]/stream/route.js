@@ -72,19 +72,13 @@ export async function GET(request, { params }) {
           const eventData = fields[fields.indexOf('data') + 1];
           send(eventId, eventType, eventData);
           lastId = eventId;
-
-          if (eventType === 'done' || eventType === 'error') {
-            controller.close();
-            return;
-          }
         }
 
-        // Check if session already finished
+        // Check if session already finished (based on DB status, not event names)
         const freshSession = await getSession(session.id);
         if (TERMINAL_STATUSES.has(freshSession?.status)) {
-          const lastReplay = replayEvents[replayEvents.length - 1];
-          const lastReplayEvent = lastReplay
-            ? lastReplay[1][lastReplay[1].indexOf('event') + 1]
+          const lastReplayEvent = replayEvents.length > 0
+            ? replayEvents[replayEvents.length - 1][1][replayEvents[replayEvents.length - 1][1].indexOf('event') + 1]
             : null;
           if (lastReplayEvent !== 'done' && lastReplayEvent !== 'error') {
             send(null, 'done', JSON.stringify({ status: freshSession.status }));
@@ -114,13 +108,19 @@ export async function GET(request, { params }) {
           }
 
           const entries = result[0][1];
+          let sawTerminalEvent = false;
           for (const [eventId, fields] of entries) {
             const eventType = fields[fields.indexOf('event') + 1];
             const eventData = fields[fields.indexOf('data') + 1];
             send(eventId, eventType, eventData);
             lastId = eventId;
+            if (eventType === 'done' || eventType === 'error') sawTerminalEvent = true;
+          }
 
-            if (eventType === 'done' || eventType === 'error') {
+          // Only close if session is actually terminal (done event may be mid-pipeline, e.g. intake done)
+          if (sawTerminalEvent) {
+            const currentSession = await getSession(session.id);
+            if (!currentSession || TERMINAL_STATUSES.has(currentSession.status)) {
               controller.close();
               blockingClient.disconnect();
               blockingClient = null;
