@@ -2,7 +2,6 @@ import { anthropic, MODELS } from './llm-client.js';
 import { config } from './config.js';
 import supabase from '../lib/supabase.js';
 
-const OPENROUTER_CHAT_URL = `${config.aigc.baseURL}/v1/chat/completions`;
 const FETCH_TIMEOUT = 120_000;
 const BEST_OF_N = parseInt(process.env.AIGC_BEST_OF_N, 10) || 1;
 const SCORE_THRESHOLD = 6;     // Minimum acceptable fidelity score (1-10)
@@ -40,12 +39,13 @@ ${pdfText.slice(0, 12000)}`,
  * Generate an ad image via OpenRouter image-capable models.
  * Returns { imageBuffer, model, prompt }.
  */
-const IMAGE_MODEL_FALLBACKS = (process.env.MIXAI_API_GEMINI_KEY || process.env.MIXAI_API_KEY)
-  ? ['gemini-3.1-flash-image-preview', 'gemini-2.5-flash-image', 'gemini-2.5-flash-image-preview']
-  : ['google/gemini-3.1-flash-image-preview', 'google/gemini-2.0-flash-exp:free', 'openai/gpt-image-1'];
+// OpenRouter models (primary)
+const OPENROUTER_IMAGE_MODELS = ['google/gemini-3.1-flash-image-preview', 'google/gemini-2.0-flash-exp:free', 'openai/gpt-image-1'];
+// MixAI models (fallback)
+const MIXAI_IMAGE_MODELS = ['gemini-3.1-flash-image-preview', 'gemini-2.5-flash-image', 'gemini-2.5-flash-image-preview'];
 
 export async function generateAdImage({ prompt, model, referenceImages }) {
-  if (!config.aigc.apiKey) throw new Error('OPENROUTER_API_KEY is not configured');
+  if (!config.aigc.apiKey) throw new Error('OPENROUTER_API_KEY or MIXAI_API_KEY is not configured');
 
   // Build message content: text prompt + optional reference images
   let content;
@@ -61,33 +61,47 @@ export async function generateAdImage({ prompt, model, referenceImages }) {
     content = prompt;
   }
 
-  // Try models in order until one succeeds
-  // Set AIGC_NO_FALLBACK=1 to disable model fallback chain (faster failures in testing)
-  const modelsToTry = model
-    ? [model]
-    : process.env.AIGC_NO_FALLBACK
-      ? [config.aigc.imageModel]
-      : [config.aigc.imageModel, ...IMAGE_MODEL_FALLBACKS.filter(m => m !== config.aigc.imageModel)];
+  if (model) {
+    const result = await callImageModel(config.aigc.baseURL, config.aigc.apiKey, model, content);
+    return { ...result, prompt };
+  }
+
+  // Set AIGC_NO_FALLBACK=1 to disable model fallback chain
+  if (process.env.AIGC_NO_FALLBACK) {
+    const result = await callImageModel(config.aigc.baseURL, config.aigc.apiKey, config.aigc.imageModel, content);
+    return { ...result, prompt };
+  }
+
+  // Try OpenRouter models first, then MixAI fallback
+  const providers = [
+    { baseURL: config.aigc.baseURL, apiKey: config.aigc.apiKey, models: OPENROUTER_IMAGE_MODELS },
+  ];
+  if (config.aigc.mixaiApiKey) {
+    providers.push({ baseURL: config.aigc.mixaiBaseURL, apiKey: config.aigc.mixaiApiKey, models: MIXAI_IMAGE_MODELS });
+  }
 
   let lastError;
-  for (const currentModel of modelsToTry) {
-    try {
-      const result = await callImageModel(currentModel, content);
-      return { ...result, prompt };
-    } catch (err) {
-      console.warn(`[aigc] ${currentModel} failed:`, err.message);
-      lastError = err;
+  for (const provider of providers) {
+    for (const currentModel of provider.models) {
+      try {
+        const result = await callImageModel(provider.baseURL, provider.apiKey, currentModel, content);
+        return { ...result, prompt };
+      } catch (err) {
+        console.warn(`[aigc] ${currentModel} failed:`, err.message);
+        lastError = err;
+      }
     }
   }
 
   throw lastError || new Error('All image models failed');
 }
 
-async function callImageModel(model, content) {
-  const res = await fetch(OPENROUTER_CHAT_URL, {
+async function callImageModel(baseURL, apiKey, model, content) {
+  const url = `${baseURL}/v1/chat/completions`;
+  const res = await fetch(url, {
     method: 'POST',
     headers: {
-      'Authorization': `Bearer ${config.aigc.apiKey}`,
+      'Authorization': `Bearer ${apiKey}`,
       'Content-Type': 'application/json',
     },
     body: JSON.stringify({

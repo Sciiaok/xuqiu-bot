@@ -56,13 +56,16 @@ export const config = {
     baseURL: process.env.FIRECRAWL_BASE_URL || 'https://api.firecrawl.dev/v1',
   },
 
-  // AIGC — image generation via MixAI Gemini (primary) or OpenRouter (fallback)
+  // AIGC — image generation via OpenRouter (primary), MixAI Gemini (fallback)
   aigc: {
-    apiKey: process.env.MIXAI_API_GEMINI_KEY || process.env.MIXAI_API_KEY || process.env.OPENROUTER_API_KEY,
-    baseURL: (process.env.MIXAI_API_GEMINI_KEY || process.env.MIXAI_API_KEY)
-      ? (process.env.MIXAI_BASE_URL || 'https://us.mixaicloud.com')
-      : (process.env.OPENROUTER_BASE_URL || 'https://openrouter.ai/api'),
-    imageModel: process.env.AIGC_IMAGE_MODEL || ((process.env.MIXAI_API_GEMINI_KEY || process.env.MIXAI_API_KEY) ? 'gemini-3.1-flash-image-preview' : 'google/gemini-3.1-flash-image-preview'),
+    apiKey: process.env.OPENROUTER_API_KEY || process.env.MIXAI_API_GEMINI_KEY || process.env.MIXAI_API_KEY,
+    baseURL: process.env.OPENROUTER_API_KEY
+      ? (process.env.OPENROUTER_BASE_URL || 'https://openrouter.ai/api')
+      : (process.env.MIXAI_BASE_URL || 'https://us.mixaicloud.com'),
+    imageModel: process.env.AIGC_IMAGE_MODEL || (process.env.OPENROUTER_API_KEY ? 'google/gemini-3.1-flash-image-preview' : 'gemini-3.1-flash-image-preview'),
+    // MixAI fallback for image generation
+    mixaiApiKey: process.env.MIXAI_API_GEMINI_KEY || process.env.MIXAI_API_KEY || null,
+    mixaiBaseURL: process.env.MIXAI_BASE_URL || 'https://us.mixaicloud.com',
     storageBucket: 'aigc-assets',
   },
 
