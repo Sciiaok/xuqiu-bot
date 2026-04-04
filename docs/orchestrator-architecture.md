@@ -9,6 +9,9 @@
 - `app/api/campaign/orchestrate/[id]/route.js` — API 入口
 - `app/api/campaign/orchestrate/[id]/stream/route.js` — SSE 重连
 - `app/api/cron/recover-orchestrator/route.js` — 崩溃恢复 cron
+- `app/api/campaign/orchestrate/[id]/message/route.js` — 中途消息
+- `app/api/campaign/orchestrate/[id]/feedback/route.js` — 反馈恢复
+- `app/api/campaign/orchestrate/[id]/approve/route.js` — 执行审批
 - `app/v5/(app)/campaign-studio/page.js` — 前端
 
 ## 1. Agent Loop 结构
@@ -48,13 +51,13 @@ runToolUseLoop (max 40 轮)
 
 ### 阶段定义
 
-| 阶段 | 名称 | Sub-Agent | 输出 |
-|------|------|-----------|------|
-| research | 市场调研 | conductResearch | 市场分析、竞品、关键词趋势 |
-| strategy | 方案规划 | generateCampaignPlanParallel | 平台/预算/campaign/adset/ad 结构 |
-| creative_plan | 素材策划 | generateCreativePlan | 素材任务列表 + 参考图片 |
-| creative | 素材生成 | generateFromDocument ×N | 各广告的图片 URL |
-| execution | 投放执行 | executeMediaPlan | Meta campaign/adset/ad 创建结果 |
+| 阶段 | 名称 | Sub-Agent | 输出 | 备注 |
+|------|------|-----------|------|------|
+| research | 市场调研 | conductResearch | 市场分析、竞品、关键词趋势 | |
+| strategy | 方案规划 | generateCampaignPlanParallel | 平台/预算/campaign/adset/ad 结构 | |
+| creative_plan | 素材策划 | generateCreativePlan | 素材任务列表 + 参考图片 | |
+| creative | 素材生成 | generateFromDocument ×N | 各广告的图片 URL | |
+| execution | 投放执行 | executeMediaPlan | Meta campaign/adset/ad 创建结果 | ⚠️ needsApproval |
 
 ### 依赖关系 (PHASE_DOWNSTREAM)
 
@@ -67,7 +70,7 @@ research → strategy → creative_plan → creative → execution
 - `strategy` 重跑 → 删 `creative_plan`, `creative`, `execution`
 - `creative_plan` 重跑 → 删 `creative`, `execution`
 
-## 3. 13 个 Orchestrator Tools
+## 3. 12 个 Orchestrator Tools
 
 ### 阶段执行
 
@@ -111,7 +114,32 @@ research → strategy → creative_plan → creative → execution
 |------|------|
 | `submit_final(summary)` | 标记编排完成 |
 
-## 4. 硬约束 (代码级，Agent 无法绕过)
+## 4. Chat Loop 与 Pipeline 双入口
+
+### chatWithOrchestrator（轻量 Chat Loop）
+
+`chatWithOrchestrator(sessionId, message)` 是用户消息的统一入口。最多 8 轮 LLM 循环，只允许执行 `CHAT_SAFE_TOOLS` 子集：
+
+```
+CHAT_SAFE_TOOLS = {
+  get_meta_assets, read_phase_detail, patch_brief,
+  preview_execution, search_fix_knowledge, save_fix_knowledge
+}
+```
+
+若 LLM 调用了非 CHAT_SAFE 的 tool（如 `run_phase`），chat loop 立即 `yield* orchestrate()` 切入完整 pipeline。
+
+### 额外 API 端点
+
+| 端点 | 方法 | 用途 |
+|------|------|------|
+| `/orchestrate/[id]/message` | POST | 向运行中的 pipeline 推送用户消息，存入 Redis queue |
+| `/orchestrate/[id]/feedback` | POST | 恢复 `awaiting_feedback` 状态的 session |
+| `/orchestrate/[id]/approve` | POST | 简化版审批，自动确认 execution 阶段 |
+
+用户中途消息通过 `consumeUserInput(sessionId)` 在每轮迭代开始时消费。
+
+## 5. 硬约束 (代码级，Agent 无法绕过)
 
 | 约束 | 触发条件 | 行为 |
 |------|---------|------|
@@ -122,7 +150,7 @@ research → strategy → creative_plan → creative → execution
 | Submit 检查 | cascade 失效阶段未重跑 | 拒绝提交 |
 | 迭代上限 | loop 达到 40 轮 | force-terminated |
 
-## 5. 错误处理分层
+## 6. 错误处理分层
 
 ### Layer 1: LLM 调用失败
 
@@ -158,7 +186,7 @@ Sub-agent 抛异常：
 
 见第 4 节。代码级拒绝，Claude 无法绕过。
 
-## 6. 重试机制
+## 7. 重试机制
 
 ### Agent 主动 retry
 
@@ -190,7 +218,7 @@ LIMIT 5
 - 恢复失败 → 标记 `status = interrupted`（不会无限重试）
 - 超过 24h 的僵尸 session 不恢复
 
-## 7. 状态机
+## 8. 状态机
 
 ```
          ┌─────────┐
@@ -220,19 +248,19 @@ LIMIT 5
    └────────────┘
 ```
 
-## 8. 数据持久化
+## 9. 数据持久化
 
 | 数据 | 存储位置 | 写入时机 |
 |------|---------|---------|
 | Session 状态 | `orchestrator_sessions.status` | 每次状态转换 |
 | 阶段结果 | `orchestrator_sessions.phase_results` | 阶段完成后 merge |
 | Checkpoint | `orchestrator_sessions.orchestrator_state` | 每轮 LLM 调用前 |
-| 修复日志 | `orchestrator_sessions.fix_log` | patch_brief 时 |
+| 修复日志 | `orchestrator_sessions.fix_log` | patch_brief 时 (上限 MAX_FIX_LOG=50) |
 | 事件消息 | `orchestrator_messages` | 阶段开始/完成/错误/进度 |
 | SSE 事件 | Redis Stream (TTL 24h) | 每个 yield 的事件 |
 | 用户中途消息 | Redis List (`user_input:{sessionId}`) | 用户在执行中发消息时 |
 
-## 9. SSE 流 & 前端恢复
+## 10. SSE 流 & 前端恢复
 
 ### 服务端 SSE 管道
 
@@ -289,7 +317,7 @@ setInterval(15s):
 
 这确保了即使服务端进程崩溃后被 cron 恢复，前端也能在 15s 内感知并重新接上数据流。
 
-## 10. 部署
+## 11. 部署
 
 ### PM2 进程
 
