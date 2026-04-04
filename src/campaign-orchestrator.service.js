@@ -973,6 +973,13 @@ async function* runToolUseLoop(sessionId, brief, messages, initialPhaseResults, 
         }
 
         case 'submit_final': {
+          // ── Hard constraint: required phases must be completed ──
+          const REQUIRED_PHASES = ['strategy', 'creative_plan', 'creative'];
+          const missingPhases = REQUIRED_PHASES.filter(p => !phaseResults[p]);
+          if (missingPhases.length > 0) {
+            result = { error: `以下必需阶段未完成: ${missingPhases.join(', ')}。请先用 run_phase 执行这些阶段再提交。` };
+            break;
+          }
           // ── Hard constraint: block submit if execution has unresolved errors ──
           const execForSubmit = phaseResults.execution;
           if (execForSubmit && execForSubmit.status !== 'completed' && execForSubmit.errors?.length) {
