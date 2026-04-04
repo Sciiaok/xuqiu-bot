@@ -982,6 +982,13 @@ function ChatTab() {
           streamDone = true;
           break;
         case 'done':
+          // Flush any pending streaming text so the cursor stops
+          if (assistantText) {
+            appendMessageForSession(sessionKey, { id: `ai-${Date.now()}`, type: 'assistant', content: assistantText });
+            assistantText = '';
+          }
+          setStreamingTextForSession(sessionKey, '');
+          flushStreamingSteps(sessionKey);
           if (data.phases_completed?.length) {
             appendMessageForSession(sessionKey, { id: `done-${Date.now()}`, type: 'assistant', content: `投放方案已完成！共执行 ${data.phases_completed.length} 个阶段：${data.phases_completed.join(' → ')}` });
             updateSessionStatus(sessionKey, { status: 'completed', current_phase: 'done' });
