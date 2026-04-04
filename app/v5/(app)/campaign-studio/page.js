@@ -1075,7 +1075,10 @@ function ChatTab() {
       // All paths now return JSON + fire-and-forget; connect to /stream for events
       // Use saved lastEventId to avoid replaying already-seen events from earlier requests
       const startId = loadLastEventId(session.session_id);
-      await connectToStream(sessionKey, session.session_id, baseId, startId);
+      // Don't await — stream reading is a background activity, sendingMsg only covers the POST
+      connectToStream(sessionKey, session.session_id, baseId, startId).catch(err => {
+        if (err.name !== 'AbortError') console.warn('Stream connection failed:', err.message);
+      });
     } catch (err) {
       if (err.name === 'AbortError') return;
       console.error('Error sending message:', err);
@@ -1084,7 +1087,6 @@ function ChatTab() {
     } finally {
       setSendingMsg(false);
       setStreamingTextForSession(sessionKey, '');
-      flushStreamingSteps(sessionKey);
     }
   }
 
@@ -1122,15 +1124,16 @@ function ChatTab() {
         appendMessageForSession(sessionKey, { id: `err-${Date.now()}`, type: 'error', content: `反馈提交失败: ${res.status}` });
         return;
       }
-      // Connect to /stream to receive events from the fire-and-forget generator
+      // Connect to /stream — don't await, stream reading is background
       const fbStartId = loadLastEventId(session.session_id);
-      await connectToStream(sessionKey, session.session_id, baseId, fbStartId);
+      connectToStream(sessionKey, session.session_id, baseId, fbStartId).catch(err => {
+        if (err.name !== 'AbortError') console.warn('Stream connection failed:', err.message);
+      });
     } catch (err) {
       if (err.name === 'AbortError') return;
       appendMessageForSession(sessionKey, { id: `err-${Date.now()}`, type: 'error', content: err.message });
     } finally {
       setSendingMsg(false);
-      flushStreamingSteps(sessionKey);
     }
   }
 
