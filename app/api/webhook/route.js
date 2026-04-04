@@ -182,11 +182,14 @@ export async function POST(request) {
 
       // Extract message details
       const waId = inboundMessages[0].from;
-      const profileName = change.contacts?.[0]?.profile?.name?.trim() || null;
+      const webhookContact = change.contacts?.[0];
+      const profileName = webhookContact?.profile?.name?.trim() || null;
+      const bsuid = webhookContact?.user_id || null;       // BSUID — always present once rolled out
+      const waUsername = webhookContact?.username || null;  // WhatsApp username (optional)
       const phoneNumberId = change.metadata?.phone_number_id || null;
 
       // Get the minimum context needed
-      const context = await getOrCreateRoutedConversationContext({ waId, profileName, phoneNumberId });
+      const context = await getOrCreateRoutedConversationContext({ waId, profileName, phoneNumberId, bsuid, username: waUsername });
       const scopedLogger = logger.child({
         wa_id: waId,
         contact_id: context.contact_id,
