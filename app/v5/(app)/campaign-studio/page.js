@@ -998,7 +998,7 @@ function ChatTab() {
         await consumeSSE(streamRes, handleEvent);
       }
     } catch (err) {
-      if (err.name === 'AbortError') return; // Expected when switching sessions
+      if (err.name === 'AbortError' || abortController.signal.aborted) return;
       console.warn('Stream connection failed:', err.message);
     } finally {
       // Only clear active flag if this connection is still the current one.
@@ -1077,6 +1077,7 @@ function ChatTab() {
       const startId = loadLastEventId(session.session_id);
       await connectToStream(sessionKey, session.session_id, baseId, startId);
     } catch (err) {
+      if (err.name === 'AbortError') return;
       console.error('Error sending message:', err);
       appendMessageForSession(sessionKey, { id: `err-${Date.now()}`, type: 'error', content: `发送失败: ${err.message}` });
       setShowReconnect(true);
@@ -1125,6 +1126,7 @@ function ChatTab() {
       const fbStartId = loadLastEventId(session.session_id);
       await connectToStream(sessionKey, session.session_id, baseId, fbStartId);
     } catch (err) {
+      if (err.name === 'AbortError') return;
       appendMessageForSession(sessionKey, { id: `err-${Date.now()}`, type: 'error', content: err.message });
     } finally {
       setSendingMsg(false);
