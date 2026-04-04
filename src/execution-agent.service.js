@@ -533,10 +533,13 @@ export async function createFullCampaign(input, options = {}) {
 
         // Lead gen + messaging CTA = WhatsApp lead capture (no form, uses WhatsApp conversation)
         // Lead gen + form-compatible CTA = Lead form capture (attach form_id)
-        // Lead gen + incompatible CTA (e.g. CONTACT_US) = no form attachment
+        // Lead gen + incompatible CTA (e.g. CONTACT_US) = auto-downgrade to LEARN_MORE and attach form
         const canAttachForm = LEAD_FORM_COMPATIBLE_CTAS.has(resolvedCta);
-        const callToAction = { type: resolvedCta };
-        if (isLeadGen && ad.lead_gen_form_id && canAttachForm && !isMessagingCta) {
+        const effectiveCta = (isLeadGen && ad.lead_gen_form_id && !canAttachForm && !isMessagingCta)
+          ? 'LEARN_MORE'  // Meta requires lead form for lead_gen; downgrade CTA to make it compatible
+          : resolvedCta;
+        const callToAction = { type: effectiveCta };
+        if (isLeadGen && ad.lead_gen_form_id && !isMessagingCta) {
           callToAction.value = { lead_gen_form_id: ad.lead_gen_form_id };
         }
 
@@ -551,9 +554,9 @@ export async function createFullCampaign(input, options = {}) {
             headline: ad.headline,
             description: ad.description,
             link_url: ad.link_url || input.link_url,
-            call_to_action_type: resolvedCta,
+            call_to_action_type: effectiveCta,
           };
-          if (isLeadGen && ad.lead_gen_form_id && canAttachForm && !isMessagingCta) mcpParams.lead_gen_form_id = ad.lead_gen_form_id;
+          if (isLeadGen && ad.lead_gen_form_id && !isMessagingCta) mcpParams.lead_gen_form_id = ad.lead_gen_form_id;
           const creativeRes = await callTool('create_ad_creative', mcpParams);
           creativeId = creativeRes.id || creativeRes.creative_id;
         } else {
