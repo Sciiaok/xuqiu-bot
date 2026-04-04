@@ -1363,15 +1363,6 @@ function ChatTab() {
                 </div>
               )}
 
-              {/* Loading indicator when sending but no stream yet */}
-              {sendingMsg && !streamingText && streamingSteps.length === 0 && (
-                <div className={`${s.chatMsg} ${s.chatAI}`}>
-                  <div className={s.aiAvatar}>AI</div>
-                  <div className={s.chatBubble} style={{ color: 'var(--text3)' }}>
-                    思考中…
-                  </div>
-                </div>
-              )}
 
             </div>
           )}
