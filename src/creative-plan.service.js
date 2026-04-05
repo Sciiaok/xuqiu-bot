@@ -130,11 +130,30 @@ function extractBriefForCreative(brief) {
 
 function extractCreativeContext(report) {
   if (!report) return {};
+
+  // Support both legacy fields and v2 direct fields
+  const v2 = report._v2;
+
+  const competitor_ads = report.competitor_ads || (v2?.market_competitor_analysis ? {
+    summary: v2.market_competitor_analysis.competitor_summary,
+    common_formats: v2.market_competitor_analysis.competitor_creative_formats,
+    common_messaging: v2.market_competitor_analysis.competitor_messaging,
+    gaps_and_opportunities: v2.market_competitor_analysis.gaps_and_opportunities,
+  } : undefined);
+
+  const content_preferences = report.audience_insights?.content_preferences
+    || v2?.audience_segmentation?.content_preferences
+    || [];
+
+  const rawSegments = report.audience_insights?.primary_segments
+    || v2?.audience_segmentation?.core_audiences
+    || [];
+
   return {
-    competitor_ads: report.competitor_ads,
-    content_preferences: report.audience_insights?.content_preferences,
-    primary_segments: Array.isArray(report.audience_insights?.primary_segments)
-      ? report.audience_insights.primary_segments.map(s => s.name || s.description)
+    competitor_ads,
+    content_preferences,
+    primary_segments: Array.isArray(rawSegments)
+      ? rawSegments.map(s => s.name || s.description)
       : [],
   };
 }

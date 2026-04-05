@@ -15,6 +15,7 @@ import {
   ResearchCard, StrategyCard, CreativePlanCard, CreativeCard,
   ExecutionCard, FeedbackCard, PhaseDivider,
 } from '../../components/PhaseCards/PhaseCards';
+import { ResearchCardV2 } from '../../components/PhaseCards/ResearchCardV2';
 
 // ─── Tab definitions ──────────────────────────────────────────────
 const MAIN_TABS = [
@@ -1374,6 +1375,9 @@ function ChatTab({ workspaceMode = false }) {
                   return <PhaseDivider key={item.id || i} label={item.content} />;
                 }
                 if (item.type === 'research_complete') {
+                  if (item.report?._v2) {
+                    return <ResearchCardV2 key={item.id || i} report={item.report} duration={item.duration} />;
+                  }
                   return <ResearchCard key={item.id || i} report={item.report} duration={item.duration} />;
                 }
                 if (item.type === 'strategy_complete') {

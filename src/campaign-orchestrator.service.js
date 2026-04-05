@@ -15,6 +15,7 @@ import {
 } from '../lib/repositories/orchestrator.repository.js';
 import supabase from '../lib/supabase.js';
 import { conductResearch } from './research-agent.service.js';
+import { conductResearchV2 } from './research-agent-v2.service.js';
 import { generateMediaPlan, generateCampaignPlan, generateCampaignPlanParallel } from './strategy-agent.service.js';
 import { generateFromDocument } from './aigc.service.js';
 import { executeMediaPlan, previewExecution, activateCampaigns } from './execution-agent.service.js';
@@ -151,10 +152,54 @@ async function runAgentWithTrace(sessionId, phaseKey, agentFn, agentArgs) {
   return result;
 }
 
+// ── V2 research mapping ──────────────────────────────────────────────
+
+/**
+ * Map v2 research output (8-section schema) to legacy field names
+ * consumed by strategy-agent, creative-plan, evaluateOutput, summarizePhaseResult.
+ */
+function mapV2ToLegacy(v2) {
+  return {
+    platform_recommendations: (v2.media_mix?.channels || []).map(c => ({
+      platform: c.platform,
+      fit_score: c.fit_score,
+      rationale: c.rationale,
+    })),
+    keyword_trends: {
+      high_volume_keywords: v2.keyword_trends?.high_volume_keywords || [],
+      rising_keywords: v2.keyword_trends?.rising_keywords || [],
+      rising: v2.keyword_trends?.rising_keywords || [],
+      seasonal_patterns: v2.keyword_trends?.seasonal_patterns || '',
+    },
+    audience_insights: {
+      primary_segments: v2.audience_segmentation?.core_audiences || [],
+      content_preferences: v2.audience_segmentation?.content_preferences || [],
+      platform_preferences: {},
+    },
+    competitor_ads: {
+      summary: v2.market_competitor_analysis?.competitor_summary || '',
+      common_formats: v2.market_competitor_analysis?.competitor_creative_formats || [],
+      common_messaging: v2.market_competitor_analysis?.competitor_messaging || [],
+      gaps_and_opportunities: v2.market_competitor_analysis?.gaps_and_opportunities || [],
+    },
+    recommendations: v2.optimization_reporting?.optimization_suggestions || [],
+    benchmark_metrics: v2.budget_scheduling?.benchmarks || {},
+    market_overview: {
+      market_size_estimate: '',
+      growth_trend: '',
+      key_players: [],
+      market_characteristics: [],
+    },
+    competitor_ads_raw: v2.competitor_ads_raw,
+    _v2: v2,
+  };
+}
+
 // ── Phase executors ────────────────────────────────────────────────────
 
 async function runResearch(sessionId, brief, _phaseResults, instructions, onProgress) {
-  return runAgentWithTrace(sessionId, 'research', conductResearch, [brief.brief || {}, instructions, onProgress]);
+  const v2Result = await runAgentWithTrace(sessionId, 'research', conductResearchV2, [brief.brief || {}, instructions, onProgress]);
+  return mapV2ToLegacy(v2Result);
 }
 
 async function runStrategy(sessionId, brief, phaseResults, instructions, onProgress) {
