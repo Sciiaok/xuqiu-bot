@@ -3,15 +3,22 @@ import { NextResponse } from 'next/server';
 import { defaultLocale, locales } from './i18n/config';
 
 export async function middleware(request) {
+  const pathname = request.nextUrl.pathname;
+
   if (process.env.PLAYWRIGHT_TEST === '1') {
     return NextResponse.next();
   }
 
-  // Demo mode: skip auth, redirect /login to /dashboard
+  // Demo mode: skip auth, redirect auth entrypoints to their default pages
   if (process.env.DEMO_MODE === 'true') {
-    if (request.nextUrl.pathname === '/login') {
+    if (pathname === '/login') {
       const url = request.nextUrl.clone();
       url.pathname = '/dashboard';
+      return NextResponse.redirect(url);
+    }
+    if (pathname === '/v5/login') {
+      const url = request.nextUrl.clone();
+      url.pathname = '/v5/analytics';
       return NextResponse.redirect(url);
     }
     return NextResponse.next();
@@ -31,8 +38,13 @@ export async function middleware(request) {
     response.cookies.set('NEXT_LOCALE', detected, { path: '/', maxAge: 365 * 24 * 60 * 60 });
   }
 
-  // Only protect /dashboard routes
-  if (!request.nextUrl.pathname.startsWith('/dashboard')) {
+  const isDashboardRoute = pathname.startsWith('/dashboard');
+  const isV5Route = pathname.startsWith('/v5');
+  const isV5LoginRoute = pathname === '/v5/login';
+  const isProtectedRoute = isDashboardRoute || (isV5Route && !isV5LoginRoute);
+
+  // Only protect app routes that require an authenticated Supabase session
+  if (!isProtectedRoute) {
     return response;
   }
 
@@ -74,7 +86,7 @@ export async function middleware(request) {
 
   if (!user) {
     const url = request.nextUrl.clone();
-    url.pathname = '/login';
+    url.pathname = isV5Route ? '/v5/login' : '/login';
     return NextResponse.redirect(url);
   }
 
@@ -82,5 +94,5 @@ export async function middleware(request) {
 }
 
 export const config = {
-  matcher: ['/dashboard/:path*', '/login'],
+  matcher: ['/dashboard/:path*', '/login', '/v5/:path*'],
 };

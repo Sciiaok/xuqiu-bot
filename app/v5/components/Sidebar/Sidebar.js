@@ -15,7 +15,8 @@ const NAV = [
   {
     section: '投放',
     items: [
-      { href: '/v5/campaign-studio', label: '广告数据', icon: 'campaign', badge: '新', badgeType: 'new' },
+      { href: '/v5/ai-automation', label: 'AI 自动化投放', icon: 'campaignAutomation', badge: 'AI', badgeType: 'new' },
+      { href: '/v5/campaign-studio', label: '广告数据', icon: 'campaign' },
     ],
   },
   {
@@ -55,6 +56,14 @@ const ICONS = {
       <path d="M2 11L7 2l5 9"/>
       <line x1="4" y1="8" x2="10" y2="8"/>
       <circle cx="13" cy="11" r="2"/>
+    </svg>
+  ),
+  campaignAutomation: (
+    <svg fill="none" stroke="currentColor" strokeWidth="1.4" viewBox="0 0 15 15">
+      <rect x="2" y="3" width="7" height="9" rx="1.5"/>
+      <path d="M9 5.5h2.5L13 4v7l-1.5-1.5H9"/>
+      <circle cx="5.5" cy="7.5" r="1.2"/>
+      <path d="M5.5 4.8v1.1M5.5 9.1v1.1M2.8 7.5h1.1M7.1 7.5h1.1"/>
     </svg>
   ),
   leadhub: (
