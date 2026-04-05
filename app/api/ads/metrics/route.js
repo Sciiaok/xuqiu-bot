@@ -1,10 +1,13 @@
 import { NextResponse } from 'next/server';
+import { ProxyAgent } from 'undici';
 import { demoGuard } from '../../../../lib/demo-mode.js';
 import { createClient } from '../../../../lib/supabase-server.js';
 
 const META_API_VERSION = 'v21.0';
 const META_API_TIMEOUT_MS = 30_000;
 const MESSAGING_CONVERSATION_ACTION = 'onsite_conversion.messaging_conversation_started';
+const META_PROXY_URL = process.env.HTTPS_PROXY || process.env.HTTP_PROXY || '';
+const META_PROXY_AGENT = META_PROXY_URL ? new ProxyAgent(META_PROXY_URL) : null;
 
 function createEmptyTotals() {
   return {
@@ -115,6 +118,7 @@ async function fetchMetaInsights({ adAccountId, accessToken, days, adIds, timeIn
         Accept: 'application/json',
       },
       signal: AbortSignal.timeout(META_API_TIMEOUT_MS),
+      dispatcher: META_PROXY_AGENT || undefined,
     });
 
     const data = await response.json();
