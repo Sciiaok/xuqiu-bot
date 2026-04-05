@@ -232,6 +232,7 @@ Requirements:
 ${langInstruction}
 ${ctaLine}
 - Do NOT include any phone numbers or contact details in the image
+- Do NOT generate any Chinese characters or CJK text in the image — all text overlays must be in the target language (English, Arabic, etc.)
 - Photorealistic, commercial photography quality, studio-grade lighting`;
 }
 
