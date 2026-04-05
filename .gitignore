@@ -48,4 +48,4 @@ tests/eval/results/
 .playwright-mcp/
 test-v5-*.mjs
 scripts/test-*.mjs
-docs/superpowers/
+.gitignore
