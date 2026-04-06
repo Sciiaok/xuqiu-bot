@@ -9,6 +9,7 @@ import Card from '../../components/Card/Card';
 import TabBar from '../../components/TabBar/TabBar';
 import Button from '../../components/Button/Button';
 import Tag from '../../components/Tag/Tag';
+import PillBar from '../../components/PillBar/PillBar';
 import { createClient } from '../../../../lib/supabase-browser';
 import Markdown from '../../components/Markdown/Markdown';
 import {
@@ -23,6 +24,149 @@ const MAIN_TABS = [
   { key: 'ai', label: '✦ AI 自动化投放' },
   { key: 'attribution', label: '🎯 深度归因分析' },
 ];
+
+const TIME_FILTER_ITEMS = [
+  { key: 'yesterday', label: '昨日' },
+  { key: '7d', label: '近 7 天' },
+  { key: '30d', label: '近 30 天' },
+  { key: 'custom', label: '自定义' },
+];
+
+const BUSINESS_LINE_ITEMS = [
+  { key: 'all', label: '全部业务线' },
+  { key: 'vehicle', label: '整车' },
+  { key: 'agri_machinery', label: '农机' },
+  { key: 'auto_parts', label: '汽配' },
+  { key: 'unclassified', label: '未分类' },
+];
+
+const BUSINESS_LINE_LABELS = {
+  all: '全部业务线',
+  vehicle: '整车',
+  agri_machinery: '农机',
+  auto_parts: '汽配',
+  unclassified: '未分类',
+};
+
+const CLASSIFICATION_SOURCE_LABELS = {
+  attribution: '归因业务线',
+  attribution_conflict: '归因冲突',
+  naming: '名称推断',
+  unclassified: '未分类',
+};
+
+function getBusinessLineVariant(line) {
+  if (line === 'vehicle') return 'proof';
+  if (line === 'agri_machinery') return 'qualify';
+  if (line === 'auto_parts') return 'good';
+  return 'low';
+}
+
+function getAssessmentDetails(ad) {
+  const lifetime = ad.lifetime || {};
+  const period = ad.period || {};
+  const daily = Array.isArray(period.daily) ? period.daily : [];
+  const recentWindow = daily.slice(-Math.min(7, daily.length || 0));
+  const recentThree = recentWindow.slice(-3);
+  const previousThree = recentWindow.slice(-6, -3);
+
+  const sumMetrics = (rows) => rows.reduce((acc, item) => {
+    acc.spend += Number(item.spend || 0);
+    acc.wa += Number(item.waConversations || 0);
+    acc.proof += Number(item.proofConversations || 0);
+    return acc;
+  }, { spend: 0, wa: 0, proof: 0 });
+
+  const recent = sumMetrics(recentThree.length > 0 ? recentThree : recentWindow);
+  const previous = sumMetrics(previousThree);
+  const recentProofRate = recent.wa > 0 ? Math.round((recent.proof / recent.wa) * 100) : 0;
+  const previousProofRate = previous.wa > 0 ? Math.round((previous.proof / previous.wa) * 100) : 0;
+  const recentCpa = recent.wa > 0 ? Number((recent.spend / recent.wa).toFixed(2)) : 0;
+  const lifetimeCpa = Number(lifetime.cpa || 0);
+
+  const positives = [];
+  const risks = [];
+  const suggestions = [];
+
+  if ((lifetime.proofRate || 0) >= 10) {
+    positives.push(`全生命周期高质量率 ${lifetime.proofRate}% ，说明这条广告长期线索质量不错。`);
+  }
+  if ((period.ctr || 0) >= 3) {
+    positives.push(`当前范围 CTR ${period.ctr}% ，素材点击吸引力较强。`);
+  }
+  if (recent.wa > 0 && recentProofRate >= Math.max(lifetime.proofRate || 0, 8)) {
+    positives.push(`最近 ${recentThree.length > 0 ? recentThree.length : recentWindow.length} 天高质量率 ${recentProofRate}% ，近期质量保持稳定。`);
+  }
+
+  if (recent.spend > 0 && recent.wa === 0) {
+    risks.push('最近几天已经产生花费，但没有带来有效 WA 对话。');
+  }
+  if (previous.wa > 0 && recent.wa > 0 && recent.wa < previous.wa * 0.7) {
+    risks.push(`最近 3 天对话量较前一阶段下降，${recent.wa} 低于此前的 ${previous.wa}。`);
+  }
+  if (recent.wa > 0 && recentProofRate + 5 < (lifetime.proofRate || 0)) {
+    risks.push(`近期高质量率 ${recentProofRate}% 低于生命周期均值 ${lifetime.proofRate || 0}% ，转化质量在走弱。`);
+  }
+  if (recent.wa > 0 && lifetimeCpa > 0 && recentCpa > lifetimeCpa * 1.25) {
+    risks.push(`近期 CPA ${formatCurrency(recentCpa)} 明显高于生命周期均值 ${formatCurrency(lifetimeCpa)}。`);
+  }
+
+  if (ad.status !== 'active') {
+    suggestions.push('广告当前已结束，建议保留为历史素材案例，若要复投可优先复用高质量素材和人群设置。');
+  } else if (recent.spend > 0 && recent.wa === 0) {
+    suggestions.push('建议先降低预算或暂停投放，优先检查素材吸引力、落地链路和受众是否失真。');
+  } else if (recent.wa > 0 && recentProofRate >= Math.max(lifetime.proofRate || 0, 8) && (lifetimeCpa === 0 || recentCpa <= lifetimeCpa * 1.1)) {
+    suggestions.push('建议继续投入，并小幅增加预算测试更大流量，观察高质量线索是否能稳定放大。');
+  } else if (recent.wa > 0) {
+    suggestions.push('建议继续投放但同步优化广告计划，优先调整素材、文案和受众分层，观察 3 天内质量是否回升。');
+  } else {
+    suggestions.push('建议先维持小额观察，等待更多最近样本后再决定是否放量。');
+  }
+
+  let verdict = '表现正常';
+  let verdictColor = 'amber';
+  let score = 55;
+
+  if (ad.status !== 'active') {
+    verdict = '已结束';
+    verdictColor = 'teal';
+    score = 62;
+  } else if (recent.spend > 0 && recent.wa === 0) {
+    verdict = '需要关注';
+    verdictColor = 'red';
+    score = 18;
+  } else if ((period.proofRate || 0) >= 12 && (period.cpa || 0) > 0 && (!lifetimeCpa || period.cpa <= lifetimeCpa * 1.1)) {
+    verdict = '建议继续投入';
+    verdictColor = 'green';
+    score = 82;
+  } else if (risks.length > 0) {
+    verdict = '建议优化';
+    verdictColor = 'amber';
+    score = 48;
+  }
+
+  return {
+    verdict,
+    verdictColor,
+    score,
+    positives,
+    risks,
+    suggestions,
+    recentLabel: recentThree.length > 0 ? '最近 3 天' : `最近 ${recentWindow.length || 0} 天`,
+    recentProofRate,
+    recentCpa,
+    previousProofRate,
+  };
+}
+
+function ImageLightbox({ url, onClose }) {
+  if (!url) return null;
+  return (
+    <div className={s.lightboxOverlay} onClick={onClose}>
+      <img src={url} alt="" className={s.lightboxImage} onClick={(event) => event.stopPropagation()} />
+    </div>
+  );
+}
 
 
 // ─── Spark Bars ──────────────────────────────────────────────────
@@ -39,6 +183,51 @@ function SparkBars({ data, color = 'var(--accent)' }) {
       ))}
     </div>
   );
+}
+
+function formatCurrency(value) {
+  return `$${Number(value || 0).toLocaleString('en-US', {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  })}`;
+}
+
+function formatCount(value) {
+  return Number(value || 0).toLocaleString();
+}
+
+function formatRangeLabel(range) {
+  if (!range) return '当前范围';
+  if (range.isSingleDay) return range.from.slice(0, 10);
+  return `${range.from.slice(5, 10)} ~ ${range.to.slice(5, 10)}`;
+}
+
+function getStatusLabel(status) {
+  return status === 'active' ? '投放中' : '已结束';
+}
+
+function buildRangeRequest(timeFilter, customFrom, customTo) {
+  if (timeFilter === 'custom' && customFrom && customTo) {
+    const fromDate = new Date(`${customFrom}T00:00:00.000Z`);
+    const toDate = new Date(`${customTo}T23:59:59.999Z`);
+    const days = Math.max(1, Math.round((toDate - fromDate) / 86400000) + 1);
+    return {
+      params: `preset=custom&startDate=${customFrom}&endDate=${customTo}`,
+      days,
+      label: days === 1 ? customFrom : `${customFrom} ~ ${customTo}`,
+    };
+  }
+
+  if (timeFilter === 'today') {
+    return { params: 'preset=today&days=1', days: 1, label: '今日' };
+  }
+  if (timeFilter === 'yesterday') {
+    return { params: 'preset=yesterday&days=1', days: 1, label: '昨日' };
+  }
+  if (timeFilter === '7d') {
+    return { params: 'preset=7d&days=7', days: 7, label: '近 7 天' };
+  }
+  return { params: 'preset=30d&days=30', days: 30, label: '近 30 天' };
 }
 
 // ─── Score Ring ──────────────────────────────────────────────────
@@ -71,118 +260,229 @@ function ScoreRing({ score, color }) {
   );
 }
 
-// ─── Ad Row (real data) ──────────────────────────────────────────
-function AdRow({ ad, isExpanded, onToggle, metricsMap }) {
-  const m = metricsMap?.get(ad.metaAdId);
-  // Derive verdict color based on proofConversationRate
-  const rate = ad.proofConversationRate || 0;
-  let verdictColor = 'amber';
-  let verdict = '表现正常';
-  let score = 50;
-  if (rate >= 80) { verdictColor = 'green'; verdict = '表现最佳'; score = Math.min(95, 70 + rate); }
-  else if (rate >= 60) { verdictColor = 'teal'; verdict = '稳定运行'; score = 60 + Math.round(rate / 5); }
-  else if (rate >= 40) { verdictColor = 'amber'; verdict = '表现正常'; score = 40 + Math.round(rate / 4); }
-  else { verdictColor = 'red'; verdict = '需要关注'; score = Math.max(10, rate); }
-
+// ─── Ad Row (aligned data) ──────────────────────────────────────
+function AdRow({ ad, isExpanded, onToggle, rangeLabel, isSingleDay, onPreview }) {
+  const period = ad.period || {};
+  const lifetime = ad.lifetime || {};
+  const trendData = (period.daily || []).slice(-7).map((item) => item.waConversations || 0);
+  const hasTrendData = trendData.some((value) => value > 0);
+  const assessment = getAssessmentDetails(ad);
+  const previewUrl = ad.creativePreviewUrl || ad.creativeThumbnailUrl || '';
+  const previewLightboxUrl = ad.creativePreviewPermalinkUrl || previewUrl;
+  const previewSizeLabel = ad.creativePreviewWidth && ad.creativePreviewHeight
+    ? `${ad.creativePreviewWidth} × ${ad.creativePreviewHeight}`
+    : null;
+  const originalSizeLabel = ad.creativeOriginalWidth && ad.creativeOriginalHeight
+    ? `${ad.creativeOriginalWidth} × ${ad.creativeOriginalHeight}`
+    : null;
   const verdictClass = {
     green: s.verdictGreen,
     amber: s.verdictAmber,
     accent: s.verdictAccent,
     teal: s.verdictTeal,
     red: s.verdictRed,
-  }[verdictColor] || '';
-
-  const sparkColorMap = {
-    green: 'var(--green)',
-    amber: 'var(--amber)',
-    accent: 'var(--accent)',
-    teal: 'var(--teal)',
-    red: 'var(--red)',
-  };
-  const sparkColor = sparkColorMap[verdictColor] || 'var(--accent)';
-
-  // Build spark from last 7 days of dailyConversations
-  const sparkData = (ad.dailyConversations || [])
-    .slice(-7)
-    .map(d => d.count);
-  const hasSparkData = sparkData.some(v => v > 0);
+  }[assessment.verdictColor] || '';
 
   return (
     <>
-      <tr
-        className={`${s.adRow} ${isExpanded ? s.adRowExpanded : ''}`}
-        onClick={onToggle}
-      >
-        <td className={s.adThumb}>💬</td>
-        <td className={s.adName}>
-          <div className={s.adNameMain}>{ad.metaAdId}</div>
-          <div className={s.adId}>Meta 广告 ID</div>
+      <tr className={`${s.adRow} ${isExpanded ? s.adRowExpanded : ''}`} onClick={onToggle}>
+        <td className={s.adThumb}>
+          <span className={`${s.stateDot} ${ad.status === 'active' ? s.stateDotActive : s.stateDotEnded}`} />
         </td>
-        <td className={s.adNum}>{m ? `$${m.spend.toLocaleString()}` : '—'}</td>
-        <td className={s.adNum}>{m ? m.impressions.toLocaleString() : '—'}</td>
-        <td className={s.adNum}>{m ? `${m.ctr}%` : '—'}</td>
-        <td className={s.adNum}>{ad.conversationCount.toLocaleString()}</td>
-        <td className={s.adNum}>{m && ad.conversationCount > 0 ? `$${(m.spend / ad.conversationCount).toFixed(2)}` : '—'}</td>
+        <td className={s.adName}>
+          <div className={s.adNameMain}>{ad.adId}</div>
+          <div className={s.adMeta}>
+            <span>{ad.adsetName || '未命名广告组'}</span>
+            <span>·</span>
+            <span>{ad.adName || '未命名广告'}</span>
+          </div>
+          <div className={s.adTagRow}>
+            <Tag variant={getBusinessLineVariant(ad.businessLine)}>{ad.businessLineLabel}</Tag>
+            <span className={s.classificationTag}>{CLASSIFICATION_SOURCE_LABELS[ad.classificationSource] || '未分类'}</span>
+          </div>
+        </td>
+        <td className={s.adNum}>{formatCurrency(period.spend)}</td>
+        <td className={s.adNum}>{formatCount(period.impressions)}</td>
+        <td className={s.adNum}>{period.ctr || 0}%</td>
+        <td className={s.adNum}>{formatCount(period.waConversations)}</td>
+        <td className={s.adNum}>{formatCurrency(period.cpa)}</td>
         <td className={s.adNum}>
-          <span className={s.proofBadge}>{ad.proofConversationRate}%</span>
+          <span className={s.proofBadge}>{period.proofRate || 0}%</span>
         </td>
         <td className={s.adSparkCell}>
-          {hasSparkData
-            ? <SparkBars data={sparkData} color={sparkColor} />
+          {hasTrendData
+            ? <SparkBars data={trendData} color="var(--accent)" />
             : <span style={{ color: 'var(--text3)', fontSize: '11px' }}>—</span>}
         </td>
         <td className={s.adArrowCell}>
           <span className={`${s.arrow} ${isExpanded ? s.arrowOpen : ''}`}>›</span>
         </td>
       </tr>
+
       {isExpanded && (
         <tr className={s.adDetailRow}>
           <td colSpan={10}>
             <div className={s.adDetail}>
-              {/* Creative preview */}
-              <div className={s.detailCreative}>
-                <div className={s.creativePlaceholder}>
-                  <span className={s.creativeEmoji}>💬</span>
-                  <span className={s.creativeLabel}>素材预览</span>
-                </div>
-                <div className={`${s.verdictBadge} ${verdictClass}`}>{verdict}</div>
-              </div>
-
-              {/* Metrics grid */}
-              <div className={s.detailMetrics}>
-                <div className={s.metricsGrid}>
-                  {[
-                    ['WA 对话', ad.conversationCount.toLocaleString()],
-                    ['中质量对话', ad.qualifyConversationCount.toLocaleString()],
-                    ['高质量对话', ad.proofConversationCount.toLocaleString()],
-                    ['中质量率', `${ad.qualifyConversationRate}%`],
-                    ['高质量率', `${ad.proofConversationRate}%`],
-                    ['最近对话', ad.lastConversationAt ? ad.lastConversationAt.split('T')[0] : '—'],
-                    ['花费', m ? `$${m.spend.toLocaleString()}` : '—'],
-                    ['展示', m ? m.impressions.toLocaleString() : '—'],
-                  ].map(([label, val]) => (
-                    <div key={label} className={s.metricBox}>
-                      <div className={s.metricBoxLabel}>{label}</div>
-                      <div className={s.metricBoxValue}>{val}</div>
+              <div className={s.detailHero}>
+                <div className={s.detailCreative}>
+                  <div className={s.detailIdentity}>
+                    <div className={s.detailTitleRow}>
+                      <strong>{ad.adName || ad.adId}</strong>
+                      <Tag variant={ad.status === 'active' ? 'qualify' : 'low'}>{getStatusLabel(ad.status)}</Tag>
+                      <Tag variant={getBusinessLineVariant(ad.businessLine)}>{ad.businessLineLabel}</Tag>
                     </div>
-                  ))}
-                </div>
-              </div>
-
-              {/* AI eval placeholder */}
-              <div className={s.detailAI}>
-                <div className={s.aiEvalHead}>
-                  <ScoreRing score={score} color={verdictColor} />
-                  <div className={s.aiEvalText}>
-                    <div className={s.aiEvalTitle}>AI 评估</div>
-                    <div className={s.aiEvalBody}>
-                      高质量率 {ad.proofConversationRate}%，中质量率 {ad.qualifyConversationRate}%。
-                      共产生 {ad.conversationCount} 条 WA 对话，其中 {ad.proofConversationCount} 条达到高质量。
-                      创意预览与深度 AI 评估需接入 Meta API 后启用。
+                    <div className={s.detailMetaList}>
+                      <span>广告 ID：{ad.adId}</span>
+                      <span>广告组：{ad.adsetName || '未命名'}</span>
+                      <span>广告系列：{ad.campaignName || '未命名'}</span>
+                      <span>分类来源：{CLASSIFICATION_SOURCE_LABELS[ad.classificationSource] || '未分类'}</span>
                     </div>
+                  </div>
+                  <div className={s.creativePreviewCard}>
+                    <div className={s.creativePreviewHead}>
+                      <div className={s.detailPanelTitle}>素材预览</div>
+                      <span className={`${s.verdictBadge} ${verdictClass}`}>{assessment.verdict}</span>
+                    </div>
+                    {previewUrl ? (
+                      <button
+                        type="button"
+                        className={s.creativePreviewButton}
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          onPreview?.(previewLightboxUrl);
+                        }}
+                      >
+                        <img src={previewUrl} alt={ad.adName || ad.adId} className={s.creativePreviewImage} />
+                        <div className={s.creativePreviewMeta}>
+                          <span>{previewSizeLabel ? `预览图 ${previewSizeLabel}` : '广告素材图'}</span>
+                          {originalSizeLabel && <span>原图 {originalSizeLabel}</span>}
+                        </div>
+                        <span className={s.creativePreviewHint}>点击查看大图</span>
+                      </button>
+                    ) : (
+                      <div className={s.creativePlaceholder}>
+                        <span className={s.creativeEmoji}>🖼</span>
+                        <span className={s.creativeLabel}>暂无素材图</span>
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                <div className={s.detailAI}>
+                  <div className={s.aiEvalHead}>
+                    <ScoreRing score={assessment.score} color={assessment.verdictColor} />
+                    <div className={s.aiEvalText}>
+                      <div className={s.aiEvalTitle}>AI 评估</div>
+                      <div className={s.aiEvalBody}>
+                        <strong>{assessment.verdict}</strong>
+                        {`。全生命周期高质量率 ${lifetime.proofRate || 0}% ，${assessment.recentLabel}高质量率 ${assessment.recentProofRate}% 。`}
+                        {assessment.recentCpa > 0 ? `近期 CPA 为 ${formatCurrency(assessment.recentCpa)}。` : ''}
+                      </div>
+                    </div>
+                  </div>
+                  <div className={s.assessmentGrid}>
+                    <div className={s.assessmentBlock}>
+                      <div className={s.assessmentTitle}>优点</div>
+                      {(assessment.positives.length > 0 ? assessment.positives : ['当前广告暂未出现明显强项，建议继续观察近期转化质量。']).map((item) => (
+                        <div key={item} className={s.assessmentItem}>{item}</div>
+                      ))}
+                    </div>
+                    <div className={s.assessmentBlock}>
+                      <div className={s.assessmentTitle}>问题</div>
+                      {(assessment.risks.length > 0 ? assessment.risks : ['最近几天没有发现明显异常，广告表现与历史水平基本一致。']).map((item) => (
+                        <div key={item} className={s.assessmentItem}>{item}</div>
+                      ))}
+                    </div>
+                  </div>
+                  <div className={s.assessmentActions}>
+                    {assessment.suggestions.map((item) => (
+                      <div key={item} className={s.assessmentAction}>{item}</div>
+                    ))}
                   </div>
                 </div>
               </div>
+
+              <div className={s.detailStatsGrid}>
+                <div className={s.detailPanel}>
+                  <div className={s.detailPanelTitle}>生命周期累计</div>
+                  <div className={s.metricsGrid}>
+                    {[
+                      ['总花费', formatCurrency(lifetime.spend)],
+                      ['总展现', formatCount(lifetime.impressions)],
+                      ['总 CTR', `${lifetime.ctr || 0}%`],
+                      ['WA 对话', formatCount(lifetime.waConversations)],
+                      ['中质量对话', formatCount(lifetime.qualifyConversations)],
+                      ['高质量对话', formatCount(lifetime.proofConversations)],
+                      ['中质量率', `${lifetime.qualifyRate || 0}%`],
+                      ['高质量率', `${lifetime.proofRate || 0}%`],
+                      ['总 CPA', formatCurrency(lifetime.cpa)],
+                      ['最近对话', lifetime.lastConversationAt ? lifetime.lastConversationAt.slice(0, 10) : '—'],
+                    ].map(([label, val]) => (
+                      <div key={label} className={s.metricBox}>
+                        <div className={s.metricBoxLabel}>{label}</div>
+                        <div className={s.metricBoxValue}>{val}</div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                <div className={s.detailPanel}>
+                  <div className={s.detailPanelTitle}>{rangeLabel} 数据</div>
+                  <div className={s.metricsGrid}>
+                    {[
+                      ['范围花费', formatCurrency(period.spend)],
+                      ['范围展现', formatCount(period.impressions)],
+                      ['范围 CTR', `${period.ctr || 0}%`],
+                      ['范围 WA 对话', formatCount(period.waConversations)],
+                      ['范围中质量', formatCount(period.qualifyConversations)],
+                      ['范围高质量', formatCount(period.proofConversations)],
+                      ['范围中质量率', `${period.qualifyRate || 0}%`],
+                      ['范围高质量率', `${period.proofRate || 0}%`],
+                      ['范围 CPA', formatCurrency(period.cpa)],
+                      ['状态', getStatusLabel(ad.status)],
+                    ].map(([label, val]) => (
+                      <div key={label} className={s.metricBox}>
+                        <div className={s.metricBoxLabel}>{label}</div>
+                        <div className={s.metricBoxValue}>{val}</div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+
+              {!isSingleDay && (
+                <div className={s.detailTrend}>
+                  <div className={s.detailPanelTitle}>{rangeLabel} 趋势</div>
+                  <div className={s.dailyTableWrap}>
+                    <table className={s.dailyTable}>
+                      <thead>
+                        <tr>
+                          <th>日期</th>
+                          <th>花费</th>
+                          <th>展现</th>
+                          <th>对话</th>
+                          <th>中质量</th>
+                          <th>高质量</th>
+                          <th>CPA</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {(period.daily || []).map((item) => (
+                          <tr key={item.date}>
+                            <td>{item.date}</td>
+                            <td>{formatCurrency(item.spend)}</td>
+                            <td>{formatCount(item.impressions)}</td>
+                            <td>{formatCount(item.waConversations)}</td>
+                            <td>{formatCount(item.qualifyConversations)}</td>
+                            <td>{formatCount(item.proofConversations)}</td>
+                            <td>{formatCurrency(item.cpa)}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
             </div>
           </td>
         </tr>
@@ -191,85 +491,67 @@ function AdRow({ ad, isExpanded, onToggle, metricsMap }) {
   );
 }
 
-// ─── Day Card (real data) ────────────────────────────────────────
-function DayCard({ day, defaultExpanded, metricsMap, dailyMetrics }) {
+function AdStatusGroup({ title, ads, defaultExpanded, rangeLabel, isSingleDay, onPreview }) {
   const [expanded, setExpanded] = useState(defaultExpanded);
-  const [expandedAd, setExpandedAd] = useState(null);
+  const [expandedAd, setExpandedAd] = useState(ads[0]?.adId || null);
 
   useEffect(() => {
-    if (defaultExpanded && day.ads.length > 0) {
-      setExpandedAd(day.ads[0].metaAdId);
+    if (defaultExpanded && ads.length > 0 && !expandedAd) {
+      setExpandedAd(ads[0].adId);
     }
-  }, [defaultExpanded, day.ads]);
+  }, [ads, defaultExpanded, expandedAd]);
 
-  const toggleAd = (id) => setExpandedAd(prev => prev === id ? null : id);
-  const statusClass = day.isToday ? s.statusGreen : s.statusNeutral;
-  const statusLabel = day.isToday ? '投放中' : '已完成';
-
-  // Compute day-level spend/impressions from dailyMetrics (per-day breakdown)
-  let daySpend = null;
-  let dayImpressions = null;
-  if (dailyMetrics) {
-    daySpend = 0;
-    dayImpressions = 0;
-    for (const ad of day.ads) {
-      const m = dailyMetrics[ad.metaAdId];
-      if (m) {
-        daySpend += m.spend;
-        dayImpressions += m.impressions;
-      }
-    }
-  }
+  const summary = ads.reduce((acc, ad) => {
+    acc.count += 1;
+    acc.spend += ad.period?.spend || 0;
+    acc.wa += ad.period?.waConversations || 0;
+    acc.proof += ad.period?.proofConversations || 0;
+    return acc;
+  }, { count: 0, spend: 0, wa: 0, proof: 0 });
 
   return (
-    <div className={`${s.dayCard} ${expanded ? s.dayCardOpen : ''}`}>
-      <div className={s.dayHeader} onClick={() => setExpanded(v => !v)}>
-        <div className={s.dayLeft}>
+    <div className={`${s.groupCard} ${expanded ? s.groupCardOpen : ''}`}>
+      <div className={s.groupHeader} onClick={() => setExpanded((value) => !value)}>
+        <div className={s.groupLeft}>
           <span className={`${s.arrow} ${expanded ? s.arrowOpen : ''}`}>›</span>
-          <span className={s.dayDate}>{day.date}{day.isToday ? ' (今日)' : ''}</span>
-          <span className={`${s.statusBadge} ${statusClass}`}>{statusLabel}</span>
+          <span className={s.groupTitle}>{title}</span>
+          <span className={s.groupCount}>{summary.count} 个广告</span>
         </div>
-        <div className={s.dayMetrics}>
-          <span className={s.dayMetric}><span className={s.dayMetricLabel}>花费</span>{daySpend !== null ? `$${daySpend.toLocaleString()}` : '—'}</span>
-          <span className={s.dayMetric}><span className={s.dayMetricLabel}>展示</span>{dayImpressions !== null ? dayImpressions.toLocaleString() : '—'}</span>
-          <span className={s.dayMetric}><span className={s.dayMetricLabel}>对话</span>{day.totalConversations.toLocaleString()}</span>
-          <span className={s.dayMetric}><span className={s.dayMetricLabel}>CPA</span>{daySpend !== null && day.totalConversations > 0 ? `$${(daySpend / day.totalConversations).toFixed(2)}` : '—'}</span>
+        <div className={s.groupMetrics}>
+          <span className={s.dayMetric}><span className={s.dayMetricLabel}>{rangeLabel} 花费</span>{formatCurrency(summary.spend)}</span>
+          <span className={s.dayMetric}><span className={s.dayMetricLabel}>{rangeLabel} 对话</span>{formatCount(summary.wa)}</span>
+          <span className={s.dayMetric}><span className={s.dayMetricLabel}>{rangeLabel} 高质量</span>{formatCount(summary.proof)}</span>
         </div>
       </div>
 
-      {expanded && day.ads.length > 0 && (
+      {expanded && (
         <div className={s.dayBody}>
-          <AIPanel title="当日广告总结" tag="自动分析">
-            <p>
-              当日共 {day.ads.length} 个广告产生 {day.totalConversations.toLocaleString()} 条 WA 对话。
-              {daySpend !== null ? `总花费 $${daySpend.toLocaleString()}，展示 ${(dayImpressions || 0).toLocaleString()} 次。` : '花费数据需配置 Meta API Token 后展示。'}
-            </p>
-          </AIPanel>
-
           <div className={s.adTableWrap}>
             <table className={s.adTable}>
               <thead>
                 <tr>
                   <th></th>
-                  <th className={s.thName}>广告 ID</th>
+                  <th className={s.thName}>广告信息</th>
                   <th className={s.thNum}>花费</th>
                   <th className={s.thNum}>展示</th>
                   <th className={s.thNum}>CTR</th>
                   <th className={s.thNum}>对话</th>
                   <th className={s.thNum}>CPA</th>
-                  <th className={s.thNum}>高质量询盘</th>
+                  <th className={s.thNum}>高质量率</th>
                   <th className={s.thNum}>趋势</th>
                   <th></th>
                 </tr>
               </thead>
               <tbody>
-                {day.ads.map(ad => (
+                {ads.map((ad) => (
                   <AdRow
-                    key={ad.metaAdId}
+                    key={ad.adId}
                     ad={ad}
-                    isExpanded={expandedAd === ad.metaAdId}
-                    onToggle={() => toggleAd(ad.metaAdId)}
-                    metricsMap={metricsMap}
+                    isExpanded={expandedAd === ad.adId}
+                    onToggle={() => setExpandedAd((current) => current === ad.adId ? null : ad.adId)}
+                    rangeLabel={rangeLabel}
+                    isSingleDay={isSingleDay}
+                    onPreview={onPreview}
                   />
                 ))}
               </tbody>
@@ -277,18 +559,12 @@ function DayCard({ day, defaultExpanded, metricsMap, dailyMetrics }) {
           </div>
         </div>
       )}
-
-      {expanded && day.ads.length === 0 && (
-        <div className={s.dayBody} style={{ padding: '16px', color: 'var(--text3)', fontSize: '13px' }}>
-          当日暂无广告对话数据
-        </div>
-      )}
     </div>
   );
 }
 
 // ─── List Tab ────────────────────────────────────────────────────
-function ListTab({ days, loading, metricsMap, dailyMetricsMap }) {
+function ListTab({ dashboard, loading, rangeLabel, isSingleDay, onPreview }) {
   if (loading) {
     return (
       <div className={s.dayList} style={{ padding: '40px', textAlign: 'center', color: 'var(--text3)' }}>
@@ -297,19 +573,40 @@ function ListTab({ days, loading, metricsMap, dailyMetricsMap }) {
     );
   }
 
-  if (!days || days.length === 0) {
+  const ads = dashboard?.ads || [];
+  if (ads.length === 0) {
     return (
       <div className={s.dayList} style={{ padding: '40px', textAlign: 'center', color: 'var(--text3)' }}>
-        暂无广告数据
+        当前筛选条件下暂无广告数据
       </div>
     );
   }
 
+  const activeAds = ads.filter((ad) => ad.status === 'active');
+  const endedAds = ads.filter((ad) => ad.status !== 'active');
+
   return (
     <div className={s.dayList}>
-      {days.map((day, i) => (
-        <DayCard key={day.date} day={day} defaultExpanded={i === 0} metricsMap={metricsMap} dailyMetrics={dailyMetricsMap[day.date]} />
-      ))}
+      {activeAds.length > 0 && (
+        <AdStatusGroup
+          title="投放中"
+          ads={activeAds}
+          defaultExpanded
+          rangeLabel={rangeLabel}
+          isSingleDay={isSingleDay}
+          onPreview={onPreview}
+        />
+      )}
+      {endedAds.length > 0 && (
+        <AdStatusGroup
+          title="已结束"
+          ads={endedAds}
+          defaultExpanded={activeAds.length === 0}
+          rangeLabel={rangeLabel}
+          isSingleDay={isSingleDay}
+          onPreview={onPreview}
+        />
+      )}
     </div>
   );
 }
@@ -1637,7 +1934,7 @@ function ChatTab({ workspaceMode = false }) {
 }
 
 // ─── Attribution Tab ─────────────────────────────────────────────
-function AttributionTab({ adsData, loading, daysFilter, metricsMap }) {
+function AttributionTab({ adsData, loading, daysFilter, metricsMap, range, selectedLine = 'all' }) {
   // Compute per-country conversation counts from joined conversation data
   const [countryData, setCountryData] = useState([]);
   const [productLineData, setProductLineData] = useState([]);
@@ -1668,23 +1965,22 @@ function AttributionTab({ adsData, loading, daysFilter, metricsMap }) {
   }, [daysFilter]);
 
   useEffect(() => {
-    // Fix #8: Fetch current + previous period for real trend comparison
     async function fetchAttributionData() {
       try {
         const supabase = createClient();
-        const effectiveDays = daysFilter || 30;
+        setLoadingAttr(true);
 
-        // Build date ranges: current period + equal-length previous period
-        const toDate = new Date();
-        const fromDate = new Date();
-        fromDate.setDate(fromDate.getDate() - effectiveDays + 1);
-        fromDate.setHours(0, 0, 0, 0);
+        const toDate = range?.to ? new Date(range.to) : new Date();
+        const fromDate = range?.from ? new Date(range.from) : new Date();
+        if (!range?.from) {
+          fromDate.setDate(fromDate.getDate() - (daysFilter || 30) + 1);
+          fromDate.setHours(0, 0, 0, 0);
+        }
         const prevTo = new Date(fromDate.getTime() - 1);
         const prevFrom = new Date(prevTo);
-        prevFrom.setDate(prevFrom.getDate() - effectiveDays + 1);
+        prevFrom.setDate(prevFrom.getDate() - (daysFilter || 30) + 1);
         prevFrom.setHours(0, 0, 0, 0);
 
-        // Fetch both periods in parallel
         const [currentRes, prevRes] = await Promise.all([
           supabase
             .from('conversations')
@@ -1703,7 +1999,13 @@ function AttributionTab({ adsData, loading, daysFilter, metricsMap }) {
         if (currentRes.error) throw currentRes.error;
         if (prevRes.error) throw prevRes.error;
 
-        // Helper: aggregate conversations into line/country buckets
+        const currentConvs = selectedLine === 'all'
+          ? (currentRes.data || [])
+          : (currentRes.data || []).filter((conv) => conv.agents?.product_line === selectedLine);
+        const prevConvs = selectedLine === 'all'
+          ? (prevRes.data || [])
+          : (prevRes.data || []).filter((conv) => conv.agents?.product_line === selectedLine);
+
         function aggregateConversations(convs) {
           const countryMap = new Map();
           const lineMap = new Map();
@@ -1741,8 +2043,8 @@ function AttributionTab({ adsData, loading, daysFilter, metricsMap }) {
           return { countryMap, lineMap };
         }
 
-        const currentAgg = aggregateConversations(currentRes.data);
-        const prevAgg = aggregateConversations(prevRes.data);
+        const currentAgg = aggregateConversations(currentConvs);
+        const prevAgg = aggregateConversations(prevConvs);
 
         // Build previous period proofRate lookup by product line
         const prevProofRateByLine = {};
@@ -1795,7 +2097,7 @@ function AttributionTab({ adsData, loading, daysFilter, metricsMap }) {
       }
     }
     fetchAttributionData();
-  }, [daysFilter, metricsMap]);
+  }, [daysFilter, metricsMap, range, selectedLine]);
 
   return (
     <div className={s.attrRoot}>
@@ -2014,14 +2316,22 @@ export function CampaignStudioScreen({
   const initialTab = tabs.find(item => item.key === defaultTab)?.key || tabs[0]?.key || 'list';
   const requiresAdsData = showMetrics || visibleTabKeys.includes('list') || visibleTabKeys.includes('attribution');
   const [tab, setTab] = useState(initialTab);
+  const shouldFetchAttribution = visibleTabKeys.includes('attribution') && tab === 'attribution';
   const [adsData, setAdsData] = useState(null);
+  const [dashboardData, setDashboardData] = useState(null);
   const [loadingAds, setLoadingAds] = useState(requiresAdsData);
-  const [daysFilter] = useState(30);
+  const [timeFilter, setTimeFilter] = useState('30d');
+  const [customFrom, setCustomFrom] = useState('');
+  const [customTo, setCustomTo] = useState('');
+  const [lineFilter, setLineFilter] = useState('all');
   const [metricsMap, setMetricsMap] = useState(new Map());
-  const [metricsTotals, setMetricsTotals] = useState(null);
-  const [dailyMetricsMap, setDailyMetricsMap] = useState({});
   const [aiAnalysis, setAiAnalysis] = useState(null);
   const [aiLoading, setAiLoading] = useState(false);
+  const [previewUrl, setPreviewUrl] = useState(null);
+  const rangeRequest = buildRangeRequest(timeFilter, customFrom, customTo);
+  const rangeQuery = rangeRequest.params;
+  const daysFilter = rangeRequest.days;
+  const subtitleLabel = rangeRequest.label;
 
   useEffect(() => {
     if (!tabs.some(item => item.key === tab)) {
@@ -2047,7 +2357,7 @@ export function CampaignStudioScreen({
   }
 
   const handleExportReport = () => {
-    const url = `/api/reports/export?type=campaign&format=csv&days=${daysFilter || 30}`;
+    const url = `/api/reports/export?type=campaign&format=csv&${rangeQuery}`;
     window.open(url, '_blank');
   };
 
@@ -2060,57 +2370,50 @@ export function CampaignStudioScreen({
     async function fetchAds() {
       setLoadingAds(true);
       try {
-        const [adsRes, metricsRes] = await Promise.all([
-          fetch(`/api/ads?days=${daysFilter}`),
-          fetch(`/api/ads/metrics?days=${daysFilter}`),
-        ]);
-        if (!adsRes.ok) throw new Error('Failed to fetch ads');
-        const data = await adsRes.json();
-        setAdsData(data);
-        if (metricsRes.ok) {
-          const metricsData = await metricsRes.json();
-          const map = new Map();
-          for (const item of metricsData.metrics || []) {
-            map.set(item.adId, item);
+        const dashboardRes = await fetch(`/api/ads/dashboard?${rangeQuery}&productLine=${lineFilter}`);
+        if (!dashboardRes.ok) throw new Error('Failed to fetch ad dashboard');
+        const dashboard = await dashboardRes.json();
+        setDashboardData(dashboard);
+
+        if (shouldFetchAttribution) {
+          const [adsRes, metricsRes] = await Promise.all([
+            fetch(`/api/ads?${rangeQuery}`),
+            fetch(`/api/ads/metrics?${rangeQuery}`),
+          ]);
+
+          if (adsRes.ok) {
+            const data = await adsRes.json();
+            setAdsData(data);
+          } else {
+            console.warn('Failed to fetch attribution ads payload');
           }
-          setMetricsMap(map);
-          if (metricsData.totals) setMetricsTotals(metricsData.totals);
-          if (metricsData.dailyMetrics) setDailyMetricsMap(metricsData.dailyMetrics);
+
+          if (metricsRes.ok) {
+            const metricsData = await metricsRes.json();
+            const map = new Map();
+            for (const item of metricsData.metrics || []) {
+              map.set(item.adId, item);
+            }
+            setMetricsMap(map);
+          } else {
+            console.warn('Failed to fetch attribution metrics payload');
+          }
         }
       } catch (err) {
         console.error('Error fetching ads:', err);
-        setAdsData(null);
       } finally {
         setLoadingAds(false);
       }
     }
     fetchAds();
-  }, [daysFilter, requiresAdsData]);
+  }, [rangeQuery, lineFilter, requiresAdsData, shouldFetchAttribution]);
 
-  // Build day cards by grouping ads by lastConversationAt date
-  const dayCards = (() => {
-    if (!adsData?.summary) return [];
-
-    const dayMap = new Map();
-    for (const ad of adsData.summary) {
-      const dateKey = ad.lastConversationAt
-        ? ad.lastConversationAt.split('T')[0]
-        : 'unknown';
-      if (!dayMap.has(dateKey)) {
-        dayMap.set(dateKey, { date: dateKey, ads: [], totalConversations: 0 });
-      }
-      const day = dayMap.get(dateKey);
-      day.ads.push(ad);
-      day.totalConversations += ad.conversationCount;
-    }
-
-    const today = new Date().toISOString().split('T')[0];
-    return Array.from(dayMap.values())
-      .sort((a, b) => b.date.localeCompare(a.date))
-      .map(day => ({ ...day, isToday: day.date === today }));
-  })();
-
-  const totals = adsData?.totals;
+  const totals = dashboardData?.summary;
+  const dashboardRange = dashboardData?.range;
+  const rangeLabel = formatRangeLabel(dashboardRange);
+  const campaignSubtitle = timeFilter === 'custom' && customFrom && customTo
+    ? subtitle.replace(/近 \{days\} 天/, '自定义范围')
+    : subtitle.replace('{days}', String(daysFilter));
 
   return (
     <div className={`${s.root} ${workspaceMode ? s.rootWorkspace : ''}`}>
@@ -2118,7 +2421,7 @@ export function CampaignStudioScreen({
       <div className={`${s.header} ${workspaceMode ? s.headerWorkspace : ''}`}>
         <div className={s.headerLeft}>
           <h1 className={s.title}>{title}</h1>
-          <span className={s.subtitle}>{subtitle.replace('{days}', String(daysFilter))}</span>
+          <span className={s.subtitle}>{campaignSubtitle}</span>
         </div>
         {(showExportAction || showGlobalAnalysis) && (
           <div className={s.headerRight}>
@@ -2141,6 +2444,31 @@ export function CampaignStudioScreen({
         </AIPanel>
       )}
 
+      {showMetrics && (
+        <div className={s.filterRow}>
+          <PillBar items={TIME_FILTER_ITEMS} active={timeFilter} onChange={setTimeFilter} variant="tr" />
+          <div className={s.divider} />
+          <PillBar items={BUSINESS_LINE_ITEMS} active={lineFilter} onChange={setLineFilter} variant="tr" />
+          {timeFilter === 'custom' && (
+            <>
+              <input
+                type="date"
+                className={s.dateInput}
+                value={customFrom}
+                onChange={(e) => setCustomFrom(e.target.value)}
+              />
+              <span style={{ color: 'var(--text3)', fontSize: 12 }}>~</span>
+              <input
+                type="date"
+                className={s.dateInput}
+                value={customTo}
+                onChange={(e) => setCustomTo(e.target.value)}
+              />
+            </>
+          )}
+        </div>
+      )}
+
       {/* Metric strip */}
       {showMetrics && (
         <div className={s.metrics}>
@@ -2149,38 +2477,38 @@ export function CampaignStudioScreen({
             value={
               loadingAds
                 ? '…'
-                : metricsTotals?.spend != null
-                  ? `$${Number(metricsTotals.spend).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+                : totals?.spend != null
+                  ? formatCurrency(totals.spend)
                   : '—'
             }
-            delta={metricsTotals?.spend != null ? `CTR ${metricsTotals.avgCtr}%` : '未配置'}
+            delta={totals?.spend != null ? `${subtitleLabel} CTR ${totals.ctr}%` : '未配置'}
             trend="neutral"
           />
           <MetricCard
-            label="WA 对话"
-            value={loadingAds ? '…' : (totals?.conversationCount?.toLocaleString() ?? '—')}
-            delta={totals ? `中质量率 ${totals.qualifyConversationRate}%` : ''}
+            label="展示"
+            value={loadingAds ? '…' : (totals?.impressions?.toLocaleString() ?? '—')}
+            delta={totals ? `点击 ${totals.clicks?.toLocaleString() ?? 0}` : ''}
             trend="up"
             color="green"
           />
           <MetricCard
-            label="活跃广告"
-            value={loadingAds ? '…' : (totals?.adsCount?.toLocaleString() ?? '—')}
-            delta={totals ? `${daysFilter} 天数据` : ''}
+            label="广告数"
+            value={loadingAds ? '…' : (totals?.totalAds?.toLocaleString() ?? '—')}
+            delta={totals ? `投放中 ${totals.activeAds} · 已结束 ${totals.endedAds}` : ''}
             trend="neutral"
             color="teal"
           />
           <MetricCard
-            label="中质量对话"
-            value={loadingAds ? '…' : (totals?.qualifyConversationCount?.toLocaleString() ?? '—')}
-            delta={totals ? `${totals.qualifyConversationRate}% 率` : ''}
+            label="WA 对话"
+            value={loadingAds ? '…' : (totals?.waConversations?.toLocaleString() ?? '—')}
+            delta={totals ? `中质量率 ${totals.qualifyRate}%` : ''}
             trend="neutral"
             color="purple"
           />
           <MetricCard
             label="高质量对话"
-            value={loadingAds ? '…' : (totals?.proofConversationCount?.toLocaleString() ?? '—')}
-            delta={totals ? `${totals.proofConversationRate}% 率` : ''}
+            value={loadingAds ? '…' : (totals?.proofConversations?.toLocaleString() ?? '—')}
+            delta={totals ? `${totals.proofRate}% 率 · CPA ${formatCurrency(totals.cpa || 0)}` : ''}
             trend="up"
             color="amber"
           />
@@ -2193,13 +2521,28 @@ export function CampaignStudioScreen({
       {/* Tab content */}
       <div className={`${s.tabContent} ${workspaceMode ? s.tabContentWorkspace : ''}`}>
         {tab === 'list' && (
-          <ListTab days={dayCards} loading={loadingAds} metricsMap={metricsMap} dailyMetricsMap={dailyMetricsMap} />
+          <ListTab
+            dashboard={dashboardData}
+            loading={loadingAds}
+            rangeLabel={rangeLabel}
+            isSingleDay={Boolean(dashboardRange?.isSingleDay)}
+            onPreview={setPreviewUrl}
+          />
         )}
         {tab === 'ai' && <Suspense><ChatTab workspaceMode={workspaceMode} /></Suspense>}
         {tab === 'attribution' && (
-          <AttributionTab adsData={adsData} loading={loadingAds} daysFilter={daysFilter} metricsMap={metricsMap} />
+          <AttributionTab
+            adsData={adsData}
+            loading={loadingAds}
+            daysFilter={daysFilter}
+            metricsMap={metricsMap}
+            range={dashboardRange}
+            selectedLine={lineFilter}
+          />
         )}
       </div>
+
+      <ImageLightbox url={previewUrl} onClose={() => setPreviewUrl(null)} />
     </div>
   );
 }
