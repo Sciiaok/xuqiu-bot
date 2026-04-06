@@ -1,7 +1,9 @@
 import { NextResponse } from 'next/server';
 import { ProxyAgent } from 'undici';
+import { createHash } from 'crypto';
 import { demoGuard } from '../../../../lib/demo-mode.js';
 import { createClient } from '../../../../lib/supabase-server.js';
+import { getRedis } from '../../../../lib/redis.js';
 
 const META_API_VERSION = 'v21.0';
 const META_API_TIMEOUT_MS = 30_000;
@@ -29,8 +31,8 @@ const QUALITY_RANK = {
   PROOF: 4,
 };
 const META_LIFETIME_LOOKBACK_MONTHS = 36;
-const DASHBOARD_CACHE_TTL_MS = 60_000;
-const dashboardCache = new Map();
+const DASHBOARD_CACHE_TTL_SECONDS = 60 * 60;
+const DASHBOARD_CACHE_KEY_PREFIX = 'ads:dashboard:';
 
 const NAME_RULES = [
   {
@@ -311,28 +313,38 @@ function isMetaRateLimitError(error) {
   return /too many calls|rate.limit|rate-limiting|user request limit reached/i.test(String(error?.message || ''));
 }
 
-function getDashboardCacheKey({ userId, range, productLine }) {
-  return JSON.stringify({
+function getDashboardCacheKey({ userId, adAccountId, range, productLine }) {
+  const raw = JSON.stringify({
     userId,
+    adAccountId,
     preset: range.preset,
     from: range.fromISO,
     to: range.toISO,
     productLine,
   });
+  const hash = createHash('sha1').update(raw).digest('hex');
+  return `${DASHBOARD_CACHE_KEY_PREFIX}${hash}`;
 }
 
-function getCachedDashboard(cacheKey) {
-  const cached = dashboardCache.get(cacheKey);
-  if (!cached) return null;
-  if (Date.now() - cached.createdAt > DASHBOARD_CACHE_TTL_MS) return null;
-  return cached.payload;
+async function getCachedDashboard(cacheKey) {
+  try {
+    const redis = getRedis();
+    const cached = await redis.get(cacheKey);
+    if (!cached) return null;
+    return JSON.parse(cached);
+  } catch (error) {
+    console.warn('[ads-dashboard] redis get failed:', error?.message || error);
+    return null;
+  }
 }
 
-function setCachedDashboard(cacheKey, payload) {
-  dashboardCache.set(cacheKey, {
-    createdAt: Date.now(),
-    payload,
-  });
+async function setCachedDashboard(cacheKey, payload) {
+  try {
+    const redis = getRedis();
+    await redis.set(cacheKey, JSON.stringify(payload), 'EX', DASHBOARD_CACHE_TTL_SECONDS);
+  } catch (error) {
+    console.warn('[ads-dashboard] redis set failed:', error?.message || error);
+  }
 }
 
 function buildMetaMetricsMap(rows) {
@@ -775,10 +787,11 @@ export async function GET(request) {
 
     const cacheKey = getDashboardCacheKey({
       userId: user.id,
+      adAccountId,
       range,
       productLine,
     });
-    const cachedPayload = getCachedDashboard(cacheKey);
+    const cachedPayload = await getCachedDashboard(cacheKey);
     if (cachedPayload) {
       return NextResponse.json(cachedPayload);
     }
@@ -1043,7 +1056,7 @@ export async function GET(request) {
       summary: buildSummary(filteredAds),
       ads: filteredAds,
     };
-    setCachedDashboard(cacheKey, payload);
+    await setCachedDashboard(cacheKey, payload);
     return NextResponse.json(payload);
   } catch (error) {
     console.error('Error building ad dashboard:', error);
@@ -1051,15 +1064,17 @@ export async function GET(request) {
       const { searchParams } = new URL(request.url);
       const range = parseDateRange(searchParams);
       const productLine = parseProductLine(searchParams);
+      const adAccountId = normalizeAdAccountId(process.env.META_AD_ACCOUNT_ID);
       const supabase = await createClient();
       const { data: { user } } = await supabase.auth.getUser();
       if (user && isMetaRateLimitError(error)) {
         const cacheKey = getDashboardCacheKey({
           userId: user.id,
+          adAccountId,
           range,
           productLine,
         });
-        const cachedPayload = getCachedDashboard(cacheKey);
+        const cachedPayload = await getCachedDashboard(cacheKey);
         if (cachedPayload) {
           console.warn('Returning cached ad dashboard after Meta rate limit');
           return NextResponse.json(cachedPayload);
