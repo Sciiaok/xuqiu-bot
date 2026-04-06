@@ -24,13 +24,14 @@ const PRODUCT_LINES = [
 ];
 
 const DATE_TABS = [
+  { key: '1d', label: '1D' },
   { key: '7d', label: '7D' },
   { key: '14d', label: '14D' },
   { key: '30d', label: '30D' },
   { key: 'custom', label: '自定义' },
 ];
 
-const DATE_TAB_TO_DAYS = { '7d': 7, '14d': 14, '30d': 30 };
+const DATE_TAB_TO_DAYS = { '1d': 1, '7d': 7, '14d': 14, '30d': 30 };
 
 const INTENT_LABELS = {
   business_inquiry: '业务咨询',
@@ -210,6 +211,7 @@ export default function AnalyticsPage() {
       qs.set('endDate', params.endDate);
     } else {
       qs.set('days', String(params.days));
+      if (params.preset) qs.set('preset', params.preset);
     }
     qs.set('productLines', params.productLines);
     qs.set('lang', 'zh');
@@ -260,6 +262,7 @@ export default function AnalyticsPage() {
   // ── Main data fetch ──
   useEffect(() => {
     let days;
+    let preset;
     let startDate, endDate;
     if (dateRange === 'custom') {
       if (!customFrom || !customTo) return;
@@ -267,6 +270,7 @@ export default function AnalyticsPage() {
       endDate = customTo;
     } else {
       days = DATE_TAB_TO_DAYS[dateRange] ?? 7;
+      preset = dateRange === '1d' ? '1d' : '';
     }
 
     const productLines = getProductLines();
@@ -279,6 +283,7 @@ export default function AnalyticsPage() {
       qs.set('endDate', endDate);
     } else {
       qs.set('days', String(days));
+      if (preset) qs.set('preset', preset);
     }
     qs.set('productLines', productLines);
 
@@ -290,7 +295,7 @@ export default function AnalyticsPage() {
       .then(json => { setData(json); setLoading(false); })
       .catch(err => { setError(err.message); setLoading(false); });
 
-    fetchAiInsight({ days, startDate, endDate, productLines });
+    fetchAiInsight({ days, preset, startDate, endDate, productLines });
   }, [dateRange, selectedLine, customFrom, customTo]);
 
   // ── Derived data ──
@@ -394,7 +399,11 @@ export default function AnalyticsPage() {
               if (dateRange === 'custom' && customFrom && customTo) {
                 return fetchAiInsight({ startDate: customFrom, endDate: customTo, productLines });
               }
-              return fetchAiInsight({ days: DATE_TAB_TO_DAYS[dateRange] ?? 7, productLines });
+              return fetchAiInsight({
+                days: DATE_TAB_TO_DAYS[dateRange] ?? 7,
+                preset: dateRange === '1d' ? '1d' : '',
+                productLines,
+              });
             }}
             refreshLabel="刷新"
           >

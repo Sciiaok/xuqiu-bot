@@ -1,6 +1,7 @@
 import supabase from '@/lib/supabase';
 import { anthropic, MODELS } from '@/src/llm-client.js';
 import { streamSSE } from '@/lib/sse.js';
+import { buildDateWindows } from '@/lib/inquiry-dashboard';
 
 const SYSTEM_PROMPTS = {
   zh: '你是B2B外贸询盘数据分析师。根据以下询盘看板聚合数据，生成3-5句简洁的中文总结。包含：关键KPI及环比变化、业务线对比、Top国家、质量和买家类型分布亮点、值得关注的异常。使用 Markdown 格式。',
@@ -11,6 +12,7 @@ const TTL_DAYS = 7;
 
 function buildCacheParams(searchParams) {
   const days = parseInt(searchParams.get('days') || '7');
+  const preset = searchParams.get('preset') || '';
   const startDate = searchParams.get('startDate') || '';
   const endDate = searchParams.get('endDate') || '';
   const lang = searchParams.get('lang') || 'zh';
@@ -23,25 +25,24 @@ function buildCacheParams(searchParams) {
     dateFrom = startDate;
     dateTo = endDate;
   } else {
-    periodKey = `${days}d:${lang}`;
-    const to = new Date();
-    const from = new Date();
-    from.setDate(from.getDate() - days);
-    dateFrom = from.toISOString().split('T')[0];
-    dateTo = to.toISOString().split('T')[0];
+    const windows = buildDateWindows({ days, preset });
+    dateFrom = windows.current.fromDate;
+    dateTo = windows.current.toDate;
+    periodKey = `${preset || `${days}d`}:${dateFrom}:${dateTo}:${lang}`;
   }
 
-  return { productLines, periodKey, dateFrom, dateTo, days, startDate, endDate, lang };
+  return { productLines, periodKey, dateFrom, dateTo, days, preset, startDate, endDate, lang };
 }
 
 async function fetchDashboardData(params) {
-  const { days, startDate, endDate, productLines } = params;
+  const { days, preset, startDate, endDate, productLines } = params;
   const qs = new URLSearchParams();
   if (startDate && endDate) {
     qs.set('startDate', startDate);
     qs.set('endDate', endDate);
   } else {
     qs.set('days', String(days));
+    if (preset) qs.set('preset', preset);
   }
   qs.set('productLines', productLines);
 
@@ -73,7 +74,7 @@ async function generateSummary(dashboardData, lang = 'zh') {
 
 export async function GET(request) {
   const { searchParams } = new URL(request.url);
-  const { productLines, periodKey, dateFrom, dateTo, days, startDate, endDate, lang } = buildCacheParams(searchParams);
+  const { productLines, periodKey, dateFrom, dateTo, days, preset, startDate, endDate, lang } = buildCacheParams(searchParams);
 
   async function* generate() {
     // 1. Check cache
@@ -100,7 +101,7 @@ export async function GET(request) {
     // 2. Generate
     yield { event: 'status', data: { message: lang === 'en' ? 'Collecting inquiry data...' : '正在收集询盘数据…' } };
 
-    const dashboardData = await fetchDashboardData({ days, startDate, endDate, productLines });
+    const dashboardData = await fetchDashboardData({ days, preset, startDate, endDate, productLines });
 
     yield { event: 'status', data: { message: lang === 'en' ? 'Generating summary...' : '正在生成询盘总结…' } };
 
@@ -136,12 +137,12 @@ export async function GET(request) {
 
 export async function POST(request) {
   const { searchParams } = new URL(request.url);
-  const { productLines, periodKey, dateFrom, dateTo, days, startDate, endDate, lang } = buildCacheParams(searchParams);
+  const { productLines, periodKey, dateFrom, dateTo, days, preset, startDate, endDate, lang } = buildCacheParams(searchParams);
 
   async function* generate() {
     yield { event: 'status', data: { message: lang === 'en' ? 'Collecting inquiry data...' : '正在收集询盘数据…' } };
 
-    const dashboardData = await fetchDashboardData({ days, startDate, endDate, productLines });
+    const dashboardData = await fetchDashboardData({ days, preset, startDate, endDate, productLines });
 
     yield { event: 'status', data: { message: lang === 'en' ? 'Regenerating summary...' : '正在重新生成询盘总结…' } };
 
