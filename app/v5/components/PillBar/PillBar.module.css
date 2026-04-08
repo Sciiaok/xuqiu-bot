@@ -32,7 +32,7 @@
   white-space: nowrap;
 }
 .trPill.active {
-  background: rgba(192, 106, 43, 0.08);
+  background: var(--accent-dim);
   border-color: var(--accent);
   color: var(--accent);
   font-weight: 500;

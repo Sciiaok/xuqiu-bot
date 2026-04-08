@@ -259,7 +259,7 @@
   padding: 2px 6px;
   background: var(--accent-dim);
   border-radius: 4px;
-  border: 1px solid rgba(192,106,43,0.2);
+  border: 1px solid rgba(24,119,242,0.2);
   margin-left: auto;
 }
 
@@ -428,7 +428,7 @@
 
 .msgAvatarAI {
   background: var(--accent-dim);
-  border-color: rgba(192,106,43,0.2);
+  border-color: rgba(24,119,242,0.2);
   color: var(--accent);
 }
 
@@ -637,7 +637,7 @@
 .aiSummaryBox {
   padding: 12px 14px;
   background: var(--accent-dim);
-  border: 1px solid rgba(192,106,43,0.2);
+  border: 1px solid rgba(24,119,242,0.2);
   border-radius: var(--r);
   display: flex;
   flex-direction: column;

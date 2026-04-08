@@ -18,13 +18,13 @@
 .logoGem {
   width: 48px;
   height: 48px;
-  background: linear-gradient(135deg, #c06a2b, #d4873a);
+  background: var(--accent);
   border-radius: 12px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   margin-bottom: 16px;
-  box-shadow: 0 4px 16px rgba(192, 106, 43, 0.25);
+  box-shadow: 0 4px 16px rgba(24, 119, 242, 0.25);
 }
 .logoGem svg {
   width: 22px;

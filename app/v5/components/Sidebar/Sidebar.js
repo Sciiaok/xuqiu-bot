@@ -99,6 +99,7 @@ export default function Sidebar() {
 
   return (
     <div className={s.sidebar}>
+    <div className={s.inner}>
       {/* Logo */}
       <div className={s.logoWrap}>
         <div className={s.logoGem}>
@@ -122,7 +123,7 @@ export default function Sidebar() {
                   className={`${s.ni} ${isActive ? s.active : ''}`}
                 >
                   {ICONS[item.icon]}
-                  {item.label}
+                  <span className={s.niLabel}>{item.label}</span>
                   {item.badge && (
                     <span className={`${s.badge} ${item.badgeType === 'new' ? s.badgeNew : item.badgeType === 'warn' ? s.badgeWarn : ''}`}>
                       {item.badge}
@@ -143,16 +144,17 @@ export default function Sidebar() {
             <line x1="7.5" y1="5" x2="7.5" y2="7.5"/>
             <circle cx="7.5" cy="10" r=".5" fill="currentColor"/>
           </svg>
-          帮助
+          <span className={s.niLabel}>帮助</span>
         </div>
         <div className={s.ni}>
           <svg fill="none" stroke="currentColor" strokeWidth="1.4" viewBox="0 0 15 15">
             <circle cx="7.5" cy="7.5" r="2.5"/>
             <path d="M7.5 1v2M7.5 12v2M1 7.5h2M12 7.5h2M3.1 3.1l1.4 1.4M10.5 10.5l1.4 1.4M10.5 3.1l-1.4 1.4M4.5 10.5L3.1 11.9"/>
           </svg>
-          设置
+          <span className={s.niLabel}>设置</span>
         </div>
       </div>
+    </div>
     </div>
   );
 }

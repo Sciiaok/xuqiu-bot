@@ -574,7 +574,7 @@
 
 .verdictGreen  { background: var(--green-dim);  color: var(--green);  border: 1px solid rgba(42,140,90,0.2); }
 .verdictAmber  { background: var(--amber-dim);  color: var(--amber);  border: 1px solid rgba(184,134,11,0.2); }
-.verdictAccent { background: var(--accent-dim); color: var(--accent); border: 1px solid rgba(192,106,43,0.2); }
+.verdictAccent { background: var(--accent-dim); color: var(--accent); border: 1px solid rgba(24,119,242,0.2); }
 .verdictTeal   { background: var(--teal-dim);   color: var(--teal);   border: 1px solid rgba(42,122,116,0.2); }
 .verdictRed    { background: var(--red-dim);    color: var(--red);    border: 1px solid rgba(196,66,48,0.2); }
 
@@ -714,7 +714,7 @@
   padding: 10px 12px;
   background: var(--accent-dim);
   color: var(--accent);
-  border: 1px solid rgba(192, 106, 43, 0.18);
+  border: 1px solid rgba(24, 119, 242, 0.18);
   font-size: 12px;
   line-height: 1.5;
 }
@@ -1150,7 +1150,7 @@
   align-items: center;
   justify-content: center;
   padding: 16px;
-  background: rgba(242, 235, 224, 0.84);
+  background: rgba(247, 248, 250, 0.84);
   border: 1px dashed var(--accent);
   border-radius: var(--rl);
   backdrop-filter: blur(4px);
@@ -1161,7 +1161,7 @@
   padding: 20px 24px;
   text-align: center;
   background: rgba(255, 255, 255, 0.92);
-  border: 1px solid rgba(198, 114, 42, 0.22);
+  border: 1px solid rgba(24, 119, 242, 0.22);
   border-radius: var(--rl);
   box-shadow: var(--shadow);
 }
