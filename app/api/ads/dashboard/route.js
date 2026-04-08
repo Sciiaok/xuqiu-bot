@@ -4,9 +4,10 @@ import { createHash } from 'crypto';
 import { demoGuard } from '../../../../lib/demo-mode.js';
 import { createClient } from '../../../../lib/supabase-server.js';
 import { getRedis } from '../../../../lib/redis.js';
+import { config } from '../../../../src/config.js';
 
 const META_API_VERSION = 'v21.0';
-const META_API_TIMEOUT_MS = 30_000;
+const META_API_TIMEOUT_MS = config.meta.apiTimeoutMs;
 const META_PROXY_URL = process.env.HTTPS_PROXY || process.env.HTTP_PROXY || '';
 const META_PROXY_AGENT = META_PROXY_URL ? new ProxyAgent(META_PROXY_URL) : null;
 const STATUS_ACTIVE = 'ACTIVE';

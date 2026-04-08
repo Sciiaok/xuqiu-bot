@@ -2,9 +2,10 @@ import { NextResponse } from 'next/server';
 import { ProxyAgent } from 'undici';
 import { demoGuard } from '../../../../lib/demo-mode.js';
 import { createClient } from '../../../../lib/supabase-server.js';
+import { config } from '../../../../src/config.js';
 
 const META_API_VERSION = 'v21.0';
-const META_API_TIMEOUT_MS = 30_000;
+const META_API_TIMEOUT_MS = config.meta.apiTimeoutMs;
 const MESSAGING_CONVERSATION_ACTION = 'onsite_conversion.messaging_conversation_started';
 const META_PROXY_URL = process.env.HTTPS_PROXY || process.env.HTTP_PROXY || '';
 const META_PROXY_AGENT = META_PROXY_URL ? new ProxyAgent(META_PROXY_URL) : null;

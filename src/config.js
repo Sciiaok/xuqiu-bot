@@ -43,6 +43,7 @@ export const config = {
     adAccountId: process.env.META_AD_ACCOUNT_ID,
     pageId: process.env.META_PAGE_ID,
     apiVersion: process.env.META_API_VERSION || 'v21.0',
+    apiTimeoutMs: parseInt(process.env.META_API_TIMEOUT_MS) || 30_000,
   },
 
   // SerpAPI — Google Trends fallback

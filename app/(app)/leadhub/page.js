@@ -6,6 +6,10 @@ import Tag from '../../components/Tag/Tag';
 import Button from '../../components/Button/Button';
 import { createClient } from '../../../lib/supabase-browser';
 import { getWaCountry } from '../../../lib/wa-country';
+import {
+  INQUIRY_QUALITY_LABELS as QUALITY_LABELS,
+  BUSINESS_VALUE_LABELS as VALUE_LABELS,
+} from '../../../lib/inquiries-filters';
 
 /* ── Constants ─────────────────────────────────────────── */
 
@@ -26,9 +30,6 @@ const DETAIL_TABS = [
 
 const SUPPLY_CHAINS = ['全部供应链', 'agri', 'vehicle', 'auto_parts'];
 const QUALITY_OPTIONS = ['全部质量', 'PROOF', 'QUALIFY', 'GOOD'];
-
-const QUALITY_LABELS = { PROOF: '高质量', QUALIFY: '中质量', GOOD: '低质量', BAD: '无效' };
-const VALUE_LABELS = { HIGH: '高价值', AVERAGE: '中价值', LOW: '低价值' };
 
 const SEARCH_DEBOUNCE_MS = 300;
 
