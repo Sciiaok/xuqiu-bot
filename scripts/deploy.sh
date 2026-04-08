@@ -6,9 +6,9 @@
 set -e
 
 # Configuration
-SERVER="aws-foggy"
+SERVER="aws-leadengine"
 REMOTE_DIR="~/lead_engine_next"
-APP_NAME="lead_engine_next"
+APP_NAME="lead-engine-next"
 TMP_FILE="/tmp/lead_engine_next.tar.gz"
 
 # Colors for output
@@ -77,13 +77,13 @@ ssh $SERVER "pm2 status"
 
 # Show URLs
 echo -e "\n${YELLOW}URLs:${NC}"
-echo "  - Dashboard:      http://ec2-3-145-93-205.us-east-2.compute.amazonaws.com/dashboard"
-echo "  - Login:          http://ec2-3-145-93-205.us-east-2.compute.amazonaws.com/login"
-echo "  - Webhook:        http://ec2-3-145-93-205.us-east-2.compute.amazonaws.com/webhook"
-echo "  - Health:         http://ec2-3-145-93-205.us-east-2.compute.amazonaws.com/api/health"
-echo "  - Cron Sync:      http://ec2-3-145-93-205.us-east-2.compute.amazonaws.com/api/cron/sync-leads"
-echo "  - Cron Queue:     http://ec2-3-145-93-205.us-east-2.compute.amazonaws.com/api/cron/process-queue"
-echo "  - Cron Recovery:  http://ec2-3-145-93-205.us-east-2.compute.amazonaws.com/api/cron/recover-orchestrator"
+echo "  - Dashboard:      http://44.194.177.234:3002/dashboard"
+echo "  - Login:          http://44.194.177.234:3002/login"
+echo "  - Webhook:        http://44.194.177.234:3002/webhook"
+echo "  - Health:         http://44.194.177.234:3002/api/health"
+echo "  - Cron Sync:      http://44.194.177.234:3002/api/cron/sync-leads"
+echo "  - Cron Queue:     http://44.194.177.234:3002/api/cron/process-queue"
+echo "  - Cron Recovery:  http://44.194.177.234:3002/api/cron/recover-orchestrator"
 
 echo -e "\n${YELLOW}Cron Logs:${NC}"
 echo "  ssh $SERVER 'pm2 logs lead-sync-cron'"

@@ -2,6 +2,17 @@ import { createServerClient } from '@supabase/ssr';
 import { NextResponse } from 'next/server';
 import { defaultLocale, locales } from './i18n/config';
 
+const PROTECTED_PREFIXES = [
+  '/analytics',
+  '/reports',
+  '/agents',
+  '/ai-automation',
+  '/campaign-studio',
+  '/leadhub',
+  '/inbox',
+  '/knowledge-base',
+];
+
 export async function middleware(request) {
   const pathname = request.nextUrl.pathname;
 
@@ -9,16 +20,11 @@ export async function middleware(request) {
     return NextResponse.next();
   }
 
-  // Demo mode: skip auth, redirect auth entrypoints to their default pages
+  // Demo mode: skip auth, redirect login entrypoint to default page
   if (process.env.DEMO_MODE === 'true') {
     if (pathname === '/login') {
       const url = request.nextUrl.clone();
-      url.pathname = '/dashboard';
-      return NextResponse.redirect(url);
-    }
-    if (pathname === '/v5/login') {
-      const url = request.nextUrl.clone();
-      url.pathname = '/v5/analytics';
+      url.pathname = '/analytics';
       return NextResponse.redirect(url);
     }
     return NextResponse.next();
@@ -29,7 +35,6 @@ export async function middleware(request) {
   const localeCookie = request.cookies.get('NEXT_LOCALE')?.value;
 
   if (!localeCookie || !locales.includes(localeCookie)) {
-    // Try Accept-Language header
     const acceptLang = request.headers.get('accept-language') || '';
     const preferred = acceptLang.split(',').map(l => l.split(';')[0].trim().substring(0, 2));
     const detected = preferred.find(l => locales.includes(l)) || defaultLocale;
@@ -38,12 +43,10 @@ export async function middleware(request) {
     response.cookies.set('NEXT_LOCALE', detected, { path: '/', maxAge: 365 * 24 * 60 * 60 });
   }
 
-  const isDashboardRoute = pathname.startsWith('/dashboard');
-  const isV5Route = pathname.startsWith('/v5');
-  const isV5LoginRoute = pathname === '/v5/login';
-  const isProtectedRoute = isDashboardRoute || (isV5Route && !isV5LoginRoute);
+  const isProtectedRoute = PROTECTED_PREFIXES.some(
+    (p) => pathname === p || pathname.startsWith(`${p}/`)
+  );
 
-  // Only protect app routes that require an authenticated Supabase session
   if (!isProtectedRoute) {
     return response;
   }
@@ -65,7 +68,6 @@ export async function middleware(request) {
           supabaseResponse = NextResponse.next({
             request,
           });
-          // Re-apply locale cookie on supabase response
           if (!localeCookie || !locales.includes(localeCookie)) {
             const acceptLang = request.headers.get('accept-language') || '';
             const preferred = acceptLang.split(',').map(l => l.split(';')[0].trim().substring(0, 2));
@@ -86,7 +88,7 @@ export async function middleware(request) {
 
   if (!user) {
     const url = request.nextUrl.clone();
-    url.pathname = isV5Route ? '/v5/login' : '/login';
+    url.pathname = '/login';
     return NextResponse.redirect(url);
   }
 
@@ -94,5 +96,15 @@ export async function middleware(request) {
 }
 
 export const config = {
-  matcher: ['/dashboard/:path*', '/login', '/v5/:path*'],
+  matcher: [
+    '/analytics/:path*',
+    '/reports/:path*',
+    '/agents/:path*',
+    '/ai-automation/:path*',
+    '/campaign-studio/:path*',
+    '/leadhub/:path*',
+    '/inbox/:path*',
+    '/knowledge-base/:path*',
+    '/login',
+  ],
 };
