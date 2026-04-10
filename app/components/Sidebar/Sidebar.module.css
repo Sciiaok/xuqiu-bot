@@ -73,8 +73,8 @@
 .sidebar:hover .logoVer { opacity: 1; }
 
 .navSection {
-  padding: 14px 14px 20px;
-  font-size: 15px;
+  padding: 14px 14px 30px;
+  font-size: 16px;
   font-family: var(--font-mono);
   text-transform: uppercase;
   letter-spacing: 1px;
@@ -114,31 +114,11 @@
 .ni.active svg { opacity: 1; }
 
 /* label text fades in only when expanded */
-.ni > :global(span:not(.badge)),
 .niLabel {
   opacity: 0;
   transition: opacity 0.15s ease;
 }
 .sidebar:hover .niLabel { opacity: 1; }
-
-.badge {
-  margin-left: auto;
-  background: var(--bg5);
-  color: var(--text2);
-  font-size: 10px;
-  font-family: var(--font-mono);
-  padding: 1px 6px;
-  border-radius: 10px;
-  min-width: 16px;
-  text-align: center;
-  line-height: 1.5;
-  font-weight: 500;
-  opacity: 0;
-  transition: opacity 0.15s ease;
-}
-.sidebar:hover .badge { opacity: 1; }
-.badgeNew { background: var(--accent); color: #fff; }
-.badgeWarn { background: var(--amber); color: #fff; }
 
 .foot {
   padding: 8px 8px 14px;

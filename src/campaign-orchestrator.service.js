@@ -14,9 +14,8 @@ import {
   attachmentsToContentBlocks,
 } from '../lib/repositories/orchestrator.repository.js';
 import supabase from '../lib/supabase.js';
-import { conductResearch } from './research-agent.service.js';
 import { conductResearchV2 } from './research-agent-v2.service.js';
-import { generateMediaPlan, generateCampaignPlan, generateCampaignPlanParallel } from './strategy-agent.service.js';
+import { generateCampaignPlanParallel } from './strategy-agent.service.js';
 import { generateFromDocument } from './aigc.service.js';
 import { executeMediaPlan, previewExecution, activateCampaigns } from './execution-agent.service.js';
 import { fetchAccountAssets } from './meta-account.service.js';

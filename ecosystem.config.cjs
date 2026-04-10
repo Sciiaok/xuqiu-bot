@@ -12,7 +12,7 @@ module.exports = {
   apps: [
     {
       name: 'lead-engine-next',
-      script: 'npm',
+      script: 'node_modules/.bin/next',  // ← 直接调用 next
       args: 'start',
       cwd: __dirname,
       env: {

@@ -49,6 +49,24 @@ export function isClaudeSupportedImageMimeType(mimeType) {
   return CLAUDE_SUPPORTED_IMAGE_MIME_TYPES.has(normalizeMimeType(mimeType));
 }
 
+// Tag the Graph API's "object does not exist" signal so callers can map it
+// to HTTP 410 Gone instead of an opaque 5xx. WhatsApp Cloud API only keeps
+// media for a limited window (days to ~2 weeks); once rotated out, Meta
+// returns code 100 subcode 33, which is expected and not a bug on our side.
+export class WhatsAppMediaGoneError extends Error {
+  constructor(mediaId, graphError) {
+    super(`WhatsApp media ${mediaId} is no longer available`);
+    this.name = 'WhatsAppMediaGoneError';
+    this.mediaId = mediaId;
+    this.graphError = graphError;
+  }
+}
+
+function isMediaGoneError(graphError) {
+  const e = graphError?.error;
+  return e?.code === 100 && e?.error_subcode === 33;
+}
+
 export async function getWhatsAppMediaMetadata(mediaId) {
   const response = await fetch(
     `https://graph.facebook.com/${config.whatsapp.apiVersion}/${mediaId}`,
@@ -61,6 +79,9 @@ export async function getWhatsAppMediaMetadata(mediaId) {
 
   if (!response.ok) {
     const err = await response.json().catch(() => null);
+    if (isMediaGoneError(err)) {
+      throw new WhatsAppMediaGoneError(mediaId, err);
+    }
     throw new Error(`WhatsApp media metadata error: ${JSON.stringify(err || { status: response.status })}`);
   }
 

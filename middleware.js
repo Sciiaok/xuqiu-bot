@@ -9,7 +9,6 @@ const PROTECTED_PREFIXES = [
   '/ai-automation',
   '/campaign-studio',
   '/leadhub',
-  '/inbox',
   '/knowledge-base',
 ];
 
@@ -103,7 +102,6 @@ export const config = {
     '/ai-automation/:path*',
     '/campaign-studio/:path*',
     '/leadhub/:path*',
-    '/inbox/:path*',
     '/knowledge-base/:path*',
     '/login',
   ],

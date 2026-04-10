@@ -13,6 +13,7 @@ import DataTable from '../../components/DataTable/DataTable';
 import TabBar from '../../components/TabBar/TabBar';
 import Tag from '../../components/Tag/Tag';
 import Markdown from '../../components/Markdown/Markdown';
+import { unknown } from 'zod/v4';
 
 // ──────────── Constants ────────────
 
@@ -24,35 +25,27 @@ const PRODUCT_LINES = [
 ];
 
 const DATE_TABS = [
-  { key: '1d', label: '1D' },
-  { key: '7d', label: '7D' },
-  { key: '14d', label: '14D' },
-  { key: '30d', label: '30D' },
+  { key: '1d', label: '最近1天' },
+  { key: '7d', label: '最近7天' },
+  { key: '30d', label: '最近30天' },
+  { key: 'all', label: '所有时间' },
   { key: 'custom', label: '自定义' },
 ];
 
-const DATE_TAB_TO_DAYS = { '1d': 1, '7d': 7, '14d': 14, '30d': 30 };
+const DATE_TAB_TO_DAYS = { '1d': 1, '7d': 7, '30d': 30 };
 
 const INTENT_LABELS = {
   business_inquiry: '业务咨询',
   business_cooperation: '商务合作',
   personal_consumer: '个人消费',
   personal_farmer: '个体农户',
-  other: '其他',
+  unknown: 'UNKNOWN',
 };
 
 const AGENT_NAME_LABELS = {
   'Vehicle Export Agent': '整车出口业务',
   'Agricultural Machinery Export Agent': '农机出口业务',
   'Japanese Auto Parts Export Agent': '汽配出口业务',
-};
-
-const BUYER_TYPE_LABELS = {
-  end_user: '终端用户',
-  dealer: '经销商',
-  contractor: '承包商',
-  cooperative: '合作社',
-  other: '未分类',
 };
 
 // Chart palette — distinct, modern, dashboard-friendly
@@ -188,6 +181,7 @@ export default function AnalyticsPage() {
   const [customTo, setCustomTo] = useState('');
 
   const [data, setData] = useState(null);
+  const [totalSpend, setTotalSpend] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
 
@@ -261,16 +255,21 @@ export default function AnalyticsPage() {
 
   // ── Main data fetch ──
   useEffect(() => {
-    let days;
-    let preset;
-    let startDate, endDate;
+    // Compute the time window as ISO timestamps, matching LeadHub's rolling-window
+    // approach (`now - N*24h`) so both pages produce identical counts.
+    let dateFrom, dateTo, days;
     if (dateRange === 'custom') {
       if (!customFrom || !customTo) return;
-      startDate = customFrom;
-      endDate = customTo;
+      dateFrom = new Date(`${customFrom}T00:00:00.000+08:00`).toISOString();
+      dateTo = new Date(`${customTo}T23:59:59.999+08:00`).toISOString();
+    } else if (dateRange === 'all') {
+      // no date filter — backend treats missing dateFrom/dateTo as "all"
+      days = 3650;
     } else {
       days = DATE_TAB_TO_DAYS[dateRange] ?? 7;
-      preset = dateRange === '1d' ? '1d' : '';
+      const now = new Date();
+      dateTo = now.toISOString();
+      dateFrom = new Date(now.getTime() - days * 24 * 60 * 60 * 1000).toISOString();
     }
 
     const productLines = getProductLines();
@@ -278,12 +277,11 @@ export default function AnalyticsPage() {
     setError(null);
 
     const qs = new URLSearchParams();
-    if (startDate && endDate) {
-      qs.set('startDate', startDate);
-      qs.set('endDate', endDate);
+    if (dateFrom && dateTo) {
+      qs.set('startDate', dateFrom);
+      qs.set('endDate', dateTo);
     } else {
       qs.set('days', String(days));
-      if (preset) qs.set('preset', preset);
     }
     qs.set('productLines', productLines);
 
@@ -295,7 +293,16 @@ export default function AnalyticsPage() {
       .then(json => { setData(json); setLoading(false); })
       .catch(err => { setError(err.message); setLoading(false); });
 
-    fetchAiInsight({ days, preset, startDate, endDate, productLines });
+    // Fetch ad spend from Meta Ads API — use the same `days` param that
+    // campaign-studio uses so both pages hit the same cache key and show
+    // identical numbers. Meta caps at 37 months (~1100 days).
+    const spendDays = Math.min(days || 30, 1100);
+    fetch(`/api/ads/metrics?days=${spendDays}&totalsOnly=true`)
+      .then(res => res.ok ? res.json() : null)
+      .then(json => { if (json?.totals) setTotalSpend(json.totals.spend ?? null); })
+      .catch(() => setTotalSpend(null));
+
+    fetchAiInsight({ days, startDate: dateFrom, endDate: dateTo, productLines });
   }, [dateRange, selectedLine, customFrom, customTo]);
 
   // ── Derived data ──
@@ -304,7 +311,6 @@ export default function AnalyticsPage() {
   const agentDistribution = data?.agentDistribution ?? [];
   const countryDistribution = data?.countryDistribution ?? [];
   const qualityDistribution = data?.qualityDistribution ?? [];
-  const buyerTypeDistribution = data?.buyerTypeDistribution ?? [];
   const intentDistribution = (data?.intentDistribution ?? []).map(d => ({
     ...d,
     name: INTENT_LABELS[d.name] || d.name,
@@ -362,6 +368,11 @@ export default function AnalyticsPage() {
           {/* KPI Cards */}
           <div className={s.metrics}>
             <MetricCard
+              label="广告花费"
+              value={totalSpend != null ? `$${totalSpend.toLocaleString()}` : '—'}
+              color="purple"
+            />
+            <MetricCard
               label="总询盘数"
               value={String(kpi.totalInquiries?.current ?? 0)}
               delta={calcDelta(kpi.totalInquiries?.current, kpi.totalInquiries?.previous)}
@@ -390,30 +401,39 @@ export default function AnalyticsPage() {
             />
           </div>
 
-          {/* AI Summary */}
+          {/* AI Summary — renders independently, never blocks data display */}
           <AIPanel
             title="AI 询盘洞察"
-            tag={aiInsightLoading ? (aiStatus || '正在生成...') : aiInsight ? '自动生成' : '自动生成'}
+            tag={aiInsightLoading ? (aiStatus || '正在分析中...') : '自动生成'}
             onRefresh={() => {
               const productLines = getProductLines();
               if (dateRange === 'custom' && customFrom && customTo) {
-                return fetchAiInsight({ startDate: customFrom, endDate: customTo, productLines });
+                const from = new Date(`${customFrom}T00:00:00.000+08:00`).toISOString();
+                const to = new Date(`${customTo}T23:59:59.999+08:00`).toISOString();
+                return fetchAiInsight({ startDate: from, endDate: to, productLines });
               }
+              if (dateRange === 'all') {
+                return fetchAiInsight({ days: 3650, productLines });
+              }
+              const d = DATE_TAB_TO_DAYS[dateRange] ?? 7;
+              const now = new Date();
               return fetchAiInsight({
-                days: DATE_TAB_TO_DAYS[dateRange] ?? 7,
-                preset: dateRange === '1d' ? '1d' : '',
+                startDate: new Date(now.getTime() - d * 86400000).toISOString(),
+                endDate: now.toISOString(),
                 productLines,
               });
             }}
             refreshLabel="刷新"
           >
-            {aiInsight ? (
-              <Markdown>{aiInsight}</Markdown>
-            ) : aiInsightLoading ? (
-              <div style={{ color: 'var(--text3)', fontSize: 13 }}>
-                {aiStatus || '正在生成询盘洞察...'}
+            {aiInsightLoading && !aiInsight ? (
+              <div style={{ color: 'var(--text3)', fontSize: 13, padding: '8px 0' }}>
+                {aiStatus || '正在分析中，数据看板已就绪...'}
               </div>
-            ) : null}
+            ) : aiInsight ? (
+              <Markdown>{aiInsight}</Markdown>
+            ) : (
+              <div style={{ color: 'var(--text3)', fontSize: 13 }}>点击"刷新"生成洞察</div>
+            )}
           </AIPanel>
 
           {/* Daily Trend — AreaChart */}
@@ -499,7 +519,7 @@ export default function AnalyticsPage() {
             </Card>
 
             {/* Country Distribution — BarChart */}
-            <Card title="国家分布 Top 10">
+            <Card title="国家分布 Top 10（线索粒度）">
               {countryDistribution.length > 0 ? (
                 <ResponsiveContainer width="100%" height={Math.max(200, countryDistribution.length * 30)}>
                   <BarChart data={countryDistribution} layout="vertical" margin={{ left: 0, right: 16 }}>
@@ -507,7 +527,7 @@ export default function AnalyticsPage() {
                     <XAxis type="number" tick={chartAxisStyle} tickLine={false} axisLine={false} />
                     <YAxis type="category" dataKey="country" tick={chartAxisStyle} tickLine={false} axisLine={false} width={72} />
                     <Tooltip content={<ChartTooltip />} />
-                    <Bar dataKey="inquiryCount" fill={COLORS.blue} radius={[0, 4, 4, 0]} name="询盘数" barSize={16} />
+                    <Bar dataKey="leadCount" fill={COLORS.blue} radius={[0, 4, 4, 0]} name="线索数" barSize={16} />
                   </BarChart>
                 </ResponsiveContainer>
               ) : (
@@ -516,18 +536,13 @@ export default function AnalyticsPage() {
             </Card>
           </div>
 
-          {/* Three Donut Charts */}
-          <div className={s.threeCol}>
+          {/* Two Donut Charts */}
+          <div className={s.twoCol}>
             <DonutCard
               title="询盘质量分布"
               data={qualityDistribution}
               colorMap={QUALITY_COLORS}
               labelMap={{ PROOF: '高质量', QUALIFY: '中质量', GOOD: '低质量', BAD: '无效' }}
-            />
-            <DonutCard
-              title="买家类型分布"
-              data={buyerTypeDistribution}
-              labelMap={BUYER_TYPE_LABELS}
             />
             <DonutCard
               title="对话意图分布"

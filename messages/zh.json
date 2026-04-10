@@ -13,7 +13,6 @@
     "ads": "广告归因",
     "leads": "线索",
     "inquiries": "询盘",
-    "inbox": "收件箱",
     "contacts": "联系人",
     "agents": "智能体",
     "docs": "知识库",
@@ -198,35 +197,6 @@
     "cancel": "取消",
     "save": "保存更改",
     "saving": "保存中..."
-  },
-  "inbox": {
-    "selectContact": "选择联系人开始聊天",
-    "conversations": "{count} 个对话",
-    "exitTakeover": "退出接管",
-    "releasing": "释放中...",
-    "takeOver": "人工接管",
-    "takingOver": "接管中...",
-    "humanMode": "人工模式",
-    "live": "实时",
-    "connecting": "连接中...",
-    "hideLeadsPanel": "隐藏线索面板",
-    "showLeadsPanel": "显示线索面板",
-    "noMessages": "暂无消息",
-    "newConversation": "新对话",
-    "typeMessage": "输入消息...",
-    "pressSendFiles": "点击发送按钮发送文件...",
-    "send": "发送",
-    "sending": "发送中",
-    "attachFile": "添加附件",
-    "dropFilesHere": "将文件拖放到此处",
-    "captionPlaceholder": "说明...",
-    "remove": "移除",
-    "failed": "失败",
-    "unsupportedFileType": "不支持的文件类型：{name}",
-    "failedToSendMessage": "发送消息失败：{error}",
-    "failedToTakeOver": "接管失败：{error}",
-    "failedToEndTakeover": "结束接管失败：{error}",
-    "failedToSendMedia": "发送媒体文件失败：{error}"
   },
   "contacts": {
     "title": "联系人",
@@ -427,7 +397,7 @@
   "campaignStudio": {
     "tabs": {
       "assistant": "✦ AI 投放助手",
-      "plans": "广告计划列表",
+      "plans": "广告列表",
       "aigc": "AI 素材生产",
       "attribution": "深度归因分析"
     },

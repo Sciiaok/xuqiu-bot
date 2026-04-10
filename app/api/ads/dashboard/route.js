@@ -829,6 +829,14 @@ export async function GET(request) {
 
     const metaLifetimeSince = buildMetaLifetimeSince(range.toISO);
 
+    // Meta Ads API caps time_range at 37 months. When the requested window
+    // exceeds this (e.g. "所有时间" → days=3650), clamp the Meta-facing
+    // since date while leaving Supabase queries uncapped.
+    const metaPeriodSince = (() => {
+      const raw = range.fromISO.slice(0, 10);
+      return raw < metaLifetimeSince ? metaLifetimeSince : raw;
+    })();
+
     const periodConversationSummary = await fetchConversationSummaryByAd({
       supabase,
       fromISO: range.fromISO,
@@ -848,12 +856,12 @@ export async function GET(request) {
         fetchMetaInsights({
           adAccountId,
           accessToken,
-          timeRange: { since: range.fromISO.slice(0, 10), until: range.toISO.slice(0, 10) },
+          timeRange: { since: metaPeriodSince, until: range.toISO.slice(0, 10) },
         }),
         fetchMetaInsights({
           adAccountId,
           accessToken,
-          timeRange: { since: range.fromISO.slice(0, 10), until: range.toISO.slice(0, 10) },
+          timeRange: { since: metaPeriodSince, until: range.toISO.slice(0, 10) },
           timeIncrement: 1,
         }),
       ]);
@@ -896,6 +904,9 @@ export async function GET(request) {
       }),
     ]);
 
+    // Creative enrichment: fetch creatives → extract hashes/videoIds → fetch
+    // images + videos in parallel. This whole block is independent of the
+    // conversation queries above, so it ran alongside them via Promise.all.
     const previewByAdId = new Map();
     try {
       const candidateCreatives = await fetchMetaAds({
@@ -916,33 +927,16 @@ export async function GET(request) {
           .filter(Boolean)
       ));
 
-      let previewImages = [];
-      try {
-        previewImages = await fetchMetaAdImages({
-          adAccountId,
-          accessToken,
-          hashes: previewHashes,
-        });
-      } catch (error) {
-        console.warn('Skipping Meta ad image enrichment:', error?.message || error);
-      }
-
-      let previewVideos = new Map();
-      try {
-        previewVideos = await fetchMetaVideoAssets({
-          accessToken,
-          videoIds: previewVideoIds,
-        });
-      } catch (error) {
-        if (isMetaPermissionError(error)) {
-          console.warn('Skipping Meta video thumbnail enrichment due to permission:', error?.message || error);
-        } else {
-          console.warn('Skipping Meta video thumbnail enrichment:', error?.message || error);
-        }
-      }
+      // Images and videos are independent — fetch in parallel
+      const [previewImages, previewVideos] = await Promise.all([
+        fetchMetaAdImages({ adAccountId, accessToken, hashes: previewHashes })
+          .catch((error) => { console.warn('Skipping Meta ad image enrichment:', error?.message); return []; }),
+        fetchMetaVideoAssets({ accessToken, videoIds: previewVideoIds })
+          .catch((error) => { console.warn('Skipping Meta video thumbnail enrichment:', error?.message); return new Map(); }),
+      ]);
 
       const previewImageMap = new Map(
-        previewImages.map((item) => [item.hash, item])
+        (Array.isArray(previewImages) ? previewImages : []).map((item) => [item.hash, item])
       );
 
       for (const ad of candidateCreatives || []) {
@@ -951,7 +945,8 @@ export async function GET(request) {
         const hash = extractCreativeImageHash(ad.creative);
         const videoId = extractCreativeVideoId(ad.creative);
         const image = hash ? previewImageMap.get(hash) : null;
-        const video = videoId ? getPreferredVideoThumbnail(previewVideos.get(String(videoId))) : null;
+        const videoMap = previewVideos instanceof Map ? previewVideos : new Map();
+        const video = videoId ? getPreferredVideoThumbnail(videoMap.get(String(videoId))) : null;
         const resolvedUrl = image?.url || video?.url || ad.creative?.thumbnail_url || '';
         const resolvedWidth = image ? toInteger(image.width) : toInteger(video?.width);
         const resolvedHeight = image ? toInteger(image.height) : toInteger(video?.height);

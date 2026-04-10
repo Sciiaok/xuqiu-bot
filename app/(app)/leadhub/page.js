@@ -1,9 +1,10 @@
 'use client';
 
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import s from './page.module.css';
 import Tag from '../../components/Tag/Tag';
 import Button from '../../components/Button/Button';
+import TabBar from '../../components/TabBar/TabBar';
 import { createClient } from '../../../lib/supabase-browser';
 import { getWaCountry } from '../../../lib/wa-country';
 import {
@@ -15,9 +16,9 @@ import {
 
 const ROUTE_FILTERS = [
   { key: 'all', label: '全部' },
-  { key: 'HUMAN_NOW', label: '待转人工', variant: 'human' },
+  { key: 'HUMAN_NOW', label: '人工跟进中', variant: 'human' },
   { key: 'CONTINUE', label: 'AI跟进中', variant: null },
-  { key: 'NURTURE', label: '待培育', variant: 'teal' },
+  { key: 'NURTURE', label: '待培育', variant: 'qualify' },
   { key: 'FAQ_END', label: '已结束', variant: 'low' },
 ];
 
@@ -28,12 +29,54 @@ const DETAIL_TABS = [
   { key: 'notes', label: '备注' },
 ];
 
-const SUPPLY_CHAINS = ['全部供应链', 'agri', 'vehicle', 'auto_parts'];
+const SUPPLY_CHAINS = ['全部供应链', 'agri_machinery', 'vehicle', 'auto_parts'];
 const QUALITY_OPTIONS = ['全部质量', 'PROOF', 'QUALIFY', 'GOOD'];
 
 const SEARCH_DEBOUNCE_MS = 300;
 
+const DATE_PRESETS = [
+  { key: '1d', label: '最近1天' },
+  { key: '7d', label: '最近7天' },
+  { key: '30d', label: '最近30天' },
+  { key: 'all', label: '所有时间' },
+  { key: 'custom', label: '自定义' },
+];
+
+const PRESET_DAYS = { '1d': 1, '7d': 7, '30d': 30 };
+
+// Convert a <input type="date"> value (YYYY-MM-DD, Beijing-local) to an ISO
+// timestamp. `endOfDay=true` snaps to 23:59:59.999 so the "to" side is inclusive.
+function dateInputToIso(dateStr, { endOfDay = false } = {}) {
+  if (!dateStr) return '';
+  const time = endOfDay ? 'T23:59:59.999' : 'T00:00:00.000';
+  return new Date(`${dateStr}${time}+08:00`).toISOString();
+}
+
+// Resolve a preset + custom inputs to the final { dateFrom, dateTo } sent to the API.
+function resolveDateRange(preset, customFrom, customTo) {
+  if (preset === 'all') return { dateFrom: '', dateTo: '' };
+  if (preset === 'custom') {
+    return {
+      dateFrom: customFrom ? dateInputToIso(customFrom) : '',
+      dateTo: customTo ? dateInputToIso(customTo, { endOfDay: true }) : '',
+    };
+  }
+  const days = PRESET_DAYS[preset];
+  if (!days) return { dateFrom: '', dateTo: '' };
+  const now = new Date();
+  const from = new Date(now.getTime() - days * 24 * 60 * 60 * 1000);
+  return { dateFrom: from.toISOString(), dateTo: now.toISOString() };
+}
+
 /* ── Helpers ────────────────────────────────────────────── */
+
+const toBeijingTime = (utcStr) =>
+  new Date(utcStr)
+    .toLocaleString('zh-CN', {
+      timeZone: 'Asia/Shanghai',
+      hour12: false
+    })
+    .replace(/\//g, '-');
 
 function getFlagEmoji(isoCode) {
   if (!isoCode || isoCode.length !== 2) return '';
@@ -60,53 +103,103 @@ function getCountryInfo(waId) {
   return { flag, country };
 }
 
+/* ── Avatar (hash-based color) ─────────────────────────── */
+const AVATAR_COLORS = [
+  'var(--accent)',
+  'var(--green)',
+  'var(--purple)',
+  'var(--teal)',
+  'var(--red)',
+  'var(--amber)',
+];
+
+function hashName(name = '') {
+  let h = 0;
+  for (let i = 0; i < name.length; i++) {
+    h = (h * 31 + name.charCodeAt(i)) & 0xfffffff;
+  }
+  return h;
+}
+
+function avatarColor(name = '') {
+  return AVATAR_COLORS[hashName(name) % AVATAR_COLORS.length];
+}
+
+function initials(name = '') {
+  return name
+    .split(/\s+/)
+    .map((w) => w[0])
+    .filter(Boolean)
+    .slice(0, 2)
+    .join('')
+    .toUpperCase() || '?';
+}
+
+function Avatar({ name, size = 36 }) {
+  const color = avatarColor(name);
+  return (
+    <div
+      style={{
+        width: size,
+        height: size,
+        borderRadius: '50%',
+        background: color,
+        color: '#fff',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        fontSize: size * 0.36,
+        fontWeight: 600,
+        flexShrink: 0,
+        fontFamily: 'var(--font-sans)',
+        letterSpacing: '0.01em',
+      }}
+    >
+      {initials(name)}
+    </div>
+  );
+}
+
+function normalizeEnum(raw, fallback, labels) {
+  const upper = (raw || fallback).toUpperCase();
+  return { raw: upper, lower: upper.toLowerCase(), label: labels[upper] || upper };
+}
+
 function mapGroupToCard(group) {
   const { meta, leads } = group;
   const { flag, country } = getCountryInfo(meta.wa_id);
-  const phone = meta.wa_id || '';
-  const name = meta.company_name || '';
-  const avatarText = (name || phone).slice(0, 2).toUpperCase();
-  const quality = (meta.inquiry_quality || 'good').toLowerCase();
-  const qualityRaw = (meta.inquiry_quality || 'GOOD').toUpperCase();
-  const qualityLabel = QUALITY_LABELS[qualityRaw] || qualityRaw;
-  const route = meta.route || '';
-  const value = (meta.business_value || 'low').toLowerCase();
-  const valueRaw = (meta.business_value || 'LOW').toUpperCase();
-  const valueLabel = VALUE_LABELS[valueRaw] || valueRaw;
-  const chain = meta.agent_product_line || '';
-  const destCountry = leads[0]?.destination_country || country;
+  const quality = normalizeEnum(meta.inquiry_quality, 'GOOD', QUALITY_LABELS);
+  const value = normalizeEnum(meta.business_value, 'LOW', VALUE_LABELS);
 
   return {
     id: meta.conversation_id,
     conversationId: meta.conversation_id,
     contactId: meta.contact_id || null,
-    phone,
-    name,
+    phone: meta.wa_id || '',
+    name: meta.name || '',
     flag,
-    country: destCountry || country,
-    ts: meta.updated_at
-      ? new Date(meta.updated_at).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })
-      : '',
-    quality,
-    qualityLabel,
-    route,
-    value,
-    valueLabel,
-    chain,
+    country: leads[0]?.destination_country || country,
+    ts: toBeijingTime(meta.last_message_at),
+    quality: quality.lower,
+    qualityLabel: quality.label,
+    route: meta.route || '',
+    value: value.lower,
+    valueLabel: value.label,
+    chain: meta.agent_product_line || '',
+    waPhoneNumberId: meta.wa_phone_number_id || '',
+    metaAdId: meta.meta_ad_id || '',
     leadCount: leads.length,
     summary: meta.handoff_summary || meta.conversation_intent_summary || '',
-    avatar: avatarText,
-    avatarColor: '#7a5c3a',
   };
 }
 
 /* ── Route Tag helper ──────────────────────────────────── */
 function RouteTag({ route }) {
   const map = {
-    HUMAN_NOW: { variant: 'human', label: '待转人工' },
-    CONTINUE: { variant: 'low', label: 'AI跟进中' },
+    HUMAN_NOW: { variant: 'human', label: '人工跟进中' },
+    CONTINUE: { variant: 'proof', label: 'AI跟进中' },
     NURTURE: { variant: 'qualify', label: '待培育' },
-    FAQ_END: { variant: 'bad', label: '已结束' },
+    FAQ_END: { variant: 'low', label: '已结束' },
   };
   const cfg = map[route] || { variant: 'low', label: route || '—' };
   return <Tag variant={cfg.variant}>{cfg.label}</Tag>;
@@ -114,27 +207,40 @@ function RouteTag({ route }) {
 
 /* ── Inquiry Card ──────────────────────────────────────── */
 function InquiryCard({ item, active, onClick }) {
+  const displayName = item.name || item.phone;
   return (
     <div
       className={`${s.inquiryCard} ${active ? s.inquiryCardActive : ''}`}
       onClick={onClick}
     >
-      <div className={s.cardRow1}>
-        <Tag variant={item.quality}>{item.qualityLabel}</Tag>
-        <span className={s.cardPhone}>{item.phone}</span>
-        {item.name && <span className={s.cardName}>{item.name}</span>}
-        <span className={s.cardCountry}>{item.flag}{item.country}</span>
-        <span className={s.cardTs}>{item.ts}</span>
+      <div className={s.cardHead}>
+        <Avatar name={displayName} size={32} />
+        <div className={s.cardHeadText}>
+          <div className={s.cardTitleRow}>
+            <span className={s.cardTitle}>{displayName}</span>
+            <span className={s.cardTs}>{item.ts}</span>
+          </div>
+          <div className={s.cardMetaRow}>
+            <span className={s.cardPhone}>{item.phone}</span>
+            {item.country && (
+              <>
+                <span className={s.cardMetaSep}>·</span>
+                <span className={s.cardCountry}>{item.flag}{item.country}</span>
+              </>
+            )}
+          </div>
+        </div>
       </div>
-      <div className={s.cardRow2}>
+      <div className={s.cardTagRow}>
+        <Tag variant={item.quality}>{item.qualityLabel}</Tag>
         <RouteTag route={item.route} />
         <Tag variant={item.value}>{item.valueLabel}</Tag>
-        <span className={s.cardChain}>{item.chain}</span>
+        {item.chain && <span className={s.cardChain}>{item.chain}</span>}
         {item.leadCount > 0 && (
           <span className={s.cardLeadCount}>{item.leadCount}条线索</span>
         )}
       </div>
-      <div className={s.cardSummary}>{item.summary}</div>
+      {item.summary && <div className={s.cardSummary}>{item.summary}</div>}
     </div>
   );
 }
@@ -145,9 +251,7 @@ function ChatMessage({ msg, contactName }) {
   const isOperator = msg.sent_by === 'operator';
   const dir = isIn ? 'in' : 'out';
   const senderName = isIn ? (contactName || '客户') : isOperator ? '人工客服' : 'AI Agent';
-  const ts = msg.sent_at
-    ? new Date(msg.sent_at).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })
-    : '';
+  const ts = toBeijingTime(msg.sent_at);
 
   const media = msg.metadata;
 
@@ -169,10 +273,10 @@ function ChatMessage({ msg, contactName }) {
   }
 
   return (
-    <div className={`${s.msgRow} ${dir === 'out' ? s.msgOut : s.msgIn}`}>
+    <div className={`${s.msgRow} ${dir === 'out' ? s.msgOut : s.msgIn} ${isOperator && !isIn ? s.msgOperator : ''}`}>
       {dir === 'in' && <div className={s.msgAvatar}>C</div>}
-      <div className={s.msgBubble} style={isOperator && !isIn ? { background: 'var(--amber)', opacity: 0.95 } : {}}>
-        <div className={s.msgSender} style={isOperator ? { color: 'var(--amber)' } : {}}>{senderName}</div>
+      <div className={s.msgBubble}>
+        <div className={s.msgSender}>{senderName}</div>
         <div className={s.msgText}>{content}</div>
         <div className={s.msgTs}>{ts}</div>
       </div>
@@ -184,6 +288,7 @@ function ChatMessage({ msg, contactName }) {
 /* ── Main Page ─────────────────────────────────────────── */
 export default function LeadHubPage() {
   const [cards, setCards] = useState([]);
+  const [totalContacts, setTotalContacts] = useState(0);
   const [totalConversations, setTotalConversations] = useState(0);
   const [totalLeads, setTotalLeads] = useState(0);
   const [hasMore, setHasMore] = useState(false);
@@ -197,7 +302,11 @@ export default function LeadHubPage() {
   const [detailTab, setDetailTab] = useState('chat');
   const [supplyChain, setSupplyChain] = useState('全部供应链');
   const [quality, setQuality] = useState('全部质量');
-  const [country, setCountry] = useState('全部国家');
+  const [country, setCountry] = useState('all');
+  const [datePreset, setDatePreset] = useState('all');
+  const [customFrom, setCustomFrom] = useState('');
+  const [customTo, setCustomTo] = useState('');
+  const [availableCountries, setAvailableCountries] = useState([]);
   const [search, setSearch] = useState('');
   const [debouncedSearch, setDebouncedSearch] = useState('');
 
@@ -207,6 +316,7 @@ export default function LeadHubPage() {
   const [msgText, setMsgText] = useState('');
   const [sending, setSending] = useState(false);
   const [confirmAction, setConfirmAction] = useState(null);
+  const [takeoverBusy, setTakeoverBusy] = useState(false);
   const [selectedFile, setSelectedFile] = useState(null);
   const [error, setError] = useState(null);
   const [notes, setNotes] = useState([]);
@@ -222,26 +332,56 @@ export default function LeadHubPage() {
 
   const listEndRef = useRef(null);
 
+  // Currently selected card. Memoized so effects that only need `selected`
+  // don't re-run when unrelated `cards` entries change (e.g. on pagination).
+  const selected = useMemo(
+    () => cards.find((c) => c.id === selectedId) || null,
+    [cards, selectedId],
+  );
+  const selectedContactId = selected?.contactId || null;
+
   // Debounce search
   useEffect(() => {
     const t = setTimeout(() => setDebouncedSearch(search), SEARCH_DEBOUNCE_MS);
     return () => clearTimeout(t);
   }, [search]);
 
-  // Build query string from current filters
+  // Fetch distinct destination countries for the filter dropdown (mount once)
+  useEffect(() => {
+    let cancelled = false;
+    const supabase = createClient();
+    supabase
+      .from('leads')
+      .select('destination_country')
+      .not('destination_country', 'is', null)
+      .then(({ data, error }) => {
+        if (cancelled || error || !data) return;
+        const unique = [...new Set(data.map(r => r.destination_country).filter(Boolean))].sort();
+        setAvailableCountries(unique);
+      });
+    return () => { cancelled = true; };
+  }, []);
+
+  // Build query string from current filters.
+  // NOTE: `routeFilter` is intentionally NOT included here — route-bar buttons
+  // (全部/人工跟进中/AI跟进中/待培育/已结束) filter the already-loaded list
+  // client-side to avoid re-hitting the DB on tab switches.
   const buildQs = useCallback((cursor = null) => {
     const qs = new URLSearchParams();
     qs.set('limit', '20');
-    if (routeFilter !== 'all') qs.append('route', routeFilter);
     if (supplyChain !== '全部供应链') qs.append('agentIds', supplyChain);
     if (quality !== '全部质量') qs.append('inquiryQuality', quality);
+    if (country !== 'all') qs.set('country', country);
     if (debouncedSearch) qs.set('customer', debouncedSearch);
+    const { dateFrom, dateTo } = resolveDateRange(datePreset, customFrom, customTo);
+    if (dateFrom) qs.set('dateFrom', dateFrom);
+    if (dateTo) qs.set('dateTo', dateTo);
     if (cursor) {
       qs.set('cursorTs', cursor.cursorTs);
       qs.set('cursorId', cursor.cursorId);
     }
     return qs;
-  }, [routeFilter, supplyChain, quality, debouncedSearch]);
+  }, [supplyChain, quality, country, datePreset, customFrom, customTo, debouncedSearch]);
 
   // Fetch initial list whenever filters change
   useEffect(() => {
@@ -258,6 +398,7 @@ export default function LeadHubPage() {
         if (cancelled) return;
         const mapped = (json.groups || []).map(mapGroupToCard);
         setCards(mapped);
+        setTotalContacts(json.totalContacts ?? 0);
         setTotalConversations(json.totalConversations ?? 0);
         setTotalLeads(json.totalLeads ?? 0);
         setHasMore(json.hasMore ?? false);
@@ -375,33 +516,26 @@ export default function LeadHubPage() {
 
   // Fetch profile when Profile tab is active and contact changes
   useEffect(() => {
-    if (detailTab !== 'profile') return;
-    const contactId = cards.find(c => c.id === selectedId)?.contactId;
-    if (!contactId) return;
+    if (detailTab !== 'profile' || !selectedContactId) return;
     let cancelled = false;
     setLoadingProfile(true);
     setProfile(null);
 
-    fetch(`/api/contacts/${contactId}/profile?withAiSummary=true`)
+    fetch(`/api/contacts/${selectedContactId}/profile?withAiSummary=true`)
       .then(r => r.json())
-      .then(json => {
-        if (cancelled) return;
-        setProfile(json);
-      })
+      .then(json => { if (!cancelled) setProfile(json); })
       .catch(() => {})
       .finally(() => { if (!cancelled) setLoadingProfile(false); });
 
     return () => { cancelled = true; };
-  }, [selectedId, detailTab, cards]);
+  }, [selectedContactId, detailTab]);
 
   // Fetch notes when Notes tab is active
   useEffect(() => {
-    if (detailTab !== 'notes') return;
-    const contactId = cards.find(c => c.id === selectedId)?.contactId;
-    if (!contactId) return;
+    if (detailTab !== 'notes' || !selectedContactId) return;
     setNotes([]);
-    fetchNotes(contactId);
-  }, [selectedId, detailTab, cards]);
+    fetchNotes(selectedContactId);
+  }, [selectedContactId, detailTab]);
 
   // Auto-dismiss error toast
   useEffect(() => {
@@ -411,17 +545,39 @@ export default function LeadHubPage() {
   }, [error]);
 
   // ── Takeover handler ──
-  async function handleTakeover() {
-    if (!selectedId) return;
-    const method = isHumanTakeover ? 'DELETE' : 'POST';
+  // `action` is an explicit 'takeover' | 'release' captured from the confirm
+  // dialog snapshot, not derived from current state — this avoids firing the
+  // wrong direction if local state drifted from the server (e.g. auto-expire).
+  async function handleTakeover(action) {
+    if (!selectedId || takeoverBusy) return;
+    const method = action === 'takeover' ? 'POST' : 'DELETE';
+    const nextState = action === 'takeover';
+
+    setTakeoverBusy(true);
     try {
       const res = await fetch(`/api/conversations/${selectedId}/takeover`, { method });
-      const data = await res.json();
-      if (data.success) {
-        setIsHumanTakeover(!isHumanTakeover);
+      let data = null;
+      try { data = await res.json(); } catch {}
+      if (!res.ok || !data?.success) {
+        throw new Error(data?.message || data?.error || `HTTP ${res.status}`);
       }
+
+      setIsHumanTakeover(nextState);
+
+      // Keep the left-list card in sync so the route badge and client-side
+      // route-bar filter reflect the new state immediately. Only override the
+      // fallback route; if the conversation has a lead-driven route, leave it.
+      setCards((prev) => prev.map((card) => {
+        if (card.id !== selectedId) return card;
+        const isFallbackRoute = card.route === 'HUMAN_NOW' || card.route === 'CONTINUE';
+        if (!isFallbackRoute) return card;
+        return { ...card, route: nextState ? 'HUMAN_NOW' : 'CONTINUE' };
+      }));
     } catch (err) {
       console.error('Takeover error:', err);
+      setError(action === 'takeover' ? '接管对话失败，请重试' : '结束接管失败，请重试');
+    } finally {
+      setTakeoverBusy(false);
     }
   }
 
@@ -476,13 +632,12 @@ export default function LeadHubPage() {
   }
 
   async function handleAddNote() {
-    const contactId = selected?.contactId;
-    if (!contactId || !noteText.trim()) return;
+    if (!selectedContactId || !noteText.trim()) return;
     try {
-      const res = await fetch(`/api/contacts/${contactId}/notes`, {
+      const res = await fetch(`/api/contacts/${selectedContactId}/notes`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ content: noteText.trim(), type: 'manual' }),
+        body: JSON.stringify({ content: noteText.trim() }),
       });
       const data = await res.json();
       if (data.note) {
@@ -498,10 +653,9 @@ export default function LeadHubPage() {
   }
 
   async function handleDeleteNote(noteId) {
-    const contactId = selected?.contactId;
-    if (!contactId) return;
+    if (!selectedContactId) return;
     try {
-      const res = await fetch(`/api/contacts/${contactId}/notes/${noteId}`, { method: 'DELETE' });
+      const res = await fetch(`/api/contacts/${selectedContactId}/notes/${noteId}`, { method: 'DELETE' });
       const data = await res.json();
       if (data.success) {
         setNotes(prev => prev.filter(n => n.id !== noteId));
@@ -514,35 +668,17 @@ export default function LeadHubPage() {
     }
   }
 
-  const selected = cards.find(c => c.id === selectedId) || null;
+  // Client-side slice driven by the route-bar buttons. Does not trigger a refetch.
+  const visibleCards = useMemo(
+    () => (routeFilter === 'all' ? cards : cards.filter((c) => c.route === routeFilter)),
+    [cards, routeFilter],
+  );
 
   return (
     <div className={s.root}>
       {/* ── Header ── */}
       <div className={s.header}>
-        <div className={s.headerLeft}>
-          <h1 className={s.title}>询盘</h1>
-          <span className={s.subtitle}>
-            {totalConversations} 个对话 · {totalLeads} 条线索
-          </span>
-        </div>
-        <div className={s.headerRight}>
-          <select className={s.filterSelect} value={supplyChain} onChange={e => setSupplyChain(e.target.value)}>
-            {SUPPLY_CHAINS.map(sc => <option key={sc}>{sc}</option>)}
-          </select>
-          <select className={s.filterSelect} value={quality} onChange={e => setQuality(e.target.value)}>
-            {QUALITY_OPTIONS.map(q => <option key={q}>{q}</option>)}
-          </select>
-          <select className={s.filterSelect} value={country} onChange={e => setCountry(e.target.value)}>
-            <option>全部国家</option>
-          </select>
-          <input
-            className={s.searchInput}
-            placeholder="搜索电话或名称…"
-            value={search}
-            onChange={e => setSearch(e.target.value)}
-          />
-        </div>
+        <h1 className={s.title}>询盘</h1>
       </div>
 
       {/* ── Two-Panel ── */}
@@ -562,17 +698,77 @@ export default function LeadHubPage() {
             ))}
           </div>
 
+          {/* Counts + Filters (moved from header) */}
+          <div className={s.leftPanelControls}>
+            <div className={s.leftPanelFilters}>
+              <select className={s.filterSelect} value={supplyChain} onChange={e => setSupplyChain(e.target.value)}>
+                {SUPPLY_CHAINS.map(sc => <option key={sc}>{sc}</option>)}
+              </select>
+              <select className={s.filterSelect} value={quality} onChange={e => setQuality(e.target.value)}>
+                {QUALITY_OPTIONS.map(q => <option key={q}>{q}</option>)}
+              </select>
+              <select className={s.filterSelect} value={country} onChange={e => setCountry(e.target.value)}>
+                <option value="all">全部国家</option>
+                {availableCountries.map(c => (
+                  <option key={c} value={c}>{c}</option>
+                ))}
+              </select>
+              <select
+                className={s.filterSelect}
+                value={datePreset}
+                onChange={e => {
+                  const v = e.target.value;
+                  setDatePreset(v);
+                  if (v !== 'custom') { setCustomFrom(''); setCustomTo(''); }
+                }}
+              >
+                {DATE_PRESETS.map(p => (
+                  <option key={p.key} value={p.key}>{p.label}</option>
+                ))}
+              </select>
+              {datePreset === 'custom' && (
+                <>
+                  <input
+                    type="date"
+                    className={s.filterSelect}
+                    value={customFrom}
+                    max={customTo || undefined}
+                    onChange={e => setCustomFrom(e.target.value)}
+                    title="起始日期"
+                  />
+                  <input
+                    type="date"
+                    className={s.filterSelect}
+                    value={customTo}
+                    min={customFrom || undefined}
+                    onChange={e => setCustomTo(e.target.value)}
+                    title="结束日期"
+                  />
+                </>
+              )}
+              <input
+                className={s.searchInput}
+                placeholder="搜索电话或名称…"
+                value={search}
+                onChange={e => setSearch(e.target.value)}
+              />
+            </div>
+            <span className={s.subtitle}>
+              {totalContacts} 个联系人 · {totalConversations} 个对话 · {totalLeads} 条线索
+            </span>
+          </div>
+
           {/* List */}
           <div className={s.list}>
             {loadingList ? (
               <div className={s.emptyState}>加载中…</div>
             ) : errorList ? (
               <div className={s.emptyState}>加载失败: {errorList}</div>
-            ) : cards.length === 0 ? (
+            ) : visibleCards.length === 0 ? (
               <div className={s.emptyState}>无匹配结果</div>
             ) : (
               <>
-                {cards.map(item => (
+                {visibleCards.map(item => (
                   <InquiryCard
                     key={item.id}
                     item={item}
@@ -595,45 +791,46 @@ export default function LeadHubPage() {
             <>
               {/* Detail Header */}
               <div className={s.detailHeader}>
-                <div
-                  className={s.detailAvatar}
-                  style={{ background: selected.avatarColor }}
-                >
-                  {selected.avatar}
-                </div>
-                <div className={s.detailInfo}>
+                <div className={s.detailRow1}>
+                  <Avatar name={selected.name || selected.phone} size={40} />
                   <div className={s.detailName}>
                     {selected.name || selected.phone}
                   </div>
+                  <Button
+                    variant={isHumanTakeover ? 'danger' : 'ghost'}
+                    size="sm"
+                    disabled={takeoverBusy}
+                    onClick={() => setConfirmAction({ type: isHumanTakeover ? 'release' : 'takeover' })}
+                  >
+                    {takeoverBusy ? '处理中…' : isHumanTakeover ? '结束接管' : '接管对话'}
+                  </Button>
+                </div>
+                <div className={s.detailRow2}>
                   <div className={s.detailMeta}>
-                    {selected.phone} · {selected.flag}{selected.country} · {selected.chain}
+                    {selected.phone} · {selected.flag}{selected.country}
+                    {selected.chain && ` · ${selected.chain}`}
+                  </div>
+                  <div className={s.detailRow2Tags}>
+                    <Tag variant={selected.quality}>{selected.qualityLabel}</Tag>
+                    <RouteTag route={selected.route} />
+                    {selected.waPhoneNumberId && (
+                      <span className={s.cardChain}>WABA: {selected.waPhoneNumberId}</span>
+                    )}
+                    {selected.metaAdId && (
+                      <span className={s.cardChain}>AID: {selected.metaAdId}</span>
+                    )}
                   </div>
                 </div>
-                <div className={s.detailTags}>
-                  <Tag variant={selected.quality}>{selected.qualityLabel}</Tag>
-                  <RouteTag route={selected.route} />
-                </div>
-                <Button
-                  variant={isHumanTakeover ? 'danger' : 'ghost'}
-                  size="sm"
-                  onClick={() => setConfirmAction({ type: isHumanTakeover ? 'release' : 'takeover' })}
-                >
-                  {isHumanTakeover ? '结束接管' : '接管对话'}
-                </Button>
               </div>
 
               {/* Sub-tabs */}
-              <div className={s.detailTabBar}>
-                {DETAIL_TABS.map(t => (
-                  <button
-                    key={t.key}
-                    className={`${s.detailTab} ${detailTab === t.key ? s.detailTabActive : ''}`}
-                    onClick={() => setDetailTab(t.key)}
-                  >
-                    {t.label}
-                  </button>
-                ))}
-              </div>
+              <TabBar
+                tabs={DETAIL_TABS}
+                active={detailTab}
+                onChange={setDetailTab}
+                style={{ marginBottom: 0, padding: '0 18px' }}
+              />
+
 
               {/* Tab Content */}
               <div className={s.detailBody}>
@@ -651,73 +848,62 @@ export default function LeadHubPage() {
                       )}
                     </div>
 
-                    {/* AI bar */}
-                    <div className={s.aiBar}>
-                      <span className={s.aiBarDot} />
-                      <span className={s.aiBarLabel}>AI 自动回复中</span>
+                    {/* Status strip (AI auto-reply / human takeover) */}
+                    <div className={`${s.statusStrip} ${isHumanTakeover ? s.statusStripHuman : ''}`}>
+                      <span className={s.statusDot} />
+                      <span className={s.statusLabel}>
+                        {isHumanTakeover ? '人工接管中 · 可手动输入消息' : 'AI 自动回复中 · 接管后可手动输入'}
+                      </span>
                     </div>
 
-                    {/* Takeover status bar */}
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '6px 12px', fontSize: 11, color: 'var(--text3)', borderTop: '1px solid var(--border)' }}>
-                      <span style={{ width: 6, height: 6, borderRadius: '50%', background: isHumanTakeover ? 'var(--amber)' : 'var(--purple)' }} />
-                      {isHumanTakeover ? '人工接管中 · 可手动输入消息' : 'AI 自动回复中 · 接管后可手动输入'}
-                    </div>
-
-                    {/* File preview strip */}
-                    {selectedFile && isHumanTakeover && (
-                      <div style={{
-                        display: 'flex', alignItems: 'center', gap: 6, padding: '4px 12px',
-                        background: 'var(--bg2)', borderTop: '1px solid var(--border)',
-                        fontSize: 12, color: 'var(--text2)',
-                      }}>
-                        <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                          {selectedFile.name}
-                        </span>
+                    {/* Input area + optional file preview */}
+                    <div className={s.inputAreaWrap}>
+                      {selectedFile && isHumanTakeover && (
+                        <div className={s.filePreview}>
+                          <span className={s.filePreviewName}>{selectedFile.name}</span>
+                          <button
+                            className={s.filePreviewRemove}
+                            onClick={() => setSelectedFile(null)}
+                            aria-label="移除文件"
+                          >
+                            ×
+                          </button>
+                        </div>
+                      )}
+                      <div className={s.inputArea}>
+                        <input
+                          type="file"
+                          ref={fileRef}
+                          style={{ display: 'none' }}
+                          accept="image/*,video/*,audio/*,.pdf,.doc,.docx"
+                          onChange={e => setSelectedFile(e.target.files?.[0] || null)}
+                        />
                         <button
-                          onClick={() => setSelectedFile(null)}
-                          style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text3)', fontSize: 14, lineHeight: 1, padding: '0 2px' }}
+                          className={s.attachBtn}
+                          disabled={!isHumanTakeover || sending}
+                          onClick={() => fileRef.current?.click()}
                         >
-                          x
+                          附件
                         </button>
+                        <input
+                          className={s.chatInput}
+                          placeholder={isHumanTakeover ? '输入消息...' : '接管后输入消息...'}
+                          disabled={!isHumanTakeover || sending}
+                          value={msgText}
+                          onChange={e => setMsgText(e.target.value)}
+                          onKeyDown={e => {
+                            if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSendMessage(); }
+                          }}
+                        />
+                        <Button
+                          variant="primary"
+                          size="sm"
+                          onClick={handleSendMessage}
+                          disabled={!isHumanTakeover || (!msgText.trim() && !selectedFile) || sending}
+                        >
+                          {sending ? '发送中…' : '发送'}
+                        </Button>
                       </div>
-                    )}
-
-                    {/* Input area */}
-                    <div className={s.inputArea}>
-                      <input
-                        type="file"
-                        ref={fileRef}
-                        style={{ display: 'none' }}
-                        accept="image/*,video/*,audio/*,.pdf,.doc,.docx"
-                        onChange={e => setSelectedFile(e.target.files?.[0] || null)}
-                      />
-                      <button
-                        className={s.attachBtn}
-                        disabled={!isHumanTakeover || sending}
-                        onClick={() => fileRef.current?.click()}
-                        style={isHumanTakeover ? { cursor: 'pointer', opacity: 1 } : {}}
-                      >
-                        附件
-                      </button>
-                      <input
-                        className={s.chatInput}
-                        placeholder={isHumanTakeover ? '输入消息...' : '接管后输入消息...'}
-                        disabled={!isHumanTakeover || sending}
-                        value={msgText}
-                        onChange={e => setMsgText(e.target.value)}
-                        onKeyDown={e => {
-                          if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSendMessage(); }
-                        }}
-                        style={isHumanTakeover ? { opacity: 1, color: 'var(--text)' } : {}}
-                      />
-                      <Button
-                        variant="primary"
-                        size="sm"
-                        onClick={handleSendMessage}
-                        disabled={!isHumanTakeover || (!msgText.trim() && !selectedFile) || sending}
-                      >
-                        {sending ? '发送中…' : '发送'}
-                      </Button>
                     </div>
                   </div>
                 )}
@@ -732,7 +918,7 @@ export default function LeadHubPage() {
                       convLeads.map(lead => (
                         <div key={lead.id} className={s.leadRow}>
                           <div className={s.leadRowTop}>
-                            <span className={s.leadProduct}>{lead.car_model || lead.product_name || '—'}</span>
+                            <span className={s.leadProduct}>{lead.car_model || lead.product_name || '—'}, {lead.brand}</span>
                             <Tag variant={(lead.inquiry_quality || 'good').toLowerCase()}>
                               {QUALITY_LABELS[(lead.inquiry_quality || 'GOOD').toUpperCase()] || lead.inquiry_quality}
                             </Tag>
@@ -740,6 +926,9 @@ export default function LeadHubPage() {
                           <div className={s.leadRowBottom}>
                             {lead.destination_country && (
                               <span className={s.leadMeta}>{lead.destination_country}</span>
+                            )}
+                            {lead.destination_port && (
+                              <span className={s.leadMeta}>{lead.destination_port}</span>
                             )}
                             {lead.qty_bucket && (
                               <span className={s.leadMeta}>{lead.qty_bucket}</span>
@@ -798,10 +987,9 @@ export default function LeadHubPage() {
                 {detailTab === 'notes' && (
                   <div className={s.tabScrollPane}>
                     {/* Add note input */}
-                    <div style={{ display: 'flex', gap: 8, padding: '0 0 12px', borderBottom: '1px solid var(--border)', marginBottom: 12 }}>
+                    <div className={s.notesAddRow}>
                       <input
                         className={s.chatInput}
-                        style={{ flex: 1, fontSize: 13 }}
                         placeholder="添加备注..."
                         value={noteText}
                         onChange={e => setNoteText(e.target.value)}
@@ -820,20 +1008,20 @@ export default function LeadHubPage() {
                       <div className={s.emptyState}>暂无备注</div>
                     ) : (
                       notes.map(note => (
-                        <div key={note.id} style={{ padding: '10px 0', borderBottom: '1px solid var(--border)' }}>
-                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 8 }}>
-                            <p style={{ margin: 0, fontSize: 13, color: 'var(--text)', lineHeight: 1.5, flex: 1 }}>{note.content}</p>
+                        <div key={note.id} className={s.noteItem}>
+                          <div className={s.noteContent}>
+                            <p className={s.noteText}>{note.content}</p>
                             <button
+                              className={s.noteDeleteBtn}
                               onClick={() => handleDeleteNote(note.id)}
-                              style={{ flexShrink: 0, background: 'none', border: 'none', color: 'var(--text3)', cursor: 'pointer', fontSize: 16, padding: '0 2px', lineHeight: 1 }}
                               title="删除备注"
                             >
-                              x
+                              ×
                             </button>
                           </div>
-                          <div style={{ display: 'flex', gap: 8, marginTop: 6, fontSize: 11, color: 'var(--text3)', fontFamily: 'var(--font-mono)' }}>
+                          <div className={s.noteMeta}>
                             {note.created_by && <span>{note.created_by}</span>}
-                            <span style={{ marginLeft: 'auto' }}>{note.created_at ? new Date(note.created_at).toLocaleString('zh-CN') : ''}</span>
+                            <span className={s.noteMetaTs}>{note.created_at ? new Date(note.created_at).toLocaleString('zh-CN') : ''}</span>
                           </div>
                         </div>
                       ))
@@ -848,38 +1036,44 @@ export default function LeadHubPage() {
 
       {/* Error toast */}
       {error && (
-        <div
-          style={{
-            position: 'fixed', bottom: 24, left: '50%', transform: 'translateX(-50%)',
-            background: 'var(--red)', color: '#fff', padding: '10px 20px',
-            borderRadius: 8, fontSize: 13, fontWeight: 600, zIndex: 9999,
-            boxShadow: '0 4px 12px rgba(0,0,0,0.15)', cursor: 'pointer',
-          }}
-          onClick={() => setError(null)}
-        >
+        <div className={s.errorToast} onClick={() => setError(null)}>
           {error}
         </div>
       )}
 
       {/* Confirm takeover dialog */}
       {confirmAction && (
-        <div style={{ position: 'fixed', inset: 0, zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(0,0,0,0.4)' }}>
-          <div style={{ background: 'var(--bg)', borderRadius: 12, padding: 24, maxWidth: 360, width: '90%', boxShadow: '0 8px 32px rgba(0,0,0,0.2)' }}>
-            <p style={{ fontSize: 15, fontWeight: 600, color: 'var(--text)', margin: '0 0 8px' }}>
+        <div className={s.confirmOverlay}>
+          <div className={s.confirmCard}>
+            <p className={s.confirmTitle}>
               {confirmAction.type === 'takeover' ? '确认接管对话？' : '确认结束接管？'}
             </p>
-            <p style={{ fontSize: 13, color: 'var(--text2)', margin: '0 0 20px' }}>
+            <p className={s.confirmBody}>
               {confirmAction.type === 'takeover'
                 ? 'AI 将暂停自动回复，您可以手动发送消息。'
                 : 'AI 将恢复自动回复，您将无法手动发送消息。'}
             </p>
-            <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
-              <button onClick={() => setConfirmAction(null)} style={{ padding: '8px 16px', border: '1px solid var(--border)', borderRadius: 6, background: 'var(--bg2)', color: 'var(--text2)', fontSize: 13, cursor: 'pointer' }}>取消</button>
-              <button onClick={() => { handleTakeover(); setConfirmAction(null); }} style={{
-                padding: '8px 16px', border: 'none', borderRadius: 6,
-                background: confirmAction.type === 'takeover' ? 'var(--red)' : 'var(--green)',
-                color: '#fff', fontSize: 13, fontWeight: 600, cursor: 'pointer',
-              }}>{confirmAction.type === 'takeover' ? '确认接管' : '确认结束'}</button>
+            <div className={s.confirmActions}>
+              <button
+                className={s.btnCancel}
+                onClick={() => setConfirmAction(null)}
+                disabled={takeoverBusy}
+              >
+                取消
+              </button>
+              <button
+                className={confirmAction.type === 'takeover' ? s.btnDanger : s.btnOk}
+                disabled={takeoverBusy}
+                onClick={() => {
+                  const action = confirmAction.type === 'takeover' ? 'takeover' : 'release';
+                  handleTakeover(action);
+                  setConfirmAction(null);
+                }}
+              >
+                {takeoverBusy
+                  ? '处理中…'
+                  : confirmAction.type === 'takeover' ? '确认接管' : '确认结束'}
+              </button>
             </div>
           </div>
         </div>

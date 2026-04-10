@@ -61,9 +61,14 @@ export async function GET(request, { params }) {
       try {
         const redis = getRedis();
 
-        // Phase 1: Replay missed events via XRANGE (exclusive start via '(' prefix)
-        // Use '-' for 0-0 (read from start), otherwise exclusive start
-        const rangeStart = lastEventId === '0-0' ? '-' : '(' + lastEventId;
+        // Phase 1: Replay missed events via XRANGE (exclusive start)
+        // Use '-' for 0-0 (read from start), otherwise increment seq to skip last-seen event
+        // Note: avoid '(' exclusive prefix — requires Redis 6.2+
+        let rangeStart = '-';
+        if (lastEventId !== '0-0') {
+          const [ms, seq] = lastEventId.split('-');
+          rangeStart = `${ms}-${Number(seq) + 1}`;
+        }
         const replayEvents = await redis.xrange(key, rangeStart, '+');
         let lastId = lastEventId;
 

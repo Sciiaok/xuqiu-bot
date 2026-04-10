@@ -10,8 +10,6 @@ export default function AIAutomationPage() {
       visibleTabKeys={['ai']}
       defaultTab="ai"
       showMetrics={false}
-      showExportAction={false}
-      showGlobalAnalysis={false}
       workspaceMode
     />
   );

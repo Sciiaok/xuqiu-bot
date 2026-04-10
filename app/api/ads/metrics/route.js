@@ -3,9 +3,11 @@ import { ProxyAgent } from 'undici';
 import { demoGuard } from '../../../../lib/demo-mode.js';
 import { createClient } from '../../../../lib/supabase-server.js';
 import { config } from '../../../../src/config.js';
+import { getRedis } from '../../../../lib/redis.js';
 
 const META_API_VERSION = 'v21.0';
 const META_API_TIMEOUT_MS = config.meta.apiTimeoutMs;
+const CACHE_TTL_SECONDS = 10 * 60; // 10 minutes
 const MESSAGING_CONVERSATION_ACTION = 'onsite_conversion.messaging_conversation_started';
 const META_PROXY_URL = process.env.HTTPS_PROXY || process.env.HTTP_PROXY || '';
 const META_PROXY_AGENT = META_PROXY_URL ? new ProxyAgent(META_PROXY_URL) : null;
@@ -40,15 +42,18 @@ function formatDate(date) {
   return date.toISOString().split('T')[0];
 }
 
-function buildTimeRange(days) {
+// Meta Ads API caps time_range at 37 months (~1100 days).
+const META_MAX_DAYS = 1100;
+
+function buildTimeRange(days, { startDate, endDate } = {}) {
+  if (startDate && endDate) {
+    return { since: startDate, until: endDate };
+  }
+  const capped = Math.min(days, META_MAX_DAYS);
   const until = new Date();
   const since = new Date();
-  since.setUTCDate(since.getUTCDate() - days + 1);
-
-  return {
-    since: formatDate(since),
-    until: formatDate(until),
-  };
+  since.setUTCDate(since.getUTCDate() - capped + 1);
+  return { since: formatDate(since), until: formatDate(until) };
 }
 
 function normalizeAdAccountId(value) {
@@ -78,12 +83,12 @@ function extractConversations(actions) {
   }, 0);
 }
 
-function buildInsightsUrl({ adAccountId, accessToken, days, adIds, timeIncrement }) {
+function buildInsightsUrl({ adAccountId, accessToken, days, adIds, timeIncrement, startDate, endDate }) {
   const params = new URLSearchParams({
     access_token: accessToken,
     fields: 'ad_id,ad_name,spend,impressions,clicks,ctr,cpc,cpm,actions',
     level: 'ad',
-    time_range: JSON.stringify(buildTimeRange(days)),
+    time_range: JSON.stringify(buildTimeRange(days, { startDate, endDate })),
     limit: '500',
   });
 
@@ -107,9 +112,9 @@ function buildInsightsUrl({ adAccountId, accessToken, days, adIds, timeIncrement
   return `https://graph.facebook.com/${META_API_VERSION}/act_${adAccountId}/insights?${params.toString()}`;
 }
 
-async function fetchMetaInsights({ adAccountId, accessToken, days, adIds, timeIncrement }) {
+async function fetchMetaInsights({ adAccountId, accessToken, days, adIds, timeIncrement, startDate, endDate }) {
   const rows = [];
-  let nextUrl = buildInsightsUrl({ adAccountId, accessToken, days, adIds, timeIncrement });
+  let nextUrl = buildInsightsUrl({ adAccountId, accessToken, days, adIds, timeIncrement, startDate, endDate });
 
   while (nextUrl) {
     const response = await fetch(nextUrl, {
@@ -177,6 +182,27 @@ function buildMetrics(rows, adIds) {
   return { metrics, totals };
 }
 
+function buildCacheKey(days, adIds, startDate, endDate) {
+  const idsPart = adIds.length > 0 ? adIds.sort().join(',') : 'all';
+  const datePart = startDate && endDate ? `${startDate}_${endDate}` : `${days}d`;
+  return `ads:metrics:${datePart}:${idsPart}`;
+}
+
+async function getFromCache(key) {
+  try {
+    const redis = getRedis();
+    const cached = await redis.get(key);
+    return cached ? JSON.parse(cached) : null;
+  } catch { return null; }
+}
+
+async function setToCache(key, data) {
+  try {
+    const redis = getRedis();
+    await redis.set(key, JSON.stringify(data), 'EX', CACHE_TTL_SECONDS);
+  } catch {}
+}
+
 export async function GET(request) {
   const demoResponse = demoGuard({
     metrics: [],
@@ -195,8 +221,19 @@ export async function GET(request) {
     const { searchParams } = new URL(request.url);
     const days = parseDays(searchParams);
     const adIds = parseAdIds(searchParams);
+    const startDate = searchParams.get('startDate') || '';
+    const endDate = searchParams.get('endDate') || '';
+    const totalsOnly = searchParams.get('totalsOnly') === 'true';
     const adAccountId = normalizeAdAccountId(process.env.META_AD_ACCOUNT_ID);
     const accessToken = process.env.META_SYSTEM_TOKEN || process.env.META_ACCESS_TOKEN;
+
+    // Redis cache — skip the 20s+ Meta API call when identical params hit recently
+    const cacheKey = buildCacheKey(days, adIds, startDate, endDate);
+    const cached = await getFromCache(cacheKey);
+    if (cached) {
+      if (totalsOnly) return NextResponse.json({ totals: cached.totals });
+      return NextResponse.json(cached);
+    }
 
     if (!accessToken) {
       return NextResponse.json({
@@ -220,9 +257,18 @@ export async function GET(request) {
       accessToken,
       days,
       adIds,
+      startDate,
+      endDate,
     });
 
     const { metrics, totals } = buildMetrics(rows, adIds);
+
+    // totalsOnly mode: analytics page only needs spend, skip the expensive daily call
+    if (totalsOnly) {
+      // Cache the aggregated result (without daily) so full callers also benefit
+      setToCache(cacheKey, { metrics, totals, dailyMetrics: {} });
+      return NextResponse.json({ totals });
+    }
 
     // Fetch daily breakdown (time_increment=1) for per-day display
     const dailyRows = await fetchMetaInsights({
@@ -231,6 +277,8 @@ export async function GET(request) {
       days,
       adIds,
       timeIncrement: 1,
+      startDate,
+      endDate,
     });
 
     // Build daily metrics keyed by date → adId → metrics
@@ -251,7 +299,9 @@ export async function GET(request) {
       };
     }
 
-    return NextResponse.json({ metrics, totals, dailyMetrics });
+    const result = { metrics, totals, dailyMetrics };
+    setToCache(cacheKey, result);
+    return NextResponse.json(result);
   } catch (error) {
     console.error('Error fetching ad metrics:', error);
     return NextResponse.json(

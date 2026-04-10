@@ -6,24 +6,23 @@ import s from './Sidebar.module.css';
 
 const NAV = [
   {
-    section: '概览',
+    section: '大盘',
     items: [
-      { href: '/analytics', label: '数据看板', icon: 'analytics' },
-      { href: '/reports', label: 'AI 报告', icon: 'reports', badge: 'AI', badgeType: 'new' },
+      { href: '/analytics', label: '监控看板', icon: 'analytics' },
+      { href: '/reports', label: '周报日报', icon: 'reports'},
     ],
   },
   {
-    section: '投放',
+    section: '投中',
     items: [
-      { href: '/ai-automation', label: 'AI 自动化投放', icon: 'campaignAutomation', badge: 'AI', badgeType: 'new' },
-      { href: '/campaign-studio', label: '广告数据', icon: 'campaign' },
+      { href: '/ai-automation', label: '广告编排', icon: 'campaignAutomation'},
+      { href: '/campaign-studio', label: '投放数据', icon: 'campaign' },
     ],
   },
   {
-    section: '线索',
+    section: '投后',
     items: [
-      { href: '/leadhub', label: '询盘', icon: 'leadhub', badge: '646' },
-      { href: '/inbox', label: '客户中心', icon: 'inbox', badge: '65', badgeType: 'warn' },
+      { href: '/leadhub', label: '询盘私信', icon: 'leadhub' },
     ],
   },
   {
@@ -72,12 +71,6 @@ const ICONS = {
       <path d="M1 2l6.5 5L14 2"/>
     </svg>
   ),
-  inbox: (
-    <svg fill="none" stroke="currentColor" strokeWidth="1.4" viewBox="0 0 15 15">
-      <circle cx="7.5" cy="5" r="3"/>
-      <path d="M2 13c0-3 2.5-5 5.5-5s5.5 2 5.5 5"/>
-    </svg>
-  ),
   agents: (
     <svg fill="none" stroke="currentColor" strokeWidth="1.4" viewBox="0 0 15 15">
       <rect x="2" y="3" width="11" height="8" rx="2"/>
@@ -124,11 +117,6 @@ export default function Sidebar() {
                 >
                   {ICONS[item.icon]}
                   <span className={s.niLabel}>{item.label}</span>
-                  {item.badge && (
-                    <span className={`${s.badge} ${item.badgeType === 'new' ? s.badgeNew : item.badgeType === 'warn' ? s.badgeWarn : ''}`}>
-                      {item.badge}
-                    </span>
-                  )}
                 </Link>
               );
             })}
@@ -138,14 +126,17 @@ export default function Sidebar() {
 
       {/* Footer */}
       <div className={s.foot}>
-        <div className={s.ni}>
+        <Link
+          href="/dev-tools"
+          className={`${s.ni} ${pathname === '/dev-tools' || pathname?.startsWith('/dev-tools/') ? s.active : ''}`}
+        >
           <svg fill="none" stroke="currentColor" strokeWidth="1.4" viewBox="0 0 15 15">
-            <circle cx="7.5" cy="7.5" r="5.5"/>
-            <line x1="7.5" y1="5" x2="7.5" y2="7.5"/>
-            <circle cx="7.5" cy="10" r=".5" fill="currentColor"/>
+            <path d="M4 3L1 7.5 4 12"/>
+            <path d="M11 3l3 4.5L11 12"/>
+            <line x1="9" y1="2" x2="6" y2="13"/>
           </svg>
-          <span className={s.niLabel}>帮助</span>
-        </div>
+          <span className={s.niLabel}>开发者工具</span>
+        </Link>
         <div className={s.ni}>
           <svg fill="none" stroke="currentColor" strokeWidth="1.4" viewBox="0 0 15 15">
             <circle cx="7.5" cy="7.5" r="2.5"/>
