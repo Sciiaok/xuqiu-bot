@@ -1,9 +1,8 @@
 'use client';
 
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { useSearchParams } from 'next/navigation';
 import s from './page.module.css';
-import Card from '../../components/Card/Card';
 import Button from '../../components/Button/Button';
 import Tag from '../../components/Tag/Tag';
 import Markdown from '../../components/Markdown/Markdown';
@@ -12,6 +11,7 @@ import {
   ExecutionCard, FeedbackCard, PhaseDivider,
 } from '../../components/PhaseCards/PhaseCards';
 import { ResearchCardV2 } from '../../components/PhaseCards/ResearchCardV2';
+import { consumeSSE } from '../../../lib/consume-sse';
 
 const PHASE_LABELS = {
   intake: '需求收集',
@@ -23,11 +23,11 @@ const PHASE_LABELS = {
 };
 
 const STATUS_LABELS = {
-  intake: '需求收集中',
-  brief_completed: '简报已完成',
-  research: '调研中',
-  strategy: '制定策略',
-  creative_plan: '规划创意',
+  intake: '输入信息',
+  brief_completed: '完成简报',
+  research: '调研市场',
+  strategy: '策略制定',
+  creative_plan: '设计创意',
   creative: '生成素材',
   execution: '执行中',
   completed: '已完成',
@@ -202,6 +202,43 @@ function ThinkingGroup({ steps }) {
   );
 }
 
+const AI_STAR_SVG = <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2L9.19 8.63L2 9.24l5.46 4.73L5.82 21L12 17.27L18.18 21l-1.64-7.03L22 9.24l-7.19-.61z"/></svg>;
+
+function AiLabel() {
+  return (
+    <div className={s.aiLabel}>
+      <span className={s.aiIcon}>{AI_STAR_SVG}</span>
+      <span>AI 助手</span>
+    </div>
+  );
+}
+
+const isMeaningfulStep = (step) => step.tool || step.phase || (step.content && step.content.trim());
+
+const STEPPER_KEYS = ['intake', 'brief_completed', 'research', 'strategy', 'creative_plan', 'creative', 'execution', 'completed'];
+
+function PhaseStepper({ status, currentPhase }) {
+  const activeKey = STEPPER_KEYS.includes(currentPhase) ? currentPhase : status;
+  const activeIdx = STEPPER_KEYS.indexOf(activeKey);
+  const isDone = status === 'completed';
+
+  return (
+    <div className={s.stepper}>
+      {STEPPER_KEYS.map((key, i) => {
+        let state = 'pending';
+        if (isDone || i < activeIdx) state = 'done';
+        else if (i === activeIdx) state = 'active';
+        return (
+          <div key={key} className={`${s.stepperItem} ${s['stepper_' + state]}`}>
+            <span className={s.stepperDot} />
+            <span className={s.stepperLabel}>{STATUS_LABELS[key] || key}</span>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 export function ChatTab({ workspaceMode = false }) {
   const searchParams = useSearchParams();
   const [sessions, setSessions] = useState([]);
@@ -242,12 +279,16 @@ export function ChatTab({ workspaceMode = false }) {
   const streamActiveRef = useRef(false);
   const selectedSessionRef = useRef(null);
   const messageLoadSeqRef = useRef(0);
-  useEffect(() => { streamingStepsRef.current = streamingSteps; }, [streamingSteps]);
-  useEffect(() => { selectedSessionRef.current = selectedSession; }, [selectedSession]);
-  useEffect(() => { pendingImagesRef.current = pendingImages; }, [pendingImages]);
+  // Sync state → refs in a single effect to avoid unnecessary effect overhead
+  useEffect(() => { streamingStepsRef.current = streamingSteps; selectedSessionRef.current = selectedSession; pendingImagesRef.current = pendingImages; }, [streamingSteps, selectedSession, pendingImages]);
   useEffect(() => {
     return () => { pendingImagesRef.current.forEach(p => p.preview && URL.revokeObjectURL(p.preview)); };
   }, []);
+
+  // Monotonically incrementing counter to guarantee unique message keys
+  // (Date.now() alone can collide when events arrive in the same millisecond)
+  const msgSeqRef = useRef(0);
+  function uid(prefix) { return `${prefix}-${Date.now()}-${++msgSeqRef.current}`; }
 
   function getSessionKey(session = selectedSessionRef.current) {
     return session?.session_id || session?.brief_id || null;
@@ -274,9 +315,9 @@ export function ChatTab({ workspaceMode = false }) {
       const next = [...prev, step];
       // Auto-flush to messages if buffer gets too large to prevent unbounded growth
       if (next.length >= MAX_STREAMING_STEPS) {
-        const meaningful = next.filter(s => s.tool || s.phase || (s.content && s.content.trim()));
+        const meaningful = next.filter(isMeaningfulStep);
         if (meaningful.length > 0) {
-          setMessages(msgs => [...msgs, { id: `tg-${Date.now()}`, type: 'thinking', steps: meaningful }]);
+          setMessages(msgs => [...msgs, { id: uid('tg'), type: 'thinking', steps: meaningful }]);
         }
         streamingStepsRef.current = [];
         return [];
@@ -294,10 +335,9 @@ export function ChatTab({ workspaceMode = false }) {
   function flushStreamingSteps(sessionKey = getSessionKey()) {
     if (!isActiveSessionKey(sessionKey)) return;
     const steps = streamingStepsRef.current;
-    // Only persist steps that have meaningful content (tool name, phase, or non-empty content)
-    const meaningful = steps.filter(s => s.tool || s.phase || (s.content && s.content.trim()));
+    const meaningful = steps.filter(isMeaningfulStep);
     if (meaningful.length > 0) {
-      setMessages(prev => [...prev, { id: `tg-${Date.now()}`, type: 'thinking', steps: [...meaningful] }]);
+      setMessages(prev => [...prev, { id: uid('tg'), type: 'thinking', steps: [...meaningful] }]);
     }
     // Use ReactDOM.flushSync equivalent: set both in same tick
     streamingStepsRef.current = [];
@@ -314,6 +354,7 @@ export function ChatTab({ workspaceMode = false }) {
   }
 
   const fileInputRef = useRef(null);
+  const textareaRef = useRef(null);
 
   function withUploadFilename(file, fallbackPrefix = 'upload') {
     if (!file || file.name) return file;
@@ -356,6 +397,27 @@ export function ChatTab({ workspaceMode = false }) {
     ));
   }
 
+  async function handleDeleteSession(briefId) {
+    if (!window.confirm('确认删除此投放计划？所有对话和数据将被永久删除。')) return;
+    try {
+      const res = await fetch('/api/campaign/sessions', {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ briefId }),
+      });
+      if (!res.ok) throw new Error('Delete failed');
+      const isCurrentSelected = selectedSession?.brief_id === briefId;
+      setSessions(prev => prev.filter(s => s.brief_id !== briefId));
+      // Switch after state update, not inside setSessions callback
+      if (isCurrentSelected) {
+        const remaining = sessions.filter(s => s.brief_id !== briefId);
+        selectSession(remaining[0] || null);
+      }
+    } catch (err) {
+      console.error('Delete session failed:', err);
+    }
+  }
+
   useEffect(() => {
     const urlSession = searchParams.get('session');
     async function fetchSessions() {
@@ -395,11 +457,21 @@ export function ChatTab({ workspaceMode = false }) {
       return;
     }
     let cancelled = false;
+    async function fetchWithRetry(url, retries = 1) {
+      for (let attempt = 0; attempt <= retries; attempt++) {
+        const res = await fetch(url);
+        if (res.ok) return res;
+        if (attempt < retries && res.status >= 500) {
+          await new Promise(r => setTimeout(r, 1500));
+          continue;
+        }
+        throw new Error(`HTTP ${res.status}`);
+      }
+    }
     async function fetchMessages() {
       setLoadingMessages(true);
       try {
-        const res = await fetch(`/api/campaign/orchestrate/${selectedSession.session_id}`);
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const res = await fetchWithRetry(`/api/campaign/orchestrate/${selectedSession.session_id}`);
         const orchData = await res.json();
         if (cancelled || messageLoadSeqRef.current !== requestSeq || !isActiveSessionKey(sessionKey)) return;
         const phaseResults = orchData.phase_results || {};
@@ -539,6 +611,8 @@ export function ChatTab({ workspaceMode = false }) {
     // Only poll when the session looks stuck (no active SSE stream)
     const sessionId = selectedSession.session_id;
     const interval = setInterval(async () => {
+      // Skip polling while SSE stream is actively connected
+      if (streamActiveRef.current) return;
       try {
         const res = await fetch(`/api/campaign/orchestrate/${sessionId}`);
         if (!res.ok) return;
@@ -612,6 +686,14 @@ export function ChatTab({ workspaceMode = false }) {
     });
   }, [selectedSession?.session_id]);
 
+  // Auto-resize textarea to fit content
+  useEffect(() => {
+    const el = textareaRef.current;
+    if (!el) return;
+    el.style.height = 'auto';
+    el.style.height = Math.min(el.scrollHeight, 200) + 'px';
+  }, [inputVal]);
+
   // ── Shared stream connection — used by handleSend, handleFeedbackRespond, and reconnect ──
   async function connectToStream(sessionKey, sessionId, baseId, startEventId) {
     // Abort any previous stream connection before starting a new one
@@ -624,33 +706,38 @@ export function ChatTab({ workspaceMode = false }) {
 
     let assistantText = '';
     let streamDone = false;
-    const { consumeSSE } = await import('../../../lib/consume-sse');
 
     const handleEvent = (event, data, eventId) => {
       if (eventId) saveLastEventId(sessionId, eventId);
       if (!isActiveSessionKey(sessionKey)) return;
-      // First event from the stream — dismiss the "AI processing" indicator
-      setWaitingForAI(false);
+      // Dismiss "AI processing" dots only when the event produces visible UI.
+      // This prevents a blank gap when non-visible events (e.g. user_injected) arrive first.
       switch (event) {
         case 'delta':
+          setWaitingForAI(false);
           assistantText += data.text;
           setStreamingTextForSession(sessionKey, assistantText);
           break;
         case 'thinking':
+          setWaitingForAI(false);
           pushStreamingStepForSession(sessionKey, { tool: null, content: data.text, phase: null });
           break;
         case 'tool_start':
+          setWaitingForAI(false);
           pushStreamingStepForSession(sessionKey, { tool: data.tool, content: '', phase: null });
           break;
         case 'tool_call':
+          setWaitingForAI(false);
           pushStreamingStepForSession(sessionKey, { tool: data.tool, content: JSON.stringify(data.input, null, 2).slice(0, 200), phase: null });
           break;
         case 'tool_result':
+          setWaitingForAI(false);
           pushStreamingStepForSession(sessionKey, { tool: data.tool, content: JSON.stringify(data.result, null, 2).slice(0, 200), phase: null });
           break;
         case 'orchestration_start':
+          setWaitingForAI(false);
           if (assistantText) {
-            appendMessageForSession(sessionKey, { id: `ai-${Date.now()}`, type: 'assistant', content: assistantText });
+            appendMessageForSession(sessionKey, { id: uid('ai'), type: 'assistant', content: assistantText });
             setStreamingTextForSession(sessionKey, '');
             assistantText = '';
           }
@@ -659,52 +746,58 @@ export function ChatTab({ workspaceMode = false }) {
           updateSessionStatus(sessionKey, { status: 'running', current_phase: 'orchestrating' });
           break;
         case 'phase_start':
+          setWaitingForAI(false);
           pushStreamingStepForSession(sessionKey, { tool: null, content: `▶ ${PHASE_LABELS[data.phase] || data.phase}`, phase: data.phase });
           updateSessionStatus(sessionKey, { current_phase: data.phase });
           break;
         case 'phase_progress':
+          setWaitingForAI(false);
           pushStreamingStepForSession(sessionKey, { tool: data.step, content: data.detail || data.step, phase: data.phase });
           break;
         case 'phase_complete': {
+          setWaitingForAI(false);
           pushStreamingStepForSession(sessionKey, { tool: null, content: `✓ ${PHASE_LABELS[data.phase] || data.phase} 完成`, phase: data.phase });
-          // Flush accumulated thinking steps BEFORE appending the result card,
-          // so the card always appears after the thinking group in the message list.
           flushStreamingSteps(sessionKey);
           const builder = phaseResultBuilders[data.phase];
           if (builder && data.result) {
             const card = builder(data.result);
-            if (card) appendMessageForSession(sessionKey, { id: `phase-${data.phase}-${Date.now()}`, ...card });
+            if (card) appendMessageForSession(sessionKey, { id: uid(`phase-${data.phase}`), ...card });
           }
           break;
         }
         case 'approval_required':
-          appendMessageForSession(sessionKey, { id: `approval-${Date.now()}`, type: 'execution_approval', plan: data.plan, status: 'awaiting_approval' });
+          setWaitingForAI(false);
+          appendMessageForSession(sessionKey, { id: uid('approval'), type: 'execution_approval', plan: data.plan, status: 'awaiting_approval' });
           updateSessionStatus(sessionKey, { status: 'awaiting_approval' });
           break;
         case 'feedback_required':
+          setWaitingForAI(false);
           flushStreamingSteps(sessionKey);
-          appendMessageForSession(sessionKey, { id: `fb-${Date.now()}`, type: 'feedback_required', message: data.message || '需要您的确认', options: data.options || [] });
+          appendMessageForSession(sessionKey, { id: uid('fb'), type: 'feedback_required', message: data.message || '需要您的确认', options: data.options || [] });
           updateSessionStatus(sessionKey, { status: 'awaiting_feedback' });
           break;
         case 'user_injected':
+          // No visible UI — keep dots spinning
           break;
         case 'phase_error':
-          appendMessageForSession(sessionKey, { id: `err-${Date.now()}`, type: 'error', content: `${PHASE_LABELS[data.phase] || data.phase} 失败: ${data.error}` });
+          setWaitingForAI(false);
+          appendMessageForSession(sessionKey, { id: uid('err'), type: 'error', content: `${PHASE_LABELS[data.phase] || data.phase} 失败: ${data.error}` });
           break;
         case 'error':
-          appendMessageForSession(sessionKey, { id: `err-${Date.now()}`, type: 'error', content: data.message || '发生错误' });
+          setWaitingForAI(false);
+          appendMessageForSession(sessionKey, { id: uid('err'), type: 'error', content: data.message || '发生错误' });
           streamDone = true;
           break;
         case 'done':
-          // Flush any pending streaming text so the cursor stops
+          setWaitingForAI(false);
           if (assistantText) {
-            appendMessageForSession(sessionKey, { id: `ai-${Date.now()}`, type: 'assistant', content: assistantText });
+            appendMessageForSession(sessionKey, { id: uid('ai'), type: 'assistant', content: assistantText });
             assistantText = '';
           }
           setStreamingTextForSession(sessionKey, '');
           flushStreamingSteps(sessionKey);
           if (data.phases_completed?.length) {
-            appendMessageForSession(sessionKey, { id: `done-${Date.now()}`, type: 'assistant', content: `投放方案已完成！共执行 ${data.phases_completed.length} 个阶段：${data.phases_completed.join(' → ')}` });
+            appendMessageForSession(sessionKey, { id: uid('done'), type: 'assistant', content: `投放方案已完成！共执行 ${data.phases_completed.length} 个阶段：${data.phases_completed.join(' → ')}` });
             updateSessionStatus(sessionKey, { status: 'completed', current_phase: 'done' });
           }
           streamDone = true;
@@ -712,7 +805,8 @@ export function ChatTab({ workspaceMode = false }) {
       }
     };
 
-    const streamUrl = `/api/campaign/orchestrate/${baseId}/stream?lastEventId=${encodeURIComponent(startEventId)}`;
+    const briefId = selectedSessionRef.current?.brief_id || '';
+    const streamUrl = `/api/campaign/orchestrate/${baseId}/stream?lastEventId=${encodeURIComponent(startEventId)}${briefId ? `&briefId=${encodeURIComponent(briefId)}` : ''}`;
     try {
       const streamRes = await fetch(streamUrl, { signal: abortController.signal });
       if (streamRes.ok) {
@@ -722,16 +816,17 @@ export function ChatTab({ workspaceMode = false }) {
       if (err.name === 'AbortError' || abortController.signal.aborted) return;
       console.warn('Stream connection failed:', err.message);
     } finally {
-      setWaitingForAI(false);
-      // Only clear active flag if this connection is still the current one.
-      // A newer connectToStream() may have already replaced streamAbortRef.
+      // Only clean up if this connection is still the current one.
+      // A newer connectToStream() may have already replaced streamAbortRef;
+      // clearing waitingForAI here would kill the NEW connection's loading dots.
       if (streamAbortRef.current === abortController) {
+        setWaitingForAI(false);
         streamActiveRef.current = false;
       }
     }
 
     if (assistantText) {
-      appendMessageForSession(sessionKey, { id: `ai-${Date.now()}`, type: 'assistant', content: assistantText });
+      appendMessageForSession(sessionKey, { id: uid('ai'), type: 'assistant', content: assistantText });
       setStreamingTextForSession(sessionKey, '');
     }
   }
@@ -749,7 +844,7 @@ export function ChatTab({ workspaceMode = false }) {
 
     // Show user message immediately + sync title to sidebar
     flushStreamingSteps(sessionKey);
-    const userMsg = { id: `tmp-${Date.now()}`, type: 'user', content: text, attachments: attachments.length ? attachments : undefined };
+    const userMsg = { id: uid('tmp'), type: 'user', content: text, attachments: attachments.length ? attachments : undefined };
     appendMessageForSession(sessionKey, userMsg);
     setStreamingTextForSession(sessionKey, '');
     setWaitingForAI(true);
@@ -771,7 +866,7 @@ export function ChatTab({ workspaceMode = false }) {
           });
           if (!res.ok) throw new Error(`HTTP ${res.status}`);
         } catch (err) {
-          appendMessageForSession(sessionKey, { id: `err-${Date.now()}`, type: 'error', content: `发送失败: ${err.message}` });
+          appendMessageForSession(sessionKey, { id: uid('err'), type: 'error', content: `发送失败: ${err.message}` });
         } finally {
           setSendingMsg(false);
         }
@@ -785,6 +880,12 @@ export function ChatTab({ workspaceMode = false }) {
       const payload = isFeedbackMode ? { response: text } : { message: text };
       if (attachments.length) payload.attachments = attachments;
 
+      // Fire POST and SSE connection in parallel — don't wait for POST before connecting to stream
+      const startId = loadLastEventId(session.session_id);
+      connectToStream(sessionKey, session.session_id, baseId, startId).catch(err => {
+        if (err.name !== 'AbortError') console.warn('Stream connection failed:', err.message);
+      });
+
       const res = await fetch(endpoint, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -794,18 +895,10 @@ export function ChatTab({ workspaceMode = false }) {
         const errBody = await res.text().catch(() => res.statusText);
         throw new Error(errBody || `Server error (${res.status})`);
       }
-
-      // All paths now return JSON + fire-and-forget; connect to /stream for events
-      // Use saved lastEventId to avoid replaying already-seen events from earlier requests
-      const startId = loadLastEventId(session.session_id);
-      // Don't await — stream reading is a background activity, sendingMsg only covers the POST
-      connectToStream(sessionKey, session.session_id, baseId, startId).catch(err => {
-        if (err.name !== 'AbortError') console.warn('Stream connection failed:', err.message);
-      });
     } catch (err) {
       if (err.name === 'AbortError') return;
       console.error('Error sending message:', err);
-      appendMessageForSession(sessionKey, { id: `err-${Date.now()}`, type: 'error', content: `发送失败: ${err.message}` });
+      appendMessageForSession(sessionKey, { id: uid('err'), type: 'error', content: `发送失败: ${err.message}` });
       setShowReconnect(true);
     } finally {
       setSendingMsg(false);
@@ -827,7 +920,7 @@ export function ChatTab({ workspaceMode = false }) {
         m.type === 'feedback_required' ? { ...m, type: 'feedback_resolved', selectedOption: response } : m
       ));
       setMessages(prev => [...prev, {
-        id: `fb-resp-${Date.now()}`,
+        id: uid('fb-resp'),
         type: 'user',
         content: response,
         attachments: attachments.length ? attachments : undefined,
@@ -844,7 +937,7 @@ export function ChatTab({ workspaceMode = false }) {
         body: JSON.stringify({ response, attachments }),
       });
       if (!res.ok) {
-        appendMessageForSession(sessionKey, { id: `err-${Date.now()}`, type: 'error', content: `反馈提交失败: ${res.status}` });
+        appendMessageForSession(sessionKey, { id: uid('err'), type: 'error', content: `反馈提交失败: ${res.status}` });
         return;
       }
       // Connect to /stream — don't await, stream reading is background
@@ -854,9 +947,36 @@ export function ChatTab({ workspaceMode = false }) {
       });
     } catch (err) {
       if (err.name === 'AbortError') return;
-      appendMessageForSession(sessionKey, { id: `err-${Date.now()}`, type: 'error', content: err.message });
+      appendMessageForSession(sessionKey, { id: uid('err'), type: 'error', content: err.message });
     } finally {
       setSendingMsg(false);
+    }
+  }
+
+  async function handleStop() {
+    const session = selectedSession;
+    const sessionKey = getSessionKey(session);
+    // 1. Abort SSE connection
+    if (streamAbortRef.current) {
+      streamAbortRef.current.abort();
+      streamAbortRef.current = null;
+    }
+    // 2. Flush any accumulated content to messages
+    if (streamingText) {
+      appendMessageForSession(sessionKey, { id: uid('ai'), type: 'assistant', content: streamingText });
+    }
+    flushStreamingSteps(sessionKey);
+    // 3. Reset streaming state
+    setStreamingText('');
+    setStreamingSteps([]);
+    streamingStepsRef.current = [];
+    setWaitingForAI(false);
+    setSendingMsg(false);
+    streamActiveRef.current = false;
+    // 4. Signal backend to stop the generator
+    if (session?.session_id) {
+      const baseId = session.session_id || session.brief_id;
+      fetch(`/api/campaign/orchestrate/${baseId}/stop`, { method: 'POST' }).catch(() => {});
     }
   }
 
@@ -995,12 +1115,19 @@ export function ChatTab({ workspaceMode = false }) {
     await uploadFiles(files);
   }
 
+  const hasContent = inputVal.trim() || pendingImages.some(p => p.uploaded);
+  const isStreaming = waitingForAI || Boolean(streamingText) || streamingSteps.length > 0;
+  const grouped = useMemo(() => groupChatMessages(messages), [messages]);
+
   return (
     <>
     <div className={`${s.chatLayout} ${workspaceMode ? s.chatLayoutWorkspace : ''}`}>
-      {/* Session sidebar list */}
       <div className={s.chatMain}>
-        <Card title="AI 投放助手" className={workspaceMode ? s.chatCardWorkspace : ''}>
+        {/* ── Phase progress stepper ──────────────────────── */}
+        {selectedSession && (
+          <PhaseStepper status={selectedSession.status} currentPhase={selectedSession.current_phase} />
+        )}
+        <div className={`${s.chatMainInner} ${workspaceMode ? s.chatCardWorkspace : ''}`}>
           <div
             className={`${s.chatDropZone} ${isDragActive ? s.chatDropZoneActive : ''}`}
             onDragEnter={handleDragEnter}
@@ -1008,178 +1135,172 @@ export function ChatTab({ workspaceMode = false }) {
             onDragLeave={handleDragLeave}
             onDrop={handleDrop}
           >
+          {/* ── Message area ─────────────────────────────────── */}
           {loadingMessages ? (
-            <div className={s.chatMessages} style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text3)' }}>
-              加载对话中…
+            <div className={s.chatMessages}>
+              <div className={s.emptyState}>
+                <span style={{ color: 'var(--text3)', fontSize: 14 }}>加载对话中…</span>
+              </div>
             </div>
           ) : messages.length === 0 && selectedSession ? (
-            <div className={s.chatMessages} style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text3)', flexDirection: 'column', gap: 12 }}>
-              <span style={{ fontSize: '28px' }}>✦</span>
-              <span style={{ fontWeight: 600, color: 'var(--text)' }}>开始你的 AI 投放计划</span>
-              <span style={{ fontSize: 12 }}>试试以下提示，或直接输入你的推广需求</span>
-              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', justifyContent: 'center', marginTop: 4 }}>
-                {['帮我推广一款新能源汽车到东南亚市场', '分析我的竞品广告投放策略', '为我的农机产品生成 Facebook 广告素材'].map(hint => (
-                  <button
-                    key={hint}
-                    onClick={() => { setInputVal(hint); }}
-                    style={{ padding: '6px 12px', fontSize: 12, background: 'var(--bg3)', border: '1px solid var(--border)', borderRadius: 'var(--r)', cursor: 'pointer', color: 'var(--text2)', transition: 'background 0.12s' }}
-                    onMouseEnter={e => e.currentTarget.style.background = 'var(--bg4)'}
-                    onMouseLeave={e => e.currentTarget.style.background = 'var(--bg3)'}
-                  >
-                    {hint}
-                  </button>
-                ))}
+            <div className={s.chatMessages}>
+              <div className={s.emptyState}>
+                <h2 className={s.emptyGreeting}>有什么可以帮你的？</h2>
+                <div className={s.emptyChips}>
+                  {['帮我推广一款新能源汽车到东南亚市场', '分析我的竞品广告投放策略', '为我的农机产品生成 Facebook 广告素材'].map(hint => (
+                    <button key={hint} className={s.emptyChip} onClick={() => setInputVal(hint)}>
+                      {hint}
+                    </button>
+                  ))}
+                </div>
               </div>
             </div>
           ) : messages.length === 0 ? (
-            <div className={s.chatMessages} style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text3)', flexDirection: 'column', gap: 8 }}>
-              <span style={{ fontSize: '24px' }}>✦</span>
-              <span>从左侧选择一个投放计划查看对话</span>
+            <div className={s.chatMessages}>
+              <div className={s.emptyState}>
+                <h2 className={s.emptyGreeting}>有什么可以帮你的？</h2>
+                <p style={{ color: 'var(--text3)', fontSize: 14, margin: 0 }}>从右侧选择一个投放计划查看对话</p>
+              </div>
             </div>
           ) : (
             <div className={s.chatMessages} ref={chatContainerRef}>
-              {groupChatMessages(messages).map((item, i) => {
-                if (item.type === 'user') {
-                  return (
-                    <div key={item.id || i} className={`${s.chatMsg} ${s.chatUser}`}>
-                      <div className={s.chatBubble}>
-                        {item.attachments?.length > 0 && (
-                          <div style={{ display: 'flex', gap: 6, marginBottom: 6, flexWrap: 'wrap' }}>
-                            {item.attachments.map((att, j) => (
-                              <div key={j} style={{ position: 'relative', cursor: 'pointer' }} onClick={() => setLightboxUrl(att.url)}>
-                                <img src={att.url} alt={att.filename || ''} style={{ width: 80, height: 80, objectFit: 'cover', borderRadius: 8, border: '1px solid var(--border)' }} />
-                                <span style={{ position: 'absolute', top: 2, right: 2, background: 'rgba(0,0,0,0.5)', color: '#fff', borderRadius: 4, fontSize: 10, padding: '1px 4px', lineHeight: 1.2 }}>⤢</span>
-                              </div>
-                            ))}
-                          </div>
-                        )}
-                        <p style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word', margin: 0 }}>
-                          {item.content}
-                        </p>
+              {grouped.map((item, i) => {
+                  const prevType = i > 0 ? grouped[i - 1].type : null;
+                  const isAiType = (t) => t === 'assistant' || t === 'error';
+                  const showAiLabel = !isAiType(prevType);
+
+                  /* ── User message ── */
+                  if (item.type === 'user') {
+                    return (
+                      <div key={item.id || i} className={s.chatMsgUser}>
+                        <div className={s.userContent}>
+                          {item.attachments?.length > 0 && (
+                            <div style={{ display: 'flex', gap: 6, marginBottom: 8, flexWrap: 'wrap' }}>
+                              {item.attachments.map((att, j) => (
+                                <div key={j} style={{ position: 'relative', cursor: 'pointer' }} onClick={() => setLightboxUrl(att.url)}>
+                                  <img src={att.url} alt={att.filename || ''} style={{ width: 80, height: 80, objectFit: 'cover', borderRadius: 12, border: '1px solid var(--border)' }} />
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                          <p>{item.content}</p>
+                        </div>
                       </div>
-                    </div>
-                  );
-                }
-                if (item.type === 'assistant') {
-                  return (
-                    <div key={item.id || i} className={`${s.chatMsg} ${s.chatAI}`}>
-                      <div className={s.aiAvatar}>AI</div>
-                      <div className={s.chatBubble}>
-                        <Markdown>{formatAssistantContent(item.content)}</Markdown>
-                      </div>
-                    </div>
-                  );
-                }
-                if (item.type === 'phase_start') {
-                  return <PhaseDivider key={item.id || i} label={item.content} />;
-                }
-                if (item.type === 'research_complete') {
-                  if (item.report?._v2) {
-                    return <ResearchCardV2 key={item.id || i} report={item.report} duration={item.duration} />;
+                    );
                   }
-                  return <ResearchCard key={item.id || i} report={item.report} duration={item.duration} />;
-                }
-                if (item.type === 'strategy_complete') {
-                  return <StrategyCard key={item.id || i} plan={item.plan} />;
-                }
-                if (item.type === 'creative_plan_complete') {
-                  return <CreativePlanCard key={item.id || i} creativeTasks={item.creativeTasks} references={item.references} />;
-                }
-                if (item.type === 'creative_complete') {
-                  return <CreativeCard key={item.id || i} creatives={item.creatives} />;
-                }
-                if (item.type === 'creative_progress') {
-                  return <CreativeCard key={item.id || i} inProgress completed={item.completed} total={item.total} errors={item.errors} lastDetail={item.lastDetail} />;
-                }
-                if (item.type === 'execution_approval') {
-                  return <ExecutionCard key={item.id || i} plan={item.plan} status="awaiting_approval" />;
-                }
-                if (item.type === 'execution_complete') {
-                  return <ExecutionCard key={item.id || i} result={item.result} status="completed" />;
-                }
-                if (item.type === 'feedback_required') {
-                  return <FeedbackCard key={item.id || i} message={item.message} options={item.options} onRespond={handleFeedbackRespond} />;
-                }
-                if (item.type === 'feedback_resolved') {
-                  return <FeedbackCard key={item.id || i} message={item.message} options={item.options} resolved selectedOption={item.selectedOption} />;
-                }
-                if (item.type === 'error') {
-                  return (
-                    <div key={item.id || i} className={`${s.chatMsg} ${s.chatAI}`}>
-                      <div className={s.aiAvatar}>AI</div>
-                      <div className={s.chatBubble}>❌ {item.content}</div>
-                    </div>
-                  );
-                }
-                // Thinking group — collapsed by default
-                return <ThinkingGroup key={`tg-${i}`} steps={item.steps} />;
+                  /* ── AI message ── */
+                  if (item.type === 'assistant') {
+                    return (
+                      <div key={item.id || i} className={s.chatMsgAI}>
+                        {showAiLabel && <AiLabel />}
+                        <div className={s.aiContent}>
+                          <Markdown>{formatAssistantContent(item.content)}</Markdown>
+                        </div>
+                      </div>
+                    );
+                  }
+                  /* ── Phase divider ── */
+                  if (item.type === 'phase_start') {
+                    return <div key={item.id || i} className={s.phaseCardWrapper}><PhaseDivider label={item.content} /></div>;
+                  }
+                  /* ── Phase result cards ── */
+                  if (item.type === 'research_complete') {
+                    const card = item.report?._v2
+                      ? <ResearchCardV2 report={item.report} duration={item.duration} />
+                      : <ResearchCard report={item.report} duration={item.duration} />;
+                    return <div key={item.id || i} className={s.phaseCardWrapper}>{card}</div>;
+                  }
+                  if (item.type === 'strategy_complete') {
+                    return <div key={item.id || i} className={s.phaseCardWrapper}><StrategyCard plan={item.plan} /></div>;
+                  }
+                  if (item.type === 'creative_plan_complete') {
+                    return <div key={item.id || i} className={s.phaseCardWrapper}><CreativePlanCard creativeTasks={item.creativeTasks} references={item.references} /></div>;
+                  }
+                  if (item.type === 'creative_complete') {
+                    return <div key={item.id || i} className={s.phaseCardWrapper}><CreativeCard creatives={item.creatives} /></div>;
+                  }
+                  if (item.type === 'creative_progress') {
+                    return <div key={item.id || i} className={s.phaseCardWrapper}><CreativeCard inProgress completed={item.completed} total={item.total} errors={item.errors} lastDetail={item.lastDetail} /></div>;
+                  }
+                  if (item.type === 'execution_approval') {
+                    return <div key={item.id || i} className={s.phaseCardWrapper}><ExecutionCard plan={item.plan} status="awaiting_approval" /></div>;
+                  }
+                  if (item.type === 'execution_complete') {
+                    return <div key={item.id || i} className={s.phaseCardWrapper}><ExecutionCard result={item.result} status="completed" /></div>;
+                  }
+                  if (item.type === 'feedback_required') {
+                    return <div key={item.id || i} className={s.phaseCardWrapper}><FeedbackCard message={item.message} options={item.options} onRespond={handleFeedbackRespond} /></div>;
+                  }
+                  if (item.type === 'feedback_resolved') {
+                    return <div key={item.id || i} className={s.phaseCardWrapper}><FeedbackCard message={item.message} options={item.options} resolved selectedOption={item.selectedOption} /></div>;
+                  }
+                  /* ── Error ── */
+                  if (item.type === 'error') {
+                    return (
+                      <div key={item.id || i} className={s.chatMsgAI}>
+                        {showAiLabel && <AiLabel />}
+                        <div className={s.aiContent} style={{ color: 'var(--red)' }}>
+                          {item.content}
+                        </div>
+                      </div>
+                    );
+                  }
+                  /* ── Thinking group ── */
+                  return <ThinkingGroup key={`tg-${i}`} steps={item.steps} />;
               })}
 
-              {/* Waiting indicator — visible between message send and first stream event */}
+              {/* Waiting indicator — pulsing dots */}
               {waitingForAI && streamingSteps.length === 0 && !streamingText && (
-                <div className={`${s.chatMsg} ${s.chatAI}`}>
-                  <div className={s.aiAvatar}>AI</div>
-                  <div className={s.chatBubble}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, color: 'var(--text2)', fontSize: 13 }}>
-                      <span style={{ display: 'inline-block', width: 10, height: 10, border: '2px solid var(--accent)', borderTopColor: 'transparent', borderRadius: '50%', animation: 'spin 0.8s linear infinite' }} />
-                      AI 正在处理中...
+                <div className={s.chatMsgAI}>
+                  <AiLabel />
+                  <div className={s.aiContent}>
+                    <div className={s.typingDots}>
+                      <span /><span /><span />
                     </div>
                   </div>
                 </div>
               )}
 
-              {/* Live streaming status bar — always visible during pipeline */}
+              {/* Live streaming status bar */}
               {streamingSteps.length > 0 && (
-                <div style={{ flexShrink: 0, borderRadius: 'var(--rl)', border: '1px solid var(--border2)', background: 'var(--bg)', padding: '10px 14px' }}>
-                  {/* Latest step — always visible */}
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: streamingSteps.length > 1 ? 8 : 0 }}>
-                    <span style={{ display: 'inline-block', width: 10, height: 10, border: '2px solid var(--accent)', borderTopColor: 'transparent', borderRadius: '50%', animation: 'spin 0.8s linear infinite' }} />
-                    <span style={{ fontSize: 12, color: 'var(--text2)', flex: 1 }}>
-                      {streamingSteps[streamingSteps.length - 1]?.content || '处理中…'}
+                <div className={s.streamingStatus}>
+                  <span className={s.streamingSpinner} />
+                  <span className={s.streamingLabel}>
+                    {streamingSteps[streamingSteps.length - 1]?.content || '处理中…'}
+                  </span>
+                  {streamingSteps[streamingSteps.length - 1]?.phase && (
+                    <span className={s.streamingPhase}>
+                      {streamingSteps[streamingSteps.length - 1].phase}
                     </span>
-                    {streamingSteps[streamingSteps.length - 1]?.phase && (
-                      <span style={{ fontSize: 10, padding: '1px 6px', borderRadius: 3, background: 'var(--accent-dim)', color: 'var(--accent)', fontFamily: 'var(--font-mono)' }}>
-                        {streamingSteps[streamingSteps.length - 1].phase}
-                      </span>
-                    )}
-                  </div>
-                  {/* Collapsible full step list */}
-                  {streamingSteps.length > 1 && (
-                    <ThinkingGroup steps={streamingSteps} />
                   )}
                 </div>
               )}
 
               {/* Live streaming assistant text */}
               {streamingText && (
-                <div className={`${s.chatMsg} ${s.chatAI}`}>
-                  <div className={s.aiAvatar}>AI</div>
-                  <div className={s.chatBubble}>
+                <div className={s.chatMsgAI}>
+                  <AiLabel />
+                  <div className={s.aiContent}>
                     <Markdown>{streamingText}</Markdown>
-                    <span style={{ display: 'inline-block', width: 6, height: 14, background: 'var(--accent)', borderRadius: 1, animation: 'blink 1s step-end infinite', marginLeft: 2, verticalAlign: 'text-bottom' }} />
+                    <span className={s.blinkingCursor} />
                   </div>
                 </div>
               )}
-
-
             </div>
           )}
 
           {/* Reconnect bar */}
           {showReconnect && (
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 0', fontSize: 12, color: 'var(--amber)' }}>
-              <span>⚠ 连接中断</span>
-              <button
-                onClick={() => { setShowReconnect(false); setRefreshKey(k => k + 1); }}
-                style={{ padding: '3px 10px', fontSize: 11, background: 'var(--bg3)', border: '1px solid var(--border)', borderRadius: 'var(--r)', cursor: 'pointer', color: 'var(--text2)' }}
-              >
-                🔄 重新连接
+            <div className={s.reconnectBar}>
+              <span>连接中断</span>
+              <button className={s.reconnectBtn} onClick={() => { setShowReconnect(false); setRefreshKey(k => k + 1); }}>
+                重新连接
               </button>
             </div>
           )}
 
-          {/* Input bar */}
-          <div className={s.chatInput}>
+          {/* ── Input area ───────────────────────────────────── */}
+          <div className={s.chatInputContainer}>
             <input
               ref={fileInputRef}
               type="file"
@@ -1188,55 +1309,79 @@ export function ChatTab({ workspaceMode = false }) {
               style={{ display: 'none' }}
               onChange={handleFileSelect}
             />
-            {/* Image previews */}
+            {/* Pending image previews */}
             {pendingImages.length > 0 && (
-              <div style={{ display: 'flex', gap: 6, padding: '6px 0', flexWrap: 'wrap', width: '100%' }}>
+              <div className={s.pendingImagesRow}>
                 {pendingImages.map(img => {
                   const isImage = img.file?.type?.startsWith('image/');
                   return (
-                  <div key={img.id} style={{ position: 'relative', width: 48, height: 48, borderRadius: 8, overflow: 'hidden', border: '1px solid var(--border)' }}>
-                    {isImage ? (
-                      <img src={img.preview} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
-                    ) : (
-                      <div style={{ width: '100%', height: '100%', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', color: 'var(--text-secondary, #888)', fontSize: 10 }}>
-                        <span style={{ fontSize: 18 }}>📄</span>
-                        <span style={{ fontSize: 8, marginTop: 1 }}>{img.file?.name?.split('.').pop()?.toUpperCase()}</span>
-                      </div>
-                    )}
-                    {img.uploading && (
-                      <div style={{ position: 'absolute', inset: 0, background: 'rgba(0,0,0,0.4)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                        <span style={{ fontSize: 12, color: '#fff' }}>⏳</span>
-                      </div>
-                    )}
-                    <button
-                      onClick={() => setPendingImages(prev => prev.filter(p => p.id !== img.id))}
-                      style={{ position: 'absolute', top: 1, right: 1, width: 16, height: 16, background: 'rgba(0,0,0,0.5)', color: '#fff', border: 'none', borderRadius: '50%', fontSize: 10, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
-                    >×</button>
-                  </div>
+                    <div key={img.id} style={{ position: 'relative', width: 52, height: 52, borderRadius: 10, overflow: 'hidden', border: '1px solid var(--border)' }}>
+                      {isImage ? (
+                        <img src={img.preview} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                      ) : (
+                        <div style={{ width: '100%', height: '100%', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', color: 'var(--text3)', fontSize: 10, background: 'var(--bg3)' }}>
+                          <span style={{ fontSize: 18 }}>📄</span>
+                          <span style={{ fontSize: 8, marginTop: 1 }}>{img.file?.name?.split('.').pop()?.toUpperCase()}</span>
+                        </div>
+                      )}
+                      {img.uploading && (
+                        <div style={{ position: 'absolute', inset: 0, background: 'rgba(0,0,0,0.4)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                          <span className={s.streamingSpinner} style={{ borderColor: '#fff', borderTopColor: 'transparent' }} />
+                        </div>
+                      )}
+                      <button
+                        onClick={() => setPendingImages(prev => prev.filter(p => p.id !== img.id))}
+                        style={{ position: 'absolute', top: 2, right: 2, width: 18, height: 18, background: 'rgba(0,0,0,0.5)', color: '#fff', border: 'none', borderRadius: '50%', fontSize: 11, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', lineHeight: 1 }}
+                      >×</button>
+                    </div>
                   );
-                  })}
+                })}
               </div>
             )}
-            <div className={s.chatInputRow}>
-              <button className={s.uploadBtn} title="上传图片/文档" onClick={handleUploadClick} disabled={sendingMsg}>📎</button>
-              <input
-                className={s.textInput}
+            <div className={s.chatInputInner}>
+              <button className={s.inputActionBtn} title="上传图片/文档" onClick={handleUploadClick} disabled={sendingMsg}>
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M21.44 11.05l-9.19 9.19a6 6 0 01-8.49-8.49l9.19-9.19a4 4 0 015.66 5.66l-9.2 9.19a2 2 0 01-2.83-2.83l8.49-8.48" />
+                </svg>
+              </button>
+              <textarea
+                ref={textareaRef}
+                className={s.chatTextarea}
                 placeholder="描述你的推广目标，或拖拽 / 粘贴素材…"
                 value={inputVal}
                 onChange={e => setInputVal(e.target.value)}
                 onKeyDown={handleKeyDown}
                 onPaste={handleInputPaste}
                 disabled={sendingMsg}
+                rows={1}
               />
-              <button
-                className={s.sendBtn}
-                onClick={handleSend}
-                disabled={(!inputVal.trim() && !pendingImages.some(p => p.uploaded)) || sendingMsg || !selectedSession}
-              >
-                {sendingMsg ? '发送中…' : '发送 ›'}
-              </button>
+              {isStreaming ? (
+                <button
+                  className={s.inputStopBtn}
+                  onClick={handleStop}
+                  title="停止生成"
+                >
+                  <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
+                    <rect x="2" y="2" width="12" height="12" rx="2" />
+                  </svg>
+                </button>
+              ) : hasContent ? (
+                <button
+                  className={s.inputSendBtn}
+                  onClick={handleSend}
+                  disabled={sendingMsg || !selectedSession}
+                  title="发送"
+                >
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                    <line x1="12" y1="19" x2="12" y2="5" />
+                    <polyline points="5 12 12 5 19 12" />
+                  </svg>
+                </button>
+              ) : null}
             </div>
           </div>
+
+          {/* Drop overlay */}
           {isDragActive && (
             <div className={s.dropOverlay}>
               <div className={s.dropOverlayInner}>
@@ -1246,7 +1391,7 @@ export function ChatTab({ workspaceMode = false }) {
             </div>
           )}
           </div>
-        </Card>
+        </div>
       </div>
 
       {/* Session list sidebar */}
@@ -1272,7 +1417,7 @@ export function ChatTab({ workspaceMode = false }) {
                 ? session.first_message.slice(0, 60) + (session.first_message.length > 60 ? '…' : '')
                 : '（无摘要）';
               const createdDate = session.created_at
-                ? new Date(session.created_at).toLocaleDateString('zh-CN', { month: 'short', day: 'numeric' })
+                ? new Date(session.created_at).toLocaleString('zh-CN', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
                 : '';
 
               const brief = session.brief_structured || {};
@@ -1292,7 +1437,12 @@ export function ChatTab({ workspaceMode = false }) {
                     ...(isActive ? { borderColor: 'var(--accent)', background: 'var(--bg3)' } : {}),
                   }}
                 >
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 6, width: '100%' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 6, width: '100%', position: 'relative' }}>
+                    <button
+                      className={s.deleteSessionBtn}
+                      onClick={(e) => { e.stopPropagation(); handleDeleteSession(session.brief_id); }}
+                      title="删除"
+                    >×</button>
                     <div className={s.previewThumb} style={{ flexShrink: 0 }}>
                       {thumbUrl ? (
                         <img src={thumbUrl} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover', borderRadius: 'var(--r)' }} />
@@ -1305,7 +1455,7 @@ export function ChatTab({ workspaceMode = false }) {
                         {preview}
                       </div>
                       <div className={s.previewMeta}>
-                        {statusLabel} · {phaseLabel} · {createdDate}
+                        {statusLabel} · {createdDate}
                       </div>
                       {tags.length > 0 && (
                         <div style={{ display: 'flex', gap: 4, marginTop: 2, flexWrap: 'wrap' }}>

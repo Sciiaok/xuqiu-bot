@@ -48,25 +48,25 @@ function KV({ label, value }) {
 }
 
 const COLOR_MAP = {
-  green:  { bg: 'rgba(42, 140, 90, 0.10)',  border: 'rgba(42, 140, 90, 0.3)',  text: '#2a8c5a' },
-  purple: { bg: 'rgba(139, 106, 191, 0.10)', border: 'rgba(139, 106, 191, 0.3)', text: '#8b6abf' },
-  amber:  { bg: 'rgba(184, 134, 11, 0.10)',  border: 'rgba(184, 134, 11, 0.3)',  text: '#b8860b' },
-  teal:   { bg: 'rgba(42, 122, 116, 0.10)',  border: 'rgba(42, 122, 116, 0.3)',  text: '#2a7a74' },
-  accent: { bg: 'rgba(192, 106, 43, 0.10)',  border: 'rgba(192, 106, 43, 0.3)',  text: '#c06a2b' },
+  green:  '#2a8c5a',
+  purple: '#8b6abf',
+  amber:  '#b8860b',
+  teal:   '#2a7a74',
+  accent: '#c06a2b',
 };
 
 function CardShell({ color, icon, title, badge, children, footer }) {
-  const c = COLOR_MAP[color] || COLOR_MAP.accent;
+  const textColor = COLOR_MAP[color] || COLOR_MAP.accent;
   return (
     <CardErrorBoundary>
-      <div style={{ borderRadius: 12, border: `1px solid ${c.border}`, background: '#f6f1ea', boxShadow: '0 1px 6px rgba(80,50,20,0.08)', marginBottom: 4, flexShrink: 0 }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '10px 14px', borderBottom: `1px solid ${c.border}`, fontSize: 12, fontWeight: 600, background: c.bg, color: c.text }}>
+      <div style={{ marginBottom: 4, flexShrink: 0 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, paddingBottom: 6, fontSize: 13, fontWeight: 600, color: textColor }}>
           <span>{icon}</span>
           <span style={{ flex: 1 }}>{title}</span>
           {badge && <span style={{ fontWeight: 400, fontSize: 11, opacity: 0.7 }}>{badge}</span>}
         </div>
-        <div style={{ padding: '12px 14px' }}>{children}</div>
-        {footer && <div style={{ padding: '8px 14px', borderTop: `1px solid ${c.border}` }}>{footer}</div>}
+        <div>{children}</div>
+        {footer && <div style={{ paddingTop: 8 }}>{footer}</div>}
       </div>
     </CardErrorBoundary>
   );

@@ -2,8 +2,9 @@
  * LLM Client Abstraction Layer
  *
  * Unified Anthropic-format API that routes to multiple providers:
- *   - Claude models → MixAI Cloud (primary) / Anthropic Direct (fallback)
+ *   - Claude models → Anthropic Direct API
  *   - MiniMax models → OpenRouter (OpenAI-compatible, auto-translated)
+ *   - Gemini models → OpenRouter (OpenAI-compatible, auto-translated)
  *
  * Callers always use Anthropic message format. Translation is internal.
  *
@@ -39,20 +40,8 @@ function isGeminiModel(model) {
 }
 
 // ── Provider Config ──────────────────────────────────────────────────
-const MIXAI_KEY = process.env.MIXAI_API_KEY;
-const MIXAI_GEMINI_KEY = process.env.MIXAI_API_GEMINI_KEY;
-const MIXAI_URL = process.env.MIXAI_BASE_URL || 'https://us.mixaicloud.com';
-
-const mixaiClient = MIXAI_KEY
-  ? new Anthropic({ apiKey: MIXAI_KEY, baseURL: MIXAI_URL })
-  : null;
-
-const mixaiGeminiClient = MIXAI_GEMINI_KEY
-  ? new OpenAI({ apiKey: MIXAI_GEMINI_KEY, baseURL: MIXAI_URL + '/v1', timeout: 120_000 })
-  : null;
-
 const ANTHROPIC_KEY = process.env.ANTHROPIC_API_KEY;
-const anthropicDirect = ANTHROPIC_KEY
+const anthropicClient = ANTHROPIC_KEY
   ? new Anthropic({ apiKey: ANTHROPIC_KEY })
   : null;
 
@@ -65,33 +54,9 @@ const openrouterClient = OPENROUTER_KEY
     })
   : null;
 
-// ── Claude Routing ──────────────────────────────────────────────────
-function hasDirectOnlyServerTools(params) {
-  return params.tools?.some(
-    (tool) => typeof tool?.type === 'string' && tool.type.startsWith('web_fetch_'),
-  );
-}
-
-function needsDirectApi(params) {
-  if (hasDirectOnlyServerTools(params)) return true;
-  if (params.tool_choice && (params.tool_choice.type === 'tool' || params.tool_choice.type === 'any')) return true;
-  if (params.output_config) return true;
-  return false;
-}
-
-function pickClaudeClient(params) {
-  if (needsDirectApi(params)) {
-    if (anthropicDirect) return { client: anthropicDirect, provider: 'direct' };
-    throw new Error('[llm-client] ANTHROPIC_API_KEY required for web_fetch / forced tool_choice / output_config');
-  }
-  if (mixaiClient) return { client: mixaiClient, provider: 'mixai' };
-  if (anthropicDirect) return { client: anthropicDirect, provider: 'direct' };
-  throw new Error('[llm-client] No Claude provider configured (set MIXAI_API_KEY or ANTHROPIC_API_KEY)');
-}
-
 // ── Logging ──────────────────────────────────────────────────────────
 function logLlmCall({ method, provider, model, responseModel, tools, toolChoice, stopReason, inputTokens, outputTokens, durationMs }) {
-  const baseUrls = { mixai: MIXAI_URL, 'mixai-gemini': MIXAI_URL, direct: 'https://api.anthropic.com', openrouter: 'https://openrouter.ai' };
+  const baseUrls = { direct: 'https://api.anthropic.com', openrouter: 'https://openrouter.ai' };
   console.log(`[llm-client] ${JSON.stringify({
     method, provider,
     base_url: baseUrls[provider] || provider,
@@ -127,12 +92,10 @@ function translateMessagesToOpenAI(messages) {
   const result = [];
   for (const msg of messages) {
     if (msg.role === 'user') {
-      // Check for tool_result content
       if (Array.isArray(msg.content)) {
         const toolResults = msg.content.filter(b => b.type === 'tool_result');
         const otherBlocks = msg.content.filter(b => b.type !== 'tool_result');
 
-        // tool_result → OpenAI tool messages
         for (const tr of toolResults) {
           result.push({
             role: 'tool',
@@ -140,7 +103,6 @@ function translateMessagesToOpenAI(messages) {
             content: typeof tr.content === 'string' ? tr.content : JSON.stringify(tr.content),
           });
         }
-        // Other content blocks → user message
         if (otherBlocks.length > 0) {
           const parts = otherBlocks.map(b => {
             if (b.type === 'text') return { type: 'text', text: b.text };
@@ -194,7 +156,7 @@ function translateMessagesToOpenAI(messages) {
 function translateToolsToOpenAI(tools) {
   if (!tools) return undefined;
   return tools
-    .filter(t => t.name && t.input_schema) // Skip native server tools (web_search, etc.)
+    .filter(t => t.name && t.input_schema)
     .map(t => ({
       type: 'function',
       function: {
@@ -209,30 +171,20 @@ function translateToolsToOpenAI(tools) {
 
 function translateResponseToAnthropic(openaiResponse, model) {
   const choice = openaiResponse.choices?.[0];
-  if (!choice) throw new Error('[llm-client] Empty response from MiniMax');
+  if (!choice) throw new Error('[llm-client] Empty response from provider');
 
   const content = [];
-
-  // Text content
   if (choice.message.content) {
     content.push({ type: 'text', text: choice.message.content });
   }
-
-  // Tool calls → tool_use blocks
   if (choice.message.tool_calls) {
     for (const tc of choice.message.tool_calls) {
       let input;
       try { input = JSON.parse(tc.function.arguments); } catch { input = {}; }
-      content.push({
-        type: 'tool_use',
-        id: tc.id,
-        name: tc.function.name,
-        input,
-      });
+      content.push({ type: 'tool_use', id: tc.id, name: tc.function.name, input });
     }
   }
 
-  // Map finish_reason
   const stopReasonMap = {
     stop: 'end_turn',
     tool_calls: 'tool_use',
@@ -263,7 +215,6 @@ function buildForcedJsonCall(params, toolName) {
   const schema = tool.input_schema;
   const schemaInstruction = `\n\nYou MUST respond with a JSON object matching this schema. Do NOT output anything outside the JSON.\nSchema:\n${JSON.stringify(schema, null, 2)}`;
 
-  // Build OpenAI messages with schema injected into system prompt
   const systemMsgs = translateSystemToOpenAI(params.system);
   if (systemMsgs.length > 0) {
     systemMsgs[systemMsgs.length - 1].content += schemaInstruction;
@@ -271,23 +222,19 @@ function buildForcedJsonCall(params, toolName) {
     systemMsgs.push({ role: 'system', content: schemaInstruction.trim() });
   }
 
-  const userMsgs = translateMessagesToOpenAI(params.messages);
-
   return {
     model: params.model,
     max_tokens: params.max_tokens,
-    messages: [...systemMsgs, ...userMsgs],
+    messages: [...systemMsgs, ...translateMessagesToOpenAI(params.messages)],
     response_format: { type: 'json_object' },
-    // No tools, no tool_choice — pure JSON output
   };
 }
 
 function wrapJsonResponseAsToolUse(openaiResponse, toolName, model) {
   const choice = openaiResponse.choices?.[0];
-  if (!choice?.message?.content) throw new Error('[llm-client] Empty response from MiniMax (forced JSON)');
+  if (!choice?.message?.content) throw new Error('[llm-client] Empty response (forced JSON)');
 
   let rawJson = choice.message.content;
-  // Strip markdown code fences if model wrapped JSON in ```json ... ```
   const fenceMatch = rawJson.match(/```(?:json)?\s*([\s\S]*?)```/);
   if (fenceMatch) rawJson = fenceMatch[1].trim();
   let input;
@@ -298,7 +245,6 @@ function wrapJsonResponseAsToolUse(openaiResponse, toolName, model) {
     input = { _raw: rawJson, _parse_error: parseErr.message };
   }
 
-  // Generate a tool_use ID matching Anthropic format
   const toolUseId = `toolu_mm_${Date.now().toString(36)}`;
 
   return {
@@ -306,9 +252,7 @@ function wrapJsonResponseAsToolUse(openaiResponse, toolName, model) {
     type: 'message',
     role: 'assistant',
     model: openaiResponse.model || model,
-    content: [
-      { type: 'tool_use', id: toolUseId, name: toolName, input },
-    ],
+    content: [{ type: 'tool_use', id: toolUseId, name: toolName, input }],
     stop_reason: 'tool_use',
     usage: {
       input_tokens: openaiResponse.usage?.prompt_tokens || 0,
@@ -336,14 +280,11 @@ async function callMiniMax(params) {
   };
 
   let result;
-
   if (isForcedTool) {
-    // Forced tool_choice → JSON mode with schema injection
     const jsonParams = buildForcedJsonCall(params, forcedToolName);
     const raw = await openrouterClient.chat.completions.create(jsonParams);
     result = wrapJsonResponseAsToolUse(raw, forcedToolName, params.model);
   } else {
-    // Auto/none tool_choice → standard OpenAI tool calling
     const openaiParams = {
       model: params.model,
       max_tokens: params.max_tokens,
@@ -352,46 +293,39 @@ async function callMiniMax(params) {
         ...translateMessagesToOpenAI(params.messages),
       ],
     };
-
     const openaiTools = translateToolsToOpenAI(params.tools);
     if (openaiTools?.length) {
       openaiParams.tools = openaiTools;
       openaiParams.tool_choice = 'auto';
     }
-
     const raw = await openrouterClient.chat.completions.create(openaiParams);
     result = translateResponseToAnthropic(raw, params.model);
   }
 
-  logLlmCall({
-    ...logMeta,
-    responseModel: result.model,
-    stopReason: result.stop_reason,
-    inputTokens: result.usage?.input_tokens,
-    outputTokens: result.usage?.output_tokens,
-    durationMs: Date.now() - t0,
-  });
-
+  logLlmCall({ ...logMeta, responseModel: result.model, stopReason: result.stop_reason, inputTokens: result.usage?.input_tokens, outputTokens: result.usage?.output_tokens, durationMs: Date.now() - t0 });
   return result;
 }
 
-// ── Gemini call handler (OpenRouter primary, MixAI fallback) ───────
+// ── Gemini call handler (OpenRouter only) ────────────────────────────
 
 function isGeminiImageModel(model) {
   return !!model?.match(/gemini.*image/i);
 }
 
 function geminiOpenRouterModel(model) {
-  // OpenRouter requires google/ prefix
   return model.startsWith('google/') ? model : 'google/' + model;
 }
 
-async function callGeminiWith(client, provider, params) {
+async function callGemini(params) {
+  if (!openrouterClient) {
+    throw new Error('[llm-client] OPENROUTER_API_KEY required for Gemini models');
+  }
+
   const t0 = Date.now();
-  const model = provider === 'openrouter' ? geminiOpenRouterModel(params.model) : params.model;
+  const model = geminiOpenRouterModel(params.model);
   const logMeta = {
     method: 'create',
-    provider,
+    provider: 'openrouter',
     model: params.model,
     tools: params.tools?.length || 0,
     toolChoice: params.tool_choice?.type || null,
@@ -406,8 +340,7 @@ async function callGeminiWith(client, provider, params) {
     ],
   };
 
-  // Image models on OpenRouter need modalities
-  if (provider === 'openrouter' && isGeminiImageModel(params.model)) {
+  if (isGeminiImageModel(params.model)) {
     openaiParams.modalities = ['image', 'text'];
   }
 
@@ -417,39 +350,11 @@ async function callGeminiWith(client, provider, params) {
     openaiParams.tool_choice = 'auto';
   }
 
-  const raw = await client.chat.completions.create(openaiParams);
+  const raw = await openrouterClient.chat.completions.create(openaiParams);
   const result = translateResponseToAnthropic(raw, params.model);
 
-  logLlmCall({
-    ...logMeta,
-    responseModel: result.model,
-    stopReason: result.stop_reason,
-    inputTokens: result.usage?.input_tokens,
-    outputTokens: result.usage?.output_tokens,
-    durationMs: Date.now() - t0,
-  });
-
+  logLlmCall({ ...logMeta, responseModel: result.model, stopReason: result.stop_reason, inputTokens: result.usage?.input_tokens, outputTokens: result.usage?.output_tokens, durationMs: Date.now() - t0 });
   return result;
-}
-
-async function callGemini(params) {
-  // Primary: OpenRouter
-  if (openrouterClient) {
-    try {
-      return await callGeminiWith(openrouterClient, 'openrouter', params);
-    } catch (err) {
-      if (mixaiGeminiClient && !process.env.LLM_NO_FALLBACK) {
-        console.warn('[llm-client] OpenRouter Gemini failed, falling back to MixAI:', err.message);
-        return await callGeminiWith(mixaiGeminiClient, 'mixai-gemini', params);
-      }
-      throw err;
-    }
-  }
-  // Fallback: MixAI only
-  if (mixaiGeminiClient) {
-    return await callGeminiWith(mixaiGeminiClient, 'mixai-gemini', params);
-  }
-  throw new Error('[llm-client] No Gemini provider configured (set OPENROUTER_API_KEY or MIXAI_API_GEMINI_KEY)');
 }
 
 // ══════════════════════════════════════════════════════════════════════
@@ -459,7 +364,7 @@ async function callGemini(params) {
 const anthropicProxy = {
   messages: {
     async create(params) {
-      // ── Gemini models → MixAI Gemini with translation ──
+      // ── Gemini models → OpenRouter with translation ──
       if (isGeminiModel(params.model)) {
         return callGemini(params);
       }
@@ -469,75 +374,49 @@ const anthropicProxy = {
         return callMiniMax(params);
       }
 
-      // ── Claude models → MixAI / Anthropic Direct ──
+      // ── Claude models → Anthropic Direct ──
+      if (!anthropicClient) {
+        throw new Error('[llm-client] ANTHROPIC_API_KEY required for Claude models');
+      }
+
       const t0 = Date.now();
       const logMeta = {
         method: 'create',
+        provider: 'direct',
         model: params.model,
         tools: params.tools?.length || 0,
         toolChoice: params.tool_choice?.type || null,
       };
 
-      const { client, provider } = pickClaudeClient(params);
-      try {
-        const result = await client.messages.create(params);
-        logLlmCall({ ...logMeta, provider, responseModel: result.model, stopReason: result.stop_reason, inputTokens: result.usage?.input_tokens, outputTokens: result.usage?.output_tokens, durationMs: Date.now() - t0 });
-        return result;
-      } catch (err) {
-        if (provider === 'mixai' && anthropicDirect && !process.env.LLM_NO_FALLBACK) {
-          console.warn(`[llm-client] MixAI failed, falling back to Anthropic direct:`, err.message);
-          emitLlmEvent({ type: 'fallback', from: 'mixai', to: 'direct', model: params.model, error: err.message });
-          const result = await anthropicDirect.messages.create(params);
-          logLlmCall({ ...logMeta, provider: 'direct', responseModel: result.model, stopReason: result.stop_reason, inputTokens: result.usage?.input_tokens, outputTokens: result.usage?.output_tokens, durationMs: Date.now() - t0 });
-          return result;
-        }
-        emitLlmEvent({ type: 'error', provider, model: params.model, error: err.message });
-        throw err;
-      }
+      const result = await anthropicClient.messages.create(params);
+      logLlmCall({ ...logMeta, responseModel: result.model, stopReason: result.stop_reason, inputTokens: result.usage?.input_tokens, outputTokens: result.usage?.output_tokens, durationMs: Date.now() - t0 });
+      return result;
     },
 
     stream(params) {
-      // MiniMax streaming not supported — fall through to Claude
       if (isMiniMaxModel(params.model)) {
         throw new Error(`[llm-client] Streaming not supported for MiniMax models (${params.model}). Use create() instead.`);
       }
 
+      if (!anthropicClient) {
+        throw new Error('[llm-client] ANTHROPIC_API_KEY required for Claude streaming');
+      }
+
       const t0 = Date.now();
-      const { client, provider } = pickClaudeClient(params);
       const logMeta = {
         method: 'stream',
+        provider: 'direct',
         model: params.model,
         tools: params.tools?.length || 0,
         toolChoice: params.tool_choice?.type || null,
-        provider,
       };
 
-      // Wrap stream with fallback: if MixAI stream fails and direct is available, retry
-      const stream = client.messages.stream(params);
+      const stream = anthropicClient.messages.stream(params);
       stream.finalMessage().then(msg => {
-        logLlmCall({
-          ...logMeta,
-          responseModel: msg.model,
-          stopReason: msg.stop_reason,
-          inputTokens: msg.usage?.input_tokens,
-          outputTokens: msg.usage?.output_tokens,
-          durationMs: Date.now() - t0,
-        });
+        logLlmCall({ ...logMeta, responseModel: msg.model, stopReason: msg.stop_reason, inputTokens: msg.usage?.input_tokens, outputTokens: msg.usage?.output_tokens, durationMs: Date.now() - t0 });
       }).catch(err => {
         logLlmCall({ ...logMeta, stopReason: `error: ${err.message}`, durationMs: Date.now() - t0 });
       });
-
-      // If primary is mixai, attach a fallback wrapper
-      if (provider === 'mixai' && anthropicDirect && !process.env.LLM_NO_FALLBACK) {
-        const originalOn = stream.on.bind(stream);
-        let hasError = false;
-        originalOn('error', () => { hasError = true; });
-        // Expose a retry helper the caller can use
-        stream._fallbackStream = () => {
-          console.warn('[llm-client] Stream fallback: MixAI → Anthropic direct');
-          return anthropicDirect.messages.stream(params);
-        };
-      }
 
       return stream;
     },

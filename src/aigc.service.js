@@ -39,13 +39,11 @@ ${pdfText.slice(0, 12000)}`,
  * Generate an ad image via OpenRouter image-capable models.
  * Returns { imageBuffer, model, prompt }.
  */
-// OpenRouter models (primary)
+// OpenRouter models
 const OPENROUTER_IMAGE_MODELS = ['google/gemini-3.1-flash-image-preview', 'google/gemini-2.0-flash-exp:free', 'openai/gpt-image-1'];
-// MixAI models (fallback)
-const MIXAI_IMAGE_MODELS = ['gemini-3.1-flash-image-preview', 'gemini-2.5-flash-image', 'gemini-2.5-flash-image-preview'];
 
 export async function generateAdImage({ prompt, model, referenceImages }) {
-  if (!config.aigc.apiKey) throw new Error('OPENROUTER_API_KEY or MIXAI_API_KEY is not configured');
+  if (!config.aigc.apiKey) throw new Error('OPENROUTER_API_KEY is not configured');
 
   // Build message content: text prompt + optional reference images
   let content;
@@ -72,13 +70,10 @@ export async function generateAdImage({ prompt, model, referenceImages }) {
     return { ...result, prompt };
   }
 
-  // Try OpenRouter models first, then MixAI fallback
+  // Try OpenRouter models in sequence
   const providers = [
     { baseURL: config.aigc.baseURL, apiKey: config.aigc.apiKey, models: OPENROUTER_IMAGE_MODELS },
   ];
-  if (config.aigc.mixaiApiKey) {
-    providers.push({ baseURL: config.aigc.mixaiBaseURL, apiKey: config.aigc.mixaiApiKey, models: MIXAI_IMAGE_MODELS });
-  }
 
   let lastError;
   for (const provider of providers) {
@@ -149,7 +144,7 @@ export function extractBase64Image(message) {
     }
   }
 
-  // Format 3: markdown ![image](data:...) in text (MixAI Gemini)
+  // Format 3: markdown ![image](data:...) in text
   const text = typeof message.content === 'string' ? message.content
     : Array.isArray(message.content) ? message.content.filter(p => p.type === 'text').map(p => p.text).join('')
     : '';

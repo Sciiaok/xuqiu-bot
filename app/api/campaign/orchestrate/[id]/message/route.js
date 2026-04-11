@@ -1,5 +1,5 @@
 import { createClient } from '../../../../../../lib/supabase-server.js';
-import { getSession, getLatestSession, addMessages, getNextMessageIndex } from '../../../../../../lib/repositories/orchestrator.repository.js';
+import { resolveSession, addMessages, getNextMessageIndex } from '../../../../../../lib/repositories/orchestrator.repository.js';
 import { getRedis, userInputKey, USER_INPUT_TTL_SECONDS } from '../../../../../../lib/redis.js';
 
 /**
@@ -28,10 +28,7 @@ export async function POST(request, { params }) {
     return Response.json({ error: 'Message or attachments required' }, { status: 400 });
   }
 
-  let session = await getSession(id);
-  if (!session) {
-    session = await getLatestSession(id);
-  }
+  const session = await resolveSession(id);
   if (!session) {
     return Response.json({ error: 'Session not found' }, { status: 404 });
   }

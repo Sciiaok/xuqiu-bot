@@ -236,14 +236,44 @@ ${JSON.stringify(trendsResult)}
 Analyze the brief and external data above, then call submit_report with your complete 8-section research report.`,
   }];
 
-  const response = await anthropic.messages.stream({
+  // Stream the LLM call and report section-by-section progress
+  const SECTION_LABELS = {
+    market_competitor_analysis: '市场与竞品分析',
+    campaign_objectives: '投放目标设定',
+    audience_segmentation: '用户画像与受众分层',
+    creative_strategy: '素材创意策略',
+    media_mix: '渠道与漏斗布局',
+    landing_page_cro: '落地页与转化链路',
+    budget_scheduling: '预算与排期分配',
+    optimization_reporting: '效果评估与迭代闭环',
+    keyword_trends: '关键词趋势',
+  };
+  const reportedSections = new Set();
+
+  const stream = anthropic.messages.stream({
     model: MODELS.SONNET,
     max_tokens: 16384,
     system: systemPrompt,
     messages,
     tools: RESEARCH_V2_TOOLS,
     tool_choice: { type: 'tool', name: 'submit_report' },
-  }).finalMessage();
+  });
+
+  let jsonAccum = '';
+  for await (const event of stream) {
+    if (event.type === 'content_block_delta' && event.delta?.type === 'input_json_delta') {
+      jsonAccum += event.delta.partial_json;
+      // Detect when a new top-level section key appears in the accumulated JSON
+      for (const [key, label] of Object.entries(SECTION_LABELS)) {
+        if (!reportedSections.has(key) && jsonAccum.includes(`"${key}"`)) {
+          reportedSections.add(key);
+          onProgress?.({ step: 'section_progress', detail: `✓ ${label} (${reportedSections.size}/9)` });
+        }
+      }
+    }
+  }
+
+  const response = await stream.finalMessage();
 
   const submitBlock = response.content.find(c => c.type === 'tool_use' && c.name === 'submit_report');
   if (submitBlock?.input && Object.keys(submitBlock.input).length > 0) {

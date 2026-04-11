@@ -1,5 +1,6 @@
 import { createClient } from '../../../../lib/supabase-server.js';
 import supabase from '../../../../lib/supabase.js';
+import { deleteBrief } from '../../../../lib/repositories/campaign-brief.repository.js';
 
 /**
  * GET /api/campaign/sessions
@@ -123,5 +124,31 @@ export async function GET() {
   } catch (error) {
     console.error('[campaign/sessions] Error:', error);
     return Response.json({ error: 'Failed to load sessions' }, { status: 500 });
+  }
+}
+
+/**
+ * DELETE /api/campaign/sessions
+ *
+ * Delete a campaign brief and all associated data (cascades to sessions + messages).
+ * Body: { briefId: "uuid" }
+ */
+export async function DELETE(request) {
+  const supabaseAuth = await createClient();
+  const { data: { user } } = await supabaseAuth.auth.getUser();
+  if (!user) {
+    return Response.json({ error: 'Unauthorized' }, { status: 401 });
+  }
+
+  try {
+    const { briefId } = await request.json();
+    if (!briefId) {
+      return Response.json({ error: 'briefId is required' }, { status: 400 });
+    }
+    await deleteBrief(briefId);
+    return Response.json({ deleted: true });
+  } catch (error) {
+    console.error('[campaign/sessions] DELETE error:', error);
+    return Response.json({ error: 'Failed to delete session' }, { status: 500 });
   }
 }

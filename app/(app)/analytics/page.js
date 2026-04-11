@@ -302,7 +302,6 @@ export default function AnalyticsPage() {
       .then(json => { if (json?.totals) setTotalSpend(json.totals.spend ?? null); })
       .catch(() => setTotalSpend(null));
 
-    fetchAiInsight({ days, startDate: dateFrom, endDate: dateTo, productLines });
   }, [dateRange, selectedLine, customFrom, customTo]);
 
   // ── Derived data ──
@@ -404,8 +403,8 @@ export default function AnalyticsPage() {
           {/* AI Summary — renders independently, never blocks data display */}
           <AIPanel
             title="AI 询盘洞察"
-            tag={aiInsightLoading ? (aiStatus || '正在分析中...') : '自动生成'}
-            onRefresh={() => {
+            tag={aiInsightLoading ? (aiStatus || '正在分析中...') : null}
+            onRefresh={aiInsight ? () => {
               const productLines = getProductLines();
               if (dateRange === 'custom' && customFrom && customTo) {
                 const from = new Date(`${customFrom}T00:00:00.000+08:00`).toISOString();
@@ -422,8 +421,8 @@ export default function AnalyticsPage() {
                 endDate: now.toISOString(),
                 productLines,
               });
-            }}
-            refreshLabel="刷新"
+            } : undefined}
+            refreshLabel="重新生成"
           >
             {aiInsightLoading && !aiInsight ? (
               <div style={{ color: 'var(--text3)', fontSize: 13, padding: '8px 0' }}>
@@ -432,7 +431,33 @@ export default function AnalyticsPage() {
             ) : aiInsight ? (
               <Markdown>{aiInsight}</Markdown>
             ) : (
-              <div style={{ color: 'var(--text3)', fontSize: 13 }}>点击"刷新"生成洞察</div>
+              <div style={{ color: 'var(--text3)', fontSize: 13 }}>
+                <span
+                  role="button"
+                  tabIndex={0}
+                  onClick={() => {
+                    const productLines = getProductLines();
+                    if (dateRange === 'custom' && customFrom && customTo) {
+                      const from = new Date(`${customFrom}T00:00:00.000+08:00`).toISOString();
+                      const to = new Date(`${customTo}T23:59:59.999+08:00`).toISOString();
+                      return fetchAiInsight({ startDate: from, endDate: to, productLines });
+                    }
+                    if (dateRange === 'all') {
+                      return fetchAiInsight({ days: 3650, productLines });
+                    }
+                    const d = DATE_TAB_TO_DAYS[dateRange] ?? 7;
+                    const now = new Date();
+                    return fetchAiInsight({
+                      startDate: new Date(now.getTime() - d * 86400000).toISOString(),
+                      endDate: now.toISOString(),
+                      productLines,
+                    });
+                  }}
+                  style={{ color: 'var(--accent)', cursor: 'pointer', fontWeight: 500 }}
+                >
+                  点击生成 AI 洞察 →
+                </span>
+              </div>
             )}
           </AIPanel>
 

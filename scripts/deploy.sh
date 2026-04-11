@@ -24,6 +24,7 @@ echo -e "${YELLOW}========================================${NC}"
 # Step 1: Create tarball (excluding node_modules - will npm install on server)
 echo -e "\n${GREEN}[1/7] Creating tarball...${NC}"
 tar -czvf $TMP_FILE \
+    --no-xattrs \
     --exclude='.next' \
     --exclude='.git' \
     --exclude='node_modules' \

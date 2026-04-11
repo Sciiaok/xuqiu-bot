@@ -345,6 +345,9 @@ async function executeSaveBrief(briefId, input) {
 }
 
 async function executeParseAttachment(_briefId, input) {
+  if (!input?.attachment_url || !input?.type) {
+    return { error: 'Missing attachment_url or type parameter' };
+  }
   const { attachment_url, type } = input;
   try {
     const res = await fetch(attachment_url);
@@ -365,29 +368,18 @@ async function executeParseAttachment(_briefId, input) {
     }
 
     if (type === 'pdf') {
-      // Dynamic import to avoid loading Java dependency at module level
-      const { convert } = await import('@opendataloader/pdf');
-      const { writeFile, readFile, mkdtemp, rm } = await import('node:fs/promises');
-      const { tmpdir } = await import('node:os');
-      const { join } = await import('node:path');
-      const { readdirSync } = await import('node:fs');
-
-      const tempDir = await mkdtemp(join(tmpdir(), 'intake-pdf-'));
-      const inputPath = join(tempDir, 'input.pdf');
-      const outputDir = join(tempDir, 'output');
-
+      const { extractText } = await import('unpdf');
+      let extracted;
       try {
-        await writeFile(inputPath, buffer);
-        await convert([inputPath], { outputDir, format: 'markdown' });
-        const mdFile = readdirSync(outputDir).find(f => f.endsWith('.md'));
-        const markdown = mdFile
-          ? await readFile(join(outputDir, mdFile), 'utf-8')
-          : '';
-        // Return first 6000 chars to fit in tool result
-        return { extracted_text: markdown.slice(0, 6000) };
-      } finally {
-        await rm(tempDir, { recursive: true, force: true }).catch(() => {});
+        extracted = await extractText(new Uint8Array(buffer));
+      } catch (pdfErr) {
+        return { error: `PDF extraction failed: ${pdfErr.message}` };
       }
+      if (!extracted?.text) return { error: 'PDF extraction returned no text' };
+      const { text } = extracted;
+      const joined = (Array.isArray(text) ? text.join('\n') : String(text || '')).trim();
+      if (!joined) return { error: 'PDF appears to be empty or image-only' };
+      return { extracted_text: joined.slice(0, 6000) };
     }
 
     return { error: `Unsupported type: ${type}` };
@@ -466,7 +458,7 @@ function extractNativeFetchDocument(content = []) {
 async function executeWebSearch(_briefId, input) {
   try {
     const response = await anthropic.messages.create({
-      model: MODELS.SONNET,
+      model: MODELS.HAIKU,
       max_tokens: 900,
       messages: [
         {
@@ -507,7 +499,7 @@ async function executeReadWebpage(_briefId, input) {
   try {
     const hostname = new URL(input.url).hostname;
     const response = await anthropic.messages.create({
-      model: MODELS.SONNET,
+      model: MODELS.HAIKU,
       max_tokens: 1400,
       messages: [
         {
@@ -567,35 +559,49 @@ export async function* processIntakeMessage(
 ) {
   let sessionId = null;
   try {
-    // 1. Load brief from DB
-    const brief = await getBrief(briefId);
+    // 1–2. Load brief + resolve session in parallel
+    const [brief, existingSession] = await Promise.all([
+      getBrief(briefId),
+      getLatestSession(briefId),
+    ]);
     if (!brief) {
       yield { event: 'error', data: { message: `Brief ${briefId} not found` } };
       return;
     }
 
-    // 2. Resolve orchestrator session (create if not exists)
-    let session = await getLatestSession(briefId);
+    let session = existingSession;
     if (!session) {
       session = await createSession(briefId, { status: 'intake', current_phase: 'intake' });
     }
     sessionId = session.id;
     // Only reset to intake if session hasn't progressed beyond intake
-    // (don't regress brief_completed/running/completed back to intake)
     const INTAKE_COMPATIBLE = ['intake'];
     if (!INTAKE_COMPATIBLE.includes(session.status)) {
-      // Session is past intake — this call will be handled by chatWithOrchestrator, not here
-      // but if we're here anyway, don't regress the status
+      // Session is past intake — don't regress the status
     } else if (session.current_phase !== 'intake') {
       session = await updateSession(sessionId, { current_phase: 'intake' });
     }
 
+    // 3–4. Load history + message index + store user message in parallel
+    // Also kick off Meta assets fetch in background (non-blocking)
+    const [history, messageIndexStart] = await Promise.all([
+      getMessagesForClaude(sessionId, { phase: 'intake' }),
+      getNextMessageIndex(sessionId),
+    ]);
+    let messageIndex = messageIndexStart;
+
+    // Store user message (don't block on this before building Claude request)
+    const addMsgPromise = addMessage(sessionId, {
+      phase: 'intake',
+      role: 'user',
+      content: message,
+      message_index: messageIndex++,
+      attachments: attachments?.length ? attachments : undefined,
+    });
+
     // 2b. Fetch Meta account assets in background (non-blocking)
-    // Results are persisted to session.phase_results.meta_assets so all downstream phases can use them.
     const metaAssetsPromise = (async () => {
-      // Skip if already fetched in a previous intake turn
-      const current = await getSession(sessionId);
-      if (current?.phase_results?.meta_assets?.available !== undefined) return;
+      if (session?.phase_results?.meta_assets?.available !== undefined) return;
       try {
         const assets = await fetchAccountAssets();
         assets.fetched_at = new Date().toISOString();
@@ -607,21 +613,6 @@ export async function* processIntakeMessage(
         console.warn(`[intake] session=${sessionId} meta_assets fetch failed:`, err.message);
       }
     })();
-
-    // 3. Load history
-    const history = await getMessagesForClaude(sessionId, { phase: 'intake' });
-
-    // 4. Get next message_index
-    let messageIndex = await getNextMessageIndex(sessionId);
-
-    // 5. Store user message in DB
-    await addMessage(sessionId, {
-      phase: 'intake',
-      role: 'user',
-      content: message,
-      message_index: messageIndex++,
-      attachments: attachments?.length ? attachments : undefined,
-    });
 
     // 5a. Persist uploaded image URLs to brief.product_images
     if (attachments?.length) {
@@ -710,12 +701,23 @@ export async function* processIntakeMessage(
       }
     }
 
+    // Ensure user message is persisted before starting LLM loop
+    await addMsgPromise;
+
     while (iterations < maxIterations) {
+      // Check stop signal before each LLM call
+      if (sessionId) {
+        const { isStopRequested } = await import('../lib/redis.js');
+        if (await isStopRequested(sessionId)) {
+          console.log(`[intake] session=${sessionId} stop signal received, aborting`);
+          return;
+        }
+      }
       iterations++;
       console.log(`[intake] session=${sessionId} iter=${iterations}/${maxIterations} messages=${messages.length}`);
 
       const stream = anthropic.messages.stream({
-        model: MODELS.SONNET,
+        model: MODELS.HAIKU,
         max_tokens: 4096,
         system: systemPrompt,
         messages,
@@ -836,61 +838,17 @@ export async function* processIntakeMessage(
         finalMessage = await stream.finalMessage();
       } catch (streamErr) {
         console.error(`[intake] session=${sessionId} iter=${iterations} stream error:`, streamErr.message, `assistantText=${assistantText.length}chars tools=${toolUseBlocks.map(t => t.name).join(',') || 'none'}`);
-
-        // Retry once with fallback stream (MixAI → Anthropic direct)
-        if (stream._fallbackStream && assistantText.length === 0 && toolUseBlocks.length === 0) {
-          console.warn(`[intake] session=${sessionId} retrying with fallback stream`);
-          const fallbackStream = stream._fallbackStream();
-          try {
-            for await (const event of fallbackStream) {
-              if (event.type === 'content_block_start') {
-                const block = event.content_block;
-                if (block.type === 'tool_use') {
-                  currentBlockType = 'tool_use';
-                  currentToolName = block.name;
-                  currentToolUseId = block.id;
-                  currentToolInput = '';
-                } else if (block.type === 'text') {
-                  currentBlockType = 'text';
-                }
-              } else if (event.type === 'content_block_delta') {
-                const delta = event.delta;
-                if (delta.type === 'text_delta') {
-                  assistantText += delta.text;
-                  yield { type: 'delta', data: delta.text };
-                } else if (delta.type === 'input_json_delta') {
-                  currentToolInput += delta.partial_json;
-                }
-              } else if (event.type === 'content_block_stop') {
-                if (currentBlockType === 'tool_use') {
-                  let parsedInput;
-                  try { parsedInput = JSON.parse(currentToolInput); } catch { parsedInput = {}; }
-                  const toolResult = await executeTool(briefId, currentToolName, parsedInput);
-                  toolUseBlocks.push({ id: currentToolUseId, name: currentToolName, input: parsedInput, result: toolResult });
-                  if (currentToolName === 'update_brief' && toolResult && !toolResult.error) {
-                    yield { type: 'brief_update', data: toolResult };
-                  }
-                }
-                currentBlockType = null;
-              }
-            }
-            finalMessage = await fallbackStream.finalMessage();
-            // Skip the throw — fallback succeeded
-          } catch (fallbackErr) {
-            console.error(`[intake] session=${sessionId} fallback also failed:`, fallbackErr.message);
-            await persistStreamTurn(assistantText, toolUseBlocks);
-            throw fallbackErr;
-          }
-        } else {
-          await persistStreamTurn(assistantText, toolUseBlocks);
-          throw streamErr;
-        }
+        await persistStreamTurn(assistantText, toolUseBlocks);
+        throw streamErr;
       }
 
       const stopReason = finalMessage.stop_reason;
       const hasToolUse = toolUseBlocks.length > 0;
       console.log(`[intake] session=${sessionId} iter=${iterations} stop_reason=${stopReason} tools=${toolUseBlocks.map(t => t.name).join(',') || 'none'} textLen=${assistantText.length}`);
-      await persistStreamTurn(assistantText, toolUseBlocks);
+      // Fire-and-forget DB write — don't block next LLM iteration
+      persistStreamTurn(assistantText, toolUseBlocks).catch(err =>
+        console.error(`[intake] session=${sessionId} persistStreamTurn failed:`, err.message)
+      );
 
       // If Claude stopped due to tool_use, feed cached results back and continue
       if (stopReason === 'tool_use' && hasToolUse) {

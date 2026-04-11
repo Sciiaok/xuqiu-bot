@@ -1,47 +1,38 @@
-/* ── Card shell ──────────────────────────────────────────────── */
+/* ── Card shell — inline chat style, no heavy borders ────────── */
 .card {
-  border-radius: var(--rl);
+  border-radius: var(--r);
   overflow: hidden;
-  border: 1px solid var(--border2);
-  background: var(--bg);
-  box-shadow: var(--shadow);
+  border: none;
+  background: none;
 }
-.card_green  { border-color: rgba(42, 140, 90, 0.35); }
-.card_purple { border-color: rgba(139, 106, 191, 0.35); }
-.card_amber  { border-color: rgba(184, 134, 11, 0.35); }
-.card_teal   { border-color: rgba(42, 122, 116, 0.35); }
-.card_accent { border-color: rgba(24, 119, 242, 0.35); }
+.card_green, .card_purple, .card_amber, .card_teal, .card_accent {}
 
 .cardHeader {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 10px 14px;
-  border-bottom: 1px solid var(--border);
-  font-size: 12px;
+  padding: 0 0 8px 0;
+  border-bottom: none;
+  font-size: 13px;
   font-weight: 600;
 }
-.header_green  { background: rgba(42, 140, 90, 0.12);  color: var(--green); }
-.header_purple { background: rgba(139, 106, 191, 0.12); color: var(--purple); }
-.header_amber  { background: rgba(184, 134, 11, 0.12);  color: var(--amber); }
-.header_teal   { background: rgba(42, 122, 116, 0.12);   color: var(--teal); }
-.header_accent { background: rgba(24, 119, 242, 0.12); color: var(--accent); }
+.header_green  { color: var(--green); }
+.header_purple { color: var(--purple); }
+.header_amber  { color: var(--amber); }
+.header_teal   { color: var(--teal); }
+.header_accent { color: var(--accent); }
 
-.headerIcon { font-size: 13px; line-height: 1; }
+.headerIcon { font-size: 14px; line-height: 1; }
 .headerTitle { flex: 1; }
 .headerBadge { font-weight: 400; font-size: 11px; opacity: 0.7; }
 
-.cardBody { padding: 12px 14px; }
+.cardBody { padding: 0; }
 
 .cardFooter {
-  padding: 8px 14px;
-  border-top: 1px solid var(--border);
+  padding: 8px 0 0 0;
+  border-top: none;
 }
-.footer_green  { border-color: rgba(42, 140, 90, 0.15); }
-.footer_purple { border-color: rgba(139, 106, 191, 0.15); }
-.footer_amber  { border-color: rgba(184, 134, 11, 0.15); }
-.footer_teal   { border-color: rgba(42, 122, 116, 0.15); }
-.footer_accent { border-color: rgba(24, 119, 242, 0.15); }
+.footer_green, .footer_purple, .footer_amber, .footer_teal, .footer_accent {}
 
 /* ── Buttons ─────────────────────────────────────────────────── */
 .expandBtn {
@@ -331,15 +322,15 @@
 .rejectBtn:hover { background: var(--bg4); }
 
 /* ── Feedback ────────────────────────────────────────────────── */
-.feedbackMsg { font-size: 12px; color: var(--text2); line-height: 1.6; white-space: pre-wrap; margin-bottom: 8px; }
-.feedbackOptions { display: flex; flex-wrap: wrap; gap: 6px; }
+.feedbackMsg { font-size: 13px; color: var(--text); line-height: 1.65; white-space: pre-wrap; margin-bottom: 10px; }
+.feedbackOptions { display: flex; flex-wrap: wrap; gap: 8px; }
 .feedbackBtn {
-  font-size: 11px;
+  font-size: 12px;
   font-family: var(--font-sans);
-  background: var(--bg3);
+  background: var(--bg2);
   border: 1px solid var(--border);
-  border-radius: var(--r);
-  padding: 5px 12px;
+  border-radius: 20px;
+  padding: 7px 16px;
   cursor: pointer;
   color: var(--text2);
   transition: background 0.15s, border-color 0.15s;

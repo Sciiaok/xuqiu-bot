@@ -1,7 +1,7 @@
 import { after } from 'next/server';
 import { createClient } from '../../../../../../lib/supabase-server.js';
 import { resumeAfterFeedback } from '../../../../../../src/campaign-orchestrator.service.js';
-import { getSession, getLatestSession, updateSessionIfStatus } from '../../../../../../lib/repositories/orchestrator.repository.js';
+import { resolveSession, updateSessionIfStatus } from '../../../../../../lib/repositories/orchestrator.repository.js';
 import { drainToRedis } from '../../../../../../lib/sse.js';
 import { streamKey } from '../../../../../../lib/redis.js';
 import { getBrief } from '../../../../../../lib/repositories/campaign-brief.repository.js';
@@ -28,10 +28,7 @@ export async function POST(request, { params }) {
 
   const responseText = body.response || '用户上传了参考图片';
 
-  let session = await getSession(id);
-  if (!session) {
-    session = await getLatestSession(id);
-  }
+  const session = await resolveSession(id);
   if (!session) {
     return Response.json({ error: 'Session not found' }, { status: 404 });
   }
@@ -44,7 +41,7 @@ export async function POST(request, { params }) {
     const generator = resumeAfterFeedback(sessionId, responseText, { attachments: body.attachments });
     after(async () => {
       try {
-        await drainToRedis(generator, key);
+        await drainToRedis(generator, key, { sessionId });
       } catch (err) {
         console.error('[feedback] drainToRedis failed:', err.message);
         await updateSessionIfStatus(sessionId, 'running', { status: 'interrupted' });

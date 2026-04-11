@@ -593,6 +593,59 @@
   white-space: pre-wrap;
 }
 
+.aiSummaryHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.aiSummaryBtn {
+  font-size: 11px;
+  padding: 3px 10px;
+  border-radius: var(--rs);
+  border: 1px solid var(--accent);
+  background: transparent;
+  color: var(--accent);
+  cursor: pointer;
+  transition: background 0.15s;
+}
+.aiSummaryBtn:hover { background: var(--accent-dim); }
+.aiSummaryBtn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+.aiSummaryPlaceholder {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--text3);
+  padding: 4px 0;
+}
+
+.aiSummaryTrigger {
+  padding: 6px 14px;
+  font-size: 12px;
+  font-weight: 500;
+  border-radius: var(--rs);
+  border: 1px solid var(--accent);
+  background: var(--accent);
+  color: #fff;
+  cursor: pointer;
+  transition: opacity 0.15s;
+}
+.aiSummaryTrigger:hover { opacity: 0.85; }
+.aiSummaryTrigger:disabled { opacity: 0.5; cursor: not-allowed; }
+
+.aiSpinner {
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  border: 2px solid var(--border);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: aiSpin 0.8s linear infinite;
+}
+@keyframes aiSpin { to { transform: rotate(360deg); } }
+
 /* ── New Inquiry Card structure ───────────────────────── */
 .cardHead {
   display: flex;

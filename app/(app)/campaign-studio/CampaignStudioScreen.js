@@ -17,6 +17,7 @@ import {
   buildRangeRequest,
 } from './helpers';
 import { ChatTab } from './ChatTab';
+import Markdown from '../../components/Markdown/Markdown';
 
 // ─── Tab definitions ──────────────────────────────────────────────
 const MAIN_TABS = [
@@ -453,30 +454,27 @@ function AttributionTab({ adsData, loading, daysFilter, metricsMap, range, selec
   const [countryData, setCountryData] = useState([]);
   const [productLineData, setProductLineData] = useState([]);
   const [loadingAttr, setLoadingAttr] = useState(true);
-  const [attrInsights, setAttrInsights] = useState(null);
+  const [attrReport, setAttrReport] = useState(null);
   const [attrLoading, setAttrLoading] = useState(false);
 
-  useEffect(() => {
-    async function fetchAIInsights() {
-      setAttrLoading(true);
-      try {
-        const res = await fetch('/api/ai/report', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ type: 'attribution', days: daysFilter || 30 }),
-        });
-        if (!res.ok) throw new Error('Failed to fetch AI insights');
-        const data = await res.json();
-        setAttrInsights(data);
-      } catch (err) {
-        console.error('Error fetching AI insights:', err);
-        setAttrInsights(null);
-      } finally {
-        setAttrLoading(false);
-      }
+  const fetchAIInsights = async () => {
+    setAttrLoading(true);
+    try {
+      const res = await fetch('/api/ai/report', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ type: 'attribution', days: daysFilter || 30 }),
+      });
+      if (!res.ok) throw new Error('Failed to fetch AI insights');
+      const data = await res.json();
+      setAttrReport(data.report || null);
+    } catch (err) {
+      console.error('Error fetching AI insights:', err);
+      setAttrReport(null);
+    } finally {
+      setAttrLoading(false);
     }
-    fetchAIInsights();
-  }, [daysFilter]);
+  };
 
   useEffect(() => {
     async function fetchAttributionData() {
@@ -615,31 +613,35 @@ function AttributionTab({ adsData, loading, daysFilter, metricsMap, range, selec
 
   return (
     <div className={s.attrRoot}>
-      {/* Core insights */}
+      {/* AI strategic insights — manual trigger */}
       <section className={s.section}>
-        <div className={s.sectionTitle}>核心战略洞察</div>
+        <div className={s.sectionTitle}>核心战略洞察 · 执行建议</div>
         {attrLoading ? (
-          <div style={{ padding: '20px', color: 'var(--text3)', fontSize: '13px' }}>AI 洞察生成中…</div>
-        ) : attrInsights?.insights ? (
-          <div className={s.insightGrid}>
-            {attrInsights.insights.map((ins, i) => {
-              const cls = {
-                red: s.insightRed,
-                purple: s.insightPurple,
-                green: s.insightGreen,
-                amber: s.insightAmber,
-              }[ins.color] || '';
-              return (
-                <div key={i} className={`${s.insightBox} ${cls}`}>
-                  <div className={s.insightIcon}>{ins.icon}</div>
-                  <div className={s.insightTitle}>{ins.title}</div>
-                  <div className={s.insightBody}>{ins.body}</div>
-                </div>
-              );
-            })}
+          <div className={s.aiPlaceholder}>
+            <span className={s.aiSpinner} />
+            AI 正在分析广告归因数据…
+          </div>
+        ) : attrReport ? (
+          <div className={s.aiReportBody}>
+            <Markdown>{attrReport}</Markdown>
+            <button
+              className={s.aiRegenBtn}
+              onClick={fetchAIInsights}
+            >
+              ✦ 重新生成
+            </button>
           </div>
         ) : (
-          <div style={{ padding: '20px', color: 'var(--text3)', fontSize: '13px' }}>暂无 AI 洞察</div>
+          <div className={s.aiPlaceholder}>
+            <span
+              role="button"
+              tabIndex={0}
+              className={s.aiTriggerLink}
+              onClick={fetchAIInsights}
+            >
+              点击生成 AI 分析 →
+            </span>
+          </div>
         )}
       </section>
 
@@ -771,46 +773,6 @@ function AttributionTab({ adsData, loading, daysFilter, metricsMap, range, selec
         )}
       </section>
 
-      {/* Recommendations */}
-      <section className={s.section}>
-        <div className={s.sectionTitle}>执行建议</div>
-        {attrLoading ? (
-          <div style={{ padding: '20px', color: 'var(--text3)', fontSize: '13px' }}>AI 建议生成中…</div>
-        ) : attrInsights?.recommendations ? (
-          <div className={s.recGrid}>
-            {attrInsights.recommendations.map((rec, i) => {
-              const prioClass = rec.color === 'red' ? s.prioRed : s.prioAmber;
-              const cardClass = rec.color === 'red' ? s.recCardRed : s.recCardAmber;
-              return (
-                <div key={i} className={`${s.recCard} ${cardClass}`}>
-                  <div className={s.recHead}>
-                    <span className={`${s.prioBadge} ${prioClass}`}>{rec.priority}</span>
-                    <span className={s.recTitle}>{rec.title}</span>
-                  </div>
-                  <p className={s.recBody}>{rec.body}</p>
-                  <ul className={s.recActions}>
-                    {(rec.actions || []).map((a, j) => (
-                      <li key={j}>{a}</li>
-                    ))}
-                  </ul>
-                </div>
-              );
-            })}
-          </div>
-        ) : (
-          <div style={{ padding: '20px', color: 'var(--text3)', fontSize: '13px' }}>暂无执行建议</div>
-        )}
-      </section>
-
-      {/* Final insight */}
-      {attrInsights?.summary && (
-        <div className={s.finalInsight}>
-          <span className={s.finalIcon}>✦</span>
-          <div>
-            <strong>综合优化潜力：</strong>{attrInsights.summary}
-          </div>
-        </div>
-      )}
     </div>
   );
 }

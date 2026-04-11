@@ -1,14 +1,19 @@
 import { createClient } from '../../../../../../lib/supabase-server.js';
 import {
   getSession,
-  getLatestSession,
+  resolveSession,
 } from '../../../../../../lib/repositories/orchestrator.repository.js';
-import { getBrief } from '../../../../../../lib/repositories/campaign-brief.repository.js';
 import { getRedis, createBlockingClient, streamKey } from '../../../../../../lib/redis.js';
 
 const VALID_STREAM_ID = /^\d+-\d+$/;
 const TERMINAL_STATUSES = new Set(['completed', 'failed']);
 const XREAD_BLOCK_MS = 30_000;
+
+/** Safely extract a field value from Redis XRANGE/XREAD field array */
+function getField(fields, name) {
+  const idx = fields.indexOf(name);
+  return idx >= 0 && idx + 1 < fields.length ? fields[idx + 1] : undefined;
+}
 
 /**
  * GET /api/campaign/orchestrate/[id]/stream?lastEventId=xxx
@@ -34,17 +39,17 @@ export async function GET(request, { params }) {
     );
   }
 
-  // Resolve session
-  let session = await getSession(id);
-  if (!session) {
-    session = await getLatestSession(id);
-  }
+  // Resolve session once — needed for status polling downstream.
+  // Accept briefId query param to skip the brief DB lookup for streamKey.
+  const briefIdParam = searchParams.get('briefId');
+  const session = await resolveSession(id);
   if (!session) {
     return Response.json({ error: 'Session not found' }, { status: 404 });
   }
+  const sessionId = session.id;
+  const briefId = briefIdParam || session.brief_id;
 
-  const brief = await getBrief(session.brief_id);
-  const key = streamKey(brief?.id || session.brief_id);
+  const key = streamKey(briefId);
 
   const encoder = new TextEncoder();
   let blockingClient = null;
@@ -73,17 +78,18 @@ export async function GET(request, { params }) {
         let lastId = lastEventId;
 
         for (const [eventId, fields] of replayEvents) {
-          const eventType = fields[fields.indexOf('event') + 1];
-          const eventData = fields[fields.indexOf('data') + 1];
+          const eventType = getField(fields, 'event');
+          const eventData = getField(fields, 'data');
+          if (!eventType || !eventData) continue;
           send(eventId, eventType, eventData);
           lastId = eventId;
         }
 
         // Check if session already finished (based on DB status, not event names)
-        const freshSession = await getSession(session.id);
+        const freshSession = await getSession(sessionId);
         if (TERMINAL_STATUSES.has(freshSession?.status)) {
           const lastReplayEvent = replayEvents.length > 0
-            ? replayEvents[replayEvents.length - 1][1][replayEvents[replayEvents.length - 1][1].indexOf('event') + 1]
+            ? getField(replayEvents[replayEvents.length - 1][1], 'event')
             : null;
           if (lastReplayEvent !== 'done' && lastReplayEvent !== 'error') {
             send(null, 'done', JSON.stringify({ status: freshSession.status }));
@@ -103,7 +109,7 @@ export async function GET(request, { params }) {
           );
 
           if (!result) {
-            const currentSession = await getSession(session.id);
+            const currentSession = await getSession(sessionId);
             if (!currentSession || TERMINAL_STATUSES.has(currentSession.status)) {
               send(null, 'done', JSON.stringify({ status: currentSession?.status || 'unknown' }));
               break;
@@ -115,8 +121,9 @@ export async function GET(request, { params }) {
           const entries = result[0][1];
           let sawTerminalEvent = false;
           for (const [eventId, fields] of entries) {
-            const eventType = fields[fields.indexOf('event') + 1];
-            const eventData = fields[fields.indexOf('data') + 1];
+            const eventType = getField(fields, 'event');
+            const eventData = getField(fields, 'data');
+            if (!eventType || !eventData) continue;
             send(eventId, eventType, eventData);
             lastId = eventId;
             if (eventType === 'done' || eventType === 'error') sawTerminalEvent = true;
@@ -124,7 +131,7 @@ export async function GET(request, { params }) {
 
           // Only close if session is actually terminal (done event may be mid-pipeline, e.g. intake done)
           if (sawTerminalEvent) {
-            const currentSession = await getSession(session.id);
+            const currentSession = await getSession(sessionId);
             if (!currentSession || TERMINAL_STATUSES.has(currentSession.status)) {
               controller.close();
               blockingClient.disconnect();

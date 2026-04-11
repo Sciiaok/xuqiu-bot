@@ -3,8 +3,7 @@ import { chatWithOrchestrator } from '../../../../../src/campaign-orchestrator.s
 import { processIntakeMessage } from '../../../../../src/campaign-intake.service.js';
 import {
   createSession,
-  getSession,
-  getLatestSession,
+  resolveSession,
   updateSessionIfStatus,
   getMessages,
 } from '../../../../../lib/repositories/orchestrator.repository.js';
@@ -35,18 +34,20 @@ export async function POST(request, { params }) {
   let body = {};
   try { body = await request.json(); } catch { /* empty body */ }
 
-  // Resolve session: id could be session_id or brief_id
-  let session = await getSession(id);
-  let brief = null;
-  if (!session) {
-    brief = await getBrief(id);
-    if (!brief) {
-      return Response.json({ error: 'Brief or session not found' }, { status: 404 });
-    }
-    session = await getLatestSession(id);
-    if (!session) {
-      session = await createSession(id, { status: 'intake', current_phase: 'intake' });
-    }
+  // Resolve session + brief in parallel (allSettled to avoid one failure killing both)
+  const [sessionResult, briefResult] = await Promise.allSettled([
+    resolveSession(id),
+    getBrief(id),
+  ]);
+  let session = sessionResult.status === 'fulfilled' ? sessionResult.value : null;
+  let brief = briefResult.status === 'fulfilled' ? briefResult.value : null;
+
+  if (!session && !brief) {
+    return Response.json({ error: 'Brief or session not found' }, { status: 404 });
+  }
+
+  if (!session && brief) {
+    session = await createSession(brief.id, { status: 'intake', current_phase: 'intake' });
   }
 
   if (!brief) {
@@ -62,7 +63,7 @@ export async function POST(request, { params }) {
     const generator = processIntakeMessage(brief.id, body.message || '', { attachments: body.attachments });
     after(async () => {
       try {
-        await drainToRedis(generator, key);
+        await drainToRedis(generator, key, { sessionId: session.id });
       } catch (err) {
         console.error('[orchestrate POST] intake drainToRedis failed:', err.message);
       }
@@ -80,7 +81,7 @@ export async function POST(request, { params }) {
   const key = streamKey(brief.id);
   after(async () => {
     try {
-      await drainToRedis(generator, key);
+      await drainToRedis(generator, key, { sessionId: session.id });
     } catch (err) {
       console.error('[orchestrate POST] drainToRedis failed:', err.message);
       await updateSessionIfStatus(session.id, 'running', { status: 'interrupted' });
@@ -108,44 +109,49 @@ export async function GET(request, { params }) {
   const phaseFilter = searchParams.get('phase');
   const debug = searchParams.get('debug') !== null;
 
-  // Resolve session
-  let session = await getSession(id);
-  if (!session) {
-    session = await getLatestSession(id);
-  }
-  if (!session) {
-    return Response.json({ error: 'Session not found' }, { status: 404 });
-  }
-  const msgOpts = {};
-  if (phaseFilter === 'chat') {
-    msgOpts.phase = null;
-  } else if (phaseFilter) {
-    msgOpts.phase = phaseFilter;
-  }
+  try {
+    const session = await resolveSession(id);
+    if (!session) {
+      return Response.json({ error: 'Session not found' }, { status: 404 });
+    }
+    const msgOpts = {};
+    if (phaseFilter === 'chat') {
+      msgOpts.phase = null;
+    } else if (phaseFilter) {
+      msgOpts.phase = phaseFilter;
+    }
 
-  const messages = await getMessages(session.id, msgOpts);
+    const messages = await getMessages(session.id, msgOpts);
 
-  // Include brief data so frontend doesn't need a separate intake endpoint
-  const briefData = await getBrief(session.brief_id);
+    // Include brief data so frontend doesn't need a separate intake endpoint
+    const briefData = await getBrief(session.brief_id);
 
-  return Response.json({
-    session_id: session.id,
-    brief_id: session.brief_id,
-    status: session.status,
-    current_phase: session.current_phase,
-    phase_results_keys: Object.keys(session.phase_results || {}),
-    phase_results: session.phase_results || {},
-    brief: briefData?.brief || {},
-    completion: briefData?.completion || {},
-    messages: messages.filter(m => debug || !(m.role === 'event' && !m.tool_name)).map(m => ({
-      id: m.id,
-      phase: m.phase,
-      role: m.role,
-      content: m.content,
-      tool_name: m.tool_name,
-      tool_result: m.tool_result,
-      attachments: m.attachments || null,
-      created_at: m.created_at,
-    })),
-  });
+    return Response.json({
+      session_id: session.id,
+      brief_id: session.brief_id,
+      status: session.status,
+      current_phase: session.current_phase,
+      phase_results_keys: Object.keys(session.phase_results || {}),
+      phase_results: session.phase_results || {},
+      brief: briefData?.brief || {},
+      completion: briefData?.completion || {},
+      messages: messages.filter(m => debug || !(m.role === 'event' && !m.tool_name)).map(m => ({
+        id: m.id,
+        phase: m.phase,
+        role: m.role,
+        content: m.content,
+        tool_name: m.tool_name,
+        tool_result: m.tool_result,
+        attachments: m.attachments || null,
+        created_at: m.created_at,
+      })),
+    });
+  } catch (err) {
+    const msg = typeof err?.message === 'string' && err.message.length > 200
+      ? `Upstream error (${err.code || 'unknown'})`
+      : err?.message || 'Internal error';
+    console.error('[orchestrate/GET] Error:', err.code || '', msg);
+    const status = err?.message?.includes('502') || err?.message?.includes('Bad gateway') ? 502 : 500;
+    return Response.json({ error: msg }, { status });
+  }
 }

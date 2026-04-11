@@ -329,6 +329,21 @@ export default function LeadHubPage() {
 
   const [profile, setProfile] = useState(null);
   const [loadingProfile, setLoadingProfile] = useState(false);
+  const [aiSummaryLoading, setAiSummaryLoading] = useState(false);
+
+  const fetchAiSummary = async () => {
+    if (!selectedContactId) return;
+    setAiSummaryLoading(true);
+    try {
+      const res = await fetch(`/api/contacts/${selectedContactId}/profile?withAiSummary=true`);
+      const json = await res.json();
+      setProfile(prev => prev ? { ...prev, aiSummary: json.aiSummary } : json);
+    } catch (err) {
+      console.error('AI summary error:', err);
+    } finally {
+      setAiSummaryLoading(false);
+    }
+  };
 
   const listEndRef = useRef(null);
 
@@ -521,7 +536,7 @@ export default function LeadHubPage() {
     setLoadingProfile(true);
     setProfile(null);
 
-    fetch(`/api/contacts/${selectedContactId}/profile?withAiSummary=true`)
+    fetch(`/api/contacts/${selectedContactId}/profile`)
       .then(r => r.json())
       .then(json => { if (!cancelled) setProfile(json); })
       .catch(() => {})
@@ -973,12 +988,38 @@ export default function LeadHubPage() {
                             </div>
                           )}
                         </div>
-                        {profile.aiSummary && (
-                          <div className={s.aiSummaryBox}>
+                        <div className={s.aiSummaryBox}>
+                          <div className={s.aiSummaryHeader}>
                             <div className={s.aiSummaryLabel}>AI 客户画像</div>
-                            <div className={s.aiSummaryText}>{profile.aiSummary}</div>
+                            {profile.aiSummary && (
+                              <button
+                                className={s.aiSummaryBtn}
+                                onClick={fetchAiSummary}
+                                disabled={aiSummaryLoading}
+                              >
+                                {aiSummaryLoading ? '生成中…' : '重新生成'}
+                              </button>
+                            )}
                           </div>
-                        )}
+                          {aiSummaryLoading ? (
+                            <div className={s.aiSummaryPlaceholder}>
+                              <span className={s.aiSpinner} />
+                              AI 正在分析客户数据…
+                            </div>
+                          ) : profile.aiSummary ? (
+                            <div className={s.aiSummaryText}>{profile.aiSummary}</div>
+                          ) : (
+                            <div className={s.aiSummaryPlaceholder}>
+                              <button
+                                className={s.aiSummaryTrigger}
+                                onClick={fetchAiSummary}
+                                disabled={aiSummaryLoading}
+                              >
+                                ✦ 生成 AI 画像
+                              </button>
+                            </div>
+                          )}
+                        </div>
                       </div>
                     )}
                   </div>
