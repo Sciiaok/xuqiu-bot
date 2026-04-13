@@ -118,6 +118,56 @@ async function* runWithHeartbeat(phaseKey, workFn) {
   yield { event: '__result', data: result };
 }
 
+// ── Helper: merge multiple async generators into one ─────────────────
+
+/**
+ * Merge multiple async generators so events are yielded as soon as any
+ * generator produces one.  Each generator is tagged with a `key` so the
+ * caller can tell which source produced each event.
+ *
+ * @param {{ key: string, gen: AsyncGenerator }[]} sources
+ * @yields {{ key: string, event: object }}
+ */
+async function* mergeGenerators(sources) {
+  // Each source gets a "reader" that keeps pulling and parking promises.
+  const readers = sources.map(({ key, gen }) => {
+    let done = false;
+    const pull = () =>
+      gen.next().then(
+        (r) => {
+          if (r.done) { done = true; return null; }
+          return { key, value: r.value };
+        },
+        (err) => { done = true; return { key, error: err }; },
+      );
+    return { key, gen, done: () => done, pull };
+  });
+
+  // Kick off initial pulls
+  let pending = readers.map((r) => ({ reader: r, promise: r.pull() }));
+
+  while (pending.length > 0) {
+    const wrapped = pending.map((p, i) =>
+      p.promise.then((result) => ({ index: i, result })),
+    );
+    const { index, result } = await Promise.race(wrapped);
+    const entry = pending[index];
+
+    if (result === null) {
+      // This generator is exhausted — remove it
+      pending.splice(index, 1);
+    } else if (result.error) {
+      // Surface the error as an event and remove this generator
+      yield { key: result.key, value: { event: 'phase_error', data: { phase: result.key, error: result.error.message } } };
+      pending.splice(index, 1);
+    } else {
+      yield result; // { key, value: event }
+      // Pull next value from the same generator
+      pending[index] = { reader: entry.reader, promise: entry.reader.pull() };
+    }
+  }
+}
+
 // ── Agent wrappers that persist tool_use conversations ─────────────────
 
 /**
@@ -301,7 +351,7 @@ async function runCreative(sessionId, brief, phaseResults, _instructions, onProg
           authClient: supabase,
         });
         completedCount++;
-        onProgress?.({ step: 'creative_item', detail: `✓ ${ad.name} 生成完成 (${completedCount}/${adJobs.length})`, name: ad.name, completed: completedCount, total: adJobs.length, errors: errorCount });
+        onProgress?.({ step: 'creative_item', detail: `✓ ${ad.name} 生成完成 (${completedCount}/${adJobs.length})`, name: ad.name, completed: completedCount, total: adJobs.length, errors: errorCount, creative: { name: ad.name, url: result.url } });
         return { status: 'fulfilled', value: { name: ad.name, result } };
       } catch (err) {
         completedCount++;
@@ -527,6 +577,12 @@ const PROMPT_CORE = `你是数字广告投放主控 Agent。根据 Campaign Brie
 - execution 需用户明确要求，创建的广告为 PAUSED 状态，用户确认后 activate_campaigns 激活
 - execution 目前仅支持 Meta Ads，其他平台输出手动操作指南
 
+## 并行优化
+- 互不依赖的阶段**必须在同一次回复中批量调用** run_phase，系统会并行执行
+- 例如: research + get_meta_assets 应在同一次 tool_use 中一起调用
+- 依赖链: (research + get_meta_assets) → strategy → creative_plan → creative → execution
+- 每批完成后再调用下一批依赖的阶段
+
 ## 工具使用
 - run_phase 返回 quality.score 和 quality.issues，据此判断是否 retry_phase
 - 阶段出错时先 search_fix_knowledge 查历史方案，修复成功后 save_fix_knowledge 记录
@@ -708,19 +764,11 @@ async function* runToolUseLoop(sessionId, brief, messages, initialPhaseResults, 
         tool_choice: { type: 'auto' },
       });
 
-      // Stream reasoning text to frontend in real-time
-      let textBuffer = '';
+      // Stream reasoning text as delta events so frontend displays as chat text
       for await (const event of llmStream) {
         if (event.type === 'content_block_delta' && event.delta?.type === 'text_delta') {
-          textBuffer += event.delta.text;
-          if (textBuffer.includes('\n') || textBuffer.length >= 80) {
-            yield { event: 'phase_progress', data: { phase: 'orchestrator', step: 'reasoning_delta', detail: textBuffer } };
-            textBuffer = '';
-          }
+          yield { event: 'delta', data: { text: event.delta.text } };
         }
-      }
-      if (textBuffer) {
-        yield { event: 'phase_progress', data: { phase: 'orchestrator', step: 'reasoning_delta', detail: textBuffer } };
       }
 
       response = await llmStream.finalMessage();
@@ -749,6 +797,163 @@ async function* runToolUseLoop(sessionId, brief, messages, initialPhaseResults, 
     let shouldTerminate = false;
     let terminateSummary = '';
 
+    // ── Parallel phase execution: pre-compute when multiple run_phase calls in one turn ──
+    const phaseToolBlocks = toolUseBlocks.filter(b => b.name === 'run_phase' || b.name === 'retry_phase');
+    const hasFeedbackBlock = toolUseBlocks.some(b => b.name === 'request_user_feedback');
+    const precomputedPhaseResults = new Map(); // block.id → { result, events }
+
+    if (phaseToolBlocks.length > 1 && !hasFeedbackBlock) {
+      console.log(`[orchestrator] parallel mode: ${phaseToolBlocks.length} phase blocks — ${phaseToolBlocks.map(b => b.input.phase).join(', ')}`);
+
+      // Validate and prepare generators for each phase
+      const generators = [];
+      const phaseStartTimes = {};
+
+      for (const block of phaseToolBlocks) {
+        const { id, name, input } = block;
+        const phaseKey = input.phase;
+        const phaseDef = PHASES.find(p => p.key === phaseKey);
+
+        // ── Validation (same as serial path) ──
+        if (name === 'retry_phase') {
+          retryCounts[phaseKey] = (retryCounts[phaseKey] || 0) + 1;
+          if (retryCounts[phaseKey] > MAX_PHASE_RETRIES) {
+            precomputedPhaseResults.set(id, {
+              toolResult: { status: 'blocked', error: `${phaseKey} 已重试 ${MAX_PHASE_RETRIES} 次仍失败，请 request_user_feedback 让用户介入` },
+            });
+            continue;
+          }
+        }
+        if (phaseKey === 'execution') {
+          const missingUpstream = ['strategy', 'creative'].filter(p => !phaseResults[p]);
+          if (missingUpstream.length > 0) {
+            precomputedPhaseResults.set(id, {
+              toolResult: { status: 'blocked', error: `前置阶段 [${missingUpstream.join(', ')}] 未完成或已失效，必须先重跑这些阶段再执行 execution` },
+            });
+            continue;
+          }
+        }
+        if (phaseKey === 'creative' && !phaseResults.strategy) {
+          precomputedPhaseResults.set(id, {
+            toolResult: { status: 'blocked', error: '前置阶段 strategy 未完成或已失效，必须先重跑 strategy 再执行 creative' },
+          });
+          continue;
+        }
+
+        // Emit phase_start
+        await addMessages(sessionId, [{
+          phase: phaseKey, role: 'event', tool_name: 'phase_start',
+          content: phaseDef?.name || phaseKey, message_index: await getNextMessageIndex(sessionId),
+        }]);
+        yield { event: 'phase_start', data: { phase: phaseKey, name: phaseDef?.name || phaseKey } };
+
+        phaseStartTimes[phaseKey] = Date.now();
+        const executor = getPhaseExecutor(phaseKey);
+        const instructions = name === 'retry_phase' ? input.feedback : input.instructions;
+        const gen = runWithHeartbeat(
+          phaseKey,
+          (onProgress) => executor(sessionId, brief, phaseResults, instructions, onProgress),
+        );
+        generators.push({ key: phaseKey, gen, blockId: id, phaseDef });
+      }
+
+      // Merge all generators and yield events as they arrive
+      if (generators.length > 0) {
+        const phaseData = {}; // phaseKey → { result, progressEvents, error }
+        for (const g of generators) {
+          phaseData[g.key] = { result: undefined, progressEvents: [], error: null };
+        }
+
+        try {
+          for await (const { key, value: evt } of mergeGenerators(generators.map(g => ({ key: g.key, gen: g.gen })))) {
+            if (evt.event === '__result') {
+              phaseData[key].result = evt.data;
+            } else {
+              if (evt.event === 'phase_progress') phaseData[key].progressEvents.push(evt);
+              yield evt;
+            }
+          }
+        } catch (mergeErr) {
+          console.error('[orchestrator] parallel merge error:', mergeErr.message);
+        }
+
+        // Post-process each completed phase (persist results, cascade, build tool results)
+        for (const g of generators) {
+          const { key: phaseKey, blockId, phaseDef } = g;
+          const pd = phaseData[phaseKey];
+          const phaseStartTime = phaseStartTimes[phaseKey];
+
+          if (pd.error) {
+            await addMessages(sessionId, [{
+              phase: phaseKey, role: 'event', tool_name: 'phase_error',
+              content: pd.error.message || String(pd.error), message_index: await getNextMessageIndex(sessionId),
+            }]);
+            yield { event: 'phase_error', data: { phase: phaseKey, error: pd.error.message || String(pd.error) } };
+            precomputedPhaseResults.set(blockId, { toolResult: { status: 'error', error: pd.error.message || String(pd.error) } });
+            continue;
+          }
+
+          const phaseResult = pd.result;
+
+          // Persist progress events
+          if (pd.progressEvents.length > 0) {
+            let progIdx = await getNextMessageIndex(sessionId);
+            await addMessages(sessionId, pd.progressEvents.map(evt => ({
+              phase: phaseKey, role: 'event', tool_name: 'phase_progress',
+              content: evt.data?.detail || evt.data?.step || '',
+              message_index: progIdx++,
+            })));
+          }
+
+          // Merge results into fresh DB copy
+          const freshSession = await getSession(sessionId);
+          phaseResults = { ...(freshSession?.phase_results || {}), [phaseKey]: phaseResult };
+
+          // Cascade invalidation
+          const stale = PHASE_DOWNSTREAM[phaseKey] || [];
+          const invalidatedNow = [];
+          for (const dk of stale) {
+            if (phaseResults[dk]) {
+              console.log(`[orchestrator] cascade: invalidating ${dk} (upstream ${phaseKey} rerun)`);
+              delete phaseResults[dk];
+              cascadeInvalidated.add(dk);
+              invalidatedNow.push(dk);
+            }
+          }
+          cascadeInvalidated.delete(phaseKey);
+          await updateSession(sessionId, { phase_results: phaseResults, current_phase: phaseKey });
+
+          const duration = Math.round((Date.now() - phaseStartTime) / 1000);
+          const resultSummary = summarizePhaseResult(phaseKey, phaseResult);
+          await addMessages(sessionId, [{
+            phase: phaseKey, role: 'event', tool_name: 'phase_complete',
+            content: resultSummary, tool_result: { duration, result_summary: resultSummary },
+            message_index: await getNextMessageIndex(sessionId),
+          }]);
+          yield { event: 'phase_complete', data: { phase: phaseKey, name: phaseDef?.name || phaseKey, result: phaseResult, duration, result_summary: resultSummary } };
+
+          const evaluation = evaluateOutput(phaseKey, phaseResult);
+          const hasPhaseErrors = phaseResult?.status && phaseResult.status !== 'completed' && phaseResult.status !== 'skipped';
+          precomputedPhaseResults.set(blockId, {
+            toolResult: {
+              status: hasPhaseErrors ? 'completed_with_errors' : 'completed',
+              result_summary: resultSummary,
+              duration_s: duration,
+              quality: evaluation,
+              ...(fixLog.length > 0 ? { fix_attempts: fixLog.length } : {}),
+              ...(hasPhaseErrors && phaseResult.errors?.length && {
+                error_details: phaseResult.errors.slice(0, 8),
+              }),
+              ...(invalidatedNow.length > 0 && {
+                cascade_invalidated: invalidatedNow,
+                cascade_warning: `⚠️ 以下阶段的结果已失效，必须按顺序重跑后才能继续: ${invalidatedNow.join(' → ')}`,
+              }),
+            },
+          });
+        }
+      }
+    }
+
     for (const block of toolUseBlocks) {
       const { id, name, input } = block;
 
@@ -763,6 +968,13 @@ async function* runToolUseLoop(sessionId, brief, messages, initialPhaseResults, 
       switch (name) {
         case 'run_phase':
         case 'retry_phase': {
+          // Use precomputed result from parallel execution if available
+          if (precomputedPhaseResults.has(id)) {
+            result = precomputedPhaseResults.get(id).toolResult;
+            break;
+          }
+
+          // ── Serial path (single phase block or feedback present) ──
           const phaseKey = input.phase;
           const phaseDef = PHASES.find(p => p.key === phaseKey);
 

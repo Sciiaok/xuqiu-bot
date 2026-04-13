@@ -176,7 +176,7 @@ function DonutCard({ title, data, colorMap, labelMap }) {
 
 export default function AnalyticsPage() {
   const [selectedLine, setSelectedLine] = useState('all');
-  const [dateRange, setDateRange] = useState('7d');
+  const [dateRange, setDateRange] = useState('30d');
   const [customFrom, setCustomFrom] = useState('');
   const [customTo, setCustomTo] = useState('');
 
@@ -185,7 +185,9 @@ export default function AnalyticsPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
 
-  const [aiInsight, setAiInsight] = useState(null);
+  const [aiInsight, setAiInsight] = useState(() => {
+    try { return sessionStorage.getItem('aiInsight') || null; } catch { return null; }
+  });
   const [aiInsightLoading, setAiInsightLoading] = useState(false);
   const [aiStatus, setAiStatus] = useState(null);
 
@@ -250,6 +252,7 @@ export default function AnalyticsPage() {
     } finally {
       setAiInsightLoading(false);
       setAiStatus(null);
+      try { if (accumulated) sessionStorage.setItem('aiInsight', accumulated); } catch {}
     }
   };
 

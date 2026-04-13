@@ -60,6 +60,7 @@ const SECTIONS = [
   { key: 'landing_page_cro',         num: '6', title: '落地页与转化链路', titleEn: 'Landing Page & CRO' },
   { key: 'budget_scheduling',        num: '7', title: '预算与排期分配', titleEn: 'Budget Allocation & Scheduling' },
   { key: 'optimization_reporting',   num: '8', title: '效果评估与迭代闭环', titleEn: 'Optimization & Reporting' },
+  { key: 'keyword_trends',           num: '9', title: '关键词趋势分析',   titleEn: 'Keyword Trends Analysis' },
 ];
 
 function SectionHeader({ num, title, titleEn }) {
@@ -263,6 +264,22 @@ function renderSection(key, data) {
           <Bullet items={data.optimization_suggestions} color="green" />
         </>
       );
+    case 'keyword_trends':
+      return (
+        <>
+          {data.seasonal_patterns && <p className={s.sectionText}>{data.seasonal_patterns}</p>}
+          {data.high_volume_keywords?.length > 0 && (
+            <div className={s.tagRow} style={{ marginTop: 6 }}>
+              {data.high_volume_keywords.map((kw, i) => <span key={i} className={`${s.tag} ${s.tag_green}`}>{kw}</span>)}
+            </div>
+          )}
+          {data.rising_keywords?.length > 0 && (
+            <div className={s.tagRow} style={{ marginTop: 4 }}>
+              {data.rising_keywords.map((kw, i) => <span key={i} className={`${s.tag} ${s.tag_amber}`}>↑ {kw}</span>)}
+            </div>
+          )}
+        </>
+      );
 
     default:
       return <pre className={s.rawJson}>{JSON.stringify(data, null, 2)}</pre>;
@@ -271,22 +288,54 @@ function renderSection(key, data) {
 
 // ── Main component ────────────────────────────────────────────────
 
-export function ResearchCardV2({ report, duration }) {
+export function ResearchCardV2({ report, duration, inProgress, completed, total }) {
   const [expanded, setExpanded] = useState(false);
   const v2 = report?._v2;
   if (!v2) return null;
 
   const summaryText = v2.market_competitor_analysis?.market_insights || '';
   const topChannels = (v2.media_mix?.channels || []).slice(0, 3);
+  const availableSections = SECTIONS.filter(sec => v2[sec.key]);
+  const hasProgress = typeof total === 'number' && total > 0;
+  const pct = hasProgress ? Math.round(((completed || 0) / total) * 100) : 0;
+
+  if (inProgress) {
+    return (
+      <CardShell
+        icon={<span className={s.spinner} />}
+        title="市场调研生成中"
+        badge={hasProgress ? `${completed || 0}/${total} 模块` : null}
+      >
+        {hasProgress && (
+          <div className={s.progressTrack}>
+            <div className={`${s.progressFill} ${s.progressFill_green}`} style={{ width: `${pct}%` }} />
+          </div>
+        )}
+
+        {/* Render completed sections as they arrive */}
+        {availableSections.length > 0 && (
+          <div className={s.expandedSection}>
+            {availableSections.map(sec => (
+              <div key={sec.key}>
+                <SectionHeader num={sec.num} title={sec.title} titleEn={sec.titleEn} />
+                {renderSection(sec.key, v2[sec.key])}
+              </div>
+            ))}
+          </div>
+        )}
+
+      </CardShell>
+    );
+  }
 
   return (
     <CardShell
       icon="✓"
       title="市场调研完成"
-      badge={duration ? `${duration}s` : '8 模块'}
+      badge={duration ? `${duration}s` : '9 模块'}
       footer={
         <button className={s.expandBtn} onClick={() => setExpanded(!expanded)}>
-          {expanded ? '收起报告' : '查看完整报告 (8 模块)'} →
+          {expanded ? '收起报告' : '查看完整报告 (9 模块)'} →
         </button>
       }
     >
@@ -316,26 +365,6 @@ export function ResearchCardV2({ report, duration }) {
             </div>
           ))}
 
-          {/* Keyword trends (standalone) */}
-          {v2.keyword_trends && (
-            <div style={{ marginTop: 14 }}>
-              <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--text3)', marginBottom: 6 }}>关键词趋势</div>
-              {v2.keyword_trends.high_volume_keywords?.length > 0 && (
-                <div className={s.tagRow}>
-                  {v2.keyword_trends.high_volume_keywords.map((kw, i) => (
-                    <span key={i} className={`${s.tag} ${s.tag_green}`}>{kw}</span>
-                  ))}
-                </div>
-              )}
-              {v2.keyword_trends.rising_keywords?.length > 0 && (
-                <div className={s.tagRow} style={{ marginTop: 4 }}>
-                  {v2.keyword_trends.rising_keywords.map((kw, i) => (
-                    <span key={i} className={`${s.tag} ${s.tag_amber}`}>↑ {kw}</span>
-                  ))}
-                </div>
-              )}
-            </div>
-          )}
         </div>
       )}
     </CardShell>

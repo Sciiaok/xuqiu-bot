@@ -11,6 +11,7 @@ import {
   INQUIRY_QUALITY_LABELS as QUALITY_LABELS,
   BUSINESS_VALUE_LABELS as VALUE_LABELS,
 } from '../../../lib/inquiries-filters';
+import Markdown from '../../components/Markdown/Markdown';
 
 /* ── Constants ─────────────────────────────────────────── */
 
@@ -1007,7 +1008,7 @@ export default function LeadHubPage() {
                               AI 正在分析客户数据…
                             </div>
                           ) : profile.aiSummary ? (
-                            <div className={s.aiSummaryText}>{profile.aiSummary}</div>
+                            <div className={s.aiSummaryText}><Markdown>{profile.aiSummary}</Markdown></div>
                           ) : (
                             <div className={s.aiSummaryPlaceholder}>
                               <button

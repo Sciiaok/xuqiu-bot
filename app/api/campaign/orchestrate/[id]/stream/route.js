@@ -100,7 +100,7 @@ export async function GET(request, { params }) {
 
         // Phase 2: Real-time via XREAD BLOCK
         blockingClient = createBlockingClient();
-        await blockingClient.connect?.();
+        await blockingClient.connect();
 
         while (true) {
           const result = await blockingClient.xread(

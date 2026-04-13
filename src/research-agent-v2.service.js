@@ -249,6 +249,15 @@ Analyze the brief and external data above, then call submit_report with your com
     keyword_trends: '关键词趋势',
   };
   const reportedSections = new Set();
+  const emittedSections = new Set();
+
+  // Try to parse partial JSON by appending closing braces
+  function tryParsePartial(json) {
+    for (let i = 0; i < 6; i++) {
+      try { return JSON.parse(json + '}'.repeat(i)); } catch {}
+    }
+    return null;
+  }
 
   const stream = anthropic.messages.stream({
     model: MODELS.SONNET,
@@ -268,6 +277,17 @@ Analyze the brief and external data above, then call submit_report with your com
         if (!reportedSections.has(key) && jsonAccum.includes(`"${key}"`)) {
           reportedSections.add(key);
           onProgress?.({ step: 'section_progress', detail: `✓ ${label} (${reportedSections.size}/9)` });
+
+          // Try to extract completed sections for live preview
+          const parsed = tryParsePartial(jsonAccum);
+          if (parsed) {
+            for (const [sKey] of Object.entries(SECTION_LABELS)) {
+              if (!emittedSections.has(sKey) && parsed[sKey] && typeof parsed[sKey] === 'object') {
+                emittedSections.add(sKey);
+                onProgress?.({ step: 'research_section', section_key: sKey, section_label: SECTION_LABELS[sKey], section_data: parsed[sKey], completed: emittedSections.size, total: 9 });
+              }
+            }
+          }
         }
       }
     }

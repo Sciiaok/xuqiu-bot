@@ -14,22 +14,13 @@ import { ResearchCardV2 } from '../../components/PhaseCards/ResearchCardV2';
 import { consumeSSE } from '../../../lib/consume-sse';
 
 const PHASE_LABELS = {
-  intake: '需求收集',
-  research: '市场调研',
-  strategy: '投放策略',
-  creative_plan: '创意规划',
-  creative: '素材生成',
-  execution: '执行发布',
-};
-
-const STATUS_LABELS = {
-  intake: '输入信息',
+  intake: '关于你',
   brief_completed: '完成简报',
   research: '调研市场',
-  strategy: '策略制定',
+  strategy: '分配预算',
   creative_plan: '设计创意',
   creative: '生成素材',
-  execution: '执行中',
+  execution: '启动投放',
   completed: '已完成',
   draft: '草稿',
 };
@@ -221,6 +212,7 @@ function PhaseStepper({ status, currentPhase }) {
   const activeKey = STEPPER_KEYS.includes(currentPhase) ? currentPhase : status;
   const activeIdx = STEPPER_KEYS.indexOf(activeKey);
   const isDone = status === 'completed';
+  const lastIdx = STEPPER_KEYS.length - 1;
 
   return (
     <div className={s.stepper}>
@@ -228,10 +220,19 @@ function PhaseStepper({ status, currentPhase }) {
         let state = 'pending';
         if (isDone || i < activeIdx) state = 'done';
         else if (i === activeIdx) state = 'active';
+        const isLast = i === lastIdx;
         return (
-          <div key={key} className={`${s.stepperItem} ${s['stepper_' + state]}`}>
-            <span className={s.stepperDot} />
-            <span className={s.stepperLabel}>{STATUS_LABELS[key] || key}</span>
+          <div key={key} className={`${s.stepperItem} ${s['stepper_' + state]} ${isLast && state === 'done' ? s.stepper_success : ''}`}>
+            <span className={s.stepperDot}>
+              {state === 'done' ? (
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
+                  <polyline points="20 6 9 17 4 12" />
+                </svg>
+              ) : state === 'active' ? (
+                <span className={s.stepperPulse} />
+              ) : null}
+            </span>
+            <span className={s.stepperLabel}>{PHASE_LABELS[key] || key}</span>
           </div>
         );
       })}
@@ -279,6 +280,10 @@ export function ChatTab({ workspaceMode = false }) {
   const streamActiveRef = useRef(false);
   const selectedSessionRef = useRef(null);
   const messageLoadSeqRef = useRef(0);
+  // Accumulated creatives for live preview during creative phase generation
+  const streamingCreativesRef = useRef([]);
+  // Accumulated research sections for live preview during research phase
+  const streamingResearchRef = useRef({});
   // Sync state → refs in a single effect to avoid unnecessary effect overhead
   useEffect(() => { streamingStepsRef.current = streamingSteps; selectedSessionRef.current = selectedSession; pendingImagesRef.current = pendingImages; }, [streamingSteps, selectedSession, pendingImages]);
   useEffect(() => {
@@ -407,10 +412,9 @@ export function ChatTab({ workspaceMode = false }) {
       });
       if (!res.ok) throw new Error('Delete failed');
       const isCurrentSelected = selectedSession?.brief_id === briefId;
-      setSessions(prev => prev.filter(s => s.brief_id !== briefId));
-      // Switch after state update, not inside setSessions callback
+      const remaining = sessions.filter(s => s.brief_id !== briefId);
+      setSessions(remaining);
       if (isCurrentSelected) {
-        const remaining = sessions.filter(s => s.brief_id !== briefId);
         selectSession(remaining[0] || null);
       }
     } catch (err) {
@@ -461,6 +465,7 @@ export function ChatTab({ workspaceMode = false }) {
       for (let attempt = 0; attempt <= retries; attempt++) {
         const res = await fetch(url);
         if (res.ok) return res;
+        if (res.status === 404) return null; // session not found — not an error
         if (attempt < retries && res.status >= 500) {
           await new Promise(r => setTimeout(r, 1500));
           continue;
@@ -472,6 +477,7 @@ export function ChatTab({ workspaceMode = false }) {
       setLoadingMessages(true);
       try {
         const res = await fetchWithRetry(`/api/campaign/orchestrate/${selectedSession.session_id}`);
+        if (!res) return; // session not found (404) — nothing to load
         const orchData = await res.json();
         if (cancelled || messageLoadSeqRef.current !== requestSeq || !isActiveSessionKey(sessionKey)) return;
         const phaseResults = orchData.phase_results || {};
@@ -584,8 +590,11 @@ export function ChatTab({ workspaceMode = false }) {
         const activeStatuses = new Set(['intake', 'running', 'awaiting_feedback']);
         if (activeStatuses.has(orchData.status)) {
           const savedId = loadLastEventId(selectedSession.session_id);
+          // If no saved event ID, use current timestamp to skip replaying history
+          // that was already loaded from the DB above (prevents duplicate messages).
+          const startId = savedId !== '0-0' ? savedId : `${Date.now()}-0`;
           const reconnectBaseId = selectedSession.session_id || selectedSession.brief_id;
-          connectToStream(sessionKey, selectedSession.session_id, reconnectBaseId, savedId);
+          connectToStream(sessionKey, selectedSession.session_id, reconnectBaseId, startId);
         }
       } catch (err) {
         console.error('Error fetching messages:', err);
@@ -630,7 +639,8 @@ export function ChatTab({ workspaceMode = false }) {
           // Session is running but we have no active stream — reconnect
           const sessionKey = getSessionKey(selectedSession);
           const savedId = loadLastEventId(sessionId);
-          connectToStream(sessionKey, sessionId, sessionId, savedId);
+          const startId = savedId !== '0-0' ? savedId : `${Date.now()}-0`;
+          connectToStream(sessionKey, sessionId, sessionId, startId);
         }
       } catch {}
     }, 15_000);
@@ -728,11 +738,11 @@ export function ChatTab({ workspaceMode = false }) {
           break;
         case 'tool_call':
           setWaitingForAI(false);
-          pushStreamingStepForSession(sessionKey, { tool: data.tool, content: JSON.stringify(data.input, null, 2).slice(0, 200), phase: null });
+          pushStreamingStepForSession(sessionKey, { tool: data.tool, content: JSON.stringify(data.input ?? {}, null, 2).slice(0, 200), phase: null });
           break;
         case 'tool_result':
           setWaitingForAI(false);
-          pushStreamingStepForSession(sessionKey, { tool: data.tool, content: JSON.stringify(data.result, null, 2).slice(0, 200), phase: null });
+          pushStreamingStepForSession(sessionKey, { tool: data.tool, content: JSON.stringify(data.result ?? {}, null, 2).slice(0, 200), phase: null });
           break;
         case 'orchestration_start':
           setWaitingForAI(false);
@@ -752,12 +762,64 @@ export function ChatTab({ workspaceMode = false }) {
           break;
         case 'phase_progress':
           setWaitingForAI(false);
-          pushStreamingStepForSession(sessionKey, { tool: data.step, content: data.detail || data.step, phase: data.phase });
+          // Creative phase: accumulate completed creatives for live preview
+          if (data.phase === 'creative' && data.creative?.url) {
+            streamingCreativesRef.current = [...streamingCreativesRef.current, data.creative];
+            setMessages(prev => {
+              const idx = prev.findLastIndex(m => m.type === 'creative_progress');
+              const card = {
+                id: idx >= 0 ? prev[idx].id : uid('cp'),
+                type: 'creative_progress',
+                completed: data.completed,
+                total: data.total,
+                errors: data.errors,
+                lastDetail: data.detail,
+                creatives: streamingCreativesRef.current,
+              };
+              if (idx >= 0) {
+                const next = [...prev];
+                next[idx] = card;
+                return next;
+              }
+              return [...prev, card];
+            });
+          // Research phase: accumulate completed sections for live preview
+          } else if (data.phase === 'research' && data.step === 'research_section' && data.section_key) {
+            streamingResearchRef.current = { ...streamingResearchRef.current, [data.section_key]: data.section_data };
+            const partialReport = streamingResearchRef.current;
+            setMessages(prev => {
+              const idx = prev.findLastIndex(m => m.type === 'research_progress');
+              const card = {
+                id: idx >= 0 ? prev[idx].id : uid('rp'),
+                type: 'research_progress',
+                report: { _v2: partialReport },
+                completed: data.completed,
+                total: data.total,
+              };
+              if (idx >= 0) {
+                const next = [...prev];
+                next[idx] = card;
+                return next;
+              }
+              return [...prev, card];
+            });
+          } else {
+            pushStreamingStepForSession(sessionKey, { tool: data.step, content: data.detail || data.step, phase: data.phase });
+          }
           break;
         case 'phase_complete': {
           setWaitingForAI(false);
           pushStreamingStepForSession(sessionKey, { tool: null, content: `✓ ${PHASE_LABELS[data.phase] || data.phase} 完成`, phase: data.phase });
           flushStreamingSteps(sessionKey);
+          // Remove live progress cards before appending final card
+          if (data.phase === 'creative') {
+            streamingCreativesRef.current = [];
+            setMessages(prev => prev.filter(m => m.type !== 'creative_progress'));
+          }
+          if (data.phase === 'research') {
+            streamingResearchRef.current = {};
+            setMessages(prev => prev.filter(m => m.type !== 'research_progress'));
+          }
           const builder = phaseResultBuilders[data.phase];
           if (builder && data.result) {
             const card = builder(data.result);
@@ -767,11 +829,17 @@ export function ChatTab({ workspaceMode = false }) {
         }
         case 'approval_required':
           setWaitingForAI(false);
+          // Clear streamed reasoning text — the approval card replaces it
+          assistantText = '';
+          setStreamingTextForSession(sessionKey, '');
           appendMessageForSession(sessionKey, { id: uid('approval'), type: 'execution_approval', plan: data.plan, status: 'awaiting_approval' });
           updateSessionStatus(sessionKey, { status: 'awaiting_approval' });
           break;
         case 'feedback_required':
           setWaitingForAI(false);
+          // Clear streamed reasoning text — the feedback card replaces it
+          assistantText = '';
+          setStreamingTextForSession(sessionKey, '');
           flushStreamingSteps(sessionKey);
           appendMessageForSession(sessionKey, { id: uid('fb'), type: 'feedback_required', message: data.message || '需要您的确认', options: data.options || [] });
           updateSessionStatus(sessionKey, { status: 'awaiting_feedback' });
@@ -811,6 +879,8 @@ export function ChatTab({ workspaceMode = false }) {
       const streamRes = await fetch(streamUrl, { signal: abortController.signal });
       if (streamRes.ok) {
         await consumeSSE(streamRes, handleEvent);
+      } else {
+        console.warn(`[ChatTab] Stream request failed: ${streamRes.status} ${streamRes.statusText}`);
       }
     } catch (err) {
       if (err.name === 'AbortError' || abortController.signal.aborted) return;
@@ -995,6 +1065,14 @@ export function ChatTab({ workspaceMode = false }) {
     return Array.from(dataTransfer?.types || []).includes('Files');
   }
 
+  function removePendingImage(imgId) {
+    setPendingImages(prev => {
+      const target = prev.find(p => p.id === imgId);
+      if (target?.preview) URL.revokeObjectURL(target.preview);
+      return prev.filter(p => p.id !== imgId);
+    });
+  }
+
   // Compress image on the client to avoid 413 server limits
   function compressImage(file, maxDim = 1920, quality = 0.85) {
     return new Promise((resolve) => {
@@ -1059,7 +1137,7 @@ export function ChatTab({ workspaceMode = false }) {
         setPendingImages(prev => prev.map(p => p.id === imgId ? { ...p, uploading: false, uploaded: result } : p));
       } catch (err) {
         console.error('Upload failed:', err);
-        setPendingImages(prev => prev.filter(p => p.id !== imgId));
+        removePendingImage(imgId);
       }
     }
   }
@@ -1210,6 +1288,9 @@ export function ChatTab({ workspaceMode = false }) {
                       : <ResearchCard report={item.report} duration={item.duration} />;
                     return <div key={item.id || i} className={s.phaseCardWrapper}>{card}</div>;
                   }
+                  if (item.type === 'research_progress') {
+                    return <div key={item.id || i} className={s.phaseCardWrapper}><ResearchCardV2 report={item.report} inProgress completed={item.completed} total={item.total} /></div>;
+                  }
                   if (item.type === 'strategy_complete') {
                     return <div key={item.id || i} className={s.phaseCardWrapper}><StrategyCard plan={item.plan} /></div>;
                   }
@@ -1220,7 +1301,7 @@ export function ChatTab({ workspaceMode = false }) {
                     return <div key={item.id || i} className={s.phaseCardWrapper}><CreativeCard creatives={item.creatives} /></div>;
                   }
                   if (item.type === 'creative_progress') {
-                    return <div key={item.id || i} className={s.phaseCardWrapper}><CreativeCard inProgress completed={item.completed} total={item.total} errors={item.errors} lastDetail={item.lastDetail} /></div>;
+                    return <div key={item.id || i} className={s.phaseCardWrapper}><CreativeCard inProgress completed={item.completed} total={item.total} errors={item.errors} lastDetail={item.lastDetail} creatives={item.creatives} /></div>;
                   }
                   if (item.type === 'execution_approval') {
                     return <div key={item.id || i} className={s.phaseCardWrapper}><ExecutionCard plan={item.plan} status="awaiting_approval" /></div>;
@@ -1330,7 +1411,7 @@ export function ChatTab({ workspaceMode = false }) {
                         </div>
                       )}
                       <button
-                        onClick={() => setPendingImages(prev => prev.filter(p => p.id !== img.id))}
+                        onClick={() => removePendingImage(img.id)}
                         style={{ position: 'absolute', top: 2, right: 2, width: 18, height: 18, background: 'rgba(0,0,0,0.5)', color: '#fff', border: 'none', borderRadius: '50%', fontSize: 11, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', lineHeight: 1 }}
                       >×</button>
                     </div>
@@ -1339,7 +1420,7 @@ export function ChatTab({ workspaceMode = false }) {
               </div>
             )}
             <div className={s.chatInputInner}>
-              <button className={s.inputActionBtn} title="上传图片/文档" onClick={handleUploadClick} disabled={sendingMsg}>
+              <button className={s.inputActionBtn} title="上传图片/文档" onClick={handleUploadClick} disabled={sendingMsg || isStreaming}>
                 <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                   <path d="M21.44 11.05l-9.19 9.19a6 6 0 01-8.49-8.49l9.19-9.19a4 4 0 015.66 5.66l-9.2 9.19a2 2 0 01-2.83-2.83l8.49-8.48" />
                 </svg>
@@ -1352,7 +1433,7 @@ export function ChatTab({ workspaceMode = false }) {
                 onChange={e => setInputVal(e.target.value)}
                 onKeyDown={handleKeyDown}
                 onPaste={handleInputPaste}
-                disabled={sendingMsg}
+                disabled={sendingMsg || isStreaming}
                 rows={1}
               />
               {isStreaming ? (
@@ -1411,8 +1492,7 @@ export function ChatTab({ workspaceMode = false }) {
           ) : (
             sessions.map(session => {
               const isActive = selectedSession?.brief_id === session.brief_id;
-              const statusLabel = STATUS_LABELS[session.status] || session.status;
-              const phaseLabel = PHASE_LABELS[session.current_phase] || session.current_phase;
+              const statusLabel = PHASE_LABELS[session.status] || session.status;
               const preview = session.first_message
                 ? session.first_message.slice(0, 60) + (session.first_message.length > 60 ? '…' : '')
                 : '（无摘要）';

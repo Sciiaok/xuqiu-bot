@@ -41,11 +41,28 @@ const CLASSIFICATION_SOURCE_LABELS = {
   unclassified: '未分类',
 };
 
-function ImageLightbox({ url, onClose }) {
+function ImageLightbox({ url, adId, onClose }) {
+  const [hdUrl, setHdUrl] = useState(null);
+  const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    if (!adId) return;
+    setHdUrl(null);
+    setLoading(true);
+    fetch(`/api/ads/creative-image?adId=${encodeURIComponent(adId)}`)
+      .then(res => res.ok ? res.json() : null)
+      .then(data => { if (data?.imageUrl) setHdUrl(data.imageUrl); })
+      .catch(() => {})
+      .finally(() => setLoading(false));
+  }, [adId]);
+
   if (!url) return null;
+  const displayUrl = hdUrl || url;
+
   return (
     <div className={s.lightboxOverlay} onClick={onClose}>
-      <img src={url} alt="" className={s.lightboxImage} onClick={(event) => event.stopPropagation()} />
+      {loading && <div className={s.lightboxLoading}>加载高清图…</div>}
+      <img src={displayUrl} alt="" className={s.lightboxImage} onClick={(event) => event.stopPropagation()} />
     </div>
   );
 }
@@ -186,7 +203,7 @@ function AdRow({ ad, isExpanded, onToggle, rangeLabel, isSingleDay, onPreview })
                         className={s.creativePreviewButton}
                         onClick={(event) => {
                           event.stopPropagation();
-                          onPreview?.(previewLightboxUrl);
+                          onPreview?.({ url: previewLightboxUrl, adId: ad.adId });
                         }}
                       >
                         <img src={previewUrl} alt={ad.adName || ad.adId} className={s.creativePreviewImage} />
@@ -194,7 +211,6 @@ function AdRow({ ad, isExpanded, onToggle, rangeLabel, isSingleDay, onPreview })
                           <span>{previewSizeLabel ? `预览图 ${previewSizeLabel}` : '广告素材图'}</span>
                           {originalSizeLabel && <span>原图 {originalSizeLabel}</span>}
                         </div>
-                        <span className={s.creativePreviewHint}>点击查看大图</span>
                       </button>
                     ) : (
                       <div className={s.creativePlaceholder}>
@@ -454,7 +470,9 @@ function AttributionTab({ adsData, loading, daysFilter, metricsMap, range, selec
   const [countryData, setCountryData] = useState([]);
   const [productLineData, setProductLineData] = useState([]);
   const [loadingAttr, setLoadingAttr] = useState(true);
-  const [attrReport, setAttrReport] = useState(null);
+  const [attrReport, setAttrReport] = useState(() => {
+    try { return sessionStorage.getItem('attrReport') || null; } catch { return null; }
+  });
   const [attrLoading, setAttrLoading] = useState(false);
 
   const fetchAIInsights = async () => {
@@ -467,7 +485,9 @@ function AttributionTab({ adsData, loading, daysFilter, metricsMap, range, selec
       });
       if (!res.ok) throw new Error('Failed to fetch AI insights');
       const data = await res.json();
-      setAttrReport(data.report || null);
+      const report = data.report || null;
+      setAttrReport(report);
+      try { if (report) sessionStorage.setItem('attrReport', report); else sessionStorage.removeItem('attrReport'); } catch {}
     } catch (err) {
       console.error('Error fetching AI insights:', err);
       setAttrReport(null);
@@ -799,7 +819,7 @@ export function CampaignStudioScreen({
   const [customFrom, setCustomFrom] = useState('');
   const [customTo, setCustomTo] = useState('');
   const [metricsMap, setMetricsMap] = useState(new Map());
-  const [previewUrl, setPreviewUrl] = useState(null);
+  const [preview, setPreview] = useState(null); // { url, adId }
   const rangeRequest = buildRangeRequest(timeFilter, customFrom, customTo);
   const rangeQuery = rangeRequest.params;
   const daysFilter = rangeRequest.days;
@@ -965,7 +985,7 @@ export function CampaignStudioScreen({
             loading={loadingAds}
             rangeLabel={rangeLabel}
             isSingleDay={Boolean(dashboardRange?.isSingleDay)}
-            onPreview={setPreviewUrl}
+            onPreview={setPreview}
           />
         )}
         {tab === 'ai' && <Suspense><ChatTab workspaceMode={workspaceMode} /></Suspense>}
@@ -981,7 +1001,7 @@ export function CampaignStudioScreen({
         )}
       </div>
 
-      <ImageLightbox url={previewUrl} onClose={() => setPreviewUrl(null)} />
+      <ImageLightbox url={preview?.url} adId={preview?.adId} onClose={() => setPreview(null)} />
     </div>
   );
 }

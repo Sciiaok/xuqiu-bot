@@ -395,7 +395,32 @@ export function CreativeCard({ creatives: raw, inProgress, completed, total, err
             <div className={`${s.progressFill} ${s.progressFill_amber}`} style={{ width: `${pct}%` }} />
           </div>
         )}
+        {creatives?.length > 0 && (
+          <div className={s.creativeGrid}>
+            {creatives.map((c, i) => (
+              <div key={i} className={s.creativeItem}>
+                {c.url && c.url.startsWith('https://') ? (
+                  <div className={s.creativeImgWrap}>
+                    <img src={c.url} alt={c.name || `素材 ${i + 1}`} className={s.creativeImg} />
+                    <button className={s.zoomBtn} onClick={() => setLightboxUrl(c.url)} title="放大查看">
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                        <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/><line x1="11" y1="8" x2="11" y2="14"/><line x1="8" y1="11" x2="14" y2="11"/>
+                      </svg>
+                    </button>
+                  </div>
+                ) : (
+                  <div className={s.creativePlaceholder}>{c.format || '图片'}</div>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
         <div className={s.progressText}>{lastDetail || '正在根据投放方案生成广告素材...'}</div>
+        {lightboxUrl && (
+          <div className={s.lightboxOverlay} onClick={() => setLightboxUrl(null)}>
+            <img src={lightboxUrl} alt="" className={s.lightboxImg} />
+          </div>
+        )}
       </CardShell>
     );
   }

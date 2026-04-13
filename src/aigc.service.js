@@ -40,7 +40,10 @@ ${pdfText.slice(0, 12000)}`,
  * Returns { imageBuffer, model, prompt }.
  */
 // OpenRouter models
-const OPENROUTER_IMAGE_MODELS = ['google/gemini-3.1-flash-image-preview', 'google/gemini-2.0-flash-exp:free', 'openai/gpt-image-1'];
+const OPENROUTER_IMAGE_MODELS = ['google/gemini-3.1-flash-image-preview', 'google/gemini-2.5-flash-image', 'openai/gpt-5-image-mini'];
+
+// Image formats supported by OpenRouter vision/image models
+const SUPPORTED_IMAGE_EXTS = new Set(['.png', '.jpg', '.jpeg', '.webp', '.gif']);
 
 export async function generateAdImage({ prompt, model, referenceImages }) {
   if (!config.aigc.apiKey) throw new Error('OPENROUTER_API_KEY is not configured');
@@ -48,13 +51,25 @@ export async function generateAdImage({ prompt, model, referenceImages }) {
   // Build message content: text prompt + optional reference images
   let content;
   if (referenceImages?.length) {
-    content = [
-      ...referenceImages.slice(0, 3).map(ref => ({
+    // Filter out unsupported image formats (e.g. .avif)
+    const supported = referenceImages.filter(ref => {
+      const url = typeof ref === 'string' ? ref : ref.url;
+      try {
+        const ext = new URL(url, 'http://x').pathname.match(/\.\w+$/)?.[0]?.toLowerCase();
+        if (ext && !SUPPORTED_IMAGE_EXTS.has(ext)) {
+          console.warn(`[aigc] Skipping unsupported image format: ${ext} — ${url.slice(0, 120)}`);
+          return false;
+        }
+      } catch {}
+      return true;
+    });
+    content = supported.length ? [
+      ...supported.slice(0, 3).map(ref => ({
         type: 'image_url',
         image_url: { url: typeof ref === 'string' ? ref : ref.url },
       })),
       { type: 'text', text: prompt },
-    ];
+    ] : prompt;
   } else {
     content = prompt;
   }

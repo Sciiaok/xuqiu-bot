@@ -10,7 +10,7 @@ import {
 import { getBrief } from '../../../../../lib/repositories/campaign-brief.repository.js';
 import { after } from 'next/server';
 import { drainToRedis } from '../../../../../lib/sse.js';
-import { streamKey } from '../../../../../lib/redis.js';
+import { streamKey, stopKey, getRedis } from '../../../../../lib/redis.js';
 
 /**
  * POST /api/campaign/orchestrate/[id]
@@ -60,6 +60,8 @@ export async function POST(request, { params }) {
   // Intake phase: dedicated intake agent (web_search, confidence checks, etc.)
   if (session.status === 'intake' && session.current_phase === 'intake' && (body.message || body.attachments)) {
     const key = streamKey(brief.id);
+    // Clear any stale stop signal from a previous abort
+    await getRedis().del(stopKey(session.id));
     const generator = processIntakeMessage(brief.id, body.message || '', { attachments: body.attachments });
     after(async () => {
       try {
@@ -77,6 +79,8 @@ export async function POST(request, { params }) {
   }
 
   // Unified orchestrator: fire-and-forget via after() + drainToRedis
+  // Clear any stale stop signal from a previous abort
+  await getRedis().del(stopKey(session.id));
   const generator = chatWithOrchestrator(session.id, body.message || '', { attachments: body.attachments });
   const key = streamKey(brief.id);
   after(async () => {

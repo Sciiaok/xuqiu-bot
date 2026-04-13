@@ -889,6 +889,14 @@ export async function* processIntakeMessage(
       console.warn(`[intake] session=${sessionId} hit maxIterations=${maxIterations}`);
     }
 
+    // Fallback: if AI finished without calling save_brief but core fields are ready,
+    // auto-complete the brief so orchestration can proceed.
+    if (!briefCompleted && latestCompletion?.core_complete) {
+      console.log(`[intake] session=${sessionId} auto-completing brief (AI did not call save_brief but core_complete=true)`);
+      await executeSaveBrief(briefId, {});
+      briefCompleted = true;
+    }
+
     // Status update: atomic promote only (intake → brief_completed), never demote
     if (briefCompleted) {
       await updateSessionIfStatus(sessionId, 'intake', { status: 'brief_completed', current_phase: 'intake' });

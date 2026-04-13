@@ -13,7 +13,7 @@
   gap: 8px;
   padding: 0 0 8px 0;
   border-bottom: none;
-  font-size: 13px;
+  font-size: 14px;
   font-weight: 600;
 }
 .header_green  { color: var(--green); }
@@ -22,9 +22,9 @@
 .header_teal   { color: var(--teal); }
 .header_accent { color: var(--accent); }
 
-.headerIcon { font-size: 14px; line-height: 1; }
+.headerIcon { font-size: 15px; line-height: 1; }
 .headerTitle { flex: 1; }
-.headerBadge { font-weight: 400; font-size: 11px; opacity: 0.7; }
+.headerBadge { font-weight: 400; font-size: 12px; opacity: 0.7; }
 
 .cardBody { padding: 0; }
 
@@ -64,14 +64,14 @@
 /* ── Sections / typography ───────────────────────────────────── */
 .section { margin-top: 10px; }
 .sectionTitle {
-  font-size: 11px;
+  font-size: 13px;
   font-weight: 600;
   color: var(--text);
   margin-bottom: 6px;
 }
-.sectionText { font-size: 12px; color: var(--text2); line-height: 1.6; margin: 0 0 4px 0; }
-.summaryText { font-size: 12px; color: var(--text2); line-height: 1.6; margin-bottom: 8px; white-space: pre-wrap; }
-.fallbackText { font-size: 12px; color: var(--text2); white-space: pre-wrap; }
+.sectionText { font-size: 13px; color: var(--text2); line-height: 1.6; margin: 0 0 4px 0; }
+.summaryText { font-size: 13px; color: var(--text2); line-height: 1.6; margin-bottom: 8px; white-space: pre-wrap; }
+.fallbackText { font-size: 13px; color: var(--text2); white-space: pre-wrap; }
 
 .expandedSection { margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--border); }
 
@@ -81,7 +81,7 @@
   display: flex;
   gap: 8px;
   align-items: flex-start;
-  font-size: 12px;
+  font-size: 13px;
   color: var(--text2);
   line-height: 1.5;
 }
@@ -93,15 +93,15 @@
 .dot_accent { background: var(--accent); }
 
 /* ── Key-value ───────────────────────────────────────────────── */
-.kv { display: flex; gap: 6px; font-size: 12px; margin-bottom: 2px; }
+.kv { display: flex; gap: 6px; font-size: 13px; margin-bottom: 2px; }
 .kvLabel { color: var(--text3); flex-shrink: 0; }
 .kvValue { color: var(--text2); }
 
 /* ── Tags ────────────────────────────────────────────────────── */
 .tagRow { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 4px; }
 .tag {
-  font-size: 10px;
-  padding: 2px 7px;
+  font-size: 11px;
+  padding: 3px 8px;
   border-radius: 4px;
   font-family: var(--font-sans);
 }
@@ -109,8 +109,8 @@
 .tag_amber  { background: var(--amber-dim);  color: var(--amber); }
 .tag_purple { background: var(--purple-dim); color: var(--purple); }
 .tagSmall {
-  font-size: 10px;
-  padding: 1px 6px;
+  font-size: 11px;
+  padding: 2px 7px;
   border-radius: 3px;
   background: var(--bg3);
   color: var(--text3);
@@ -118,13 +118,13 @@
 
 /* ── Bar charts ──────────────────────────────────────────────── */
 .barRow { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
-.barLabel { font-size: 11px; color: var(--text3); width: 60px; flex-shrink: 0; }
+.barLabel { font-size: 12px; color: var(--text3); width: 60px; flex-shrink: 0; }
 .barTrack { flex: 1; height: 6px; background: var(--bg3); border-radius: 3px; overflow: hidden; }
 .barFill { height: 100%; border-radius: 3px; transition: width 0.3s; }
 .barFill_green  { background: var(--green); }
 .barFill_purple { background: var(--purple); }
-.barValue { font-size: 11px; color: var(--text2); width: 30px; text-align: right; font-family: var(--font-mono); }
-.barExtra { font-size: 11px; color: var(--text3); width: 60px; text-align: right; font-family: var(--font-mono); }
+.barValue { font-size: 12px; color: var(--text2); width: 30px; text-align: right; font-family: var(--font-mono); }
+.barExtra { font-size: 12px; color: var(--text3); width: 60px; text-align: right; font-family: var(--font-mono); }
 
 /* ── Metrics grid ────────────────────────────────────────────── */
 .metricsGrid { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; }
@@ -261,6 +261,7 @@
 .progressTrack { width: 100%; height: 5px; background: var(--bg3); border-radius: 3px; overflow: hidden; margin-bottom: 8px; }
 .progressFill { height: 100%; border-radius: 3px; transition: width 0.3s; }
 .progressFill_amber { background: var(--amber); }
+.progressFill_green { background: #2a8c5a; }
 .progressText { font-size: 12px; color: var(--text3); }
 
 .spinner {
