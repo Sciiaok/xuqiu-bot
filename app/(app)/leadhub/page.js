@@ -399,15 +399,19 @@ export default function LeadHubPage() {
     return qs;
   }, [supplyChain, quality, country, datePreset, customFrom, customTo, debouncedSearch]);
 
-  // Fetch initial list whenever filters change
-  useEffect(() => {
-    let cancelled = false;
+  // Shared fetch for the first page — used by both initial load and realtime refresh.
+  // `resetSelection` = true on filter changes (pick first card), false on realtime
+  // updates (preserve whatever the user is looking at).
+  const refreshList = useCallback((resetSelection = false) => {
     setLoadingList(true);
     setErrorList(null);
-    setCards([]);
-    setSelectedId(null);
+    if (resetSelection) {
+      setCards([]);
+      setSelectedId(null);
+    }
     setNextCursor(null);
 
+    let cancelled = false;
     fetch(`/api/inquiries?${buildQs()}`)
       .then(r => r.json())
       .then(json => {
@@ -419,7 +423,7 @@ export default function LeadHubPage() {
         setTotalLeads(json.totalLeads ?? 0);
         setHasMore(json.hasMore ?? false);
         setNextCursor(json.nextCursor ?? null);
-        if (mapped.length > 0) setSelectedId(mapped[0].id);
+        if (resetSelection && mapped.length > 0) setSelectedId(mapped[0].id);
       })
       .catch(err => {
         if (cancelled) return;
@@ -431,6 +435,50 @@ export default function LeadHubPage() {
 
     return () => { cancelled = true; };
   }, [buildQs]);
+
+  // Fetch initial list whenever filters change
+  useEffect(() => {
+    const cancel = refreshList(true);
+    return cancel;
+  }, [refreshList]);
+
+  // Real-time: refresh conversation list on new / updated conversations.
+  // We keep the latest refreshList in a ref so the subscription effect has a
+  // stable dependency array and doesn't tear down / rebuild the WebSocket
+  // channel every time filters change.
+  const refreshListRef = useRef(refreshList);
+  useEffect(() => { refreshListRef.current = refreshList; }, [refreshList]);
+
+  const refreshDebounceRef = useRef(null);
+  useEffect(() => {
+    const supabase = createClient();
+    let active = true;
+    const debouncedRefresh = () => {
+      if (!active) return;
+      clearTimeout(refreshDebounceRef.current);
+      refreshDebounceRef.current = setTimeout(() => refreshListRef.current(false), 500);
+    };
+    // Unique channel name avoids collisions when Strict Mode re-mounts.
+    const channel = supabase
+      .channel(`leadhub-conv-list-${Date.now()}`)
+      .on('postgres_changes',
+        { event: 'INSERT', schema: 'public', table: 'conversations' },
+        debouncedRefresh
+      )
+      .on('postgres_changes',
+        { event: 'UPDATE', schema: 'public', table: 'conversations' },
+        debouncedRefresh
+      )
+      .subscribe();
+
+    return () => {
+      active = false;
+      clearTimeout(refreshDebounceRef.current);
+      // Defer removal so the singleton Supabase client's shared WebSocket stays
+      // alive through React Strict Mode's unmount → re-mount cycle.
+      setTimeout(() => supabase.removeChannel(channel), 1000);
+    };
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Load more (cursor pagination)
   const loadMore = useCallback(() => {
