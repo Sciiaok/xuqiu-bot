@@ -4,7 +4,6 @@ import { useEffect, useState } from 'react';
 import s from './page.module.css';
 import Button from '../../components/Button/Button';
 import Tag from '../../components/Tag/Tag';
-import { createClient } from '../../../lib/supabase-browser';
 
 const PRODUCT_META = {
   agri_machinery: {
@@ -34,62 +33,51 @@ const DEFAULT_META = {
   tags: ['WhatsApp', '多语言'],
 };
 
-async function fetchAgentStats(agentId) {
-  const supabase = createClient();
+function formatProofRate(convCount, proofCount) {
+  if (!convCount) return '0.0%';
+  return ((proofCount / convCount) * 100).toFixed(1) + '%';
+}
 
-  const [convResult, leadResult] = await Promise.all([
-    supabase
-      .from('conversations')
-      .select('*', { count: 'exact', head: true })
-      .eq('agent_id', agentId),
-    supabase
-      .from('leads')
-      .select('inquiry_quality')
-      .eq('agent_id', agentId),
-  ]);
-
-  const convCount = convResult.count ?? 0;
-  const leads = leadResult.data ?? [];
-  const leadCount = leads.length;
-  const proofCount = leads.filter(l => l.inquiry_quality === 'PROOF').length;
-  const qualifyRate = convCount > 0 ? ((proofCount / convCount) * 100).toFixed(1) + '%' : '0.0%';
-
-  return { convCount, leadCount, proofCount, qualifyRate };
+async function parseApiError(res) {
+  const body = await res.json().catch(() => ({}));
+  return body.error || `请求失败 (${res.status})`;
 }
 
 export default function AgentsPage() {
   const [agents, setAgents] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState('');
+  const [formError, setFormError] = useState('');
   const [editingAgent, setEditingAgent] = useState(null);
   const [showForm, setShowForm] = useState(false);
   const [formData, setFormData] = useState({ name: '', productLine: 'agri_machinery', systemPrompt: '' });
   const [saving, setSaving] = useState(false);
+  const [promptExpanded, setPromptExpanded] = useState(false);
 
   async function loadAgents() {
     setLoading(true);
+    setLoadError('');
     try {
       const res = await fetch('/api/agents');
+      if (!res.ok) throw new Error(await parseApiError(res));
       const data = await res.json();
       const rawAgents = data.agents ?? [];
-
-      const agentsWithStats = await Promise.all(
-        rawAgents.map(async (agent) => {
-          const stats = await fetchAgentStats(agent.id);
-          const meta = PRODUCT_META[agent.product_line] ?? DEFAULT_META;
-          return {
-            ...agent,
-            ...meta,
-            stats: [
-              { label: '对话数', value: stats.convCount.toLocaleString() },
-              { label: '高质量线索', value: stats.proofCount.toLocaleString() },
-              { label: '中质量率', value: stats.qualifyRate },
-              { label: '平均响应', value: '1.2s' },
-            ],
-          };
-        })
-      );
-
-      setAgents(agentsWithStats);
+      setAgents(rawAgents.map((agent) => {
+        const meta = PRODUCT_META[agent.product_line] ?? DEFAULT_META;
+        const stats = agent.stats ?? { conv_count: 0, proof_count: 0 };
+        return {
+          ...agent,
+          ...meta,
+          statsDisplay: [
+            { label: '对话数', value: stats.conv_count.toLocaleString() },
+            { label: '高质量线索', value: stats.proof_count.toLocaleString() },
+            { label: 'PROOF 率', value: formatProofRate(stats.conv_count, stats.proof_count) },
+          ],
+        };
+      }));
+    } catch (err) {
+      setLoadError(err.message);
+      setAgents([]);
     } finally {
       setLoading(false);
     }
@@ -102,6 +90,7 @@ export default function AgentsPage() {
   function openCreate() {
     setEditingAgent(null);
     setFormData({ name: '', productLine: 'agri_machinery', systemPrompt: '' });
+    setFormError('');
     setShowForm(true);
   }
 
@@ -112,38 +101,57 @@ export default function AgentsPage() {
       productLine: agent.product_line ?? 'agri_machinery',
       systemPrompt: agent.system_prompt ?? '',
     });
+    setFormError('');
     setShowForm(true);
   }
 
   function closeForm() {
     setShowForm(false);
     setEditingAgent(null);
+    setFormError('');
+    setPromptExpanded(false);
+  }
+
+  async function handleDelete(agent) {
+    const ok = window.confirm(`确定删除智能体"${agent.name}"？删除后将不再接收新对话。`);
+    if (!ok) return;
+    try {
+      const res = await fetch(`/api/agents/${agent.id}`, { method: 'DELETE' });
+      if (!res.ok) throw new Error(await parseApiError(res));
+      await loadAgents();
+    } catch (err) {
+      setLoadError(err.message);
+    }
   }
 
   async function handleSubmit(e) {
     e.preventDefault();
     setSaving(true);
+    setFormError('');
     try {
       const body = {
         name: formData.name,
         productLine: formData.productLine,
         systemPrompt: formData.systemPrompt,
       };
-      if (editingAgent) {
-        await fetch(`/api/agents/${editingAgent.id}`, {
-          method: 'PUT',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(body),
-        });
-      } else {
-        await fetch('/api/agents', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(body),
-        });
-      }
+      const res = editingAgent
+        ? await fetch(`/api/agents/${editingAgent.id}`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body),
+          })
+        : await fetch('/api/agents', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body),
+          });
+
+      if (!res.ok) throw new Error(await parseApiError(res));
+
       closeForm();
       await loadAgents();
+    } catch (err) {
+      setFormError(err.message);
     } finally {
       setSaving(false);
     }
@@ -160,63 +168,63 @@ export default function AgentsPage() {
         <Button variant="primary" onClick={openCreate}>✦ 新建智能体</Button>
       </div>
 
+      {/* Load error banner */}
+      {loadError && (
+        <div className={s.errorBanner}>
+          <span>加载失败：{loadError}</span>
+          <Button variant="ghost" size="sm" onClick={loadAgents}>重试</Button>
+        </div>
+      )}
+
       {/* Loading state */}
-      {loading && (
+      {loading && !loadError && (
         <div className={s.loadingWrap}>
           <span className={s.spinner} />
         </div>
       )}
 
       {/* Agent Cards */}
-      {!loading && (
+      {!loading && !loadError && (
         <div className={s.cardList}>
           {agents.map(agent => (
             <div key={agent.id} className={s.agentCard}>
-              {/* Icon */}
-              <div
-                className={s.agentIcon}
-                style={{ background: agent.iconBg }}
-              >
-                {agent.emoji}
+              <div className={s.cardHeader}>
+                <div className={s.agentIcon} style={{ background: agent.iconBg }}>
+                  {agent.emoji}
+                </div>
+                <div className={s.headerMain}>
+                  <div className={s.nameRow}>
+                    <span className={s.agentName}>{agent.name}</span>
+                    {agent.is_active && (
+                      <span className={s.liveStatus}>
+                        <span className={s.liveDot} />
+                        运行中
+                      </span>
+                    )}
+                  </div>
+                </div>
               </div>
 
-              {/* Content */}
-              <div className={s.agentContent}>
-                {/* Name row */}
-                <div className={s.nameRow}>
-                  <span className={s.agentName}>{agent.name}</span>
-                  {agent.is_active && (
-                    <span className={s.liveStatus}>
-                      <span className={s.liveDot} />
-                      运行中
-                    </span>
-                  )}
-                </div>
+              <div className={s.statsRow}>
+                {agent.statsDisplay.map(stat => (
+                  <span key={stat.label} className={s.stat}>
+                    <span className={s.statLabel}>{stat.label}</span>
+                    <span className={s.statValue}>{stat.value}</span>
+                  </span>
+                ))}
+              </div>
 
-                {/* Stats row */}
-                <div className={s.statsRow}>
-                  {agent.stats.map(stat => (
-                    <span key={stat.label} className={s.stat}>
-                      <span className={s.statLabel}>{stat.label}</span>
-                      <span className={s.statValue}>{stat.value}</span>
-                    </span>
+              <p className={s.description}>{agent.description}</p>
+
+              <div className={s.footer}>
+                <div className={s.tagList}>
+                  {agent.tags.map(tag => (
+                    <Tag key={tag} variant="default">{tag}</Tag>
                   ))}
                 </div>
-
-                {/* Description */}
-                <p className={s.description}>{agent.description}</p>
-
-                {/* Footer row */}
-                <div className={s.footer}>
-                  <div className={s.tagList}>
-                    {agent.tags.map(tag => (
-                      <Tag key={tag} variant="default">{tag}</Tag>
-                    ))}
-                  </div>
-                  <div className={s.actions}>
-                    <Button variant="ghost" size="sm" onClick={() => openEdit(agent)}>编辑</Button>
-                    <Button variant="ghost" size="sm" onClick={() => openEdit(agent)}>设置</Button>
-                  </div>
+                <div className={s.actions}>
+                  <Button variant="ghost" size="sm" onClick={() => openEdit(agent)}>编辑</Button>
+                  <Button variant="ghost" size="sm" onClick={() => handleDelete(agent)}>删除</Button>
                 </div>
               </div>
             </div>
@@ -224,14 +232,23 @@ export default function AgentsPage() {
         </div>
       )}
 
-      {/* Add new agent placeholder */}
-      <div className={s.addCard}>
-        <div>
-          <div className={s.addCardTitle}>光伏 / 新能源 / 其他供应链 Agent</div>
-          <div className={s.addCardSub}>新增供应链后在此配置对应 AI 代理</div>
+      {/* Fullscreen prompt editor (overlays the form modal) */}
+      {showForm && promptExpanded && (
+        <div className={s.fullscreenOverlay}>
+          <div className={s.fullscreenModal}>
+            <div className={s.fullscreenHeader}>
+              <h3 className={s.fullscreenTitle}>编辑系统提示词</h3>
+              <Button variant="ghost" size="sm" onClick={() => setPromptExpanded(false)}>收起</Button>
+            </div>
+            <textarea
+              className={s.fullscreenTextarea}
+              value={formData.systemPrompt}
+              onChange={e => setFormData(p => ({ ...p, systemPrompt: e.target.value }))}
+              autoFocus
+            />
+          </div>
         </div>
-        <Button variant="ghost" onClick={openCreate}>+ 新建智能体</Button>
-      </div>
+      )}
 
       {/* Create / Edit form */}
       {showForm && (
@@ -262,7 +279,16 @@ export default function AgentsPage() {
                 </select>
               </label>
               <label className={s.formLabel}>
-                系统提示词
+                <div className={s.promptLabelRow}>
+                  <span>系统提示词</span>
+                  <button
+                    type="button"
+                    className={s.expandButton}
+                    onClick={() => setPromptExpanded(true)}
+                  >
+                    ⛶ 展开编辑
+                  </button>
+                </div>
                 <textarea
                   className={s.formTextarea}
                   value={formData.systemPrompt}
@@ -270,6 +296,9 @@ export default function AgentsPage() {
                   rows={6}
                 />
               </label>
+              {formError && (
+                <div className={s.errorBanner}>{formError}</div>
+              )}
               <div className={s.formActions}>
                 <Button type="button" variant="ghost" onClick={closeForm} disabled={saving}>取消</Button>
                 <Button type="submit" variant="primary" disabled={saving}>{saving ? '保存中…' : '保存'}</Button>

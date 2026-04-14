@@ -9,7 +9,7 @@ const MAX_TOOL_ITERATIONS = 20;
 // ── Direct Meta Graph API helpers ────────────────────────────────────
 
 function metaUrl(path) {
-  const version = config.meta?.apiVersion || 'v21.0';
+  const version = config.meta.apiVersion;
   return `https://graph.facebook.com/${version}/${path}`;
 }
 
@@ -214,7 +214,7 @@ The media plan uses short names. Map them for create_campaign:
 let _cachedPageToken = null;
 async function getPageAccessToken(pageId, systemToken) {
   if (_cachedPageToken) return _cachedPageToken;
-  const version = config.meta?.apiVersion || 'v21.0';
+  const version = config.meta.apiVersion;
   const res = await fetch(
     `https://graph.facebook.com/${version}/${pageId}?fields=access_token&access_token=${systemToken}`,
     { signal: AbortSignal.timeout(FETCH_TIMEOUT) },
@@ -262,7 +262,7 @@ export async function createLeadForm({ name, questions, headline, description, p
     button_text: 'WhatsApp Us',
   });
 
-  const version = config.meta?.apiVersion || 'v21.0';
+  const version = config.meta.apiVersion;
   const res = await fetch(`https://graph.facebook.com/${version}/${pageId}/leadgen_forms`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },

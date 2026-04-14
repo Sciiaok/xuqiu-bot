@@ -19,22 +19,20 @@ let _transport = null;
 async function getClient() {
   if (_client) return _client;
 
-  const mcpUrl = process.env.META_ADS_MCP_URL;
-
-  if (mcpUrl) {
+  if (config.metaAdsMcp.url) {
     // Remote streamable-http transport
     const { StreamableHTTPClientTransport } = await import(
       '@modelcontextprotocol/sdk/client/streamableHttp.js'
     );
-    _transport = new StreamableHTTPClientTransport(new URL(mcpUrl));
+    _transport = new StreamableHTTPClientTransport(new URL(config.metaAdsMcp.url));
   } else {
     // Local stdio transport (default)
     _transport = new StdioClientTransport({
-      command: process.env.META_ADS_MCP_COMMAND || 'uvx',
-      args: (process.env.META_ADS_MCP_ARGS || 'meta-ads-mcp').split(' '),
+      command: config.metaAdsMcp.command,
+      args: config.metaAdsMcp.args,
       env: {
         ...process.env,
-        META_ACCESS_TOKEN: config.meta?.accessToken || '',
+        META_ACCESS_TOKEN: config.meta.accessToken || '',
       },
     });
   }
@@ -55,8 +53,8 @@ export async function callTool(name, args = {}) {
 
   // For remote HTTP transport, inject access_token per-call
   const callArgs = { ...args };
-  if (process.env.META_ADS_MCP_URL && !callArgs.access_token) {
-    callArgs.access_token = config.meta?.accessToken;
+  if (config.metaAdsMcp.url && !callArgs.access_token) {
+    callArgs.access_token = config.meta.accessToken;
   }
 
   const result = await client.callTool({ name, arguments: callArgs });

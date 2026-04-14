@@ -1,7 +1,6 @@
 import { config } from './config.js';
 
 const FETCH_TIMEOUT = 20_000;
-const DEFAULT_FIRECRAWL_BASE_URL = 'https://api.firecrawl.dev/v1';
 
 /**
  * Validate that a value is a usable image URL (http/https, not a description string).
@@ -120,7 +119,7 @@ async function fetchWebsiteImages(websiteUrl, products) {
   if (!apiKey) return [];
 
   try {
-    const res = await fetch(`${config.firecrawl?.baseURL || DEFAULT_FIRECRAWL_BASE_URL}/scrape`, {
+    const res = await fetch(`${config.firecrawl.baseURL}/scrape`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',

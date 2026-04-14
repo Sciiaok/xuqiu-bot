@@ -36,48 +36,54 @@
   font-family: var(--font-sans);
 }
 
-/* ── Card List ────────────────────────────────────────── */
+/* ── Card List (responsive grid) ──────────────────────── */
 .cardList {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
+  gap: 14px;
+}
+
+/* ── Agent Card (block layout) ───────────────────────── */
+.agentCard {
   display: flex;
   flex-direction: column;
   gap: 12px;
-}
-
-/* ── Agent Card ───────────────────────────────────────── */
-.agentCard {
-  display: flex;
-  align-items: flex-start;
-  gap: 14px;
-  padding: 16px;
+  padding: 18px;
   background: var(--bg2);
   border: 1px solid var(--border);
   border-radius: var(--rl);
   transition: border-color 0.15s;
+  min-height: 260px;
 }
 
 .agentCard:hover {
   border-color: var(--border2);
 }
 
-/* ── Agent Icon ───────────────────────────────────────── */
-.agentIcon {
-  width: 42px;
-  height: 42px;
-  border-radius: var(--r);
+.cardHeader {
   display: flex;
   align-items: center;
-  justify-content: center;
-  font-size: 20px;
-  flex-shrink: 0;
+  gap: 12px;
 }
 
-/* ── Agent Content ────────────────────────────────────── */
-.agentContent {
+.headerMain {
   flex: 1;
   min-width: 0;
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 2px;
+}
+
+/* ── Agent Icon ───────────────────────────────────────── */
+.agentIcon {
+  width: 44px;
+  height: 44px;
+  border-radius: var(--r);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 22px;
+  flex-shrink: 0;
 }
 
 /* ── Name Row ─────────────────────────────────────────── */
@@ -157,6 +163,7 @@
   line-height: 1.6;
   margin: 0;
   font-family: var(--font-sans);
+  flex: 1;
 }
 
 /* ── Footer ───────────────────────────────────────────── */
@@ -181,30 +188,103 @@
   flex-shrink: 0;
 }
 
-/* ── Add Card Placeholder ─────────────────────────────── */
-.addCard {
+/* ── Error banner ─────────────────────────────────────── */
+.errorBanner {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  padding: 18px;
-  border: 1px dashed var(--border2);
-  border-radius: var(--rl);
-  margin-top: 4px;
-}
-
-.addCardTitle {
+  padding: 10px 14px;
+  background: var(--red-dim);
+  border: 1px solid var(--red);
+  border-radius: var(--r);
+  color: var(--red);
   font-size: 13px;
-  font-weight: 500;
-  color: var(--text2);
-  margin-bottom: 3px;
   font-family: var(--font-sans);
 }
 
-.addCardSub {
-  font-size: 12px;
-  color: var(--text3);
+/* ── Prompt expand button + fullscreen editor ────────── */
+.promptLabelRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.expandButton {
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: var(--r);
+  padding: 2px 8px;
+  font-size: 11px;
+  color: var(--text2);
+  cursor: pointer;
   font-family: var(--font-sans);
+  transition: border-color 0.15s, color 0.15s;
+}
+
+.expandButton:hover {
+  border-color: var(--accent);
+  color: var(--text);
+}
+
+.fullscreenOverlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.7);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 200; /* above the base modal */
+  padding: 24px;
+}
+
+.fullscreenModal {
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  border-radius: var(--rl);
+  padding: 20px;
+  width: 100%;
+  max-width: 1100px;
+  height: 100%;
+  max-height: 85vh;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.fullscreenHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.fullscreenTitle {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+  font-family: var(--font-display);
+  color: var(--text);
+}
+
+.fullscreenTextarea {
+  flex: 1;
+  width: 100%;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--r);
+  padding: 14px;
+  font-size: 13px;
+  color: var(--text);
+  font-family: var(--font-mono);
+  outline: none;
+  resize: none;
+  line-height: 1.6;
+  transition: border-color 0.15s;
+}
+
+.fullscreenTextarea:focus {
+  border-color: var(--accent);
 }
 
 /* ── Loading ──────────────────────────────────────────── */

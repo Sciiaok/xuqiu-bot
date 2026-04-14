@@ -6,28 +6,23 @@ import s from './Sidebar.module.css';
 
 const NAV = [
   {
-    section: '大盘',
+    section: '数据概览',
     items: [
       { href: '/analytics', label: '监控看板', icon: 'analytics' },
-      { href: '/reports', label: '周报日报', icon: 'reports'},
+      { href: '/reports', label: '周报日报', icon: 'reports' },
     ],
   },
   {
-    section: '投中',
+    section: '自动化营销',
     items: [
-      { href: '/ai-automation', label: '广告编排', icon: 'campaignAutomation'},
+      { href: '/ai-automation', label: 'AUTOPILOT', icon: 'campaignAutomation' },
       { href: '/campaign-studio', label: '投放数据', icon: 'campaign' },
     ],
   },
   {
-    section: '投后',
+    section: '智能外贸员',
     items: [
       { href: '/leadhub', label: '询盘私信', icon: 'leadhub' },
-    ],
-  },
-  {
-    section: '系统',
-    items: [
       { href: '/agents', label: '智能体', icon: 'agents' },
       { href: '/knowledge-base', label: '知识库', icon: 'knowledge' },
     ],

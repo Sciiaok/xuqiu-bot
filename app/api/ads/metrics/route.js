@@ -9,8 +9,7 @@ const META_API_VERSION = 'v21.0';
 const META_API_TIMEOUT_MS = config.meta.apiTimeoutMs;
 const CACHE_TTL_SECONDS = 10 * 60; // 10 minutes
 const MESSAGING_CONVERSATION_ACTION = 'onsite_conversion.messaging_conversation_started';
-const META_PROXY_URL = process.env.HTTPS_PROXY || process.env.HTTP_PROXY || '';
-const META_PROXY_AGENT = META_PROXY_URL ? new ProxyAgent(META_PROXY_URL) : null;
+const META_PROXY_AGENT = config.proxy.httpsUrl ? new ProxyAgent(config.proxy.httpsUrl) : null;
 
 function createEmptyTotals() {
   return {
@@ -224,8 +223,8 @@ export async function GET(request) {
     const startDate = searchParams.get('startDate') || '';
     const endDate = searchParams.get('endDate') || '';
     const totalsOnly = searchParams.get('totalsOnly') === 'true';
-    const adAccountId = normalizeAdAccountId(process.env.META_AD_ACCOUNT_ID);
-    const accessToken = process.env.META_SYSTEM_TOKEN || process.env.META_ACCESS_TOKEN;
+    const adAccountId = normalizeAdAccountId(config.meta.adAccountId);
+    const accessToken = config.meta.accessToken;
 
     // Redis cache — skip the 20s+ Meta API call when identical params hit recently
     const cacheKey = buildCacheKey(days, adIds, startDate, endDate);

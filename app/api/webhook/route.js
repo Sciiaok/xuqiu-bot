@@ -48,7 +48,7 @@ async function scheduleProcessing(conversationId) {
 
   setTimeout(async () => {
     try {
-      const baseUrl = process.env.NEXT_PUBLIC_APP_URL || `http://localhost:${config.server.port}`;
+      const baseUrl = config.app.baseUrl || `http://localhost:${config.server.port}`;
       const response = await fetch(`${baseUrl}/api/webhook/process`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },

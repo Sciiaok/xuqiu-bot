@@ -3,6 +3,7 @@ import supabase from '../../../../lib/supabase.js';
 import { orchestrate } from '../../../../src/campaign-orchestrator.service.js';
 import { drainToRedis } from '../../../../lib/sse.js';
 import { streamKey } from '../../../../lib/redis.js';
+import { config } from '../../../../src/config.js';
 
 const STALE_THRESHOLD_MINUTES = 5;
 
@@ -15,7 +16,7 @@ const STALE_THRESHOLD_MINUTES = 5;
  */
 export async function GET(request) {
   const authHeader = request.headers.get('authorization');
-  const cronSecret = process.env.CRON_SECRET;
+  const cronSecret = config.secrets.cron;
   if (cronSecret && authHeader !== `Bearer ${cronSecret}`) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }

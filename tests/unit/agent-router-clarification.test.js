@@ -45,6 +45,7 @@ test('router accepts clarification tool calls without a candidate agent_id', asy
     namedExports: {
       config: {
         anthropic: {
+          directApiKey: 'anthropic-test-key',
           apiKey: 'anthropic-test-key',
           model: 'claude-test-model',
         },

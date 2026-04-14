@@ -51,8 +51,13 @@ test('getResponse sends inbound WhatsApp images to Claude as image blocks', asyn
     namedExports: {
       config: {
         anthropic: {
+          directApiKey: 'anthropic-test-key',
           apiKey: 'anthropic-test-key',
           model: 'claude-test-model',
+        },
+        supabase: {
+          url: 'http://test.local',
+          publishableKey: 'test',
         },
       },
     },
@@ -134,8 +139,13 @@ test('getResponse traces contextInfo in claude.request.started log', async () =>
     namedExports: {
       config: {
         anthropic: {
+          directApiKey: 'anthropic-test-key',
           apiKey: 'anthropic-test-key',
           model: 'claude-test-model',
+        },
+        supabase: {
+          url: 'http://test.local',
+          publishableKey: 'test',
         },
       },
     },

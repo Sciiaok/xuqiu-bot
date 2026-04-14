@@ -1,7 +1,7 @@
 import { anthropic, MODELS, onLlmEvent } from './llm-client.js';
 import { getRedis, userInputKey } from '../lib/redis.js';
-import { config } from './config.js';
 import { getBrief, updateBriefFields, sanitizeBriefFields } from '../lib/repositories/campaign-brief.repository.js';
+import { config } from './config.js';
 
 import {
   createSession,
@@ -329,7 +329,7 @@ async function runCreative(sessionId, brief, phaseResults, _instructions, onProg
   }
 
   // Generate creatives with concurrency limit to avoid API rate limits
-  const CREATIVE_CONCURRENCY = parseInt(process.env.CREATIVE_CONCURRENCY, 10) || 10;
+  const CREATIVE_CONCURRENCY = config.campaign.creativeConcurrency;
   onProgress?.({ step: 'creative_start', detail: `开始生成 ${adJobs.length} 张广告素材 (并发${CREATIVE_CONCURRENCY})`, total: adJobs.length, completed: 0 });
   let completedCount = 0;
   let errorCount = 0;

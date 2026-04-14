@@ -16,7 +16,7 @@ export async function fetchAccountAssets() {
   const accountId = `act_${config.meta?.adAccountId}`;
   const token = config.meta?.accessToken;
   const pageId = config.meta?.pageId;
-  const version = config.meta?.apiVersion || 'v21.0';
+  const version = config.meta.apiVersion;
 
   if (!token || !config.meta?.adAccountId) {
     return { available: false, reason: 'META_ACCESS_TOKEN or META_AD_ACCOUNT_ID not configured' };

@@ -1,4 +1,4 @@
-import { anthropic, MODELS } from './llm-client.js';
+import { anthropic } from './llm-client.js';
 import { config } from './config.js';
 import {
   downloadWhatsAppMediaBuffer,
@@ -437,342 +437,425 @@ function buildTraceContextInfo(contextInfo = {}) {
   }));
 }
 
+// ─── Claude request constants ─────────────────────────────────────────
+const MAX_TOKENS = 4096;
+const MAX_TOOL_ITERATIONS = 5;
+const FORCE_SUBMIT_PROMPT =
+  'Please call submit_response with your structured response now.';
+
+// ─── Message building ─────────────────────────────────────────────────
+
 /**
- * Get an intelligent response from Claude
- * @param {Array} conversationHistory - Array of {role, content, metadata} message objects
- * @param {string|Object|Array} userMessage - The latest user message or multimodal message batch
- * @param {Object} contextInfo - Context information (missing_fields)
- * @returns {Promise<Object>} - Parsed JSON response
+ * Convert a stored message into Anthropic content.
+ * Returns a plain string for text-only content, an array of blocks when a
+ * supported image is attached, or '' for empty messages.
  */
-export async function getResponse(conversationHistory, userMessage, contextInfo = {}, agentConfig = null, traceContext = {}) {
+async function buildClaudeContent(message, logger) {
+  const text = typeof message?.content === 'string' ? message.content.trim() : '';
+  const metadata = message?.metadata || {};
+  const blocks = [];
+
+  if (text) {
+    blocks.push({ type: 'text', text });
+  }
+
+  if (
+    message?.role === 'user' &&
+    metadata.media_type === 'image' &&
+    metadata.wa_media_id
+  ) {
+    try {
+      const { buffer, mimeType } = await downloadWhatsAppMediaBuffer(metadata.wa_media_id);
+      if (buffer.length > 0 && isClaudeSupportedImageMimeType(mimeType)) {
+        blocks.push({
+          type: 'image',
+          source: {
+            type: 'base64',
+            media_type: mimeType,
+            data: buffer.toString('base64'),
+          },
+        });
+      }
+    } catch (error) {
+      logger.warn('claude.image_attachment.failed', {
+        wa_media_id: metadata.wa_media_id,
+        error: error.message,
+      });
+    }
+  }
+
+  if (blocks.length === 0) return '';
+  if (blocks.length === 1 && blocks[0].type === 'text') return blocks[0].text;
+  return blocks;
+}
+
+/**
+ * The latest user input may be a plain string, a single message object, or an
+ * array of aggregated messages. Flatten them into a single Claude content value.
+ */
+async function normalizeLatestUserMessage(input, logger) {
+  if (typeof input === 'string') return input;
+
+  const items = Array.isArray(input) ? input : [input];
+  const blocks = [];
+
+  for (const item of items) {
+    const content = await buildClaudeContent({ role: 'user', ...item }, logger);
+    if (typeof content === 'string') {
+      if (content.trim()) blocks.push({ type: 'text', text: content });
+      continue;
+    }
+    blocks.push(...content);
+  }
+
+  if (blocks.length === 0) return '';
+  if (blocks.length === 1 && blocks[0].type === 'text') return blocks[0].text;
+  return blocks;
+}
+
+function isNonEmptyMessage(message) {
+  if (typeof message.content === 'string') return message.content.trim() !== '';
+  return Array.isArray(message.content) && message.content.length > 0;
+}
+
+/**
+ * Mark the last history message with cache_control so all prior turns are
+ * served from prompt cache on subsequent requests. Mutates the array.
+ */
+function markHistoryForCache(history) {
+  if (history.length === 0) return;
+  const last = history[history.length - 1];
+  if (typeof last.content === 'string') {
+    last.content = [
+      { type: 'text', text: last.content, cache_control: { type: 'ephemeral' } },
+    ];
+  } else if (Array.isArray(last.content) && last.content.length > 0) {
+    last.content[last.content.length - 1].cache_control = { type: 'ephemeral' };
+  }
+}
+
+async function buildMessages(conversationHistory, latestUserMessage, logger) {
+  const historyMessages = Array.isArray(conversationHistory) ? conversationHistory : [];
+
+  const sanitizedHistory = await Promise.all(
+    historyMessages.map(async (msg) => ({
+      role: msg.role,
+      content: await buildClaudeContent(msg, logger),
+    }))
+  );
+  const latestUserContent = await normalizeLatestUserMessage(latestUserMessage, logger);
+
+  const messages = [
+    ...sanitizedHistory,
+    { role: 'user', content: latestUserContent },
+  ].filter(isNonEmptyMessage);
+
+  // Apply cache_control after filtering (matches previous behavior: empty
+  // trailing history messages are removed before being marked).
+  markHistoryForCache(sanitizedHistory);
+
+  return {
+    messages,
+    historyCount: sanitizedHistory.length,
+    latestContent: latestUserContent,
+  };
+}
+
+// ─── System prompt building ──────────────────────────────────────────
+
+function buildPriorStateLines(priorState) {
+  if (!priorState) return [];
+  const lines = [
+    `Prior classification: intent=${priorState.conversation_intent}, quality=${priorState.inquiry_quality}, value=${priorState.business_value}`,
+  ];
+  const collected = [
+    priorState.car_model && `product=${priorState.car_model}`,
+    priorState.qty_bucket && `qty=${priorState.qty_bucket}`,
+    priorState.destination_country && `destination=${priorState.destination_country}`,
+    priorState.company_name && `company=${priorState.company_name}`,
+  ].filter(Boolean);
+  if (collected.length > 0) {
+    lines.push(`Collected so far: ${collected.join(', ')}`);
+  }
+  lines.push(
+    'IMPORTANT: Do NOT downgrade intent or quality unless the customer EXPLICITLY contradicts prior business signals (e.g. "actually I only need 1 for personal use"). Job titles like "self employed", "mechanic", etc. are NOT contradictions.'
+  );
+  return lines;
+}
+
+function buildDynamicContext(contextInfo) {
+  const missingFieldsText =
+    contextInfo.missing_fields?.length > 0
+      ? `Missing fields to collect: ${contextInfo.missing_fields.join(', ')}`
+      : 'No specific fields required';
+  const priorStateLines = buildPriorStateLines(contextInfo.prior_state);
+  const carRecommendation = contextInfo.car_recommendation || '';
+
+  return `CURRENT CONTEXT:
+- ${missingFieldsText}${priorStateLines.length > 0 ? '\n- ' + priorStateLines.join('\n- ') : ''}${carRecommendation ? '\n- ' + carRecommendation : ''}`;
+}
+
+/**
+ * Two-block system prompt: cached static agent prompt + uncached per-request
+ * dynamic context.
+ */
+function buildSystemBlocks(systemPrompt, dynamicContext) {
+  return [
+    { type: 'text', text: systemPrompt, cache_control: { type: 'ephemeral' } },
+    { type: 'text', text: dynamicContext },
+  ];
+}
+
+function resolveSystemPrompt(agentConfig) {
+  return agentConfig?.system_prompt || SYSTEM_PROMPT;
+}
+
+function hasCustomOutputSchema(agentConfig) {
+  return Boolean(
+    agentConfig?.output_schema && Object.keys(agentConfig.output_schema).length > 0
+  );
+}
+
+function resolveOutputSchema(agentConfig) {
+  return hasCustomOutputSchema(agentConfig) ? agentConfig.output_schema : JSON_SCHEMA;
+}
+
+// ─── Agent tools ─────────────────────────────────────────────────────
+
+async function loadAgentTools(agentId, logger) {
+  if (!agentId) return [];
+  let productTools = [];
+  let kbTools = [];
+  try {
+    productTools = await buildProductTools(agentId);
+  } catch (e) {
+    logger.warn('claude.product_tools.failed', { error: e.message });
+  }
+  try {
+    kbTools = await buildKbTools(agentId);
+  } catch (e) {
+    logger.warn('claude.kb_tools.failed', { error: e.message });
+  }
+  return [...productTools, ...kbTools];
+}
+
+function buildSubmitResponseTool(outputSchema) {
+  return {
+    name: 'submit_response',
+    description:
+      'Submit your final response. Call this after gathering any needed product information. You MUST call this tool as your final action.',
+    input_schema: outputSchema,
+    cache_control: { type: 'ephemeral' },
+  };
+}
+
+/**
+ * Mark the last agent tool with cache_control so all tool definitions share a
+ * single cache boundary with submit_response.
+ */
+function markLastToolForCache(tools) {
+  if (tools.length === 0) return tools;
+  return tools.map((tool, i) =>
+    i === tools.length - 1 ? { ...tool, cache_control: { type: 'ephemeral' } } : tool
+  );
+}
+
+// ─── Claude API call helpers ─────────────────────────────────────────
+
+function callClaude({ systemBlocks, messages, tools, toolChoice, outputConfig }) {
+  const payload = {
+    model: config.anthropic.model,
+    max_tokens: MAX_TOKENS,
+    system: systemBlocks,
+    messages,
+  };
+  if (tools) payload.tools = tools;
+  if (toolChoice) payload.tool_choice = toolChoice;
+  if (outputConfig) payload.output_config = outputConfig;
+  return anthropic.messages.create(payload);
+}
+
+/**
+ * Append a "please submit" user turn and re-call Claude with tool_choice
+ * pinned to submit_response. Mutates messages.
+ */
+async function forceSubmitResponse({ systemBlocks, messages, tools, prevResponse }) {
+  messages.push({ role: 'assistant', content: prevResponse.content });
+  messages.push({ role: 'user', content: FORCE_SUBMIT_PROMPT });
+  return callClaude({
+    systemBlocks,
+    messages,
+    tools,
+    toolChoice: { type: 'tool', name: 'submit_response' },
+  });
+}
+
+/**
+ * Tool-use loop: Claude may call product/KB tools up to MAX_TOOL_ITERATIONS
+ * times before calling submit_response (the final-answer tool). Returns
+ * parsed submit_response input.
+ *
+ * If the model exits without calling submit_response (either it stops with
+ * text, or it exhausts iterations on product tools), we issue a single
+ * forced submit_response turn and throw if that also fails.
+ */
+async function callViaToolUse({ systemBlocks, messages, tools, agentId, logger }) {
+  let response = await callClaude({
+    systemBlocks,
+    messages,
+    tools,
+    toolChoice: { type: 'auto' },
+  });
+
+  let iterations = 0;
+  while (iterations < MAX_TOOL_ITERATIONS && response.stop_reason === 'tool_use') {
+    iterations++;
+    const toolUse = response.content.find((c) => c.type === 'tool_use');
+
+    if (toolUse.name === 'submit_response') {
+      logger.info('claude.tool_use.submit_response', { iterations });
+      return toolUse.input;
+    }
+
+    logger.info('claude.tool_use.call', { tool: toolUse.name, iteration: iterations });
+    const toolResult = isKbTool(toolUse.name)
+      ? await executeKbTool(toolUse.name, toolUse.input, agentId)
+      : await executeProductTool(toolUse.name, toolUse.input, agentId);
+
+    messages.push({ role: 'assistant', content: response.content });
+    messages.push({
+      role: 'user',
+      content: [{ type: 'tool_result', tool_use_id: toolUse.id, content: toolResult }],
+    });
+
+    response = await callClaude({ systemBlocks, messages, tools });
+  }
+
+  // Model never called submit_response on its own → force one final turn.
+  logger.warn('claude.tool_use.force_submit', {
+    stop_reason: response.stop_reason,
+    iterations,
+  });
+  response = await forceSubmitResponse({ systemBlocks, messages, tools, prevResponse: response });
+  const submitTool = response.content.find(
+    (c) => c.type === 'tool_use' && c.name === 'submit_response'
+  );
+  if (!submitTool) {
+    throw new Error('Claude did not produce a response after forced submit_response');
+  }
+  logger.info('claude.tool_use.submit_response', { iterations, forced: true });
+  return submitTool.input;
+}
+
+/**
+ * Plain json_schema output, used when the agent has no product/KB tools.
+ */
+async function callViaJsonSchema({ systemBlocks, messages, outputSchema }) {
+  const response = await callClaude({
+    systemBlocks,
+    messages,
+    outputConfig: { format: { type: 'json_schema', schema: outputSchema } },
+  });
+  const content = response.content[0];
+  if (content.type !== 'text') {
+    throw new Error('Unexpected response type from Claude');
+  }
+  return JSON.parse(content.text);
+}
+
+// ─── Post-processing ─────────────────────────────────────────────────
+
+function stripEmptyStringFields(obj) {
+  const cleaned = {};
+  for (const [key, value] of Object.entries(obj)) {
+    if (value === '') continue;
+    cleaned[key] = value;
+  }
+  return cleaned;
+}
+
+/**
+ * Map agent-specific output shapes to the standard leads format and strip
+ * empty string fields (schema requires them but they are noise in storage).
+ */
+function postProcess(parsed, agentConfig) {
+  if (hasCustomOutputSchema(agentConfig)) {
+    normalizeAgentResponse(parsed);
+  }
+  if (parsed.leads) {
+    parsed.leads = parsed.leads.map(stripEmptyStringFields);
+  }
+}
+
+// ─── Main entry ──────────────────────────────────────────────────────
+
+/**
+ * Get an intelligent response from Claude.
+ *
+ * Flow:
+ *   1. Build messages (history + latest, apply cache_control to last turn).
+ *   2. Resolve system prompt and output schema (agent override vs defaults).
+ *   3. Load agent-specific product/KB tools if any.
+ *   4. Call Claude via tool-use loop (if tools) or plain json_schema output.
+ *   5. Normalize agent-specific output + strip empty fields.
+ *
+ * @param {Array} conversationHistory - Stored {role, content, metadata} messages.
+ * @param {string|Object|Array} userMessage - Latest user input (plain text, a message object, or aggregated batch).
+ * @param {Object} contextInfo - Runtime context (missing_fields, prior_state, car_recommendation).
+ * @param {Object} [agentConfig] - Optional agent profile overriding prompt / schema / id.
+ * @param {Object} [traceContext] - Logger trace ids.
+ * @returns {Promise<Object>} Parsed structured response.
+ */
+export async function getResponse(
+  conversationHistory,
+  userMessage,
+  contextInfo = {},
+  agentConfig = null,
+  traceContext = {}
+) {
   const logger = createTraceLogger({
     component: 'claude',
     trace_id: traceContext.traceId,
     conversation_id: traceContext.conversationId,
     wa_id: traceContext.waId,
   });
-  const historyMessages = Array.isArray(conversationHistory) ? conversationHistory : [];
 
-  async function buildClaudeContent(message) {
-    const text = typeof message?.content === 'string' ? message.content.trim() : '';
-    const metadata = message?.metadata || {};
-    const blocks = [];
-
-    if (text) {
-      blocks.push({ type: 'text', text });
-    }
-
-    if (
-      message?.role === 'user' &&
-      metadata.media_type === 'image' &&
-      metadata.wa_media_id
-    ) {
-      try {
-        const { buffer, mimeType } = await downloadWhatsAppMediaBuffer(metadata.wa_media_id);
-        if (buffer.length > 0 && isClaudeSupportedImageMimeType(mimeType)) {
-          blocks.push({
-            type: 'image',
-            source: {
-              type: 'base64',
-              media_type: mimeType,
-              data: buffer.toString('base64'),
-            },
-          });
-        }
-      } catch (error) {
-        logger.warn('claude.image_attachment.failed', {
-          wa_media_id: metadata.wa_media_id,
-          error: error.message,
-        });
-      }
-    }
-
-    if (blocks.length === 0) {
-      return '';
-    }
-
-    if (blocks.length === 1 && blocks[0].type === 'text') {
-      return blocks[0].text;
-    }
-
-    return blocks;
-  }
-
-  async function normalizeLatestUserMessage(input) {
-    if (typeof input === 'string') {
-      return input;
-    }
-
-    const items = Array.isArray(input) ? input : [input];
-    const blocks = [];
-
-    for (const item of items) {
-      const content = await buildClaudeContent({ role: 'user', ...item });
-      if (typeof content === 'string') {
-        if (content.trim()) {
-          blocks.push({ type: 'text', text: content });
-        }
-        continue;
-      }
-      blocks.push(...content);
-    }
-
-    if (blocks.length === 0) {
-      return '';
-    }
-
-    if (blocks.length === 1 && blocks[0].type === 'text') {
-      return blocks[0].text;
-    }
-
-    return blocks;
-  }
-
-  const sanitizedHistory = await Promise.all(
-    historyMessages.map(async (msg) => ({
-      role: msg.role,
-      content: await buildClaudeContent(msg),
-    }))
+  const { messages, historyCount, latestContent } = await buildMessages(
+    conversationHistory,
+    userMessage,
+    logger
   );
-  const latestUserContent = await normalizeLatestUserMessage(userMessage);
 
-  // Build messages array with conversation history + new user message
-  const messages = [
-    ...sanitizedHistory,
-    {
-      role: 'user',
-      content: latestUserContent,
-    },
-  ].filter((message) => {
-    if (typeof message.content === 'string') {
-      return message.content.trim() !== '';
-    }
-    return Array.isArray(message.content) && message.content.length > 0;
-  });
-
-  // Use agent config if provided, otherwise fall back to hardcoded defaults
-  const systemPrompt = agentConfig?.system_prompt || SYSTEM_PROMPT;
-  const outputSchema = agentConfig?.output_schema && Object.keys(agentConfig.output_schema).length > 0
-    ? agentConfig.output_schema
-    : JSON_SCHEMA;
-
-  // Build enhanced system prompt with context
-  const missingFieldsText = contextInfo.missing_fields?.length > 0
-    ? `Missing fields to collect: ${contextInfo.missing_fields.join(', ')}`
-    : 'No specific fields required';
-
-  const priorState = contextInfo.prior_state;
-  const priorStateLines = [];
-  if (priorState) {
-    priorStateLines.push(`Prior classification: intent=${priorState.conversation_intent}, quality=${priorState.inquiry_quality}, value=${priorState.business_value}`);
-    const collected = [
-      priorState.car_model && `product=${priorState.car_model}`,
-      priorState.qty_bucket && `qty=${priorState.qty_bucket}`,
-      priorState.destination_country && `destination=${priorState.destination_country}`,
-      priorState.company_name && `company=${priorState.company_name}`,
-    ].filter(Boolean);
-    if (collected.length > 0) {
-      priorStateLines.push(`Collected so far: ${collected.join(', ')}`);
-    }
-    priorStateLines.push('IMPORTANT: Do NOT downgrade intent or quality unless the customer EXPLICITLY contradicts prior business signals (e.g. "actually I only need 1 for personal use"). Job titles like "self employed", "mechanic", etc. are NOT contradictions.');
-  }
-
-  const carRecommendation = contextInfo.car_recommendation || '';
-
-  const dynamicContext = `CURRENT CONTEXT:
-- ${missingFieldsText}${priorStateLines.length > 0 ? '\n- ' + priorStateLines.join('\n- ') : ''}${carRecommendation ? '\n- ' + carRecommendation : ''}`;
-
-  // Split system prompt into static (cached) + dynamic (uncached) blocks
-  const systemBlocks = [
-    {
-      type: 'text',
-      text: systemPrompt,
-      cache_control: { type: 'ephemeral' },
-    },
-    {
-      type: 'text',
-      text: dynamicContext,
-    },
-  ];
-
-  // Cache conversation history: mark the last history message so all prior
-  // turns are served from cache on subsequent requests
-  if (sanitizedHistory.length > 0) {
-    const lastMsg = sanitizedHistory[sanitizedHistory.length - 1];
-    if (typeof lastMsg.content === 'string') {
-      lastMsg.content = [
-        { type: 'text', text: lastMsg.content, cache_control: { type: 'ephemeral' } },
-      ];
-    } else if (Array.isArray(lastMsg.content) && lastMsg.content.length > 0) {
-      lastMsg.content[lastMsg.content.length - 1].cache_control = { type: 'ephemeral' };
-    }
-  }
+  const outputSchema = resolveOutputSchema(agentConfig);
+  const systemBlocks = buildSystemBlocks(
+    resolveSystemPrompt(agentConfig),
+    buildDynamicContext(contextInfo)
+  );
 
   logger.info('claude.request.started', {
     message_count: messages.length,
-    history_count: sanitizedHistory.length,
-    latest_input_type: Array.isArray(latestUserContent) ? 'multimodal' : 'text',
+    history_count: historyCount,
+    latest_input_type: Array.isArray(latestContent) ? 'multimodal' : 'text',
     has_agent_config: Boolean(agentConfig),
-    model: MODELS.SONNET,
+    model: config.anthropic.model,
     context_info: buildTraceContextInfo(contextInfo),
   });
 
-  // Check if this agent has product knowledge tools or KB tools
   const agentId = agentConfig?.id;
-  let productTools = [];
-  let kbTools = [];
-  if (agentId) {
-    try {
-      productTools = await buildProductTools(agentId);
-    } catch (e) {
-      logger.warn('claude.product_tools.failed', { error: e.message });
-    }
-    try {
-      kbTools = await buildKbTools(agentId);
-    } catch (e) {
-      logger.warn('claude.kb_tools.failed', { error: e.message });
-    }
-  }
+  const agentTools = await loadAgentTools(agentId, logger);
 
-  const allAgentTools = [...productTools, ...kbTools];
-  const hasProductTools = allAgentTools.length > 0;
   let parsed;
-
-  if (hasProductTools) {
-    // Tool-use mode: product tools + submit_response tool
-    // TODO: switch to programmatic tool calling (code_execution_20260120) when OpenRouter supports it
-    const submitResponseTool = {
-      name: 'submit_response',
-      description: 'Submit your final response. Call this after gathering any needed product information. You MUST call this tool as your final action.',
-      input_schema: outputSchema,
-      cache_control: { type: 'ephemeral' },
-    };
-    // Add cache_control to the last agent tool so all tool definitions are cached together
-    const cachedProductTools = allAgentTools.map((tool, i) =>
-      i === allAgentTools.length - 1
-        ? { ...tool, cache_control: { type: 'ephemeral' } }
-        : tool
-    );
-    const allTools = [...cachedProductTools, submitResponseTool];
-
-    let response = await anthropic.messages.create({
-      model: MODELS.SONNET,
-      max_tokens: 4096,
-      system: systemBlocks,
-      messages: messages,
-      tools: allTools,
-      tool_choice: { type: 'auto' },
-    });
-
-    // Tool-use loop (max 5 iterations to prevent runaway)
-    let iterations = 0;
-    while (iterations < 5) {
-      // If Claude stopped without calling any tool, force submit_response
-      if (response.stop_reason !== 'tool_use') {
-        logger.info('claude.tool_use.force_submit', { stop_reason: response.stop_reason });
-        messages.push({ role: 'assistant', content: response.content });
-        messages.push({ role: 'user', content: 'Please call submit_response with your structured response now.' });
-        response = await anthropic.messages.create({
-          model: MODELS.SONNET,
-          max_tokens: 4096,
-          system: systemBlocks,
-          messages: messages,
-          tools: allTools,
-          tool_choice: { type: 'tool', name: 'submit_response' },
-        });
-      }
-      if (response.stop_reason !== 'tool_use') break;
-      iterations++;
-      const toolUse = response.content.find(c => c.type === 'tool_use');
-
-      // submit_response = final answer
-      if (toolUse.name === 'submit_response') {
-        parsed = toolUse.input;
-        logger.info('claude.tool_use.submit_response', { iterations });
-        break;
-      }
-
-      // Execute product or knowledge base tool
-      logger.info('claude.tool_use.call', {
-        tool: toolUse.name,
-        iteration: iterations,
-      });
-      const toolResult = isKbTool(toolUse.name)
-        ? await executeKbTool(toolUse.name, toolUse.input, agentId)
-        : await executeProductTool(toolUse.name, toolUse.input, agentId);
-      messages.push({ role: 'assistant', content: response.content });
-      messages.push({
-        role: 'user',
-        content: [{ type: 'tool_result', tool_use_id: toolUse.id, content: toolResult }],
-      });
-      response = await anthropic.messages.create({
-        model: MODELS.SONNET,
-        max_tokens: 4096,
-        system: systemBlocks,
-        messages: messages,
-        tools: allTools,
-      });
-    }
-
-    // Fallback: if Claude exhausted tool iterations without submit_response, force it
-    if (!parsed) {
-      logger.warn('claude.tool_use.force_submit_after_loop', { iterations });
-      messages.push({ role: 'assistant', content: response.content });
-      messages.push({ role: 'user', content: 'Please call submit_response with your structured response now.' });
-      response = await anthropic.messages.create({
-        model: MODELS.SONNET,
-        max_tokens: 4096,
-        system: systemBlocks,
-        messages: messages,
-        tools: allTools,
-        tool_choice: { type: 'tool', name: 'submit_response' },
-      });
-      const submitTool = response.content.find(c => c.type === 'tool_use' && c.name === 'submit_response');
-      if (submitTool) {
-        parsed = submitTool.input;
-        logger.info('claude.tool_use.submit_response', { iterations, forced: true });
-      } else {
-        throw new Error('Claude did not produce a response after forced submit_response');
-      }
-    }
+  if (agentTools.length > 0) {
+    const tools = [
+      ...markLastToolForCache(agentTools),
+      buildSubmitResponseTool(outputSchema),
+    ];
+    parsed = await callViaToolUse({ systemBlocks, messages, tools, agentId, logger });
   } else {
-    // Standard mode: json_schema output (no product tools)
-    const response = await anthropic.messages.create({
-      model: MODELS.SONNET,
-      max_tokens: 4096,
-      system: systemBlocks,
-      messages: messages,
-      output_config: {
-        format: {
-          type: 'json_schema',
-          schema: outputSchema,
-        },
-      },
-    });
-
-    const content = response.content[0];
-    if (content.type !== 'text') {
-      throw new Error('Unexpected response type from Claude');
-    }
-    parsed = JSON.parse(content.text);
+    parsed = await callViaJsonSchema({ systemBlocks, messages, outputSchema });
   }
 
-  // Normalize non-standard agent output to standard pipeline format
-  if (agentConfig?.output_schema && Object.keys(agentConfig.output_schema).length > 0) {
-    normalizeAgentResponse(parsed);
-  }
-
-  // Clean up empty strings from structured output (required fields output "" when unknown)
-  if (parsed.leads) {
-    parsed.leads = parsed.leads.map(lead => {
-      const cleaned = {};
-      for (const [key, value] of Object.entries(lead)) {
-        if (value === '') continue;
-        cleaned[key] = value;
-      }
-      return cleaned;
-    });
-  }
+  postProcess(parsed, agentConfig);
 
   logger.info('claude.request.completed', {
     intent: parsed.conversation_intent,

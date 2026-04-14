@@ -5,6 +5,7 @@ import supabase from '@/lib/supabase';
 import { getLeadsNeedingSync, getLeadById } from '@/lib/repositories/lead.repository';
 import { createSyncLog, updateSyncLog, hasSuccessfulSync } from '@/lib/repositories/sync-log.repository';
 import { syncLeadsToExternal, processSyncResults, expandLeadForSync } from '@/lib/services/external-sync';
+import { config } from '@/src/config';
 
 export async function POST(request) {
   const demoResponse = demoGuard({ success: true, queued: 0, synced: 0, failed: 0, message: 'Demo mode' });
@@ -73,7 +74,7 @@ export async function POST(request) {
     }
 
     // Call external API
-    const apiKey = process.env.REVO_SCM_API_KEY;
+    const apiKey = config.secrets.revoScmApiKey;
     const apiResponse = await syncLeadsToExternal(leadsToSync, apiKey);
     const results = processSyncResults(leadsToSync, apiResponse);
 

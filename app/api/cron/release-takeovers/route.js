@@ -3,6 +3,7 @@ import {
   findExpiredTakeovers,
   endHumanTakeover,
 } from '../../../../lib/repositories/conversation.repository.js';
+import { config } from '../../../../src/config.js';
 
 /**
  * GET /api/cron/release-takeovers
@@ -12,14 +13,14 @@ import {
 export async function GET(request) {
   // Optional cron secret (aligned with existing process-queue pattern)
   const authHeader = request.headers.get('authorization');
-  const cronSecret = process.env.CRON_SECRET;
+  const cronSecret = config.secrets.cron;
 
   if (cronSecret && authHeader !== `Bearer ${cronSecret}`) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
 
   try {
-    if (process.env.TAKEOVER_AUTO_EXPIRE === 'off') {
+    if (config.app.takeoverAutoExpireDisabled) {
       return NextResponse.json({ released: 0, skipped: 'TAKEOVER_AUTO_EXPIRE=off' });
     }
 

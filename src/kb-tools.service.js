@@ -38,11 +38,6 @@ export async function buildKbTools(agentId) {
     .eq('agent_id', agentId)
     .eq('is_active', true);
 
-  const { count: shippingCount } = await supabase
-    .from('kb_shipping_routes')
-    .select('id', { count: 'exact', head: true })
-    .eq('agent_id', agentId);
-
   const { count: pricingCount } = await supabase
     .from('kb_pricing_rules')
     .select('id', { count: 'exact', head: true })

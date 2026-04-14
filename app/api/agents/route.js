@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { demoGuard } from '../../../lib/demo-mode.js';
 import { createClient } from '../../../lib/supabase-server.js';
-import { getAllAgents, createAgent } from '../../../lib/repositories/agent.repository.js';
+import { getAllAgentsWithStats, createAgent } from '../../../lib/repositories/agent.repository.js';
 
 /**
  * GET /api/agents - List all agents
@@ -16,7 +16,7 @@ export async function GET(request) {
 
     const { searchParams } = new URL(request.url);
     const activeOnly = searchParams.get('active') === 'true';
-    const agents = await getAllAgents(activeOnly);
+    const agents = await getAllAgentsWithStats(activeOnly);
 
     return NextResponse.json({ agents });
   } catch (error) {

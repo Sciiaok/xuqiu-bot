@@ -18,16 +18,6 @@ Rules:
 5. If the intent is ambiguous across candidates, set needs_clarification=true and provide a short WhatsApp-style clarification question.
 6. Keep the reason concise and concrete.
 7. Treat inbound referral context and matched_ad_context as strong routing hints when present.
-
-Strong routing signals for auto parts:
-- OEM / part numbers like 23221-0D010, 77020-02180
-- Spare part names like fuel pump, control board, door handle, bumper, sensor, headlamp
-- Vehicle model + year + part request, e.g. "Honda HRV 2000 door handle"
-- Image-led parts sourcing requests such as "I am looking for this part", "find this handle"
-
-Strong routing signals for whole vehicles:
-- Requests for complete cars, units, shipping quotes, CIF/FOB for vehicles
-- Model-level buying intent without part/component language
 `;
 
 const SELECT_AGENT_TOOL = {
@@ -36,7 +26,7 @@ const SELECT_AGENT_TOOL = {
   input_schema: {
     type: 'object',
     additionalProperties: false,
-    required: ['agent_id', 'confidence', 'reason', 'needs_clarification', 'clarification_message'],
+    required: ['agent_id', 'confidence', 'reason', 'needs_clarification'],
     properties: {
       agent_id: {
         type: 'string',

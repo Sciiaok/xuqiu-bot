@@ -4,6 +4,7 @@ import {
   getConversationsWithPendingMessages,
   releaseStaleLocks,
 } from '../../../../lib/repositories/queue.repository.js';
+import { config } from '../../../../src/config.js';
 
 /**
  * GET /api/cron/process-queue - Cron endpoint for fallback queue processing
@@ -12,7 +13,7 @@ import {
 export async function GET(request) {
   // Optional: Verify cron secret for security
   const authHeader = request.headers.get('authorization');
-  const cronSecret = process.env.CRON_SECRET;
+  const cronSecret = config.secrets.cron;
 
   if (cronSecret && authHeader !== `Bearer ${cronSecret}`) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });

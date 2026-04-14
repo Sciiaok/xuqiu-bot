@@ -7,6 +7,7 @@ import { sendMessage } from './whatsapp.service.js';
 import { updateLead, getLeadsByConversation } from '../lib/repositories/lead.repository.js';
 import { sendFeishuMessage } from './feishu.service.js';
 import { createTraceLogger } from '../lib/core-trace.js';
+import { config } from './config.js';
 
 const INQUIRY_QUALITY_LABEL = { GOOD: '优质', POOR: '低质' };
 const BUSINESS_VALUE_LABEL = { HIGH: '高', MEDIUM: '中', LOW: '低' };
@@ -93,7 +94,7 @@ export async function routeLeadToSales(lead, handoffSummary, traceContext = {}) 
   // Feishu uuid max 50 chars; lead.id(36) + '_' + timestamp(13) = 50
   const routeUuid = `${lead.id}_${Date.parse(lead.updated_at || '') || 0}`;
 
-  sendFeishuMessage(message, true, process.env.FEISHU_CHAT_ID, routeUuid).catch(err =>
+  sendFeishuMessage(message, true, config.feishu.chatId, routeUuid).catch(err =>
     logger.error('routing.feishu.failed', { error: err.message })
   );
 

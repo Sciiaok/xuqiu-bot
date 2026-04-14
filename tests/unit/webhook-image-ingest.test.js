@@ -81,6 +81,9 @@ async function loadWebhookRoute() {
         server: {
           port: 3002,
         },
+        app: {
+          baseUrl: undefined,
+        },
       },
     },
   });

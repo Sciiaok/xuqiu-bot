@@ -8,6 +8,7 @@ import { anthropic, MODELS } from './llm-client.js';
 import { processDocument } from './kb-upload.service.js';
 import supabase from '../lib/supabase.js';
 import { createTraceLogger } from '../lib/core-trace.js';
+import { config } from './config.js';
 
 const logger = createTraceLogger({ service: 'kb-feishu-import' });
 
@@ -26,8 +27,8 @@ async function getToken() {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
-      app_id: process.env.FEISHU_APP_ID,
-      app_secret: process.env.FEISHU_APP_SECRET,
+      app_id: config.feishu.appId,
+      app_secret: config.feishu.appSecret,
     }),
   });
 

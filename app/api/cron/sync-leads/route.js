@@ -9,12 +9,13 @@ import {
   incrementRetryCount,
 } from '@/lib/repositories/sync-log.repository';
 import { syncLeadsToExternal, processSyncResults, expandLeadForSync } from '@/lib/services/external-sync';
+import { config } from '@/src/config';
 
 export async function POST(request) {
   try {
     // Verify cron secret
     const authHeader = request.headers.get('authorization');
-    const cronSecret = process.env.CRON_SECRET;
+    const cronSecret = config.secrets.cron;
 
     if (cronSecret && authHeader !== `Bearer ${cronSecret}`) {
       return NextResponse.json(
@@ -72,7 +73,7 @@ export async function POST(request) {
       const batchLogs = logsToUpdate.slice(i, i + batchSize);
 
       try {
-        const apiKey = process.env.REVO_SCM_API_KEY;
+        const apiKey = config.secrets.revoScmApiKey;
         const apiResponse = await syncLeadsToExternal(batch, apiKey);
         const results = processSyncResults(batch, apiResponse);
 

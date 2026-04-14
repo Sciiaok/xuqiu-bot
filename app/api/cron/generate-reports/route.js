@@ -5,6 +5,7 @@ import {
   reportExists,
   computePeriod,
 } from '@/lib/services/report-generator';
+import { config } from '@/src/config';
 
 const MAX_AUTO_RETRIES = 3;
 
@@ -23,7 +24,7 @@ export async function POST(request) {
   try {
     // Verify cron secret
     const authHeader = request.headers.get('authorization');
-    const cronSecret = process.env.CRON_SECRET;
+    const cronSecret = config.secrets.cron;
     if (cronSecret && authHeader !== `Bearer ${cronSecret}`) {
       return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
     }

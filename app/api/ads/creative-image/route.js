@@ -5,8 +5,7 @@ import { config } from '../../../../src/config.js';
 
 const META_API_VERSION = 'v21.0';
 const META_API_TIMEOUT_MS = config.meta.apiTimeoutMs;
-const META_PROXY_URL = process.env.HTTPS_PROXY || process.env.HTTP_PROXY || '';
-const META_PROXY_AGENT = META_PROXY_URL ? new ProxyAgent(META_PROXY_URL) : null;
+const META_PROXY_AGENT = config.proxy.httpsUrl ? new ProxyAgent(config.proxy.httpsUrl) : null;
 
 /**
  * GET /api/ads/creative-image?adId=123
@@ -23,7 +22,7 @@ export async function GET(request) {
   const adId = searchParams.get('adId');
   if (!adId) return NextResponse.json({ error: 'Missing adId' }, { status: 400 });
 
-  const accessToken = process.env.META_SYSTEM_TOKEN || process.env.META_ACCESS_TOKEN;
+  const accessToken = config.meta.accessToken;
   if (!accessToken) {
     return NextResponse.json({ error: 'META_SYSTEM_TOKEN is not configured' }, { status: 500 });
   }

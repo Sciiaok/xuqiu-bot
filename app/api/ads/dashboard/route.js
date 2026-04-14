@@ -8,8 +8,7 @@ import { config } from '../../../../src/config.js';
 
 const META_API_VERSION = 'v21.0';
 const META_API_TIMEOUT_MS = config.meta.apiTimeoutMs;
-const META_PROXY_URL = process.env.HTTPS_PROXY || process.env.HTTP_PROXY || '';
-const META_PROXY_AGENT = META_PROXY_URL ? new ProxyAgent(META_PROXY_URL) : null;
+const META_PROXY_AGENT = config.proxy.httpsUrl ? new ProxyAgent(config.proxy.httpsUrl) : null;
 const STATUS_ACTIVE = 'ACTIVE';
 const DEFAULT_LOOKBACK_DAYS = 30;
 const MAX_PAGE_SIZE = 1000;
@@ -775,8 +774,8 @@ export async function GET(request) {
     const { searchParams } = new URL(request.url);
     const range = parseDateRange(searchParams);
     const productLine = parseProductLine(searchParams);
-    const adAccountId = normalizeAdAccountId(process.env.META_AD_ACCOUNT_ID);
-    const accessToken = process.env.META_SYSTEM_TOKEN || process.env.META_ACCESS_TOKEN;
+    const adAccountId = normalizeAdAccountId(config.meta.adAccountId);
+    const accessToken = config.meta.accessToken;
 
     if (!accessToken) {
       return NextResponse.json({ error: 'META_SYSTEM_TOKEN / META_ACCESS_TOKEN is not configured' }, { status: 500 });
@@ -1060,7 +1059,7 @@ export async function GET(request) {
       const { searchParams } = new URL(request.url);
       const range = parseDateRange(searchParams);
       const productLine = parseProductLine(searchParams);
-      const adAccountId = normalizeAdAccountId(process.env.META_AD_ACCOUNT_ID);
+      const adAccountId = normalizeAdAccountId(config.meta.adAccountId);
       const supabase = await createClient();
       const { data: { user } } = await supabase.auth.getUser();
       if (user && isMetaRateLimitError(error)) {

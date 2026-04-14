@@ -3,7 +3,6 @@ import { config } from './config.js';
 import supabase from '../lib/supabase.js';
 
 const FETCH_TIMEOUT = 120_000;
-const BEST_OF_N = parseInt(process.env.AIGC_BEST_OF_N, 10) || 1;
 const SCORE_THRESHOLD = 6;     // Minimum acceptable fidelity score (1-10)
 
 /**
@@ -80,7 +79,7 @@ export async function generateAdImage({ prompt, model, referenceImages }) {
   }
 
   // Set AIGC_NO_FALLBACK=1 to disable model fallback chain
-  if (process.env.AIGC_NO_FALLBACK) {
+  if (config.aigc.noFallback) {
     const result = await callImageModel(config.aigc.baseURL, config.aigc.apiKey, config.aigc.imageModel, content);
     return { ...result, prompt };
   }
@@ -303,7 +302,7 @@ Reply ONLY with JSON: {"score": <number>, "reason": "<one sentence>"}`,
  * Generate N candidate images and pick the best one by vision model scoring.
  * Falls back to first successful candidate if scoring fails.
  */
-export async function generateAdImageBestOfN({ prompt, model, referenceImages, n = BEST_OF_N }) {
+export async function generateAdImageBestOfN({ prompt, model, referenceImages, n = config.aigc.bestOfN }) {
   if (!referenceImages?.length || n <= 1) {
     // No references to score against — single generation
     return generateAdImage({ prompt, model, referenceImages });

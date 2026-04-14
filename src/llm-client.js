@@ -19,6 +19,7 @@
  */
 import OpenAI from 'openai';
 import Anthropic from '@anthropic-ai/sdk';
+import { config } from './config.js';
 
 // ── Model Registry ───────────────────────────────────────────────────
 export const MODELS = {
@@ -40,15 +41,19 @@ function isGeminiModel(model) {
 }
 
 // ── Provider Config ──────────────────────────────────────────────────
-const ANTHROPIC_KEY = process.env.ANTHROPIC_API_KEY;
-const anthropicClient = ANTHROPIC_KEY
-  ? new Anthropic({ apiKey: ANTHROPIC_KEY })
+// `?.` tolerates partial config in tests; in production every section is
+// always populated by src/config.js.
+const anthropicClient = config.anthropic?.apiKey
+  ? new Anthropic({ 
+    apiKey: config.anthropic.apiKey,
+    baseURL: config.anthropic.baseURL,
+    timeout: 120_000
+  })
   : null;
 
-const OPENROUTER_KEY = process.env.OPENROUTER_API_KEY;
-const openrouterClient = OPENROUTER_KEY
+const openrouterClient = config.openrouter?.apiKey
   ? new OpenAI({
-      apiKey: OPENROUTER_KEY,
+      apiKey: config.openrouter.apiKey,
       baseURL: 'https://openrouter.ai/api/v1',
       timeout: 120_000,
     })
@@ -56,9 +61,14 @@ const openrouterClient = OPENROUTER_KEY
 
 // ── Logging ──────────────────────────────────────────────────────────
 function logLlmCall({ method, provider, model, responseModel, tools, toolChoice, stopReason, inputTokens, outputTokens, durationMs }) {
-  const baseUrls = { direct: 'https://api.anthropic.com', openrouter: 'https://openrouter.ai' };
-  console.log(`[llm-client] ${JSON.stringify({
-    method, provider,
+  const baseUrls = { direct: config.anthropic.baseURL, openrouter: config.openrouter.baseURL };
+  console.log(JSON.stringify({
+    ts: new Date().toISOString(),
+    level: 'info',
+    event: 'llm.call',
+    component: 'llm-client',
+    method,
+    provider,
     base_url: baseUrls[provider] || provider,
     model,
     response_model: responseModel || model,
@@ -68,7 +78,7 @@ function logLlmCall({ method, provider, model, responseModel, tools, toolChoice,
     input_tokens: inputTokens || 0,
     output_tokens: outputTokens || 0,
     duration_ms: durationMs,
-  })}`);
+  }));
 }
 
 // ══════════════════════════════════════════════════════════════════════
@@ -241,7 +251,15 @@ function wrapJsonResponseAsToolUse(openaiResponse, toolName, model) {
   try {
     input = JSON.parse(rawJson);
   } catch (parseErr) {
-    console.error(`[llm-client] JSON parse failed for forced tool ${toolName}. Error: ${parseErr.message}. Raw (first 800 chars): ${rawJson.slice(0, 800)}`);
+    console.error(JSON.stringify({
+      ts: new Date().toISOString(),
+      level: 'error',
+      event: 'llm.forced_json.parse_failed',
+      component: 'llm-client',
+      tool_name: toolName,
+      error: parseErr.message,
+      raw_preview: rawJson.slice(0, 800),
+    }));
     input = { _raw: rawJson, _parse_error: parseErr.message };
   }
 
@@ -424,7 +442,9 @@ const anthropicProxy = {
 };
 
 // ── OpenAI Client (embeddings, GPT, product parsing) ─────────────────
-const USE_OPENROUTER = !process.env.OPENAI_API_KEY && !!process.env.OPENROUTER_API_KEY;
+// When OPENAI_API_KEY is absent but OPENROUTER_API_KEY is present, route
+// OpenAI-style calls through OpenRouter's OpenAI-compatible endpoint.
+const USE_OPENROUTER = !config.openai?.apiKey && !!config.openrouter?.apiKey;
 
 function openaiModel(model) {
   if (!USE_OPENROUTER) return model;
@@ -435,13 +455,11 @@ function openaiModel(model) {
   return PREFIX[model] || model;
 }
 
-const OPENAI_KEY = process.env.OPENAI_API_KEY || process.env.OPENROUTER_API_KEY;
+const OPENAI_KEY = config.openai?.apiKey || config.openrouter?.apiKey;
 const openaiClient = OPENAI_KEY
   ? new OpenAI({
       apiKey: OPENAI_KEY,
-      baseURL: USE_OPENROUTER
-        ? (process.env.OPENROUTER_BASE_URL || 'https://openrouter.ai/api') + '/v1'
-        : undefined,
+      baseURL: USE_OPENROUTER ? `${config.openrouter.baseURL}/v1` : undefined,
       timeout: 60000,
     })
   : null;

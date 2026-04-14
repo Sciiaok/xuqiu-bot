@@ -1,4 +1,5 @@
 import { randomUUID } from 'crypto';
+import { config } from './config.js';
 
 const TOKEN_URL = 'https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal';
 const MESSAGE_URL = 'https://open.feishu.cn/open-apis/im/v1/messages?receive_id_type=chat_id';
@@ -16,8 +17,8 @@ async function getTenantAccessToken() {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
-      app_id: process.env.FEISHU_APP_ID,
-      app_secret: process.env.FEISHU_APP_SECRET,
+      app_id: config.feishu.appId,
+      app_secret: config.feishu.appSecret,
     }),
   });
 
@@ -41,7 +42,7 @@ async function getTenantAccessToken() {
  * @param {string} chatId - Override chat_id (optional, defaults to FEISHU_CHAT_ID)
  * @param {string} routeUuid - Optional stable UUID for Feishu deduplication
  */
-export async function sendFeishuMessage(markdownContent, atAll = false, chatId = process.env.FEISHU_CHAT_ID, routeUuid = randomUUID()) {
+export async function sendFeishuMessage(markdownContent, atAll = false, chatId = config.feishu.chatId, routeUuid = randomUUID()) {
   const token = await getTenantAccessToken();
 
   const content = atAll
