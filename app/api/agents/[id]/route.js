@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import { demoGuard } from '../../../../lib/demo-mode.js';
 import { createClient } from '../../../../lib/supabase-server.js';
 import {
-  findAgentById,
+  findAgentByIdWithStats,
   updateAgent,
   deactivateAgent,
 } from '../../../../lib/repositories/agent.repository.js';
@@ -19,7 +19,7 @@ export async function GET(request, { params }) {
     }
 
     const { id } = await params;
-    const agent = await findAgentById(id);
+    const agent = await findAgentByIdWithStats(id);
     if (!agent) {
       return NextResponse.json({ error: 'Agent not found' }, { status: 404 });
     }

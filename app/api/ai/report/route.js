@@ -1,8 +1,8 @@
 import { NextResponse } from 'next/server';
 import { createClient } from '../../../../lib/supabase-server.js';
 import supabase from '../../../../lib/supabase.js';
-import { anthropic, MODELS } from '../../../../src/llm-client.js';
 import { demoGuard } from '../../../../lib/demo-mode.js';
+import { generateSummaryWithFallback } from '../../../../lib/ai-summary.js';
 
 const VALID_TYPES = new Set([
   'daily_report',
@@ -505,10 +505,6 @@ export async function buildReportData(type, fromISO, toISO, fromDate, toDate) {
   }
 }
 
-function extractReportText(result) {
-  return result.content?.find((block) => block.type === 'text')?.text?.trim() || '';
-}
-
 export async function POST(request) {
   const demoResponse = demoGuard({
     type: 'daily_report',
@@ -545,25 +541,17 @@ export async function POST(request) {
     const reportData = await buildReportData(type, fromISO, toISO, fromDate, toDate);
     const systemPrompt = REPORT_PROMPTS[type];
 
-    const result = await anthropic.messages.create({
-      model: MODELS.MINIMAX,
-      system: systemPrompt,
-      messages: [{
-        role: 'user',
-        content: (() => {
-        const dataStr = JSON.stringify(reportData, null, 2);
-        // Truncate to ~30KB to stay within MiniMax token budget
-        const truncated = dataStr.length > 30000 ? dataStr.slice(0, 30000) + '\n...(数据已截断)' : dataStr;
-        return `请严格基于以下数据生成报告，不要编造未提供的信息。若数据不足，请明确指出。\n\n报告类型: ${type}\n时间范围: ${fromISO} 至 ${toISO}\n附加上下文:\n${JSON.stringify(context || {}, null, 2)}\n\n数据:\n${truncated}`;
-      })(),
-      }],
-      max_tokens: 2000,
-    });
+    const dataStr = JSON.stringify(reportData, null, 2);
+    // Truncate to ~30KB to stay within MiniMax token budget
+    const truncated = dataStr.length > 30000 ? dataStr.slice(0, 30000) + '\n...(数据已截断)' : dataStr;
+    const userPrompt = `请严格基于以下数据生成报告，不要编造未提供的信息。若数据不足，请明确指出。\n\n报告类型: ${type}\n时间范围: ${fromISO} 至 ${toISO}\n附加上下文:\n${JSON.stringify(context || {}, null, 2)}\n\n数据:\n${truncated}`;
 
-    const report = extractReportText(result);
-    if (!report) {
-      throw new Error('MiniMax returned empty report');
-    }
+    const report = await generateSummaryWithFallback({
+      system: systemPrompt,
+      userPrompt,
+      maxTokens: 2000,
+      logTag: `ai/report:${type}`,
+    });
 
     return NextResponse.json({
       type,

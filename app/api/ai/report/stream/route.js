@@ -1,8 +1,8 @@
 import { createClient } from '../../../../../lib/supabase-server.js';
 import { getRedis } from '../../../../../lib/redis.js';
-import { anthropic, MODELS } from '../../../../../src/llm-client.js';
 import { demoGuard } from '../../../../../lib/demo-mode.js';
 import { streamSSE } from '../../../../../lib/sse.js';
+import { generateSummaryWithFallback } from '../../../../../lib/ai-summary.js';
 
 const REPORT_PROMPTS = {
   market_insight: '你是国际市场分析师。分析各市场的询盘数据，识别热门市场、新兴机会和风险信号。用中文回复，使用 Markdown 格式。',
@@ -106,20 +106,19 @@ export async function GET(request) {
 
     const dataStr = JSON.stringify(reportData, null, 2);
     const truncated = dataStr.length > 30000 ? dataStr.slice(0, 30000) + '\n...(数据已截断)' : dataStr;
+    const userPrompt = `请严格基于以下数据生成报告，不要编造未提供的信息。若数据不足，请明确指出。\n\n报告类型: ${type}\n时间范围: ${fromISO} 至 ${toISO}\n\n数据:\n${truncated}`;
 
-    const result = await anthropic.messages.create({
-      model: MODELS.MINIMAX,
-      system: REPORT_PROMPTS[type],
-      messages: [{
-        role: 'user',
-        content: `请严格基于以下数据生成报告，不要编造未提供的信息。若数据不足，请明确指出。\n\n报告类型: ${type}\n时间范围: ${fromISO} 至 ${toISO}\n\n数据:\n${truncated}`,
-      }],
-      max_tokens: 2000,
-    });
-
-    const fullText = result.content?.find(b => b.type === 'text')?.text?.trim() || '';
-    if (!fullText) {
-      yield { event: 'error', data: { message: '报告生成失败' } };
+    let fullText;
+    try {
+      fullText = await generateSummaryWithFallback({
+        system: REPORT_PROMPTS[type],
+        userPrompt,
+        maxTokens: 2000,
+        logTag: `ai/report/stream:${type}`,
+      });
+    } catch (err) {
+      console.error('[ai/report/stream] All models failed:', err.message);
+      yield { event: 'error', data: { message: `报告生成失败: ${err.message}` } };
       return;
     }
 

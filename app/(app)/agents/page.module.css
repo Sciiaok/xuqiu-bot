@@ -52,14 +52,79 @@
   background: var(--bg2);
   border: 1px solid var(--border);
   border-radius: var(--rl);
+<<<<<<< HEAD
+  transition: border-color 0.15s, transform 0.15s;
+  min-height: 260px;
+  text-decoration: none;
+  color: inherit;
+  cursor: pointer;
+=======
   transition: border-color 0.15s;
   min-height: 260px;
+>>>>>>> main
 }
 
 .agentCard:hover {
-  border-color: var(--border2);
+  border-color: var(--accent);
+  transform: translateY(-1px);
 }
 
+<<<<<<< HEAD
+/* Inactive card — dim everything except the agent name + restore button */
+.agentCardInactive {
+  opacity: 0.65;
+  background: var(--bg);
+  border-style: dashed;
+}
+
+.agentCardInactive:hover {
+  opacity: 0.85;
+  border-color: var(--border2);
+  transform: none;
+}
+
+/* ── Toggle buttons (停用 / 启用) ───────────────────────── */
+.deactivateBtn,
+.activateBtn {
+  padding: 5px 12px;
+  border-radius: 4px;
+  background: transparent;
+  border: 1px solid var(--border);
+  font-size: 12px;
+  font-family: var(--font-sans);
+  cursor: pointer;
+  transition: all 0.15s;
+  min-width: 56px;
+}
+
+.deactivateBtn {
+  color: var(--text3);
+}
+
+.deactivateBtn:hover:not(:disabled) {
+  border-color: var(--red);
+  color: var(--red);
+  background: var(--red-dim);
+}
+
+.activateBtn {
+  color: var(--green);
+  border-color: var(--green);
+  background: var(--green-dim);
+}
+
+.activateBtn:hover:not(:disabled) {
+  opacity: 0.85;
+}
+
+.deactivateBtn:disabled,
+.activateBtn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+=======
+>>>>>>> main
 .cardHeader {
   display: flex;
   align-items: center;
@@ -101,6 +166,20 @@
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.inactiveStatus {
+  font-size: 10px;
+  font-weight: 600;
+  font-family: var(--font-mono);
+  color: var(--text3);
+  background: var(--bg3);
+  border: 1px solid var(--border);
+  padding: 2px 7px;
+  border-radius: 4px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  flex-shrink: 0;
 }
 
 .liveStatus {
@@ -393,4 +472,85 @@
   justify-content: flex-end;
   gap: 8px;
   margin-top: 4px;
+}
+
+.formInputError {
+  border-color: var(--red);
+}
+
+.formHint {
+  font-size: 11px;
+  color: var(--text3);
+  font-family: var(--font-mono);
+}
+
+.fieldError {
+  font-size: 11px;
+  color: var(--red);
+  font-family: var(--font-mono);
+}
+
+/* ── Create step 2: confirmation ──────────────────────── */
+.confirmNotice {
+  margin: 0;
+  padding: 10px 12px;
+  background: var(--amber-dim);
+  border: 1px solid rgba(184, 134, 11, 0.25);
+  border-radius: var(--r);
+  font-size: 12px;
+  color: var(--text2);
+  font-family: var(--font-sans);
+  line-height: 1.55;
+}
+
+.slugCode {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  background: var(--bg3);
+  padding: 1px 6px;
+  border-radius: 3px;
+  color: var(--text);
+  border: 1px solid var(--border);
+}
+
+.summaryList {
+  margin: 0;
+  padding: 12px 14px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--r);
+  display: grid;
+  grid-template-columns: 80px 1fr;
+  row-gap: 8px;
+  column-gap: 12px;
+  font-size: 12px;
+  font-family: var(--font-sans);
+}
+
+.summaryList dt {
+  color: var(--text3);
+  font-family: var(--font-mono);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  font-size: 10px;
+  padding-top: 2px;
+}
+
+.summaryList dd {
+  margin: 0;
+  color: var(--text);
+  word-break: break-word;
+}
+
+.summaryPromptPreview {
+  max-height: 180px;
+  overflow-y: auto;
+  white-space: pre-wrap;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.55;
+  padding: 8px 10px;
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  border-radius: 4px;
 }

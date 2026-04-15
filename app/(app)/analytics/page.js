@@ -14,25 +14,17 @@ import TabBar from '../../components/TabBar/TabBar';
 import Tag from '../../components/Tag/Tag';
 import Markdown from '../../components/Markdown/Markdown';
 import { unknown } from 'zod/v4';
+import { resolveDateRange } from '../../../lib/inquiry-dashboard.js';
 
 // ──────────── Constants ────────────
 
-const PRODUCT_LINES = [
-  { key: 'all', label: '全部业务线' },
-  { key: 'vehicle', label: '整车' },
-  { key: 'auto_parts', label: '汽配' },
-  { key: 'agri_machinery', label: '农机' },
-];
-
 const DATE_TABS = [
-  { key: '1d', label: '最近1天' },
-  { key: '7d', label: '最近7天' },
-  { key: '30d', label: '最近30天' },
-  { key: 'all', label: '所有时间' },
+  { key: '1d', label: '昨天' },
+  { key: '7d', label: '前一周' },
+  { key: '30d', label: '前一个月' },
+  { key: '365d', label: '前一年' },
   { key: 'custom', label: '自定义' },
 ];
-
-const DATE_TAB_TO_DAYS = { '1d': 1, '7d': 7, '30d': 30 };
 
 const INTENT_LABELS = {
   business_inquiry: '业务咨询',
@@ -175,7 +167,6 @@ function DonutCard({ title, data, colorMap, labelMap }) {
 // ──────────── Main Page ────────────
 
 export default function AnalyticsPage() {
-  const [selectedLine, setSelectedLine] = useState('all');
   const [dateRange, setDateRange] = useState('30d');
   const [customFrom, setCustomFrom] = useState('');
   const [customTo, setCustomTo] = useState('');
@@ -191,8 +182,15 @@ export default function AnalyticsPage() {
   const [aiInsightLoading, setAiInsightLoading] = useState(false);
   const [aiStatus, setAiStatus] = useState(null);
 
-  const getProductLines = () =>
-    selectedLine === 'all' ? 'vehicle,auto_parts,agri_machinery' : selectedLine;
+  // Build fetchAiInsight params for the currently-selected date range.
+  // Returns null when custom is selected but dates are empty.
+  const buildInsightRequest = () => {
+    if (dateRange === 'custom' && (!customFrom || !customTo)) return null;
+    const { startDate, endDate, days } = resolveDateRange(dateRange, customFrom, customTo);
+    return startDate && endDate
+      ? { startDate, endDate }
+      : { days };
+  };
 
   // ── AI Summary SSE ──
   const fetchAiInsight = async (params) => {
@@ -209,7 +207,6 @@ export default function AnalyticsPage() {
       qs.set('days', String(params.days));
       if (params.preset) qs.set('preset', params.preset);
     }
-    qs.set('productLines', params.productLines);
     qs.set('lang', 'zh');
 
     try {
@@ -258,35 +255,21 @@ export default function AnalyticsPage() {
 
   // ── Main data fetch ──
   useEffect(() => {
-    // Compute the time window as ISO timestamps, matching LeadHub's rolling-window
-    // approach (`now - N*24h`) so both pages produce identical counts.
-    let dateFrom, dateTo, days;
-    if (dateRange === 'custom') {
-      if (!customFrom || !customTo) return;
-      dateFrom = new Date(`${customFrom}T00:00:00.000+08:00`).toISOString();
-      dateTo = new Date(`${customTo}T23:59:59.999+08:00`).toISOString();
-    } else if (dateRange === 'all') {
-      // no date filter — backend treats missing dateFrom/dateTo as "all"
-      days = 3650;
-    } else {
-      days = DATE_TAB_TO_DAYS[dateRange] ?? 7;
-      const now = new Date();
-      dateTo = now.toISOString();
-      dateFrom = new Date(now.getTime() - days * 24 * 60 * 60 * 1000).toISOString();
-    }
+    // Use yesterday-based windows (via resolveDateRange) so cache keys are
+    // stable within a calendar day and today's still-growing data is excluded.
+    if (dateRange === 'custom' && (!customFrom || !customTo)) return;
 
-    const productLines = getProductLines();
+    const { startDate, endDate, days } = resolveDateRange(dateRange, customFrom, customTo);
     setLoading(true);
     setError(null);
 
     const qs = new URLSearchParams();
-    if (dateFrom && dateTo) {
-      qs.set('startDate', dateFrom);
-      qs.set('endDate', dateTo);
+    if (startDate && endDate) {
+      qs.set('startDate', startDate);
+      qs.set('endDate', endDate);
     } else {
       qs.set('days', String(days));
     }
-    qs.set('productLines', productLines);
 
     fetch(`/api/inquiry-dashboard?${qs}`)
       .then(res => {
@@ -296,16 +279,21 @@ export default function AnalyticsPage() {
       .then(json => { setData(json); setLoading(false); })
       .catch(err => { setError(err.message); setLoading(false); });
 
-    // Fetch ad spend from Meta Ads API — use the same `days` param that
-    // campaign-studio uses so both pages hit the same cache key and show
-    // identical numbers. Meta caps at 37 months (~1100 days).
-    const spendDays = Math.min(days || 30, 1100);
-    fetch(`/api/ads/metrics?days=${spendDays}&totalsOnly=true`)
+    // Fetch ad spend from Meta Ads API — use startDate/endDate when we have
+    // them so cache keys match campaign-studio. Meta caps at 37 months (~1100 days).
+    const spendQs = new URLSearchParams({ totalsOnly: 'true' });
+    if (startDate && endDate) {
+      spendQs.set('startDate', startDate);
+      spendQs.set('endDate', endDate);
+    } else {
+      spendQs.set('days', String(Math.min(days || 30, 1100)));
+    }
+    fetch(`/api/ads/metrics?${spendQs}`)
       .then(res => res.ok ? res.json() : null)
       .then(json => { if (json?.totals) setTotalSpend(json.totals.spend ?? null); })
       .catch(() => setTotalSpend(null));
 
-  }, [dateRange, selectedLine, customFrom, customTo]);
+  }, [dateRange, customFrom, customTo]);
 
   // ── Derived data ──
   const kpi = data?.kpi ?? {};
@@ -331,15 +319,6 @@ export default function AnalyticsPage() {
           <span className={s.subtitle}>业务询盘质量与转化分析</span>
         </div>
         <div className={s.headerRight}>
-          <select
-            className={s.supplySelect}
-            value={selectedLine}
-            onChange={e => setSelectedLine(e.target.value)}
-          >
-            {PRODUCT_LINES.map(pl => (
-              <option key={pl.key} value={pl.key}>{pl.label}</option>
-            ))}
-          </select>
           <TabBar tabs={DATE_TABS} active={dateRange} onChange={setDateRange} />
           {dateRange === 'custom' && (
             <div className={s.dateRow}>
@@ -408,22 +387,8 @@ export default function AnalyticsPage() {
             title="AI 询盘洞察"
             tag={aiInsightLoading ? (aiStatus || '正在分析中...') : null}
             onRefresh={aiInsight ? () => {
-              const productLines = getProductLines();
-              if (dateRange === 'custom' && customFrom && customTo) {
-                const from = new Date(`${customFrom}T00:00:00.000+08:00`).toISOString();
-                const to = new Date(`${customTo}T23:59:59.999+08:00`).toISOString();
-                return fetchAiInsight({ startDate: from, endDate: to, productLines });
-              }
-              if (dateRange === 'all') {
-                return fetchAiInsight({ days: 3650, productLines });
-              }
-              const d = DATE_TAB_TO_DAYS[dateRange] ?? 7;
-              const now = new Date();
-              return fetchAiInsight({
-                startDate: new Date(now.getTime() - d * 86400000).toISOString(),
-                endDate: now.toISOString(),
-                productLines,
-              });
+              const req = buildInsightRequest();
+              if (req) return fetchAiInsight(req);
             } : undefined}
             refreshLabel="重新生成"
           >
@@ -439,22 +404,8 @@ export default function AnalyticsPage() {
                   role="button"
                   tabIndex={0}
                   onClick={() => {
-                    const productLines = getProductLines();
-                    if (dateRange === 'custom' && customFrom && customTo) {
-                      const from = new Date(`${customFrom}T00:00:00.000+08:00`).toISOString();
-                      const to = new Date(`${customTo}T23:59:59.999+08:00`).toISOString();
-                      return fetchAiInsight({ startDate: from, endDate: to, productLines });
-                    }
-                    if (dateRange === 'all') {
-                      return fetchAiInsight({ days: 3650, productLines });
-                    }
-                    const d = DATE_TAB_TO_DAYS[dateRange] ?? 7;
-                    const now = new Date();
-                    return fetchAiInsight({
-                      startDate: new Date(now.getTime() - d * 86400000).toISOString(),
-                      endDate: now.toISOString(),
-                      productLines,
-                    });
+                    const req = buildInsightRequest();
+                    if (req) fetchAiInsight(req);
                   }}
                   style={{ color: 'var(--accent)', cursor: 'pointer', fontWeight: 500 }}
                 >
@@ -501,12 +452,16 @@ export default function AnalyticsPage() {
                 <div className={s.agentList}>
                   {agentDistribution.map(agent => {
                     const total = Object.values(agent.quality).reduce((a, b) => a + b, 0);
+                    // Prefer stable agentId. Fall back to productLine for the
+                    // "no agent assigned" bucket so keys stay unique even when
+                    // multiple rows share the "Unknown" display name.
+                    const rowKey = agent.agentId || `noagent:${agent.productLine || 'unknown'}`;
                     return (
-                      <div key={agent.agentName} className={s.agentRow}>
+                      <div key={rowKey} className={s.agentRow}>
                         <div className={s.agentHeader}>
                           <span className={s.agentName}>{AGENT_NAME_LABELS[agent.agentName] || agent.agentName}</span>
                           <Tag variant={PL_TAG_VARIANT[agent.productLine] || 'low'}>
-                            {PRODUCT_LINES.find(p => p.key === agent.productLine)?.label || agent.productLine}
+                            {agent.displayLabel || agent.productLine}
                           </Tag>
                           <span className={s.agentStats}>
                             {agent.inquiryCount} 询盘 · {agent.proofCount} 高质量 · {agent.proofRate}%
@@ -588,7 +543,7 @@ export default function AnalyticsPage() {
                   i + 1,
                   p.productName,
                   <Tag key={p.productLine} variant={PL_TAG_VARIANT[p.productLine] || 'low'}>
-                    {PRODUCT_LINES.find(pl => pl.key === p.productLine)?.label || p.productLine}
+                    {p.displayLabel || p.productLine}
                   </Tag>,
                   p.inquiryCount,
                   `${p.proofRate}%`,

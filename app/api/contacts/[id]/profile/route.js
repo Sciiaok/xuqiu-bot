@@ -3,13 +3,9 @@ import { demoGuard } from '../../../../../lib/demo-mode.js';
 import { createClient } from '../../../../../lib/supabase-server.js';
 import supabase from '../../../../../lib/supabase.js';
 import { findContactById } from '../../../../../lib/repositories/contact.repository.js';
-import { anthropic, MODELS } from '../../../../../src/llm-client.js';
+import { generateSummaryWithFallback } from '../../../../../lib/ai-summary.js';
 
 const AI_SYSTEM_PROMPT = 'You are a B2B sales analyst. Summarize this customer profile in Chinese. Include: buyer intent, product interests, budget signals, engagement level, recommended next steps. Keep it concise (under 200 words).';
-
-function extractText(response) {
-  return response?.content?.find(c => c.type === 'text')?.text?.trim() || '';
-}
 
 function buildAiSummaryInput(contact, conversations, leads, messages) {
   const timeline = [...messages]
@@ -115,24 +111,17 @@ export async function GET(request, { params }) {
       }
 
       try {
-        const aiResponse = await anthropic.messages.create({
-          model: MODELS.MINIMAX,
+        responseBody.aiSummary = await generateSummaryWithFallback({
           system: AI_SYSTEM_PROMPT,
-          messages: [
-            {
-              role: 'user',
-              content: buildAiSummaryInput(contact, conversations || [], leads, recentMessages),
-            },
-          ],
-          max_tokens: 500,
+          userPrompt: buildAiSummaryInput(contact, conversations || [], leads, recentMessages),
+          maxTokens: 500,
+          logTag: 'contacts/profile',
         });
-
-        const aiSummary = extractText(aiResponse);
-        if (aiSummary) {
-          responseBody.aiSummary = aiSummary;
-        }
       } catch (aiError) {
         console.error('[contacts/profile] Failed to generate AI summary:', aiError);
+        // Surface the failure to the client instead of silently omitting the field —
+        // the caller's button will show "生成失败" rather than appear to do nothing.
+        responseBody.aiSummaryError = aiError.message || 'AI 画像生成失败';
       }
     }
 

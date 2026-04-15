@@ -5,6 +5,7 @@ import { demoGuard } from '../../../../lib/demo-mode.js';
 import { createClient } from '../../../../lib/supabase-server.js';
 import { getRedis } from '../../../../lib/redis.js';
 import { config } from '../../../../src/config.js';
+import { formatDateInTimeZone, shiftDateString, localDateToUtcIso } from '../../../../lib/inquiry-dashboard.js';
 
 const META_API_VERSION = 'v21.0';
 const META_API_TIMEOUT_MS = config.meta.apiTimeoutMs;
@@ -16,6 +17,8 @@ const CONVERSATION_CHUNK_SIZE = 50;
 const META_IMAGE_HASH_CHUNK_SIZE = 40;
 const META_VIDEO_ID_CHUNK_SIZE = 25;
 
+// Legacy display labels for the original three product lines. New custom
+// product lines fall through to the slug itself via getProductLineLabel().
 const PRODUCT_LINE_LABELS = {
   all: '全部',
   vehicle: '整车',
@@ -23,6 +26,10 @@ const PRODUCT_LINE_LABELS = {
   agri_machinery: '农机',
   unclassified: '未分类',
 };
+
+function getProductLineLabel(value) {
+  return PRODUCT_LINE_LABELS[value] || value || '未分类';
+}
 
 const QUALITY_RANK = {
   BAD: 1,
@@ -51,7 +58,10 @@ const NAME_RULES = [
 
 function parseProductLine(searchParams) {
   const value = String(searchParams.get('productLine') || 'all').trim();
-  return PRODUCT_LINE_LABELS[value] ? value : 'all';
+  // Accept any non-empty slug (not just the legacy three). 'all' is the only
+  // special sentinel; empty input falls back to 'all'.
+  if (!value) return 'all';
+  return value;
 }
 
 function parseDateRange(searchParams) {
@@ -59,26 +69,27 @@ function parseDateRange(searchParams) {
   const startDate = String(searchParams.get('startDate') || '').trim();
   const endDate = String(searchParams.get('endDate') || '').trim();
   const explicitDays = parseInt(searchParams.get('days') || '', 10);
-  const now = new Date();
 
   let fromDate;
   let toDate;
   let effectivePreset = preset || '30d';
   let days;
 
+  let fromDateStr;
+  let toDateStr;
+
   if (startDate && endDate) {
-    fromDate = new Date(`${startDate}T00:00:00.000Z`);
-    toDate = new Date(`${endDate}T23:59:59.999Z`);
+    fromDateStr = startDate;
+    toDateStr = endDate;
     effectivePreset = 'custom';
-    days = Math.max(1, Math.round((toDate - fromDate) / 86400000) + 1);
+    days = Math.max(1, Math.round(
+      (new Date(`${endDate}T00:00:00.000Z`) - new Date(`${startDate}T00:00:00.000Z`)) / 86400000,
+    ) + 1);
   } else {
     switch (preset) {
       case 'today':
-        days = 1;
-        break;
       case 'yesterday':
         days = 1;
-        now.setUTCDate(now.getUTCDate() - 1);
         break;
       case '7d':
         days = 7;
@@ -92,12 +103,15 @@ function parseDateRange(searchParams) {
         break;
     }
 
-    toDate = new Date(now);
-    toDate.setUTCHours(23, 59, 59, 999);
-    fromDate = new Date(toDate);
-    fromDate.setUTCDate(fromDate.getUTCDate() - days + 1);
-    fromDate.setUTCHours(0, 0, 0, 0);
+    // Yesterday-based window (Asia/Shanghai): [yesterday - (days-1), yesterday].
+    // Stable within the calendar day for cache reuse; excludes today's partial data.
+    const today = formatDateInTimeZone(new Date());
+    toDateStr = shiftDateString(today, -1);
+    fromDateStr = shiftDateString(toDateStr, -(days - 1));
   }
+
+  fromDate = new Date(localDateToUtcIso(fromDateStr, false));
+  toDate = new Date(localDateToUtcIso(toDateStr, true));
 
   return {
     preset: effectivePreset,
@@ -106,7 +120,11 @@ function parseDateRange(searchParams) {
     toDate,
     fromISO: fromDate.toISOString(),
     toISO: toDate.toISOString(),
-    isSingleDay: fromDate.toISOString().slice(0, 10) === toDate.toISOString().slice(0, 10),
+    // Local (Asia/Shanghai) date strings — use for Meta Ads API `time_range`
+    // since Meta treats these as inclusive local dates per ad-account timezone.
+    fromDateStr,
+    toDateStr,
+    isSingleDay: fromDateStr === toDateStr,
   };
 }
 
@@ -664,9 +682,11 @@ function mergeStats(metaMetrics, conversationMetrics) {
   };
 }
 
-function buildMetaLifetimeSince(untilISO) {
-  const untilDate = new Date(untilISO);
-  const sinceDate = new Date(untilDate);
+function buildMetaLifetimeSince(untilDateStr) {
+  // untilDateStr is YYYY-MM-DD (local Shanghai). Subtract months preserving the
+  // YYYY-MM-DD format expected by Meta's time_range.since.
+  const [year, month, day] = untilDateStr.split('-').map(Number);
+  const sinceDate = new Date(Date.UTC(year, month - 1, day));
   sinceDate.setUTCMonth(sinceDate.getUTCMonth() - META_LIFETIME_LOOKBACK_MONTHS);
   return sinceDate.toISOString().slice(0, 10);
 }
@@ -826,15 +846,14 @@ export async function GET(request) {
       });
     }
 
-    const metaLifetimeSince = buildMetaLifetimeSince(range.toISO);
+    const metaLifetimeSince = buildMetaLifetimeSince(range.toDateStr);
 
     // Meta Ads API caps time_range at 37 months. When the requested window
-    // exceeds this (e.g. "所有时间" → days=3650), clamp the Meta-facing
-    // since date while leaving Supabase queries uncapped.
-    const metaPeriodSince = (() => {
-      const raw = range.fromISO.slice(0, 10);
-      return raw < metaLifetimeSince ? metaLifetimeSince : raw;
-    })();
+    // exceeds this, clamp the Meta-facing since date while leaving Supabase
+    // queries uncapped.
+    const metaPeriodSince = range.fromDateStr < metaLifetimeSince
+      ? metaLifetimeSince
+      : range.fromDateStr;
 
     const periodConversationSummary = await fetchConversationSummaryByAd({
       supabase,
@@ -850,17 +869,17 @@ export async function GET(request) {
         fetchMetaInsights({
           adAccountId,
           accessToken,
-          timeRange: { since: metaLifetimeSince, until: range.toISO.slice(0, 10) },
+          timeRange: { since: metaLifetimeSince, until: range.toDateStr },
         }),
         fetchMetaInsights({
           adAccountId,
           accessToken,
-          timeRange: { since: metaPeriodSince, until: range.toISO.slice(0, 10) },
+          timeRange: { since: metaPeriodSince, until: range.toDateStr },
         }),
         fetchMetaInsights({
           adAccountId,
           accessToken,
-          timeRange: { since: metaPeriodSince, until: range.toISO.slice(0, 10) },
+          timeRange: { since: metaPeriodSince, until: range.toDateStr },
           timeIncrement: 1,
         }),
       ]);
@@ -1010,7 +1029,7 @@ export async function GET(request) {
             creativeOriginalHeight: 0,
           }),
           businessLine: classification.businessLine,
-          businessLineLabel: PRODUCT_LINE_LABELS[classification.businessLine] || PRODUCT_LINE_LABELS.unclassified,
+          businessLineLabel: getProductLineLabel(classification.businessLine),
           classificationSource: classification.source,
           lifetime,
           period: {

@@ -24,7 +24,7 @@ const NAV = [
     items: [
       { href: '/leadhub', label: '询盘私信', icon: 'leadhub' },
       { href: '/agents', label: '智能体', icon: 'agents' },
-      { href: '/knowledge-base', label: '知识库', icon: 'knowledge' },
+      // 知识库已嵌入到 agent 详情页（/agents/[id]/knowledge-base），不再作为独立入口
     ],
   },
 ];

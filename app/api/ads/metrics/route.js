@@ -4,6 +4,7 @@ import { demoGuard } from '../../../../lib/demo-mode.js';
 import { createClient } from '../../../../lib/supabase-server.js';
 import { config } from '../../../../src/config.js';
 import { getRedis } from '../../../../lib/redis.js';
+import { formatDateInTimeZone, shiftDateString } from '../../../../lib/inquiry-dashboard.js';
 
 const META_API_VERSION = 'v21.0';
 const META_API_TIMEOUT_MS = config.meta.apiTimeoutMs;
@@ -48,11 +49,13 @@ function buildTimeRange(days, { startDate, endDate } = {}) {
   if (startDate && endDate) {
     return { since: startDate, until: endDate };
   }
+  // Yesterday-based window in Asia/Shanghai so the same `days` value produces
+  // a stable [since, until] pair throughout the calendar day.
   const capped = Math.min(days, META_MAX_DAYS);
-  const until = new Date();
-  const since = new Date();
-  since.setUTCDate(since.getUTCDate() - capped + 1);
-  return { since: formatDate(since), until: formatDate(until) };
+  const today = formatDateInTimeZone(new Date());
+  const until = shiftDateString(today, -1);
+  const since = shiftDateString(until, -(capped - 1));
+  return { since, until };
 }
 
 function normalizeAdAccountId(value) {

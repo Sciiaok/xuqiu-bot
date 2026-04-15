@@ -27,10 +27,10 @@ const MAIN_TABS = [
 ];
 
 const TIME_FILTER_ITEMS = [
-  { key: '1d', label: '最近1天' },
-  { key: '7d', label: '最近7天' },
-  { key: '30d', label: '最近30天' },
-  { key: 'all', label: '所有时间' },
+  { key: '1d', label: '昨天' },
+  { key: '7d', label: '前一周' },
+  { key: '30d', label: '前一个月' },
+  { key: '365d', label: '前一年' },
   { key: 'custom', label: '自定义' },
 ];
 

@@ -582,6 +582,14 @@ export async function generateCampaignPlanParallel(brief, researchReport, instru
     }
   }
 
+  // Hard cap: 自动化投放最终只输出 1 个广告系列。
+  // 直接在并行扇出前裁剪 cells，避免浪费 LLM 调用。保留第一个 cell（最优平台/区域/首个漏斗阶段）。
+  if (cells.length > 1) {
+    const dropped = cells.slice(1).map(c => `${c.platform}/${c.region}/${c.stage.key}`);
+    console.log(`[strategy-parallel] MAX_CAMPAIGNS=1: keeping ${cells[0].platform}/${cells[0].region}/${cells[0].stage.key}, dropping ${dropped.length} cells: ${dropped.join(', ')}`);
+    cells.length = 1;
+  }
+
   const totalCells = cells.length;
   onProgress?.({
     step: 'generating_strategy',

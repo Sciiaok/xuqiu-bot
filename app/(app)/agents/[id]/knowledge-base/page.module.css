@@ -4,8 +4,39 @@
   flex-direction: column;
   height: 100vh;
   overflow: hidden;
-  padding: 24px 24px 0;
+  padding: 16px 24px 0;
   box-sizing: border-box;
+}
+
+/* ── Breadcrumb ───────────────────────────────────────── */
+.breadcrumb {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  font-family: var(--font-sans);
+  color: var(--text3);
+  flex-shrink: 0;
+  margin-bottom: 8px;
+}
+
+.breadcrumbLink {
+  color: var(--text3);
+  text-decoration: none;
+  transition: color 0.15s;
+}
+
+.breadcrumbLink:hover {
+  color: var(--text);
+}
+
+.breadcrumbSep {
+  color: var(--text4, var(--text3));
+}
+
+.breadcrumbCurrent {
+  color: var(--text);
+  font-weight: 500;
 }
 
 /* ── Header ───────────────────────────────────────────── */
@@ -39,32 +70,6 @@
   color: var(--text3);
   font-family: var(--font-sans);
 }
-
-.headerRight {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.agentSelect {
-  height: 32px;
-  padding: 0 28px 0 10px;
-  background: var(--bg2);
-  border: 1px solid var(--border);
-  border-radius: var(--r);
-  color: var(--text);
-  font-family: var(--font-sans);
-  font-size: 12px;
-  cursor: pointer;
-  appearance: none;
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M0 0l5 6 5-6z' fill='%23a09484'/%3E%3C/svg%3E");
-  background-repeat: no-repeat;
-  background-position: right 9px center;
-  outline: none;
-}
-
-.agentSelect:hover { border-color: var(--border2); }
-.agentSelect:focus { border-color: var(--accent); }
 
 /* ── Tabs ─────────────────────────────────────────────── */
 .tabBar {
@@ -382,7 +387,6 @@
   font-family: var(--font-sans);
 }
 
-/* Dropzone */
 .dropzone {
   border: 2px dashed var(--border2);
   border-radius: var(--r);
@@ -421,7 +425,6 @@
   font-family: var(--font-mono);
 }
 
-/* Layer selector in upload */
 .formRow {
   display: flex;
   align-items: center;
@@ -455,7 +458,6 @@
 
 .formSelect:focus { border-color: var(--accent); }
 
-/* Upload progress */
 .uploadProgress {
   margin-top: 12px;
   display: flex;
@@ -474,20 +476,6 @@
 
 .uploadStatusDone { color: var(--green); }
 .uploadStatusError { color: var(--red); }
-
-.uploadBar {
-  height: 3px;
-  background: var(--bg4);
-  border-radius: 2px;
-  overflow: hidden;
-}
-
-.uploadBarFill {
-  height: 100%;
-  background: var(--accent);
-  border-radius: 2px;
-  transition: width 0.3s;
-}
 
 /* Document List */
 .docList {
@@ -624,14 +612,13 @@
   display: grid;
   grid-template-columns: 220px 1fr;
   gap: 0;
-  height: calc(100vh - 160px);
+  height: calc(100vh - 190px);
   border: 1px solid var(--border);
   border-radius: var(--rl);
   overflow: hidden;
   background: var(--bg2);
 }
 
-/* Session sidebar */
 .sessionSidebar {
   display: flex;
   flex-direction: column;
@@ -683,7 +670,6 @@
   font-family: var(--font-mono);
 }
 
-/* Chat main area */
 .chatMain {
   display: flex;
   flex-direction: column;
@@ -798,7 +784,6 @@
   padding: 0 2px;
 }
 
-/* Typing indicator */
 .typingIndicator {
   display: flex;
   align-items: center;
@@ -821,7 +806,11 @@
 .typingDot:nth-child(2) { animation-delay: 0.2s; }
 .typingDot:nth-child(3) { animation-delay: 0.4s; }
 
-/* Chat input */
+@keyframes v5-pulse {
+  0%, 100% { opacity: 0.3; }
+  50% { opacity: 1; }
+}
+
 .chatInputArea {
   display: flex;
   align-items: center;
@@ -870,4 +859,8 @@
   display: flex;
   justify-content: center;
   padding: 40px;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
 }

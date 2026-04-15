@@ -12,6 +12,8 @@ import {
   BUSINESS_VALUE_LABELS as VALUE_LABELS,
 } from '../../../lib/inquiries-filters';
 import Markdown from '../../components/Markdown/Markdown';
+import { listAgents } from '../../../lib/api/agents.js';
+import { getDisplayLabel } from '../../../lib/constants/product-lines.js';
 
 /* ── Constants ─────────────────────────────────────────── */
 
@@ -30,7 +32,9 @@ const DETAIL_TABS = [
   { key: 'notes', label: '备注' },
 ];
 
-const SUPPLY_CHAINS = ['全部供应链', 'agri_machinery', 'vehicle', 'auto_parts'];
+// Sentinel for "no supply-chain filter". Backend's inquiries route already
+// accepts product_line slugs (not just UUIDs) as agentIds — see resolveAgentIdsFilter.
+const SUPPLY_CHAIN_ALL = '全部供应链';
 const QUALITY_OPTIONS = ['全部质量', 'PROOF', 'QUALIFY', 'GOOD'];
 
 const SEARCH_DEBOUNCE_MS = 300;
@@ -301,7 +305,8 @@ export default function LeadHubPage() {
   const [selectedId, setSelectedId] = useState(null);
   const [routeFilter, setRouteFilter] = useState('all');
   const [detailTab, setDetailTab] = useState('chat');
-  const [supplyChain, setSupplyChain] = useState('全部供应链');
+  const [supplyChain, setSupplyChain] = useState(SUPPLY_CHAIN_ALL);
+  const [supplyChainOptions, setSupplyChainOptions] = useState([]);
   const [quality, setQuality] = useState('全部质量');
   const [country, setCountry] = useState('all');
   const [datePreset, setDatePreset] = useState('all');
@@ -331,16 +336,27 @@ export default function LeadHubPage() {
   const [profile, setProfile] = useState(null);
   const [loadingProfile, setLoadingProfile] = useState(false);
   const [aiSummaryLoading, setAiSummaryLoading] = useState(false);
+  const [aiSummaryError, setAiSummaryError] = useState('');
 
   const fetchAiSummary = async () => {
     if (!selectedContactId) return;
     setAiSummaryLoading(true);
+    setAiSummaryError('');
     try {
       const res = await fetch(`/api/contacts/${selectedContactId}/profile?withAiSummary=true`);
       const json = await res.json();
-      setProfile(prev => prev ? { ...prev, aiSummary: json.aiSummary } : json);
+      if (!res.ok) {
+        throw new Error(json.error || `请求失败 (${res.status})`);
+      }
+      if (json.aiSummary) {
+        setProfile(prev => prev ? { ...prev, aiSummary: json.aiSummary } : json);
+      } else {
+        // Backend returned 200 but omitted aiSummary (both MINIMAX and HAIKU failed).
+        throw new Error(json.aiSummaryError || 'AI 画像生成失败，请稍后重试');
+      }
     } catch (err) {
       console.error('AI summary error:', err);
+      setAiSummaryError(err.message);
     } finally {
       setAiSummaryLoading(false);
     }
@@ -361,6 +377,26 @@ export default function LeadHubPage() {
     const t = setTimeout(() => setDebouncedSearch(search), SEARCH_DEBOUNCE_MS);
     return () => clearTimeout(t);
   }, [search]);
+
+  // Fetch active agents → supply-chain dropdown options (mount once).
+  // Backend's inquiries route accepts product_line slugs as `agentIds`, so we
+  // send the slug as the filter value rather than needing the UUID.
+  useEffect(() => {
+    let cancelled = false;
+    listAgents({ activeOnly: true })
+      .then(agents => {
+        if (cancelled) return;
+        const options = agents
+          .filter(a => a.product_line)
+          .map(a => ({
+            value: a.product_line,
+            label: getDisplayLabel(a),
+          }));
+        setSupplyChainOptions(options);
+      })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, []);
 
   // Fetch distinct destination countries for the filter dropdown (mount once)
   useEffect(() => {
@@ -385,7 +421,7 @@ export default function LeadHubPage() {
   const buildQs = useCallback((cursor = null) => {
     const qs = new URLSearchParams();
     qs.set('limit', '20');
-    if (supplyChain !== '全部供应链') qs.append('agentIds', supplyChain);
+    if (supplyChain !== SUPPLY_CHAIN_ALL) qs.append('agentIds', supplyChain);
     if (quality !== '全部质量') qs.append('inquiryQuality', quality);
     if (country !== 'all') qs.set('country', country);
     if (debouncedSearch) qs.set('customer', debouncedSearch);
@@ -766,7 +802,10 @@ export default function LeadHubPage() {
           <div className={s.leftPanelControls}>
             <div className={s.leftPanelFilters}>
               <select className={s.filterSelect} value={supplyChain} onChange={e => setSupplyChain(e.target.value)}>
-                {SUPPLY_CHAINS.map(sc => <option key={sc}>{sc}</option>)}
+                <option value={SUPPLY_CHAIN_ALL}>{SUPPLY_CHAIN_ALL}</option>
+                {supplyChainOptions.map(opt => (
+                  <option key={opt.value} value={opt.value}>{opt.label}</option>
+                ))}
               </select>
               <select className={s.filterSelect} value={quality} onChange={e => setQuality(e.target.value)}>
                 {QUALITY_OPTIONS.map(q => <option key={q}>{q}</option>)}
@@ -1064,8 +1103,13 @@ export default function LeadHubPage() {
                                 onClick={fetchAiSummary}
                                 disabled={aiSummaryLoading}
                               >
-                                ✦ 生成 AI 画像
+                                ✦ {aiSummaryError ? '重试生成' : '生成 AI 画像'}
                               </button>
+                              {aiSummaryError && (
+                                <span style={{ color: 'var(--red)', fontSize: 12, marginLeft: 10 }}>
+                                  {aiSummaryError}
+                                </span>
+                              )}
                             </div>
                           )}
                         </div>

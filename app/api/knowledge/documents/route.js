@@ -1,5 +1,10 @@
 import { NextResponse } from 'next/server';
 import supabase from '../../../../lib/supabase.js';
+import {
+  getDocumentsByAgent,
+  getDocumentById,
+  deleteDocumentById,
+} from '../../../../lib/repositories/knowledge-base.repository.js';
 
 /**
  * GET /api/knowledge/documents?agent_id=xxx
@@ -14,15 +19,8 @@ export async function GET(request) {
       return NextResponse.json({ error: 'agent_id is required' }, { status: 400 });
     }
 
-    const { data, error } = await supabase
-      .from('kb_documents')
-      .select('*')
-      .eq('agent_id', agentId)
-      .order('created_at', { ascending: false });
-
-    if (error) throw error;
-
-    return NextResponse.json({ documents: data || [] });
+    const documents = await getDocumentsByAgent(agentId);
+    return NextResponse.json({ documents });
   } catch (error) {
     console.error('[knowledge/documents] Error:', error);
     return NextResponse.json({ error: error.message }, { status: 500 });
@@ -30,38 +28,32 @@ export async function GET(request) {
 }
 
 /**
- * DELETE /api/knowledge/documents
+ * DELETE /api/knowledge/documents?doc_id=xxx
  * Delete a knowledge document and all its associated data.
- * Body: { doc_id: "uuid" }
+ * Accepts doc_id from either query string or JSON body (for backwards compat).
  */
 export async function DELETE(request) {
   try {
-    const body = await request.json();
-    const { doc_id } = body;
+    const { searchParams } = new URL(request.url);
+    let docId = searchParams.get('doc_id');
+    if (!docId) {
+      // Fallback: older clients POST JSON body
+      const body = await request.json().catch(() => ({}));
+      docId = body.doc_id;
+    }
 
-    if (!doc_id) {
+    if (!docId) {
       return NextResponse.json({ error: 'doc_id is required' }, { status: 400 });
     }
 
-    // Get document info for storage cleanup
-    const { data: doc } = await supabase
-      .from('kb_documents')
-      .select('storage_path')
-      .eq('id', doc_id)
-      .single();
-
-    // Delete from storage if path exists
+    // Clean up storage first (best-effort) — repo doesn't touch storage
+    const doc = await getDocumentById(docId);
     if (doc?.storage_path) {
       await supabase.storage.from('kb-assets').remove([doc.storage_path]);
     }
 
     // Delete document (cascades to kb_knowledge_points, kb_products, kb_shipping_routes)
-    const { error } = await supabase
-      .from('kb_documents')
-      .delete()
-      .eq('id', doc_id);
-
-    if (error) throw error;
+    await deleteDocumentById(docId);
 
     return NextResponse.json({ success: true });
   } catch (error) {

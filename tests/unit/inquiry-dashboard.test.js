@@ -5,27 +5,77 @@ import {
   buildDateWindows,
   buildInquiryRecords,
   createDateSeries,
+  resolveDateRange,
 } from '../../lib/inquiry-dashboard.js';
 
-test('buildDateWindows returns exactly seven calendar days for 7d', () => {
+test('buildDateWindows returns exactly seven calendar days ending yesterday for 7d', () => {
   const windows = buildDateWindows({
     days: 7,
     now: new Date('2026-04-06T09:30:00+08:00'),
   });
 
-  assert.equal(windows.current.fromDate, '2026-03-31');
-  assert.equal(windows.current.toDate, '2026-04-06');
+  assert.equal(windows.current.fromDate, '2026-03-30');
+  assert.equal(windows.current.toDate, '2026-04-05');
   assert.deepEqual(createDateSeries(windows.current.fromDate, windows.current.toDate), [
+    '2026-03-30',
     '2026-03-31',
     '2026-04-01',
     '2026-04-02',
     '2026-04-03',
     '2026-04-04',
     '2026-04-05',
-    '2026-04-06',
   ]);
-  assert.equal(windows.previous.fromDate, '2026-03-24');
-  assert.equal(windows.previous.toDate, '2026-03-30');
+  assert.equal(windows.previous.fromDate, '2026-03-23');
+  assert.equal(windows.previous.toDate, '2026-03-29');
+});
+
+test('resolveDateRange returns [yesterday, yesterday] for 1d', () => {
+  const { startDate, endDate, days, label } = resolveDateRange(
+    '1d', '', '', new Date('2026-04-15T03:00:00+08:00'),
+  );
+  assert.equal(startDate, '2026-04-14');
+  assert.equal(endDate, '2026-04-14');
+  assert.equal(days, 1);
+  assert.equal(label, '昨天');
+});
+
+test('resolveDateRange returns [yesterday-6, yesterday] for 7d', () => {
+  const { startDate, endDate, days, label } = resolveDateRange(
+    '7d', '', '', new Date('2026-04-15T03:00:00+08:00'),
+  );
+  assert.equal(startDate, '2026-04-08');
+  assert.equal(endDate, '2026-04-14');
+  assert.equal(days, 7);
+  assert.equal(label, '前一周');
+});
+
+test('resolveDateRange returns [yesterday-29, yesterday] for 30d', () => {
+  const { startDate, endDate, days, label } = resolveDateRange(
+    '30d', '', '', new Date('2026-04-15T03:00:00+08:00'),
+  );
+  assert.equal(startDate, '2026-03-16');
+  assert.equal(endDate, '2026-04-14');
+  assert.equal(days, 30);
+  assert.equal(label, '前一个月');
+});
+
+test('resolveDateRange returns [yesterday-364, yesterday] for 365d', () => {
+  const { startDate, endDate, days, label } = resolveDateRange(
+    '365d', '', '', new Date('2026-04-15T03:00:00+08:00'),
+  );
+  assert.equal(startDate, '2025-04-15');
+  assert.equal(endDate, '2026-04-14');
+  assert.equal(days, 365);
+  assert.equal(label, '过去一年');
+});
+
+test('resolveDateRange passes through custom dates', () => {
+  const { startDate, endDate, days } = resolveDateRange(
+    'custom', '2026-04-01', '2026-04-10',
+  );
+  assert.equal(startDate, '2026-04-01');
+  assert.equal(endDate, '2026-04-10');
+  assert.equal(days, 10);
 });
 
 test('buildDateWindows returns yesterday as the full current window for 1d', () => {

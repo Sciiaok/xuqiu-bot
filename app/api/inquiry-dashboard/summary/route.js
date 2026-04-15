@@ -1,7 +1,7 @@
 import supabase from '@/lib/supabase';
-import { anthropic, MODELS } from '@/src/llm-client.js';
 import { streamSSE } from '@/lib/sse.js';
 import { parseDashboardParams, fetchDashboardData } from '@/lib/inquiry-dashboard';
+import { generateSummaryWithFallback } from '@/lib/ai-summary';
 
 const SYSTEM_PROMPTS = {
   zh: '你是B2B外贸询盘数据分析师。根据以下询盘看板聚合数据，生成3-5句简洁的中文总结。包含：关键KPI及环比变化、业务线对比、Top国家、质量和买家类型分布亮点、值得关注的异常。使用 Markdown 格式。',
@@ -63,17 +63,6 @@ async function writeCache({ productLinesKey, periodKey, dateFrom, dateTo }, cont
 
 /* ─────────────────────────  LLM  ───────────────────────── */
 
-async function callLLM(model, systemPrompt, userPrompt) {
-  const result = await anthropic.messages.create({
-    model,
-    system: systemPrompt,
-    messages: [{ role: 'user', content: userPrompt }],
-    max_tokens: 1500,
-  });
-  return result.content?.find((b) => b.type === 'text')?.text?.trim() || '';
-}
-
-// Try MINIMAX first (fast & cheap); fall back to HAIKU if it fails or returns empty.
 async function generateSummary(dashboardData, lang) {
   const dataStr = JSON.stringify(dashboardData, null, 2);
   const truncated = dataStr.length > MAX_DATA_CHARS
@@ -85,15 +74,12 @@ async function generateSummary(dashboardData, lang) {
     ? `Generate a summary strictly based on the following data. Do not fabricate information not provided.\n\nData:\n${truncated}`
     : `请严格基于以下数据生成总结，不要编造未提供的信息。\n\n数据:\n${truncated}`;
 
-  try {
-    const text = await callLLM(MODELS.MINIMAX, systemPrompt, userPrompt);
-    if (text) return text;
-    console.warn('[inquiry-summary] MINIMAX returned empty, falling back to HAIKU');
-  } catch (err) {
-    console.warn('[inquiry-summary] MINIMAX failed, falling back to HAIKU:', err.message);
-  }
-
-  return callLLM(MODELS.HAIKU, systemPrompt, userPrompt);
+  return generateSummaryWithFallback({
+    system: systemPrompt,
+    userPrompt,
+    maxTokens: 1500,
+    logTag: 'inquiry-summary',
+  });
 }
 
 /* ─────────────────────────  SSE stream  ───────────────────────── */

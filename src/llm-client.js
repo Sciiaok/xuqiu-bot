@@ -54,7 +54,7 @@ const anthropicClient = config.anthropic?.apiKey
 const openrouterClient = config.openrouter?.apiKey
   ? new OpenAI({
       apiKey: config.openrouter.apiKey,
-      baseURL: 'https://openrouter.ai/api/v1',
+      baseURL: config.openrouter.baseURL,
       timeout: 120_000,
     })
   : null;

@@ -1,16 +1,5 @@
 import { NextResponse } from 'next/server';
-import supabase from '../../../../lib/supabase.js';
-
-const LAYERS = ['company', 'product', 'logistics', 'compliance', 'sales', 'competitive'];
-
-const LAYER_LABELS = {
-  company: '公司基础信息',
-  product: '产品与价格',
-  logistics: '物流与交付',
-  compliance: '合规与认证',
-  sales: '销售话术与流程',
-  competitive: '竞品情报',
-};
+import { getHealthSummary } from '../../../../lib/repositories/knowledge-base.repository.js';
 
 /**
  * GET /api/knowledge/health?agent_id=xxx
@@ -25,110 +14,16 @@ export async function GET(request) {
       return NextResponse.json({ error: 'agent_id is required' }, { status: 400 });
     }
 
-    // Get document counts per layer
-    const { data: docs } = await supabase
-      .from('kb_documents')
-      .select('layer, status')
-      .eq('agent_id', agentId);
+    const summary = await getHealthSummary(agentId);
+    const recommendations = generateRecommendations(
+      summary.layers,
+      summary.outdated_docs,
+      summary.total_products,
+      summary.total_pricing_rules,
+      summary.total_glossary_terms,
+    );
 
-    // Get knowledge point counts per layer
-    const { data: points } = await supabase
-      .from('kb_knowledge_points')
-      .select('layer')
-      .eq('agent_id', agentId)
-      .eq('status', 'active');
-
-    // Get draft count (pending review from auto-learn or teach)
-    const { count: draftCount } = await supabase
-      .from('kb_knowledge_points')
-      .select('id', { count: 'exact', head: true })
-      .eq('agent_id', agentId)
-      .eq('status', 'draft');
-
-    // Get product count
-    const { count: productCount } = await supabase
-      .from('kb_products')
-      .select('id', { count: 'exact', head: true })
-      .eq('agent_id', agentId)
-      .eq('is_active', true);
-
-    // Get pricing rules count
-    const { count: pricingRulesCount } = await supabase
-      .from('kb_pricing_rules')
-      .select('id', { count: 'exact', head: true })
-      .eq('agent_id', agentId)
-      .eq('is_active', true);
-
-    // Get glossary count
-    const { count: glossaryCount } = await supabase
-      .from('kb_glossary')
-      .select('id', { count: 'exact', head: true })
-      .eq('agent_id', agentId);
-
-    // Get outdated documents
-    const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
-    const { data: outdatedDocs } = await supabase
-      .from('kb_documents')
-      .select('id, filename, layer, updated_at')
-      .eq('agent_id', agentId)
-      .eq('status', 'ready')
-      .lt('updated_at', thirtyDaysAgo);
-
-    // Build per-layer health
-    const layers = {};
-    let totalPoints = 0;
-    let coveredLayers = 0;
-
-    for (const layer of LAYERS) {
-      const layerDocs = (docs || []).filter(d => d.layer === layer && d.status === 'ready');
-      const layerPoints = (points || []).filter(p => p.layer === layer);
-      const docCount = layerDocs.length;
-      const pointCount = layerPoints.length;
-      totalPoints += pointCount;
-
-      let coverage = 0;
-      if (pointCount > 50) coverage = 90;
-      else if (pointCount > 20) coverage = 70;
-      else if (pointCount > 5) coverage = 50;
-      else if (pointCount > 0) coverage = 25;
-
-      let status = 'error';
-      if (coverage >= 70) status = 'good';
-      else if (coverage > 0) status = 'warn';
-
-      if (coverage > 0) coveredLayers++;
-
-      layers[layer] = {
-        label: LAYER_LABELS[layer],
-        coverage,
-        docs: docCount,
-        points: pointCount,
-        status,
-      };
-    }
-
-    const overallCoverage = Math.round((coveredLayers / LAYERS.length) * 100);
-
-    // Generate AI recommendations based on health data
-    const recommendations = generateRecommendations(layers, outdatedDocs, productCount, pricingRulesCount, glossaryCount);
-
-    return NextResponse.json({
-      overall_coverage: overallCoverage,
-      total_documents: (docs || []).filter(d => d.status === 'ready').length,
-      total_knowledge_points: totalPoints,
-      total_products: productCount || 0,
-      total_pricing_rules: pricingRulesCount || 0,
-      total_glossary_terms: glossaryCount || 0,
-      pending_drafts: draftCount || 0,
-      layers,
-      outdated_docs: (outdatedDocs || []).map(d => ({
-        doc_id: d.id,
-        filename: d.filename,
-        layer: d.layer,
-        days_since_update: Math.floor((Date.now() - new Date(d.updated_at)) / (1000 * 60 * 60 * 24)),
-      })),
-      ai_recommendations: recommendations,
-    });
+    return NextResponse.json({ ...summary, ai_recommendations: recommendations });
   } catch (error) {
     console.error('[knowledge/health] Error:', error);
     return NextResponse.json({ error: error.message }, { status: 500 });
@@ -186,7 +81,7 @@ function generateRecommendations(layers, outdatedDocs, productCount, pricingRule
   // Outdated documents
   if (outdatedDocs?.length > 0) {
     for (const doc of outdatedDocs.slice(0, 3)) {
-      const days = Math.floor((Date.now() - new Date(doc.updated_at)) / (1000 * 60 * 60 * 24));
+      const days = doc.days_since_update;
       recs.push({
         priority: days > 90 ? 'high' : 'medium',
         layer: doc.layer,

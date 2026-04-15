@@ -43,6 +43,7 @@ export async function POST(request) {
     const {
       name,
       productLine,
+      displayLabel,
       systemPrompt,
       outputSchema,
       qualificationConfig,
@@ -59,6 +60,7 @@ export async function POST(request) {
     const agent = await createAgent({
       name,
       productLine,
+      displayLabel: displayLabel || null,
       systemPrompt,
       outputSchema: outputSchema || {},
       qualificationConfig: qualificationConfig || {},

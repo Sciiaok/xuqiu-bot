@@ -1,6 +1,8 @@
 // Pure helper functions extracted from CampaignStudioScreen.js.
 // No React/state dependencies — safe to unit-test in isolation.
 
+import { resolveDateRange } from '../../../lib/inquiry-dashboard.js';
+
 export function formatCurrency(value) {
   return `$${Number(value || 0).toLocaleString('en-US', {
     minimumFractionDigits: 2,
@@ -23,27 +25,18 @@ export function getStatusLabel(status) {
 }
 
 export function buildRangeRequest(timeFilter, customFrom, customTo) {
-  if (timeFilter === 'custom' && customFrom && customTo) {
-    const fromDate = new Date(`${customFrom}T00:00:00.000Z`);
-    const toDate = new Date(`${customTo}T23:59:59.999Z`);
-    const days = Math.max(1, Math.round((toDate - fromDate) / 86400000) + 1);
-    return {
-      params: `preset=custom&startDate=${customFrom}&endDate=${customTo}`,
-      days,
-      label: days === 1 ? customFrom : `${customFrom} ~ ${customTo}`,
-    };
+  const { startDate, endDate, days, label } = resolveDateRange(timeFilter, customFrom, customTo);
+
+  if (!startDate || !endDate) {
+    // Custom with empty inputs — preserve previous "no params" behavior.
+    return { params: '', days, label };
   }
 
-  if (timeFilter === 'all') {
-    return { params: 'days=3650', days: 3650, label: '所有时间' };
-  }
-  if (timeFilter === '1d') {
-    return { params: 'preset=today&days=1', days: 1, label: '最近1天' };
-  }
-  if (timeFilter === '7d') {
-    return { params: 'preset=7d&days=7', days: 7, label: '最近7天' };
-  }
-  return { params: 'preset=30d&days=30', days: 30, label: '最近30天' };
+  return {
+    params: `startDate=${startDate}&endDate=${endDate}`,
+    days,
+    label,
+  };
 }
 
 export function getAssessmentDetails(ad) {

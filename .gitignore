@@ -49,3 +49,6 @@ tests/eval/results/
 test-v5-*.mjs
 scripts/test-*.mjs
 .gitignore
+
+
+.claude/launch.json
