@@ -26,7 +26,7 @@ function graphUrl(path) {
   return `https://graph.facebook.com/${GRAPH_VERSION}/${path}`;
 }
 
-async function metaPost(path, body, token) {
+async function metaPost(path, body, token, { step } = {}) {
   const res = await fetch(graphUrl(path), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -36,9 +36,12 @@ async function metaPost(path, body, token) {
   const data = await res.json();
   if (data.error) {
     const msg = data.error.error_user_msg || data.error.error_user_title || data.error.message;
-    const err = new Error(`Meta API: ${msg}`);
+    // Include the step (campaign / adset / creative / ad / activate) so the
+    // user can tell at which stage Meta rejected the request.
+    const err = new Error(step ? `Meta API [${step}]: ${msg}` : `Meta API: ${msg}`);
     err.metaError = data.error;
     err.metaStatus = res.status;
+    err.step = step;
     throw err;
   }
   return data;
@@ -63,7 +66,7 @@ async function metaUploadImage(imageUrl, { ad_account_id, access_token }) {
     signal: AbortSignal.timeout(FETCH_TIMEOUT),
   });
   const data = await res.json();
-  if (data.error) throw new Error(`Meta API: ${data.error.message}`);
+  if (data.error) throw new Error(`Meta API [image]: ${data.error.message}`);
   const first = Object.values(data.images || {})[0];
   if (!first?.hash) throw new Error('No image hash returned from Meta');
   return first.hash;
@@ -122,21 +125,56 @@ export async function* stageCampaigns(plan, { userId }) {
   };
 
   for (const campaign of plan.campaigns || []) {
-    // 1. Campaign (CBO: daily_budget + bid_strategy live here, not on adset)
+    // Fail fast on missing / malformed budget. Without a positive integer
+    // daily_budget, Meta silently treats the campaign as "no campaign budget"
+    // and then rejects the adset with a cryptic
+    //   "若不使用广告系列预算，则必须在 is_adset_budget_sharing_enabled ..."
+    // error. Surfacing it up front beats chasing it through Graph responses.
+    const dailyBudget = Number(campaign.daily_budget_cents);
+    if (!Number.isInteger(dailyBudget) || dailyBudget <= 0) {
+      throw new Error(
+        `campaign "${campaign.name}" 缺少有效的 daily_budget_cents（收到：${JSON.stringify(campaign.daily_budget_cents)}）。` +
+        '需要正整数，单位为分（例如 $20/天 = 2000）。',
+      );
+    }
+
+    // 1. Campaign (CBO: daily_budget + bid_strategy live here, not on adset).
+    // Meta requires is_adset_budget_sharing_enabled to be explicit on any
+    // campaign with >1 adset (and is harmless on single-adset campaigns).
+    // Passing `false` opts out of the 20%-shared-budget optimization — safer
+    // default for MVP where per-adset spend should be predictable.
     const campaignPayload = {
       name: campaign.name,
       objective: 'OUTCOME_ENGAGEMENT',
       status: 'PAUSED',
       buying_type: 'AUCTION',
       special_ad_categories: [],
-      daily_budget: campaign.daily_budget_cents,
+      daily_budget: dailyBudget,
       bid_strategy: 'LOWEST_COST_WITHOUT_CAP',
+      is_adset_budget_sharing_enabled: false,
     };
-    const { id: campaignId } = await metaPost(`act_${ad_account_id}/campaigns`, campaignPayload, access_token);
+    const { id: campaignId } = await metaPost(
+      `act_${ad_account_id}/campaigns`,
+      campaignPayload,
+      access_token,
+      { step: `campaign "${campaign.name}"` },
+    );
     out.campaign_ids.push(campaignId);
     yield { type: 'campaign_created', name: campaign.name, id: campaignId };
 
     for (const adSet of campaign.ad_sets || []) {
+      // Meta requires non-empty geo_locations.countries. If the LLM emitted
+      // an empty array, Graph would reject with a vague "targeting is
+      // required" message — catch it up front with a clear explanation.
+      const countries = Array.isArray(adSet.targeting?.countries)
+        ? adSet.targeting.countries.filter(c => typeof c === 'string' && c.trim())
+        : [];
+      if (countries.length === 0) {
+        throw new Error(
+          `ad_set "${adSet.name}" 的 targeting.countries 为空。至少需要 1 个 ISO-2 国家码（例 "TH"、"ID"）。`,
+        );
+      }
+
       // 2. AdSet — no daily_budget here (inherited from CBO campaign).
       // destination_type + promoted_object are what makes this a Click-to-WA ad.
       const adsetPayload = {
@@ -152,7 +190,7 @@ export async function* stageCampaigns(plan, { userId }) {
         targeting: {
           age_min: adSet.targeting?.age_min ?? 18,
           age_max: adSet.targeting?.age_max ?? 65,
-          geo_locations: { countries: adSet.targeting?.countries || [] },
+          geo_locations: { countries },
           // Meta requires advantage_audience explicitly since 2025. 0 = opt out,
           // keeping the targeting we specified exactly. Matches our reference
           // live ad (adset 120243642835730034).
@@ -160,7 +198,12 @@ export async function* stageCampaigns(plan, { userId }) {
         },
         status: 'PAUSED',
       };
-      const { id: adsetId } = await metaPost(`act_${ad_account_id}/adsets`, adsetPayload, access_token);
+      const { id: adsetId } = await metaPost(
+        `act_${ad_account_id}/adsets`,
+        adsetPayload,
+        access_token,
+        { step: `adset "${adSet.name}"` },
+      );
       out.adset_ids.push(adsetId);
       yield { type: 'adset_created', name: adSet.name, id: adsetId };
 
@@ -209,7 +252,12 @@ export async function* stageCampaigns(plan, { userId }) {
             },
           },
         };
-        const { id: creativeId } = await metaPost(`act_${ad_account_id}/adcreatives`, creativePayload, access_token);
+        const { id: creativeId } = await metaPost(
+          `act_${ad_account_id}/adcreatives`,
+          creativePayload,
+          access_token,
+          { step: `creative "${ad.name}"` },
+        );
         out.creative_ids.push(creativeId);
         yield { type: 'creative_created', ad: ad.name, id: creativeId };
 
@@ -220,7 +268,12 @@ export async function* stageCampaigns(plan, { userId }) {
           creative: { creative_id: creativeId },
           status: 'PAUSED',
         };
-        const { id: adId } = await metaPost(`act_${ad_account_id}/ads`, adPayload, access_token);
+        const { id: adId } = await metaPost(
+          `act_${ad_account_id}/ads`,
+          adPayload,
+          access_token,
+          { step: `ad "${ad.name}"` },
+        );
         out.ad_ids.push(adId);
         yield { type: 'ad_created', ad: ad.name, id: adId };
       }
@@ -257,7 +310,7 @@ export async function* activateCampaigns({ campaign_ids = [], adset_ids = [], ad
 
   async function activateOne(level, id) {
     try {
-      await metaPost(id, { status: 'ACTIVE' }, access_token);
+      await metaPost(id, { status: 'ACTIVE' }, access_token, { step: `activate ${level} ${id}` });
       return { level, id, status: 'ACTIVE' };
     } catch (err) {
       return { level, id, error: err.message };

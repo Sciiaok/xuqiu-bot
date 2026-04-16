@@ -69,7 +69,9 @@ const TOOLS = [
               name: { type: 'string' },
               daily_budget_cents: {
                 type: 'integer',
-                description: '每天预算，分 (cents) 为单位。例如 $20/天 = 2000',
+                description:
+                  '**必填**。每天预算，单位为分 (cents) 的正整数。$20/天 = 2000, $50/天 = 5000。' +
+                  '注意：daily_budget 放在 campaign 层（CBO），不要放在 ad_set 层。漏填会导致 Meta 拒绝投放。',
               },
               duration_days: { type: 'integer', description: '投放天数，不填则长期' },
               ad_sets: {
@@ -627,6 +629,15 @@ async function draftAdPlan(input, { sessionId, waNumbers }) {
     };
   }
 
+  // Structural validation. tool_use schema marks these as required but
+  // Anthropic doesn't strictly enforce `required` — models occasionally drop
+  // fields (e.g. emit daily_budget on the ad_set level per outdated Meta docs
+  // instead of on the campaign). Validating here lets the Agent retry in the
+  // SAME turn with a clear error message, instead of failing at launch time
+  // with a cryptic Meta rejection.
+  const structuralError = validatePlanShape(campaigns);
+  if (structuralError) return structuralError;
+
   const plan = {
     version: 1,
     summary: input.summary || '',
@@ -648,6 +659,82 @@ async function draftAdPlan(input, { sessionId, waNumbers }) {
   await updateSession(sessionId, { plan_json: plan });
 
   return { ok: true, plan_summary: plan.summary, campaigns_count: plan.campaigns.length };
+}
+
+/**
+ * Validate the shape of `campaigns` against what Meta will accept.
+ *
+ * Returns a tool-result-shaped error object the Agent can read, or null when
+ * valid. Catches exactly the things that Meta reports with cryptic messages
+ * at stage time — daily_budget misplaced or missing, empty targeting,
+ * missing creative — so the Agent retries in the same turn instead of the
+ * user hitting a mid-launch failure.
+ *
+ * Kept intentionally shallow: only fields that block Graph API acceptance.
+ * Creative content quality is not policed here.
+ */
+function validatePlanShape(campaigns) {
+  const issues = [];
+
+  for (const [ci, c] of campaigns.entries()) {
+    const cTag = `campaigns[${ci}]`;
+    if (!c?.name || typeof c.name !== 'string') {
+      issues.push(`${cTag}.name 缺失或不是字符串`);
+    }
+    // daily_budget_cents is the most frequent drop. LLM occasionally buries
+    // it on ad_sets (wrong for CBO) or omits entirely. Accept integer or
+    // integer-like string but reject undefined / 0 / negative.
+    const dbRaw = c?.daily_budget_cents;
+    const db = Number(dbRaw);
+    if (dbRaw === undefined || dbRaw === null || !Number.isInteger(db) || db <= 0) {
+      issues.push(
+        `${cTag}.daily_budget_cents 缺失或无效（收到：${JSON.stringify(dbRaw)}）。` +
+        '必填正整数，单位为分——$20/天 = 2000。daily_budget 必须放在 campaign 层，而不是 ad_set 层。',
+      );
+    }
+
+    const adSets = Array.isArray(c?.ad_sets) ? c.ad_sets : [];
+    if (adSets.length === 0) {
+      issues.push(`${cTag}.ad_sets 必须至少有 1 个 ad_set`);
+    }
+
+    for (const [si, as] of adSets.entries()) {
+      const sTag = `${cTag}.ad_sets[${si}]`;
+      if (!as?.name) issues.push(`${sTag}.name 缺失`);
+
+      const countries = Array.isArray(as?.targeting?.countries)
+        ? as.targeting.countries.filter(x => typeof x === 'string' && x.trim())
+        : [];
+      if (countries.length === 0) {
+        issues.push(`${sTag}.targeting.countries 为空，至少要 1 个 ISO-2 国家码（例 "SA","AE"）`);
+      }
+
+      const ads = Array.isArray(as?.ads) ? as.ads : [];
+      if (ads.length === 0) {
+        issues.push(`${sTag}.ads 必须至少有 1 个 ad`);
+      }
+
+      for (const [ai, ad] of ads.entries()) {
+        const aTag = `${sTag}.ads[${ai}]`;
+        if (!ad?.name) issues.push(`${aTag}.name 缺失`);
+        if (!ad?.creative?.headline) issues.push(`${aTag}.creative.headline 缺失`);
+        if (!ad?.creative?.primary_text) issues.push(`${aTag}.creative.primary_text 缺失`);
+        if (!ad?.creative?.image_url) {
+          issues.push(`${aTag}.creative.image_url 缺失——请先调 generate_ad_creative 拿到 URL 再填回来`);
+        }
+        if (!ad?.welcome_message) issues.push(`${aTag}.welcome_message 缺失`);
+      }
+    }
+  }
+
+  if (issues.length === 0) return null;
+  return {
+    error: 'plan_shape_invalid',
+    message:
+      '计划结构不符合 Meta 投放要求。请修正以下字段后重新调用 draft_ad_plan：\n  - ' +
+      issues.join('\n  - '),
+    issues,
+  };
 }
 
 // ── Utils ───────────────────────────────────────────────────────────────
