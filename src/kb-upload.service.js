@@ -4,7 +4,7 @@
  * Handles file upload, AI-powered parsing, bilingual translation,
  * embedding generation, and structured data extraction.
  */
-import { anthropic, MODELS } from './llm-client.js';
+import { openrouter, MODELS } from './llm-client.js';
 import { generateEmbedding, translateWithGlossary, detectLanguage } from './kb-search.service.js';
 import supabase from '../lib/supabase.js';
 import { createTraceLogger } from '../lib/core-trace.js';
@@ -124,16 +124,16 @@ Output as JSON:
   "detected_type": "product_catalog | price_list | shipping_table | policy_document | faq | general"
 }`;
 
-  const response = await anthropic.messages.create({
-    model: MODELS.SONNET,
+  const response = await openrouter.messages.create({
+    models: [MODELS.SONNET],
     max_tokens: 8000,
-    system: systemPrompt,
     messages: [
+      { role: 'system', content: systemPrompt },
       { role: 'user', content: `File type: ${fileType}\n\nDocument content:\n${truncate(content, 15000)}` },
     ],
   });
 
-  const text = response.content[0]?.text || '{}';
+  const text = response.choices[0].message.content || '{}';
   try {
     // Extract JSON from response (may be wrapped in markdown code fences)
     const jsonMatch = text.match(/```(?:json)?\s*([\s\S]*?)```/) || [null, text];
@@ -204,16 +204,16 @@ Each product should have:
 Output: { "products": [...] }
 If no product data found, output: { "products": [] }`;
 
-  const response = await anthropic.messages.create({
-    model: MODELS.SONNET,
+  const response = await openrouter.messages.create({
+    models: [MODELS.SONNET],
     max_tokens: 8000,
-    system: systemPrompt,
     messages: [
+      { role: 'system', content: systemPrompt },
       { role: 'user', content: `File type: ${fileType}\n\nContent:\n${truncate(content, 15000)}` },
     ],
   });
 
-  const text = response.content[0]?.text || '{}';
+  const text = response.choices[0].message.content || '{}';
   let parsed;
   try {
     const jsonMatch = text.match(/```(?:json)?\s*([\s\S]*?)```/) || [null, text];
@@ -263,16 +263,16 @@ Each route should have:
 Output: { "routes": [...] }
 If no shipping data found, output: { "routes": [] }`;
 
-  const response = await anthropic.messages.create({
-    model: MODELS.SONNET,
+  const response = await openrouter.messages.create({
+    models: [MODELS.SONNET],
     max_tokens: 4000,
-    system: systemPrompt,
     messages: [
+      { role: 'system', content: systemPrompt },
       { role: 'user', content: `File type: ${fileType}\n\nContent:\n${truncate(content, 10000)}` },
     ],
   });
 
-  const text = response.content[0]?.text || '{}';
+  const text = response.choices[0].message.content || '{}';
   let parsed;
   try {
     const jsonMatch = text.match(/```(?:json)?\s*([\s\S]*?)```/) || [null, text];

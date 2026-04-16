@@ -1,0 +1,885 @@
+/* ─── Shell ─────────────────────────────────────────────────────── */
+/*
+ * The outer app layout (app/(app)/layout.js) wraps us in a <main
+ * overflowY: auto>, which means if our content ever exceeds the parent's
+ * height, the whole page scrolls and the composer gets pushed out of view.
+ *
+ * Two defenses here:
+ *   1. `height: 100%` (not 100vh) so we fill exactly our parent cell
+ *   2. `overflow: hidden` so we can't push the outer <main> into scroll mode
+ *
+ * Then inside, every nested flex child that owns its own scroll needs
+ * `min-height: 0` — otherwise `flex: 1 + overflow-y: auto` silently breaks
+ * because the default `min-height: auto` lets content push the track bigger
+ * than the parent.
+ */
+.root {
+  display: grid;
+  /* 260px sidebar | 1fr chat | 400px plan panel */
+  grid-template-columns: 260px 1fr 400px;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+  background: var(--bg2);
+  color: var(--text);
+  font-family: var(--font-inter), system-ui, -apple-system, sans-serif;
+}
+
+/* ─── Sidebar ───────────────────────────────────────────────────── */
+.sidebar {
+  border-right: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
+  min-width: 0;
+  min-height: 0; /* let .sessionList own the scroll, not the sidebar */
+  height: 100%;
+}
+.sidebarHead {
+  padding: 16px 12px 8px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text2);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.newBtn {
+  width: calc(100% - 20px);
+  margin: 0 10px 8px;
+  padding: 10px 12px;
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  transition: background 0.12s;
+}
+.newBtn:hover { background: var(--bg3); }
+.newBtn:disabled { opacity: 0.5; cursor: wait; }
+
+.sessionList {
+  flex: 1;
+  overflow-y: auto;
+  padding: 4px 8px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+/* ─── Session card (left sidebar) ─────────────────────────────
+ * Each session is a 2-line compact card with status dot, title,
+ * countries/budget/time row. Hover reveals the delete ×.
+ */
+.sessionCard {
+  position: relative;
+  padding: 8px 10px;
+  border-radius: 8px;
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  transition: background 0.1s;
+}
+.sessionCard:hover { background: var(--bg3); }
+.sessionCardActive {
+  background: var(--accent-dim) !important;
+}
+.sessionCardActive .sessionCardTitle { color: var(--accent); font-weight: 500; }
+
+.sessionCardTop {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+.sessionCardTitle {
+  flex: 1;
+  min-width: 0;
+  font-size: 13px;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Status dot — the visual anchor for scanning the list */
+.sessionDot {
+  width: 7px; height: 7px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.sessionDotDraft     { background: var(--text3); }
+.sessionDotBusy      { background: var(--amber); animation: sessionPulse 1.4s ease-in-out infinite; }
+.sessionDotLaunched  { background: var(--green); }
+.sessionDotFailed    { background: var(--red); }
+.sessionDotArchived  { background: transparent; border: 1px solid var(--border3); }
+@keyframes sessionPulse {
+  0%, 100% { opacity: 1; }
+  50%      { opacity: 0.35; }
+}
+
+/* Meta row: countries · budget · time */
+.sessionCardMeta {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  padding-left: 13px;     /* align under title, past the dot+gap */
+  font-size: 11px;
+  color: var(--text3);
+  overflow: hidden;
+  white-space: nowrap;
+}
+.sessionCardCountries {
+  font-family: var(--font-dm-mono), monospace;
+  letter-spacing: 0.02em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+.sessionCardBudget {
+  font-family: var(--font-dm-mono), monospace;
+  color: var(--text2);
+  flex-shrink: 0;
+}
+.sessionCardTime {
+  margin-left: auto;        /* push time to the right edge */
+  flex-shrink: 0;
+  color: var(--text3);
+}
+
+/* Delete × — hidden until card hover; absolute so it can overlay title tail */
+.sessionCardDel {
+  width: 20px; height: 20px;
+  border: none;
+  background: var(--bg);
+  color: var(--text3);
+  cursor: pointer;
+  font-size: 14px;
+  line-height: 1;
+  border-radius: 4px;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+.sessionCard:hover .sessionCardDel { display: flex; }
+.sessionCardDel:hover { background: var(--bg5); color: var(--red); }
+
+.sidebarEmpty { padding: 16px; color: var(--text3); font-size: 12px; text-align: center; }
+
+/* ─── Main chat area ────────────────────────────────────────────── */
+.main {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;   /* required so .chatScroll's overflow-auto engages */
+  height: 100%;
+  position: relative;
+}
+
+.chatScroll {
+  flex: 1 1 0;
+  min-height: 0;   /* otherwise default min-height: auto == content height */
+  overflow-y: auto;
+  padding: 32px 0 24px;
+  display: flex;
+  flex-direction: column;
+}
+
+.chatInner {
+  width: 100%;
+  max-width: 740px;
+  margin: 0 auto;
+  padding: 0 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+/* ─── Empty state ───────────────────────────────────────────────── */
+.empty {
+  margin: auto;
+  text-align: center;
+  padding: 60px 24px;
+  max-width: 620px;
+}
+.emptyTitle {
+  font-size: 28px;
+  font-weight: 600;
+  margin: 0 0 24px;
+  color: var(--text);
+  font-family: var(--font-syne), inherit;
+}
+.emptyChips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: center;
+}
+.emptyChip {
+  padding: 10px 16px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  font-size: 13px;
+  color: var(--text);
+  cursor: pointer;
+  transition: background 0.1s;
+}
+.emptyChip:hover { background: var(--bg3); }
+
+/* ─── Message bubbles ───────────────────────────────────────────── */
+.userMsg {
+  align-self: flex-end;
+  max-width: 80%;
+  background: var(--accent);
+  color: white;
+  padding: 10px 14px;
+  border-radius: 18px 18px 4px 18px;
+  font-size: 14.5px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  word-wrap: break-word;
+}
+.userAttach {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-bottom: 8px;
+  /* Hard caps so even if a child rule fails, the bubble can't blow up. */
+  max-width: 100%;
+}
+/* Direct class on the <img> (see AutopilotApp.js) — avoids any CSS-Modules
+   compound-selector ambiguity across bundlers. */
+.userAttachImg {
+  width: 120px;
+  height: 120px;
+  object-fit: cover;
+  border-radius: 8px;
+  flex: 0 0 auto;
+  display: block;
+}
+
+.aiMsg {
+  align-self: flex-start;
+  max-width: 100%;
+  width: 100%;
+  font-size: 14.5px;
+  line-height: 1.65;
+  color: var(--text);
+}
+.aiMsg p { margin: 0 0 10px; }
+.aiMsg p:last-child { margin-bottom: 0; }
+
+/* ─── Thinking/tool strip ───────────────────────────────────────── */
+.toolStrip {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--text3);
+  padding: 6px 0;
+}
+.toolStrip .spinner {
+  width: 14px; height: 14px;
+  border: 2px solid var(--border);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* ─── Composer ──────────────────────────────────────────────────── */
+.composer {
+  padding: 12px 0 24px;
+  border-top: 1px solid var(--border);
+  background: var(--bg2);
+  flex-shrink: 0; /* never yield height to .chatScroll's growing content */
+}
+.composerInner {
+  width: 100%;
+  max-width: 740px;
+  margin: 0 auto;
+  padding: 0 24px;
+}
+.composerBox {
+  display: flex;
+  align-items: flex-end;
+  gap: 6px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 22px;
+  padding: 6px 6px 6px 8px;
+  transition: border-color 0.15s;
+}
+.composerIconBtn {
+  width: 34px; height: 34px;
+  border-radius: 50%;
+  border: none;
+  background: transparent;
+  color: var(--text2);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  transition: background 0.12s;
+}
+.composerIconBtn:hover:not(:disabled) { background: var(--bg3); color: var(--text); }
+.composerIconBtn:disabled { opacity: 0.3; cursor: not-allowed; }
+
+/* ─── Pending attachment tiles ──────────────────────────────────── */
+.attachRow {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 8px;
+}
+.attachTile {
+  position: relative;
+  width: 56px; height: 56px;
+  border-radius: 10px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  background: var(--bg);
+}
+.attachTile img {
+  width: 100%; height: 100%;
+  object-fit: cover;
+}
+.attachOverlay {
+  position: absolute; inset: 0;
+  background: rgba(0,0,0,0.45);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.attachOverlay .spinner {
+  border-color: rgba(255,255,255,0.3);
+  border-top-color: #fff;
+}
+.attachRemove {
+  position: absolute; top: 3px; right: 3px;
+  width: 18px; height: 18px;
+  border: none;
+  border-radius: 50%;
+  background: rgba(0,0,0,0.6);
+  color: #fff;
+  font-size: 12px;
+  line-height: 1;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.attachRemove:hover { background: rgba(0,0,0,0.8); }
+.composerBox:focus-within {
+  border-color: var(--border3);
+}
+.composerTextarea {
+  flex: 1;
+  resize: none;
+  border: none;
+  outline: none;
+  background: transparent;
+  font-family: inherit;
+  font-size: 15px;
+  line-height: 1.5;
+  padding: 8px 0;
+  max-height: 200px;
+  color: var(--text);
+}
+.composerBtn {
+  width: 34px; height: 34px;
+  border-radius: 50%;
+  border: none;
+  background: var(--text);
+  color: var(--bg2);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  transition: background 0.12s, opacity 0.12s;
+}
+.composerBtn:hover { background: var(--accent); }
+.composerBtn:disabled { opacity: 0.3; cursor: not-allowed; }
+
+.composerFoot {
+  margin-top: 8px;
+  font-size: 11px;
+  color: var(--text3);
+  text-align: center;
+}
+
+/* ─── WhatsApp Gate Card ───────────────────────────────────────── */
+.gateWrap { margin: auto; padding: 40px 24px; max-width: 520px; }
+.gateCard {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 24px;
+}
+.gateIcon {
+  width: 40px; height: 40px;
+  border-radius: 8px;
+  background: var(--amber-dim);
+  color: var(--amber);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 22px;
+  margin-bottom: 12px;
+}
+.gateTitle { font-size: 17px; font-weight: 600; margin: 0 0 8px; }
+.gateBody { color: var(--text2); font-size: 14px; line-height: 1.6; margin: 0 0 16px; }
+.gateLink {
+  color: var(--accent);
+  text-decoration: none;
+}
+.gateLink:hover { text-decoration: underline; }
+.gateBtns { display: flex; gap: 8px; }
+.gateBtn {
+  padding: 8px 14px;
+  font-size: 13px;
+  font-weight: 500;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--bg2);
+  color: var(--text);
+  cursor: pointer;
+}
+.gateBtn:hover { background: var(--bg3); }
+.gateBtnPrimary {
+  background: var(--accent);
+  color: white;
+  border-color: var(--accent);
+}
+.gateBtnPrimary:hover { filter: brightness(1.05); background: var(--accent); }
+
+/* ─── Right panel (plan column) ─────────────────────────────────── */
+.planPanel {
+  border-left: 1px solid var(--border);
+  background: var(--bg);
+  min-width: 0;
+  min-height: 0;
+  height: 100%;
+  overflow-y: auto;
+  padding: 20px 16px;
+  display: flex;
+  flex-direction: column;
+}
+.planPanelEmpty {
+  margin: auto;
+  text-align: center;
+  padding: 40px 12px;
+  max-width: 260px;
+}
+.planPanelIcon {
+  width: 48px; height: 48px;
+  margin: 0 auto 14px;
+  border-radius: 12px;
+  background: var(--bg3);
+  color: var(--accent);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 22px;
+}
+.planPanelTitle {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text);
+  margin-bottom: 6px;
+}
+.planPanelHint {
+  font-size: 13px;
+  color: var(--text3);
+  line-height: 1.55;
+}
+
+/*
+ * ─── Ad Plan Card ───────────────────────────────────────────────────
+ *
+ * Design principles (after the 2026-04 rewrite):
+ *   1. ONE surface. Card is a single white panel with rounded corners +
+ *      thin border. No nested boxes, no card-in-card.
+ *   2. Sections are separated by hairline top-borders — never by inner
+ *      bordered containers.
+ *   3. Consistent 14×18 section padding.
+ *   4. Tabs are flat pills on the card surface; active state = accent tint.
+ *   5. Thumbnails 56×56 (down from 64) so 3-ad adsets stay compact.
+ */
+
+.planCard {
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  overflow: hidden;      /* clip section borders to rounded corners */
+  width: 100%;
+  flex-shrink: 0;        /* don't collapse inside the flex-column panel */
+  display: flex;
+  flex-direction: column;
+}
+
+/* ── Head ── */
+.planHead {
+  padding: 14px 18px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.planKind {
+  font-size: 11px;
+  color: var(--text3);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  font-weight: 600;
+}
+.planTitle {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text);
+  line-height: 1.4;
+  /* No line-clamp — the panel's own overflow-y: auto handles a long summary. */
+  word-wrap: break-word;
+}
+
+/* ── Generic section block (divider + padding) ── */
+.planSection {
+  padding: 12px 18px;
+  border-top: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.sectionLabel {
+  font-size: 11px;
+  color: var(--text3);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  font-weight: 600;
+}
+.sectionLabelCount {
+  font-family: var(--font-dm-mono), monospace;
+  font-weight: 400;
+  margin-left: 2px;
+}
+
+/* ── Stats (inline, no box chrome) ── */
+.statsRow {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 4px 16px;
+  margin: 0;
+}
+.stat { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.stat dt {
+  font-size: 11px;
+  color: var(--text3);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  font-weight: 600;
+}
+.stat dd {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text);
+  font-family: var(--font-dm-mono), monospace;
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.statSub {
+  font-size: 11px;
+  font-weight: 400;
+  color: var(--text3);
+  font-family: var(--font-inter), sans-serif;
+  letter-spacing: 0;
+}
+
+/* ── WhatsApp destination ── */
+.waRow {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.waIcon {
+  width: 30px; height: 30px;
+  flex-shrink: 0;
+  border-radius: 8px;
+  background: var(--green-dim);
+  color: var(--green);
+  display: flex; align-items: center; justify-content: center;
+  font-size: 16px;
+}
+.waText { min-width: 0; }
+.waNumber {
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--text);
+  font-family: var(--font-dm-mono), monospace;
+}
+.waBiz { font-size: 12px; color: var(--text3); margin-top: 1px; }
+
+/* ── Ad-set tabs ── */
+.tabs {
+  display: flex;
+  gap: 4px;
+  overflow-x: auto;
+  margin: 0 -2px;   /* let tabs breathe against section padding on scroll */
+  padding: 2px;
+}
+.tabs::-webkit-scrollbar { height: 0; }
+.tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 10px;
+  border: 1px solid var(--border);
+  background: var(--bg2);
+  border-radius: 999px;
+  font-size: 12px;
+  color: var(--text2);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 0.12s, color 0.12s, border-color 0.12s;
+}
+.tab:hover:not(.tabActive) { background: var(--bg3); color: var(--text); }
+.tabActive {
+  background: var(--accent-dim);
+  color: var(--accent);
+  border-color: transparent;
+  font-weight: 500;
+}
+.tabBadge {
+  font-size: 10px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: var(--bg3);
+  color: var(--text3);
+  font-family: var(--font-dm-mono), monospace;
+}
+.tabActive .tabBadge {
+  background: var(--accent);
+  color: white;
+}
+
+/* ── Ad-set meta line ── */
+.adsetMeta {
+  font-size: 12px;
+  color: var(--text3);
+  line-height: 1.55;
+}
+
+/* ── Ad list ── */
+.adList {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.ad {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+}
+.ad + .ad { padding-top: 10px; border-top: 1px dashed var(--border); }
+/* Zero-chrome wrapper that makes the thumbnail clickable without adding a
+ * visual button look. Hover/focus get a subtle ring to signal interactivity. */
+.adThumbBtn {
+  padding: 0;
+  border: none;
+  background: transparent;
+  cursor: zoom-in;
+  flex-shrink: 0;
+  border-radius: 8px;
+  transition: box-shadow 0.15s, transform 0.15s;
+}
+.adThumbBtn:hover,
+.adThumbBtn:focus-visible {
+  box-shadow: 0 0 0 2px var(--accent);
+  outline: none;
+  transform: translateY(-1px);
+}
+.adThumb {
+  display: block;
+  width: 56px; height: 56px;
+  flex-shrink: 0;
+  border-radius: 8px;
+  object-fit: cover;
+  border: 1px solid var(--border);
+  background: var(--bg);
+}
+.adThumbMissing {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text3);
+  font-size: 20px;
+  font-weight: 600;
+  background: var(--bg);
+}
+.adText { flex: 1; min-width: 0; }
+.adHead {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text);
+  margin-bottom: 2px;
+  line-height: 1.4;
+}
+.adCopy {
+  margin: 0;
+  font-size: 12px;
+  color: var(--text2);
+  line-height: 1.55;
+  /* No clamp — full copy should be visible; panel scrolls. */
+  white-space: pre-wrap;
+  word-wrap: break-word;
+}
+.adWelcome {
+  margin-top: 6px;
+  display: flex;
+  gap: 6px;
+  align-items: flex-start;
+  padding: 6px 10px;
+  background: var(--green-dim);
+  color: var(--green);
+  border-radius: 6px;
+  font-size: 11.5px;
+  line-height: 1.5;
+}
+.adWelcomeMark { flex-shrink: 0; }
+
+/* ── Footer ── */
+.planFoot {
+  padding: 12px 18px;
+  border-top: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  background: var(--bg2);
+}
+.footStatus {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 1;
+  min-width: 0;
+  font-size: 12px;
+  flex-wrap: wrap;
+}
+.statusDot {
+  width: 8px; height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.statusDot_draft     { background: var(--text3); }
+.statusDot_streaming { background: var(--accent); animation: pulse 1.4s ease-in-out infinite; }
+.statusDot_busy      { background: var(--amber); animation: pulse 1.4s ease-in-out infinite; }
+.statusDot_launched  { background: var(--green); }
+.statusDot_failed    { background: var(--red); }
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50%      { opacity: 0.35; }
+}
+.statusText { color: var(--text); font-weight: 500; }
+.statusDetail {
+  color: var(--text3);
+  font-size: 11px;
+  width: 100%;   /* wrap onto its own line below status */
+  margin-top: 2px;
+}
+.launchBtn {
+  padding: 8px 14px;
+  font-size: 13px;
+  font-weight: 500;
+  border-radius: 8px;
+  border: none;
+  background: var(--accent);
+  color: white;
+  cursor: pointer;
+  white-space: nowrap;
+  flex-shrink: 0;
+  transition: filter 0.12s;
+}
+.launchBtn:hover { filter: brightness(1.05); }
+.launchBtnDisabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.launchBtnDisabled:hover { filter: none; }
+
+/* ── Launched: shortcut links below the foot ── */
+.planLinks {
+  padding: 10px 18px;
+  border-top: 1px solid var(--border);
+  display: flex;
+  gap: 14px;
+  flex-wrap: wrap;
+  background: var(--bg);
+}
+.planLinks a {
+  font-size: 12px;
+  color: var(--accent);
+  text-decoration: none;
+}
+.planLinks a:hover { text-decoration: underline; }
+
+/* ── Lightbox (full-size ad image) ── */
+/*
+ * Fixed-position overlay scoped to the viewport. Click anywhere or press
+ * Escape to close. Image is constrained to 90vw × 90vh with object-fit
+ * contain so aspect ratio is preserved regardless of image dimensions.
+ */
+.lightbox {
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  background: rgba(0, 0, 0, 0.82);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: zoom-out;
+  padding: 40px;
+}
+.lightboxImg {
+  max-width: 90vw;
+  max-height: 90vh;
+  object-fit: contain;
+  border-radius: 8px;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+}
+.lightboxClose {
+  position: absolute;
+  top: 20px;
+  right: 24px;
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  border: none;
+  background: rgba(255, 255, 255, 0.12);
+  color: white;
+  font-size: 22px;
+  line-height: 1;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.12s;
+}
+.lightboxClose:hover { background: rgba(255, 255, 255, 0.25); }

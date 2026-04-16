@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, Suspense } from 'react';
+import { useState, useEffect } from 'react';
 import s from './page.module.css';
 import MetricCard from '../../components/MetricCard/MetricCard';
 import Card from '../../components/Card/Card';
@@ -16,13 +16,14 @@ import {
   getStatusLabel,
   buildRangeRequest,
 } from './helpers';
-import { ChatTab } from './ChatTab';
 import Markdown from '../../components/Markdown/Markdown';
 
 // ─── Tab definitions ──────────────────────────────────────────────
+// The legacy `ai` tab (campaign orchestrator chat) was replaced by the
+// standalone /ai-automation route in PR 4. Campaign Studio is now strictly
+// data/analytics — list + attribution.
 const MAIN_TABS = [
   { key: 'list', label: '📊 广告列表' },
-  { key: 'ai', label: '✦ AI 自动化投放' },
   { key: 'attribution', label: '🎯 深度归因分析' },
 ];
 
@@ -988,7 +989,6 @@ export function CampaignStudioScreen({
             onPreview={setPreview}
           />
         )}
-        {tab === 'ai' && <Suspense><ChatTab workspaceMode={workspaceMode} /></Suspense>}
         {tab === 'attribution' && (
           <AttributionTab
             adsData={adsData}

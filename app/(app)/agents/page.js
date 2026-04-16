@@ -5,7 +5,6 @@ import Link from 'next/link';
 import s from './page.module.css';
 import Button from '../../components/Button/Button';
 import Tag from '../../components/Tag/Tag';
-<<<<<<< HEAD
 import {
   listAgents,
   createAgent,
@@ -19,45 +18,6 @@ import {
 function formatProofRate(convCount, proofCount) {
   if (!convCount) return '0.0%';
   return ((proofCount / convCount) * 100).toFixed(1) + '%';
-=======
-
-const PRODUCT_META = {
-  agri_machinery: {
-    emoji: '🌾',
-    iconBg: 'var(--green-dim)',
-    description: '处理农业机械询盘，自动识别拖拉机、收割机、播种机等产品需求，完成 B2B 资格预审并输出结构化 PROOF 线索。',
-    tags: ['WhatsApp', '多语言', '自动报价'],
-  },
-  vehicle: {
-    emoji: '🚗',
-    iconBg: 'var(--accent-dim)',
-    description: '处理汽车整车询盘，覆盖 BYD、长安等主流车型，自动完成车型匹配、数量确认及目的港询价流程。',
-    tags: ['WhatsApp', '多语言', '车型匹配'],
-  },
-  auto_parts: {
-    emoji: '⚙️',
-    iconBg: 'var(--amber-dim)',
-    description: '处理汽车零配件询盘，支持日系 OEM/OES 配件查询，自动识别零件编号、品牌及批量采购需求。',
-    tags: ['WhatsApp', '多语言', '配件查询'],
-  },
-};
-
-const DEFAULT_META = {
-  emoji: '🤖',
-  iconBg: 'var(--accent-dim)',
-  description: '处理产品询盘，完成资格预审并输出结构化 PROOF 线索。',
-  tags: ['WhatsApp', '多语言'],
-};
-
-function formatProofRate(convCount, proofCount) {
-  if (!convCount) return '0.0%';
-  return ((proofCount / convCount) * 100).toFixed(1) + '%';
-}
-
-async function parseApiError(res) {
-  const body = await res.json().catch(() => ({}));
-  return body.error || `请求失败 (${res.status})`;
->>>>>>> main
 }
 
 const EMPTY_FORM = { name: '', productLine: '', displayLabel: '', systemPrompt: '' };
@@ -66,19 +26,12 @@ export default function AgentsPage() {
   const [agents, setAgents] = useState([]);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState('');
-<<<<<<< HEAD
   const [togglingId, setTogglingId] = useState(null);
 
   // Create flow: 'idle' (closed) | 'form' (step 1) | 'confirm' (step 2)
   const [createStep, setCreateStep] = useState('idle');
   const [formData, setFormData] = useState(EMPTY_FORM);
   const [formError, setFormError] = useState('');
-=======
-  const [formError, setFormError] = useState('');
-  const [editingAgent, setEditingAgent] = useState(null);
-  const [showForm, setShowForm] = useState(false);
-  const [formData, setFormData] = useState({ name: '', productLine: 'agri_machinery', systemPrompt: '' });
->>>>>>> main
   const [saving, setSaving] = useState(false);
   const [promptExpanded, setPromptExpanded] = useState(false);
 
@@ -86,7 +39,6 @@ export default function AgentsPage() {
     setLoading(true);
     setLoadError('');
     try {
-<<<<<<< HEAD
       const rawAgents = await listAgents();
       setAgents(rawAgents.map((agent) => {
         const meta = getProductMeta(agent.product_line);
@@ -94,18 +46,6 @@ export default function AgentsPage() {
         return {
           ...agent,
           meta,
-=======
-      const res = await fetch('/api/agents');
-      if (!res.ok) throw new Error(await parseApiError(res));
-      const data = await res.json();
-      const rawAgents = data.agents ?? [];
-      setAgents(rawAgents.map((agent) => {
-        const meta = PRODUCT_META[agent.product_line] ?? DEFAULT_META;
-        const stats = agent.stats ?? { conv_count: 0, proof_count: 0 };
-        return {
-          ...agent,
-          ...meta,
->>>>>>> main
           statsDisplay: [
             { label: '对话数', value: stats.conv_count.toLocaleString() },
             { label: '高质量线索', value: stats.proof_count.toLocaleString() },
@@ -125,7 +65,6 @@ export default function AgentsPage() {
     loadAgents();
   }, []);
 
-<<<<<<< HEAD
   // Active first, inactive last; within each group keep API order (created_at asc).
   const sortedAgents = useMemo(() => {
     return [...agents].sort((a, b) => {
@@ -146,43 +85,6 @@ export default function AgentsPage() {
     setCreateStep('idle');
     setFormError('');
     setPromptExpanded(false);
-=======
-  function openCreate() {
-    setEditingAgent(null);
-    setFormData({ name: '', productLine: 'agri_machinery', systemPrompt: '' });
-    setFormError('');
-    setShowForm(true);
-  }
-
-  function openEdit(agent) {
-    setEditingAgent(agent);
-    setFormData({
-      name: agent.name ?? '',
-      productLine: agent.product_line ?? 'agri_machinery',
-      systemPrompt: agent.system_prompt ?? '',
-    });
-    setFormError('');
-    setShowForm(true);
-  }
-
-  function closeForm() {
-    setShowForm(false);
-    setEditingAgent(null);
-    setFormError('');
-    setPromptExpanded(false);
-  }
-
-  async function handleDelete(agent) {
-    const ok = window.confirm(`确定删除智能体"${agent.name}"？删除后将不再接收新对话。`);
-    if (!ok) return;
-    try {
-      const res = await fetch(`/api/agents/${agent.id}`, { method: 'DELETE' });
-      if (!res.ok) throw new Error(await parseApiError(res));
-      await loadAgents();
-    } catch (err) {
-      setLoadError(err.message);
-    }
->>>>>>> main
   }
 
   const productLineError = formData.productLine
@@ -215,34 +117,12 @@ export default function AgentsPage() {
         productLine: formData.productLine.trim(),
         displayLabel: formData.displayLabel.trim(),
         systemPrompt: formData.systemPrompt,
-<<<<<<< HEAD
       });
       closeCreate();
       await loadAgents();
     } catch (err) {
       setFormError(err.message);
       // Stay on confirm step so user can retry without losing input
-=======
-      };
-      const res = editingAgent
-        ? await fetch(`/api/agents/${editingAgent.id}`, {
-            method: 'PUT',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(body),
-          })
-        : await fetch('/api/agents', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(body),
-          });
-
-      if (!res.ok) throw new Error(await parseApiError(res));
-
-      closeForm();
-      await loadAgents();
-    } catch (err) {
-      setFormError(err.message);
->>>>>>> main
     } finally {
       setSaving(false);
     }
@@ -299,7 +179,6 @@ export default function AgentsPage() {
         </div>
       )}
 
-<<<<<<< HEAD
       {/* Agent Cards — whole card is a link into the detail page */}
       {!loading && !loadError && (
         <div className={s.cardList}>
@@ -312,34 +191,17 @@ export default function AgentsPage() {
               <div className={s.cardHeader}>
                 <div className={s.agentIcon} style={{ background: agent.meta.iconBg }}>
                   {agent.meta.emoji}
-=======
-      {/* Agent Cards */}
-      {!loading && !loadError && (
-        <div className={s.cardList}>
-          {agents.map(agent => (
-            <div key={agent.id} className={s.agentCard}>
-              <div className={s.cardHeader}>
-                <div className={s.agentIcon} style={{ background: agent.iconBg }}>
-                  {agent.emoji}
->>>>>>> main
                 </div>
                 <div className={s.headerMain}>
                   <div className={s.nameRow}>
                     <span className={s.agentName}>{agent.name}</span>
-<<<<<<< HEAD
                     {agent.is_active ? (
-=======
-                    {agent.is_active && (
->>>>>>> main
                       <span className={s.liveStatus}>
                         <span className={s.liveDot} />
                         运行中
                       </span>
-<<<<<<< HEAD
                     ) : (
                       <span className={s.inactiveStatus}>已停用</span>
-=======
->>>>>>> main
                     )}
                   </div>
                 </div>
@@ -354,24 +216,15 @@ export default function AgentsPage() {
                 ))}
               </div>
 
-<<<<<<< HEAD
               <p className={s.description}>{agent.meta.description}</p>
 
               <div className={s.footer}>
                 <div className={s.tagList}>
                   {agent.meta.tags.map(tag => (
-=======
-              <p className={s.description}>{agent.description}</p>
-
-              <div className={s.footer}>
-                <div className={s.tagList}>
-                  {agent.tags.map(tag => (
->>>>>>> main
                     <Tag key={tag} variant="default">{tag}</Tag>
                   ))}
                 </div>
                 <div className={s.actions}>
-<<<<<<< HEAD
                   <button
                     type="button"
                     className={agent.is_active ? s.deactivateBtn : s.activateBtn}
@@ -382,10 +235,6 @@ export default function AgentsPage() {
                       ? '处理中…'
                       : agent.is_active ? '停用' : '启用'}
                   </button>
-=======
-                  <Button variant="ghost" size="sm" onClick={() => openEdit(agent)}>编辑</Button>
-                  <Button variant="ghost" size="sm" onClick={() => handleDelete(agent)}>删除</Button>
->>>>>>> main
                 </div>
               </div>
             </Link>
@@ -393,13 +242,8 @@ export default function AgentsPage() {
         </div>
       )}
 
-<<<<<<< HEAD
       {/* Fullscreen prompt editor (overlays the create modal) */}
       {createStep === 'form' && promptExpanded && (
-=======
-      {/* Fullscreen prompt editor (overlays the form modal) */}
-      {showForm && promptExpanded && (
->>>>>>> main
         <div className={s.fullscreenOverlay}>
           <div className={s.fullscreenModal}>
             <div className={s.fullscreenHeader}>
@@ -455,7 +299,6 @@ export default function AgentsPage() {
               </label>
 
               <label className={s.formLabel}>
-<<<<<<< HEAD
                 展示名称
                 <input
                   className={s.formInput}
@@ -471,8 +314,6 @@ export default function AgentsPage() {
               </label>
 
               <label className={s.formLabel}>
-=======
->>>>>>> main
                 <div className={s.promptLabelRow}>
                   <span>系统提示词</span>
                   <button
@@ -492,15 +333,9 @@ export default function AgentsPage() {
                   required
                 />
               </label>
-<<<<<<< HEAD
 
               {formError && <div className={s.errorBanner}>{formError}</div>}
 
-=======
-              {formError && (
-                <div className={s.errorBanner}>{formError}</div>
-              )}
->>>>>>> main
               <div className={s.formActions}>
                 <Button type="button" variant="ghost" onClick={closeCreate}>取消</Button>
                 <Button type="submit" variant="primary" disabled={!canGoToConfirm}>

@@ -1061,15 +1061,6 @@
   white-space: pre-wrap;
 }
 
-/* ── Phase card wrapper — centered ─────────────────────────────── */
-.phaseCardWrapper {
-  width: 100%;
-  padding-left: 20px;
-  font-size: 16px;
-  line-height: 1.6;
-  color: var(--text);
-}
-
 /* ── Thinking group — minimal, no border ──────────────────────── */
 .thinkingGroup {
   margin: 0;

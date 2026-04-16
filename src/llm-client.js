@@ -1,67 +1,68 @@
 /**
- * LLM Client Abstraction Layer
+ * LLM Client — single source for all model API calls.
  *
- * Unified Anthropic-format API that routes to multiple providers:
- *   - Claude models → Anthropic Direct API
- *   - MiniMax models → OpenRouter (OpenAI-compatible, auto-translated)
- *   - Gemini models → OpenRouter (OpenAI-compatible, auto-translated)
+ * Uses raw `fetch` — zero SDK dependencies.
+ * All LLM calls go through OpenRouter /chat/completions (OpenAI format).
  *
- * Callers always use Anthropic message format. Translation is internal.
+ * Exposes two clients:
+ *   - `openrouter`   → OpenRouter
+ *                       .messages.create / .messages.stream  (/chat/completions, OpenAI format)
+ *                       .embeddings.create                   (/embeddings)
+ *                       .chat.completions.create             (/chat/completions, raw passthrough)
+ *   - `openai`       → OpenAI Direct (Whisper only)
  *
- * Forced tool_choice on MiniMax:
- *   OpenRouter doesn't support forced tool_choice for MiniMax.
- *   The client converts it to JSON-mode output with schema injection,
- *   then wraps the result back into Anthropic tool_use format — transparent to callers.
- *
- * Usage:
- *   import { anthropic, openai, MODELS } from './llm-client.js';
- *   const res = await anthropic.messages.create({ model: MODELS.SONNET, ... });
+ * Every business file imports its client from here — no other file may
+ * read LLM API keys from process.env.
  */
-import OpenAI from 'openai';
-import Anthropic from '@anthropic-ai/sdk';
 import { config } from './config.js';
 
 // ── Model Registry ───────────────────────────────────────────────────
 export const MODELS = {
-  SONNET: 'claude-sonnet-4-6',
-  HAIKU: 'claude-haiku-4-5-20251001',
+  SONNET: 'anthropic/claude-sonnet-4.6',
+  HAIKU: 'anthropic/claude-haiku-4.5',
+  GPT54: 'openai/gpt-5.4',
+  GPT54MINI:  'openai/gpt-5.4-mini',
   MINIMAX: 'minimax/minimax-m2.7',
-  GEMINI_FLASH: 'gemini-2.5-flash',
-  GPT_MINI: 'gpt-4o-mini',
   EMBEDDING: 'text-embedding-3-small',
   WHISPER: 'whisper-1',
 };
 
-function isMiniMaxModel(model) {
-  return model?.startsWith('minimax/');
+// ══════════════════════════════════════════════════════════════════════
+// Helpers
+// ══════════════════════════════════════════════════════════════════════
+
+async function fetchWithTimeout(url, options, timeoutMs) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(url, { ...options, signal: controller.signal });
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
-function isGeminiModel(model) {
-  return !!model?.includes('gemini');
+// ── Headers & SSE ────────────────────────────────────────────────────
+
+function openrouterHeaders() {
+  return {
+    'Content-Type': 'application/json',
+    Authorization: `Bearer ${config.openrouter.apiKey}`,
+  };
 }
 
-// ── Provider Config ──────────────────────────────────────────────────
-// `?.` tolerates partial config in tests; in production every section is
-// always populated by src/config.js.
-const anthropicClient = config.anthropic?.apiKey
-  ? new Anthropic({ 
-    apiKey: config.anthropic.apiKey,
-    baseURL: config.anthropic.baseURL,
-    timeout: 120_000
-  })
-  : null;
-
-const openrouterClient = config.openrouter?.apiKey
-  ? new OpenAI({
-      apiKey: config.openrouter.apiKey,
-      baseURL: config.openrouter.baseURL,
-      timeout: 120_000,
-    })
-  : null;
+function parseSSELine(line) {
+  if (!line || line.startsWith(':')) return null;
+  if (line.startsWith('data: ')) {
+    const data = line.slice(6);
+    if (data === '[DONE]') return null;
+    try { return JSON.parse(data); } catch { return null; }
+  }
+  return null;
+}
 
 // ── Logging ──────────────────────────────────────────────────────────
-function logLlmCall({ method, provider, model, responseModel, tools, toolChoice, stopReason, inputTokens, outputTokens, durationMs }) {
-  const baseUrls = { direct: config.anthropic.baseURL, openrouter: config.openrouter.baseURL };
+
+function logLlmCall({ method, provider, models, responseModel, tools, toolChoice, finishReason, promptTokens, completionTokens, durationMs }) {
   console.log(JSON.stringify({
     ts: new Date().toISOString(),
     level: 'info',
@@ -69,412 +70,336 @@ function logLlmCall({ method, provider, model, responseModel, tools, toolChoice,
     component: 'llm-client',
     method,
     provider,
-    base_url: baseUrls[provider] || provider,
-    model,
-    response_model: responseModel || model,
+    base_url: config.openrouter.baseURL,
+    models,
+    response_model: responseModel || models?.[0],
     tools: tools || 0,
     tool_choice: toolChoice || null,
-    stop_reason: stopReason || null,
-    input_tokens: inputTokens || 0,
-    output_tokens: outputTokens || 0,
+    finish_reason: finishReason || null,
+    prompt_tokens: promptTokens || 0,
+    completion_tokens: completionTokens || 0,
     duration_ms: durationMs,
   }));
 }
 
 // ══════════════════════════════════════════════════════════════════════
-// MiniMax Translation Layer (Anthropic format ↔ OpenAI format)
+// Streaming — yields raw OpenAI SSE chunks, assembles finalMessage()
 // ══════════════════════════════════════════════════════════════════════
 
-// ── Anthropic → OpenAI message translation ──────────────────────────
+// Stream health thresholds — kill the connection rather than wait forever
+// when OpenRouter routes us to a slow/stalled provider.
+const STREAM_IDLE_TIMEOUT_MS  = 30_000;   // no bytes for 30s → abort
+const STREAM_TOTAL_TIMEOUT_MS = 180_000;  // total stream > 3min → abort
 
-function translateSystemToOpenAI(system) {
-  if (!system) return [];
-  if (typeof system === 'string') return [{ role: 'system', content: system }];
-  // Array of content blocks (with cache_control etc.) → join text
-  if (Array.isArray(system)) {
-    const text = system.map(b => (typeof b === 'string' ? b : b.text || '')).join('\n\n');
-    return [{ role: 'system', content: text }];
-  }
-  return [{ role: 'system', content: String(system) }];
-}
+function createStream(params) {
+  let _finalResolve, _finalReject;
+  const _finalPromise = new Promise((resolve, reject) => {
+    _finalResolve = resolve;
+    _finalReject = reject;
+  });
 
-function translateMessagesToOpenAI(messages) {
-  const result = [];
-  for (const msg of messages) {
-    if (msg.role === 'user') {
-      if (Array.isArray(msg.content)) {
-        const toolResults = msg.content.filter(b => b.type === 'tool_result');
-        const otherBlocks = msg.content.filter(b => b.type !== 'tool_result');
+  // Single abort controller covers both the initial fetch and the SSE read
+  // loop. Firing it cleanly terminates the response.body.getReader().read()
+  // with an AbortError on the next await.
+  const abortController = new AbortController();
+  const startedAt = Date.now();
+  let lastChunkAt = Date.now();
+  let aborted = false;
 
-        for (const tr of toolResults) {
-          result.push({
-            role: 'tool',
-            tool_call_id: tr.tool_use_id,
-            content: typeof tr.content === 'string' ? tr.content : JSON.stringify(tr.content),
-          });
-        }
-        if (otherBlocks.length > 0) {
-          const parts = otherBlocks.map(b => {
-            if (b.type === 'text') return { type: 'text', text: b.text };
-            if (b.type === 'image') {
-              return {
-                type: 'image_url',
-                image_url: {
-                  url: b.source?.type === 'base64'
-                    ? `data:${b.source.media_type};base64,${b.source.data}`
-                    : b.source?.url || '',
-                },
-              };
+  const abortWith = (reason) => {
+    if (aborted) return;
+    aborted = true;
+    try { abortController.abort(new Error(reason)); } catch {}
+  };
+
+  // Watchdog: every second, check if stream has stalled or blown the budget.
+  const watchdog = setInterval(() => {
+    if (aborted) return;
+    const now = Date.now();
+    if (now - startedAt > STREAM_TOTAL_TIMEOUT_MS) {
+      abortWith(`stream_total_timeout (${STREAM_TOTAL_TIMEOUT_MS / 1000}s)`);
+    } else if (now - lastChunkAt > STREAM_IDLE_TIMEOUT_MS) {
+      abortWith(`stream_idle_timeout (${STREAM_IDLE_TIMEOUT_MS / 1000}s)`);
+    }
+  }, 1000);
+
+  const fetchPromise = fetchWithTimeout(
+    `${config.openrouter.baseURL}/chat/completions`,
+    {
+      method: 'POST',
+      headers: openrouterHeaders(),
+      body: JSON.stringify({ ...params, stream: true }),
+      signal: abortController.signal,
+    },
+    120_000,
+  );
+
+  async function* iterChunks() {
+    let response;
+    try {
+      response = await fetchPromise;
+    } catch (err) {
+      clearInterval(watchdog);
+      _finalReject(err);
+      throw err;
+    }
+
+    if (!response.ok) {
+      clearInterval(watchdog);
+      const body = await response.text();
+      const err = new Error(`OpenRouter API error ${response.status}: ${body}`);
+      _finalReject(err);
+      throw err;
+    }
+
+    // State for assembling finalMessage
+    let model = null;
+    let finishReason = null;
+    let usage = {};
+    let contentText = '';
+    const toolCalls = {};  // index → { id, type, function: { name, arguments } }
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        lastChunkAt = Date.now();
+        buffer += decoder.decode(value, { stream: true });
+
+        const lines = buffer.split('\n');
+        buffer = lines.pop();
+
+        for (const line of lines) {
+          const chunk = parseSSELine(line.trim());
+          if (!chunk) continue;
+
+          if (!model && chunk.model) model = chunk.model;
+
+          const choice = chunk.choices?.[0];
+          if (choice) {
+            const delta = choice.delta;
+            if (delta?.content) contentText += delta.content;
+            if (delta?.tool_calls) {
+              for (const tc of delta.tool_calls) {
+                const idx = tc.index ?? 0;
+                if (!toolCalls[idx]) {
+                  toolCalls[idx] = { id: tc.id || '', type: 'function', function: { name: '', arguments: '' } };
+                }
+                if (tc.id) toolCalls[idx].id = tc.id;
+                if (tc.function?.name) toolCalls[idx].function.name += tc.function.name;
+                if (tc.function?.arguments) toolCalls[idx].function.arguments += tc.function.arguments;
+              }
             }
-            return { type: 'text', text: JSON.stringify(b) };
-          });
-          result.push({ role: 'user', content: parts });
+            if (choice.finish_reason) finishReason = choice.finish_reason;
+          }
+
+          if (chunk.usage) usage = chunk.usage;
+
+          yield chunk;
         }
-      } else {
-        result.push({ role: 'user', content: msg.content });
       }
-    } else if (msg.role === 'assistant') {
-      if (Array.isArray(msg.content)) {
-        const toolUses = msg.content.filter(b => b.type === 'tool_use');
-        const textBlocks = msg.content.filter(b => b.type === 'text');
-        const textContent = textBlocks.map(b => b.text).join('') || null;
-
-        if (toolUses.length > 0) {
-          result.push({
-            role: 'assistant',
-            content: textContent,
-            tool_calls: toolUses.map(tu => ({
-              id: tu.id,
-              type: 'function',
-              function: {
-                name: tu.name,
-                arguments: JSON.stringify(tu.input),
-              },
-            })),
-          });
-        } else {
-          result.push({ role: 'assistant', content: textContent || '' });
-        }
-      } else {
-        result.push({ role: 'assistant', content: msg.content || '' });
+    } catch (err) {
+      clearInterval(watchdog);
+      if (aborted) {
+        const tagged = new Error(`LLM stream aborted: ${err?.message || 'timeout'}`);
+        tagged.code = 'LLM_STREAM_ABORTED';
+        _finalReject(tagged);
+        throw tagged;
       }
+      _finalReject(err);
+      throw err;
     }
-  }
-  return result;
-}
+    clearInterval(watchdog);
 
-function translateToolsToOpenAI(tools) {
-  if (!tools) return undefined;
-  return tools
-    .filter(t => t.name && t.input_schema)
-    .map(t => ({
-      type: 'function',
-      function: {
-        name: t.name,
-        description: t.description || '',
-        parameters: t.input_schema,
-      },
-    }));
-}
+    // Assemble final message in OpenAI response shape
+    const message = { role: 'assistant', content: contentText || null };
+    const tcArray = Object.values(toolCalls);
+    if (tcArray.length) message.tool_calls = tcArray;
 
-// ── OpenAI → Anthropic response translation ─────────────────────────
-
-function translateResponseToAnthropic(openaiResponse, model) {
-  const choice = openaiResponse.choices?.[0];
-  if (!choice) throw new Error('[llm-client] Empty response from provider');
-
-  const content = [];
-  if (choice.message.content) {
-    content.push({ type: 'text', text: choice.message.content });
-  }
-  if (choice.message.tool_calls) {
-    for (const tc of choice.message.tool_calls) {
-      let input;
-      try { input = JSON.parse(tc.function.arguments); } catch { input = {}; }
-      content.push({ type: 'tool_use', id: tc.id, name: tc.function.name, input });
-    }
-  }
-
-  const stopReasonMap = {
-    stop: 'end_turn',
-    tool_calls: 'tool_use',
-    length: 'max_tokens',
-    content_filter: 'end_turn',
-  };
-
-  return {
-    id: openaiResponse.id,
-    type: 'message',
-    role: 'assistant',
-    model: openaiResponse.model || model,
-    content,
-    stop_reason: stopReasonMap[choice.finish_reason] || 'end_turn',
-    usage: {
-      input_tokens: openaiResponse.usage?.prompt_tokens || 0,
-      output_tokens: openaiResponse.usage?.completion_tokens || 0,
-    },
-  };
-}
-
-// ── Forced tool_choice → JSON mode conversion ───────────────────────
-
-function buildForcedJsonCall(params, toolName) {
-  const tool = params.tools?.find(t => t.name === toolName);
-  if (!tool) throw new Error(`[llm-client] Forced tool "${toolName}" not found in tools array`);
-
-  const schema = tool.input_schema;
-  const schemaInstruction = `\n\nYou MUST respond with a JSON object matching this schema. Do NOT output anything outside the JSON.\nSchema:\n${JSON.stringify(schema, null, 2)}`;
-
-  const systemMsgs = translateSystemToOpenAI(params.system);
-  if (systemMsgs.length > 0) {
-    systemMsgs[systemMsgs.length - 1].content += schemaInstruction;
-  } else {
-    systemMsgs.push({ role: 'system', content: schemaInstruction.trim() });
-  }
-
-  return {
-    model: params.model,
-    max_tokens: params.max_tokens,
-    messages: [...systemMsgs, ...translateMessagesToOpenAI(params.messages)],
-    response_format: { type: 'json_object' },
-  };
-}
-
-function wrapJsonResponseAsToolUse(openaiResponse, toolName, model) {
-  const choice = openaiResponse.choices?.[0];
-  if (!choice?.message?.content) throw new Error('[llm-client] Empty response (forced JSON)');
-
-  let rawJson = choice.message.content;
-  const fenceMatch = rawJson.match(/```(?:json)?\s*([\s\S]*?)```/);
-  if (fenceMatch) rawJson = fenceMatch[1].trim();
-  let input;
-  try {
-    input = JSON.parse(rawJson);
-  } catch (parseErr) {
-    console.error(JSON.stringify({
-      ts: new Date().toISOString(),
-      level: 'error',
-      event: 'llm.forced_json.parse_failed',
-      component: 'llm-client',
-      tool_name: toolName,
-      error: parseErr.message,
-      raw_preview: rawJson.slice(0, 800),
-    }));
-    input = { _raw: rawJson, _parse_error: parseErr.message };
-  }
-
-  const toolUseId = `toolu_mm_${Date.now().toString(36)}`;
-
-  return {
-    id: openaiResponse.id,
-    type: 'message',
-    role: 'assistant',
-    model: openaiResponse.model || model,
-    content: [{ type: 'tool_use', id: toolUseId, name: toolName, input }],
-    stop_reason: 'tool_use',
-    usage: {
-      input_tokens: openaiResponse.usage?.prompt_tokens || 0,
-      output_tokens: openaiResponse.usage?.completion_tokens || 0,
-    },
-  };
-}
-
-// ── MiniMax call handler ────────────────────────────────────────────
-
-async function callMiniMax(params) {
-  if (!openrouterClient) {
-    throw new Error('[llm-client] OPENROUTER_API_KEY required for MiniMax models');
-  }
-
-  const t0 = Date.now();
-  const isForcedTool = params.tool_choice?.type === 'tool';
-  const forcedToolName = isForcedTool ? params.tool_choice.name : null;
-  const logMeta = {
-    method: 'create',
-    provider: 'openrouter',
-    model: params.model,
-    tools: params.tools?.length || 0,
-    toolChoice: isForcedTool ? `forced:${forcedToolName}→json` : (params.tool_choice?.type || null),
-  };
-
-  let result;
-  if (isForcedTool) {
-    const jsonParams = buildForcedJsonCall(params, forcedToolName);
-    const raw = await openrouterClient.chat.completions.create(jsonParams);
-    result = wrapJsonResponseAsToolUse(raw, forcedToolName, params.model);
-  } else {
-    const openaiParams = {
-      model: params.model,
-      max_tokens: params.max_tokens,
-      messages: [
-        ...translateSystemToOpenAI(params.system),
-        ...translateMessagesToOpenAI(params.messages),
-      ],
+    const finalResult = {
+      id: null,
+      model,
+      choices: [{ message, finish_reason: finishReason || 'stop' }],
+      usage,
     };
-    const openaiTools = translateToolsToOpenAI(params.tools);
-    if (openaiTools?.length) {
-      openaiParams.tools = openaiTools;
-      openaiParams.tool_choice = 'auto';
-    }
-    const raw = await openrouterClient.chat.completions.create(openaiParams);
-    result = translateResponseToAnthropic(raw, params.model);
+    _finalResolve(finalResult);
   }
 
-  logLlmCall({ ...logMeta, responseModel: result.model, stopReason: result.stop_reason, inputTokens: result.usage?.input_tokens, outputTokens: result.usage?.output_tokens, durationMs: Date.now() - t0 });
-  return result;
-}
+  const iterator = iterChunks();
 
-// ── Gemini call handler (OpenRouter only) ────────────────────────────
-
-function isGeminiImageModel(model) {
-  return !!model?.match(/gemini.*image/i);
-}
-
-function geminiOpenRouterModel(model) {
-  return model.startsWith('google/') ? model : 'google/' + model;
-}
-
-async function callGemini(params) {
-  if (!openrouterClient) {
-    throw new Error('[llm-client] OPENROUTER_API_KEY required for Gemini models');
-  }
-
-  const t0 = Date.now();
-  const model = geminiOpenRouterModel(params.model);
-  const logMeta = {
-    method: 'create',
-    provider: 'openrouter',
-    model: params.model,
-    tools: params.tools?.length || 0,
-    toolChoice: params.tool_choice?.type || null,
+  return {
+    [Symbol.asyncIterator]() { return iterator; },
+    next: iterator.next.bind(iterator),
+    return: iterator.return.bind(iterator),
+    throw: iterator.throw.bind(iterator),
+    finalMessage() { return _finalPromise; },
   };
-
-  const openaiParams = {
-    model,
-    max_tokens: params.max_tokens,
-    messages: [
-      ...translateSystemToOpenAI(params.system),
-      ...translateMessagesToOpenAI(params.messages),
-    ],
-  };
-
-  if (isGeminiImageModel(params.model)) {
-    openaiParams.modalities = ['image', 'text'];
-  }
-
-  const openaiTools = translateToolsToOpenAI(params.tools);
-  if (openaiTools?.length) {
-    openaiParams.tools = openaiTools;
-    openaiParams.tool_choice = 'auto';
-  }
-
-  const raw = await openrouterClient.chat.completions.create(openaiParams);
-  const result = translateResponseToAnthropic(raw, params.model);
-
-  logLlmCall({ ...logMeta, responseModel: result.model, stopReason: result.stop_reason, inputTokens: result.usage?.input_tokens, outputTokens: result.usage?.output_tokens, durationMs: Date.now() - t0 });
-  return result;
 }
 
 // ══════════════════════════════════════════════════════════════════════
-// Unified Proxy (routes by model)
+// OpenRouter client
 // ══════════════════════════════════════════════════════════════════════
 
-const anthropicProxy = {
+const openrouter = {
   messages: {
     async create(params) {
-      // ── Gemini models → OpenRouter with translation ──
-      if (isGeminiModel(params.model)) {
-        return callGemini(params);
-      }
-
-      // ── MiniMax models → OpenRouter with translation ──
-      if (isMiniMaxModel(params.model)) {
-        return callMiniMax(params);
-      }
-
-      // ── Claude models → Anthropic Direct ──
-      if (!anthropicClient) {
-        throw new Error('[llm-client] ANTHROPIC_API_KEY required for Claude models');
+      if (!config.openrouter.baseURL || !config.openrouter.apiKey) {
+        throw new Error('[llm-client] OPENROUTER_API_KEY required');
       }
 
       const t0 = Date.now();
       const logMeta = {
         method: 'create',
-        provider: 'direct',
-        model: params.model,
+        provider: 'openrouter',
+        models: params.models,
         tools: params.tools?.length || 0,
-        toolChoice: params.tool_choice?.type || null,
+        toolChoice: typeof params.tool_choice === 'string' ? params.tool_choice : params.tool_choice?.function?.name || null,
       };
 
-      const result = await anthropicClient.messages.create(params);
-      logLlmCall({ ...logMeta, responseModel: result.model, stopReason: result.stop_reason, inputTokens: result.usage?.input_tokens, outputTokens: result.usage?.output_tokens, durationMs: Date.now() - t0 });
+      const response = await fetchWithTimeout(
+        `${config.openrouter.baseURL}/chat/completions`,
+        {
+          method: 'POST',
+          headers: openrouterHeaders(),
+          body: JSON.stringify(params),
+        },
+        120_000,
+      );
+      if (!response.ok) {
+        const body = await response.text();
+        throw new Error(`OpenRouter API error ${response.status}: ${body}`);
+      }
+      const result = await response.json();
+
+      logLlmCall({
+        ...logMeta,
+        responseModel: result.model,
+        finishReason: result.choices?.[0]?.finish_reason,
+        promptTokens: result.usage?.prompt_tokens,
+        completionTokens: result.usage?.completion_tokens,
+        durationMs: Date.now() - t0,
+      });
       return result;
     },
 
     stream(params) {
-      if (isMiniMaxModel(params.model)) {
-        throw new Error(`[llm-client] Streaming not supported for MiniMax models (${params.model}). Use create() instead.`);
-      }
-
-      if (!anthropicClient) {
-        throw new Error('[llm-client] ANTHROPIC_API_KEY required for Claude streaming');
+      if (!config.openrouter.baseURL || !config.openrouter.apiKey) {
+        throw new Error('[llm-client] OPENROUTER_API_KEY required');
       }
 
       const t0 = Date.now();
       const logMeta = {
         method: 'stream',
-        provider: 'direct',
-        model: params.model,
+        provider: 'openrouter',
+        models: params.models,
         tools: params.tools?.length || 0,
-        toolChoice: params.tool_choice?.type || null,
+        toolChoice: typeof params.tool_choice === 'string' ? params.tool_choice : params.tool_choice?.function?.name || null,
       };
 
-      const stream = anthropicClient.messages.stream(params);
-      stream.finalMessage().then(msg => {
-        logLlmCall({ ...logMeta, responseModel: msg.model, stopReason: msg.stop_reason, inputTokens: msg.usage?.input_tokens, outputTokens: msg.usage?.output_tokens, durationMs: Date.now() - t0 });
+      const streamObj = createStream(params);
+
+      streamObj.finalMessage().then(result => {
+        logLlmCall({
+          ...logMeta,
+          responseModel: result.model,
+          finishReason: result.choices?.[0]?.finish_reason,
+          promptTokens: result.usage?.prompt_tokens,
+          completionTokens: result.usage?.completion_tokens,
+          durationMs: Date.now() - t0,
+        });
       }).catch(err => {
-        logLlmCall({ ...logMeta, stopReason: `error: ${err.message}`, durationMs: Date.now() - t0 });
+        logLlmCall({ ...logMeta, finishReason: `error: ${err.message}`, durationMs: Date.now() - t0 });
       });
 
-      return stream;
+      return streamObj;
+    },
+  },
+
+  // ── OpenAI-compatible endpoints (embeddings + image generation) ────
+  embeddings: {
+    async create(params, options) {
+      if (!config.openrouter.baseURL || !config.openrouter.apiKey) {
+        throw new Error('[llm-client] OPENROUTER_API_KEY required for embeddings');
+      }
+      const timeoutMs = options?.timeout || 60_000;
+      const response = await fetchWithTimeout(
+        `${config.openrouter.baseURL}/embeddings`,
+        {
+          method: 'POST',
+          headers: openrouterHeaders(),
+          body: JSON.stringify(params),
+        },
+        timeoutMs,
+      );
+      if (!response.ok) {
+        const body = await response.text();
+        throw new Error(`OpenRouter embeddings error ${response.status}: ${body}`);
+      }
+      return response.json();
+    },
+  },
+  chat: {
+    completions: {
+      async create(params, options) {
+        if (!config.openrouter.baseURL || !config.openrouter.apiKey) {
+          throw new Error('[llm-client] OPENROUTER_API_KEY required for chat completions');
+        }
+        const timeoutMs = options?.timeout || 120_000;
+        const response = await fetchWithTimeout(
+          `${config.openrouter.baseURL}/chat/completions`,
+          {
+            method: 'POST',
+            headers: openrouterHeaders(),
+            body: JSON.stringify(params),
+          },
+          timeoutMs,
+        );
+        if (!response.ok) {
+          const body = await response.text();
+          throw new Error(`OpenRouter chat error ${response.status}: ${body}`);
+        }
+        return response.json();
+      },
     },
   },
 };
 
-// ── OpenAI Client (embeddings, GPT, product parsing) ─────────────────
-// When OPENAI_API_KEY is absent but OPENROUTER_API_KEY is present, route
-// OpenAI-style calls through OpenRouter's OpenAI-compatible endpoint.
-const USE_OPENROUTER = !config.openai?.apiKey && !!config.openrouter?.apiKey;
+// ══════════════════════════════════════════════════════════════════════
+// OpenAI client (Direct) — Whisper only
+// ══════════════════════════════════════════════════════════════════════
 
-function openaiModel(model) {
-  if (!USE_OPENROUTER) return model;
-  const PREFIX = {
-    [MODELS.GPT_MINI]: 'openai/gpt-4o-mini',
-    [MODELS.EMBEDDING]: 'openai/text-embedding-3-small',
-  };
-  return PREFIX[model] || model;
-}
+const openai = {
+  audio: {
+    transcriptions: {
+      async create(params) {
+        const form = new FormData();
+        form.append('file', params.file);
+        form.append('model', params.model);
+        if (params.language) form.append('language', params.language);
+        if (params.prompt) form.append('prompt', params.prompt);
 
-const OPENAI_KEY = config.openai?.apiKey || config.openrouter?.apiKey;
-const openaiClient = OPENAI_KEY
-  ? new OpenAI({
-      apiKey: OPENAI_KEY,
-      baseURL: USE_OPENROUTER ? `${config.openrouter.baseURL}/v1` : undefined,
-      timeout: 60000,
-    })
-  : null;
-
-// ── Event listeners ─────────────────────────────────────────────────
-const _listeners = [];
-export function onLlmEvent(fn) {
-  _listeners.push(fn);
-  return () => { const i = _listeners.indexOf(fn); if (i >= 0) _listeners.splice(i, 1); };
-}
-function emitLlmEvent(event) {
-  for (const fn of _listeners) { try { fn(event); } catch {} }
-}
+        const response = await fetchWithTimeout(
+          `https://api.openai.com/v1/audio/transcriptions`,
+          {
+            method: 'POST',
+            headers: { Authorization: `Bearer ${config.openai.apiKey}` },
+            body: form,
+          },
+          60_000,
+        );
+        if (!response.ok) {
+          const body = await response.text();
+          throw new Error(`OpenAI transcription error ${response.status}: ${body}`);
+        }
+        return response.json();
+      },
+    },
+  },
+};
 
 // ── Exports ──────────────────────────────────────────────────────────
-export const anthropic = anthropicProxy;
-export const openai = openaiClient;
-export { openaiModel, isGeminiModel };
+export { openrouter, openai };

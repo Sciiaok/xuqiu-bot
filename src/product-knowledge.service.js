@@ -1,4 +1,4 @@
-import { openai, openaiModel, MODELS } from './llm-client.js';
+import { openrouter, MODELS } from './llm-client.js';
 import { read, utils } from 'xlsx';
 import supabase from '../lib/supabase.js';
 
@@ -295,8 +295,8 @@ export function parseExcel(excelBuffer) {
  * Extracts everything including price (price exclusion from vectors is handled at embedding time).
  */
 export async function extractExcelContent(rawText, productLine) {
-  const response = await openai.chat.completions.create({
-    model: openaiModel(MODELS.GPT_MINI),
+  const response = await openrouter.chat.completions.create({
+    model: MODELS.GPT54MINI,
     temperature: 0,
     response_format: { type: 'json_object' },
     messages: [
@@ -475,8 +475,8 @@ export async function normalizeSpecFields(rawKeyValues, productLine) {
     return null;
   }
 
-  const response = await openai.chat.completions.create({
-    model: openaiModel(MODELS.GPT_MINI),
+  const response = await openrouter.chat.completions.create({
+    model: MODELS.GPT54MINI,
     temperature: 0,
     response_format: { type: 'json_object' },
     messages: [
@@ -568,8 +568,8 @@ function splitMarkdownIntoChunks(text, maxChars) {
  * Uses OpenAI text-embedding-3-small (1536 dimensions).
  */
 export async function generateEmbeddings(texts) {
-  const response = await openai.embeddings.create({
-    model: openaiModel(MODELS.EMBEDDING),
+  const response = await openrouter.embeddings.create({
+    model: MODELS.EMBEDDING,
     input: texts,
   });
 

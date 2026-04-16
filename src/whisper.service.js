@@ -1,8 +1,5 @@
-import OpenAI from 'openai';
-import { config } from './config.js';
+import { openai, MODELS } from './llm-client.js';
 import { downloadWhatsAppMediaBuffer } from './whatsapp-media.service.js';
-
-const openai = new OpenAI({ apiKey: config.openai.apiKey });
 
 /**
  * Transcribe a WhatsApp voice message to text using OpenAI Whisper
@@ -19,7 +16,7 @@ export async function transcribeWhatsAppAudio(mediaId) {
 
   const transcription = await openai.audio.transcriptions.create({
     file,
-    model: 'whisper-1',
+    model: MODELS.WHISPER,
   });
 
   const text = transcription.text.trim();

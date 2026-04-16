@@ -1,10 +1,17 @@
-/* ── V5 NEUTRAL LIGHT THEME (FB Ads Manager inspired) ── */
-/* Scoped under .v5-root to avoid leaking into existing dashboard */
+/* ── PROME ENGINE LIGHT THEME (2026 refresh) ──
+ *
+ * Replaced the FB-blue (#1877f2) and low-radius palette with the Prome
+ * Engine brand's royal blue + slightly softer, more elevated look. Kept
+ * text/background greys intact because every page's typography is tuned
+ * against them — only swapping brand-level knobs.
+ *
+ * Scoped under .v5-root so it doesn't leak into the demo dashboard.
+ */
 
 .v5-root {
-  --bg: #f0f2f5;
+  --bg: #f4f6fa;              /* slightly cooler page bg (was #f0f2f5) */
   --bg2: #ffffff;
-  --bg3: #e8f1f3;
+  --bg3: #eef4ff;             /* tinted-blue hover surface for a brand echo */
   --bg4: #eceef1;
   --bg5: #e4e6eb;
   --border: #e6e8eb;
@@ -13,8 +20,12 @@
   --text: #1c1e21;
   --text2: #606770;
   --text3: #8a8d91;
-  --accent: #1877f2;
-  --accent-dim: rgba(24, 119, 242, 0.08);
+
+  /* Brand accent — royal blue drawn from the Prome Engine logo gradient. */
+  --accent: #2563eb;
+  --accent-hover: #1d4ed8;
+  --accent-dim: rgba(37, 99, 235, 0.08);
+
   --green: #2e7d32;
   --green-dim: rgba(46, 125, 50, 0.08);
   --amber: #b26a00;
@@ -25,10 +36,15 @@
   --purple-dim: rgba(124, 77, 255, 0.08);
   --teal: #00897b;
   --teal-dim: rgba(0, 137, 123, 0.08);
-  --r: 6px;
-  --rl: 8px;
-  --rxl: 12px;
-  --shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
+
+  /* Radii bumped one notch — modern SaaS cards feel softer. */
+  --r: 8px;
+  --rl: 10px;
+  --rxl: 14px;
+
+  /* Two-layer shadow for gentle lift on cards (was a single flat wash). */
+  --shadow: 0 1px 2px rgba(15, 23, 42, 0.04), 0 1px 3px rgba(15, 23, 42, 0.06);
+  --shadow-lg: 0 4px 10px rgba(15, 23, 42, 0.06), 0 2px 4px rgba(15, 23, 42, 0.04);
 
   /* Font families (set by next/font in layout.js) */
   --font-sans: var(--font-inter), 'Inter', sans-serif;

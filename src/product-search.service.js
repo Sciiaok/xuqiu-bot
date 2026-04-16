@@ -1,4 +1,4 @@
-import { openai, openaiModel, MODELS } from './llm-client.js';
+import { openrouter, MODELS } from './llm-client.js';
 import supabase from '../lib/supabase.js';
 
 /**
@@ -10,8 +10,8 @@ import supabase from '../lib/supabase.js';
  */
 export async function searchProducts(query, agentId, topK = 3) {
   // Generate embedding for the query
-  const response = await openai.embeddings.create({
-    model: openaiModel(MODELS.EMBEDDING),
+  const response = await openrouter.embeddings.create({
+    model: MODELS.EMBEDDING,
     input: query,
   });
   const embedding = response.data[0].embedding;

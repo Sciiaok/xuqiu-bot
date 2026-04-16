@@ -15,7 +15,7 @@ const NAV = [
   {
     section: '自动化营销',
     items: [
-      { href: '/ai-automation', label: 'AUTOPILOT', icon: 'campaignAutomation' },
+      { href: '/ai-automation', label: 'Autopilot', icon: 'campaignAutomation' },
       { href: '/campaign-studio', label: '投放数据', icon: 'campaign' },
     ],
   },
@@ -88,13 +88,27 @@ export default function Sidebar() {
   return (
     <div className={s.sidebar}>
     <div className={s.inner}>
-      {/* Logo */}
+      {/*
+       * Logo — two images crossfade on sidebar expand:
+       *   - logoMark : 26px P-in-orbit icon. Visible when rail is collapsed so
+       *                it lines up with the nav icon column.
+       *   - logoFull : Prome Engine wordmark (icon + type, tight-cropped PNG).
+       *                Fades in on hover; mark fades out to avoid double-P.
+       */}
       <div className={s.logoWrap}>
-        <div className={s.logoGem}>
-          <svg viewBox="0 0 14 14"><path d="M7 0L13 3.5V10.5L7 14L1 10.5V3.5L7 0Z"/></svg>
-        </div>
-        <span className={s.logoName}>Lead Engine</span>
-        <span className={s.logoVer}>v5W</span>
+        <img
+          src="/brand/prome-mark.png"
+          alt=""
+          aria-hidden="true"
+          className={s.logoMark}
+          width={26}
+          height={26}
+        />
+        <img
+          src="/brand/prome-logo.png"
+          alt="Prome Engine"
+          className={s.logoFull}
+        />
       </div>
 
       {/* Navigation */}

@@ -6,20 +6,13 @@
 // client bundle and must read `NEXT_PUBLIC_*` inline (Next.js convention).
 
 export const config = {
-  // Claude / Anthropic
-  anthropic: {
-    apiKey: process.env.ANTHROPIC_API_KEY,
-    baseURL: process.env.ANTHROPIC_BASE_URL || 'https://api.anthropic.com',
-    model: process.env.CLAUDE_MODEL || 'claude-sonnet-4-6',
-  },
-
-  // OpenRouter (non-Claude model routing + OpenAI-compatible proxy)
+  // OpenRouter — used by llm-client for all LLM calls (/chat/completions).
   openrouter: {
     apiKey: process.env.OPENROUTER_API_KEY,
-    baseURL: process.env.OPENROUTER_BASE_URL || 'https://openrouter.ai/api',
+    baseURL: process.env.OPENROUTER_BASE_URL || 'https://openrouter.ai/api/v1',
   },
 
-  // OpenAI (Whisper + direct GPT)
+  // OpenAI Direct — embeddings + Whisper only.
   openai: {
     apiKey: process.env.OPENAI_API_KEY,
   },
@@ -65,10 +58,9 @@ export const config = {
     baseURL: process.env.FIRECRAWL_BASE_URL || 'https://api.firecrawl.dev/v1',
   },
 
-  // AIGC — image generation via OpenRouter
+  // AIGC — image generation knobs.
+  // Client (apiKey/baseURL) is owned by llm-client's openrouter.
   aigc: {
-    apiKey: process.env.OPENROUTER_API_KEY,
-    baseURL: process.env.OPENROUTER_BASE_URL || 'https://openrouter.ai/api',
     imageModel: process.env.AIGC_IMAGE_MODEL || 'google/gemini-3.1-flash-image-preview',
     storageBucket: 'aigc-assets',
     bestOfN: parseInt(process.env.AIGC_BEST_OF_N, 10) || 1,

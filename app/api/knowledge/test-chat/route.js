@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import supabase from '../../../../lib/supabase.js';
 import { searchKnowledge } from '../../../../src/kb-search.service.js';
-import { anthropic, MODELS } from '../../../../src/llm-client.js';
+import { openrouter, MODELS } from '../../../../src/llm-client.js';
 
 export const maxDuration = 60;
 
@@ -79,14 +79,16 @@ Rules:
       { role: 'user', content: message },
     ];
 
-    const llmResponse = await anthropic.messages.create({
-      model: MODELS.SONNET,
+    const llmResponse = await openrouter.messages.create({
+      models: [MODELS.SONNET],
       max_tokens: 2000,
-      system: systemPrompt,
-      messages,
+      messages: [
+        { role: 'system', content: systemPrompt },
+        ...messages,
+      ],
     });
 
-    const assistantContent = llmResponse.content[0]?.text || 'No response generated.';
+    const assistantContent = llmResponse.choices[0].message.content || 'No response generated.';
 
     // Detect knowledge gap if no results found
     if (!searchResult.results?.length || searchResult.results.every(r => (r.score || 0) < 0.5)) {

@@ -83,23 +83,5 @@ module.exports = {
       merge_logs: true,
       log_date_format: 'YYYY-MM-DD HH:mm:ss',
     },
-    {
-      name: 'orchestrator-recovery',
-      script: 'scripts/cron-recover-orchestrator.js',
-      cwd: __dirname,
-      node_args: '--experimental-modules',
-      env: {
-        NODE_ENV: 'production',
-        API_BASE_URL: 'http://localhost:3002',
-      },
-      instances: 1,
-      autorestart: true,
-      watch: false,
-      max_memory_restart: '256M',
-      out_file: 'logs/orchestrator-recovery-out.log',
-      error_file: 'logs/orchestrator-recovery-error.log',
-      merge_logs: true,
-      log_date_format: 'YYYY-MM-DD HH:mm:ss',
-    },
   ],
 };

@@ -1,4 +1,4 @@
-import { anthropic, MODELS } from './llm-client.js';
+import { openrouter, MODELS } from './llm-client.js';
 import { buildRoutingCandidate } from './agent-runtime.service.js';
 import {
   formatReferralContextForPrompt,
@@ -21,9 +21,11 @@ Rules:
 `;
 
 const SELECT_AGENT_TOOL = {
-  name: 'select_agent',
-  description: 'Select the best agent for this conversation.',
-  input_schema: {
+  type: 'function',
+  function: {
+    name: 'select_agent',
+    description: 'Select the best agent for this conversation.',
+    parameters: {
     type: 'object',
     additionalProperties: false,
     required: ['agent_id', 'confidence', 'reason', 'needs_clarification'],
@@ -49,6 +51,7 @@ const SELECT_AGENT_TOOL = {
         description: 'Short clarification question for the customer. Empty string if not needed.',
       },
     },
+  },
   },
 };
 
@@ -117,32 +120,29 @@ export async function routeConversationWithClaudeToolUse({
     latest_user_message_preview: String(userMessage || '').slice(0, 200),
   });
 
-  const response = await anthropic.messages.create({
-    model: MODELS.SONNET,
+  const response = await openrouter.messages.create({
+    models: [MODELS.SONNET],
     max_tokens: 1024,
-    system: ROUTER_SYSTEM_PROMPT,
     messages: [
+      { role: 'system', content: ROUTER_SYSTEM_PROMPT },
       {
         role: 'user',
         content: prompt,
       },
     ],
     tools: [SELECT_AGENT_TOOL],
-    tool_choice: {
-      type: 'tool',
-      name: 'select_agent',
-    },
+    tool_choice: { type: 'function', function: { name: 'select_agent' } },
   });
 
-  const toolUse = response.content.find(
-    (block) => block.type === 'tool_use' && block.name === 'select_agent'
+  const toolCall = response.choices[0].message.tool_calls?.find(
+    (tc) => tc.function.name === 'select_agent'
   );
 
-  if (!toolUse) {
+  if (!toolCall) {
     throw new Error('Claude router did not return a select_agent tool call');
   }
 
-  const decision = toolUse.input || {};
+  const decision = JSON.parse(toolCall.function.arguments) || {};
   if (!decision.needs_clarification && !allowedAgentIds.has(decision.agent_id)) {
     throw new Error(`Claude router selected unknown agent: ${decision.agent_id}`);
   }

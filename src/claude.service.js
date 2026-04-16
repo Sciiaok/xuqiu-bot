@@ -1,4 +1,4 @@
-import { anthropic } from './llm-client.js';
+import { openrouter, MODELS } from './llm-client.js';
 import { config } from './config.js';
 import {
   downloadWhatsAppMediaBuffer,
@@ -468,11 +468,9 @@ async function buildClaudeContent(message, logger) {
       const { buffer, mimeType } = await downloadWhatsAppMediaBuffer(metadata.wa_media_id);
       if (buffer.length > 0 && isClaudeSupportedImageMimeType(mimeType)) {
         blocks.push({
-          type: 'image',
-          source: {
-            type: 'base64',
-            media_type: mimeType,
-            data: buffer.toString('base64'),
+          type: 'image_url',
+          image_url: {
+            url: `data:${mimeType};base64,${buffer.toString('base64')}`,
           },
         });
       }
@@ -744,17 +742,41 @@ function markLastToolForCache(tools) {
 
 // ─── Claude API call helpers ─────────────────────────────────────────
 
-function callClaude({ systemBlocks, messages, tools, toolChoice, outputConfig }) {
+function callClaude({ systemBlocks, messages, tools, toolChoice, responseFormat }) {
+  // Prepend system as first message (join block texts if array)
+  let systemContent;
+  if (Array.isArray(systemBlocks)) {
+    systemContent = systemBlocks.map(b => (typeof b === 'string' ? b : b.text || '')).join('\n\n');
+  } else {
+    systemContent = typeof systemBlocks === 'string' ? systemBlocks : String(systemBlocks || '');
+  }
+  const allMessages = [
+    { role: 'system', content: systemContent },
+    ...messages,
+  ];
+
   const payload = {
-    model: config.anthropic.model,
+    models: [MODELS.SONNET],
     max_tokens: MAX_TOKENS,
-    system: systemBlocks,
-    messages,
+    messages: allMessages,
   };
-  if (tools) payload.tools = tools;
-  if (toolChoice) payload.tool_choice = toolChoice;
-  if (outputConfig) payload.output_config = outputConfig;
-  return anthropic.messages.create(payload);
+  if (tools) {
+    payload.tools = tools.map(t => ({
+      type: 'function',
+      function: { name: t.name, description: t.description || '', parameters: t.input_schema },
+    }));
+  }
+  if (toolChoice) {
+    if (toolChoice.type === 'auto') {
+      payload.tool_choice = 'auto';
+    } else if (toolChoice.type === 'tool') {
+      payload.tool_choice = { type: 'function', function: { name: toolChoice.name } };
+    } else {
+      payload.tool_choice = toolChoice;
+    }
+  }
+  if (responseFormat) payload.response_format = responseFormat;
+  return openrouter.messages.create(payload);
 }
 
 /**
@@ -762,7 +784,14 @@ function callClaude({ systemBlocks, messages, tools, toolChoice, outputConfig })
  * pinned to submit_response. Mutates messages.
  */
 async function forceSubmitResponse({ systemBlocks, messages, tools, prevResponse }) {
-  messages.push({ role: 'assistant', content: prevResponse.content });
+  const prevMsg = prevResponse.choices[0].message;
+  messages.push({ role: 'assistant', content: prevMsg.content, tool_calls: prevMsg.tool_calls });
+  // If previous response had tool_calls, provide dummy tool results before the user prompt
+  if (prevMsg.tool_calls?.length) {
+    for (const tc of prevMsg.tool_calls) {
+      messages.push({ role: 'tool', tool_call_id: tc.id, content: JSON.stringify({ skipped: 'Force submit' }) });
+    }
+  }
   messages.push({ role: 'user', content: FORCE_SUBMIT_PROMPT });
   return callClaude({
     systemBlocks,
@@ -790,43 +819,45 @@ async function callViaToolUse({ systemBlocks, messages, tools, agentId, logger }
   });
 
   let iterations = 0;
-  while (iterations < MAX_TOOL_ITERATIONS && response.stop_reason === 'tool_use') {
+  while (iterations < MAX_TOOL_ITERATIONS && response.choices[0].finish_reason === 'tool_calls') {
     iterations++;
-    const toolUse = response.content.find((c) => c.type === 'tool_use');
+    const toolCalls = response.choices[0].message.tool_calls || [];
+    const tc = toolCalls[0];
+    if (!tc) break;
 
-    if (toolUse.name === 'submit_response') {
+    const toolName = tc.function.name;
+    const toolInput = JSON.parse(tc.function.arguments);
+
+    if (toolName === 'submit_response') {
       logger.info('claude.tool_use.submit_response', { iterations });
-      return toolUse.input;
+      return toolInput;
     }
 
-    logger.info('claude.tool_use.call', { tool: toolUse.name, iteration: iterations });
-    const toolResult = isKbTool(toolUse.name)
-      ? await executeKbTool(toolUse.name, toolUse.input, agentId)
-      : await executeProductTool(toolUse.name, toolUse.input, agentId);
+    logger.info('claude.tool_use.call', { tool: toolName, iteration: iterations });
+    const toolResult = isKbTool(toolName)
+      ? await executeKbTool(toolName, toolInput, agentId)
+      : await executeProductTool(toolName, toolInput, agentId);
 
-    messages.push({ role: 'assistant', content: response.content });
-    messages.push({
-      role: 'user',
-      content: [{ type: 'tool_result', tool_use_id: toolUse.id, content: toolResult }],
-    });
+    const msg = response.choices[0].message;
+    messages.push({ role: 'assistant', content: msg.content, tool_calls: msg.tool_calls });
+    messages.push({ role: 'tool', tool_call_id: tc.id, content: typeof toolResult === 'string' ? toolResult : JSON.stringify(toolResult) });
 
     response = await callClaude({ systemBlocks, messages, tools });
   }
 
   // Model never called submit_response on its own → force one final turn.
   logger.warn('claude.tool_use.force_submit', {
-    stop_reason: response.stop_reason,
+    stop_reason: response.choices[0].finish_reason,
     iterations,
   });
   response = await forceSubmitResponse({ systemBlocks, messages, tools, prevResponse: response });
-  const submitTool = response.content.find(
-    (c) => c.type === 'tool_use' && c.name === 'submit_response'
-  );
+  const toolCalls = response.choices[0].message.tool_calls || [];
+  const submitTool = toolCalls.find(tc => tc.function.name === 'submit_response');
   if (!submitTool) {
     throw new Error('Claude did not produce a response after forced submit_response');
   }
   logger.info('claude.tool_use.submit_response', { iterations, forced: true });
-  return submitTool.input;
+  return JSON.parse(submitTool.function.arguments);
 }
 
 /**
@@ -836,13 +867,16 @@ async function callViaJsonSchema({ systemBlocks, messages, outputSchema }) {
   const response = await callClaude({
     systemBlocks,
     messages,
-    outputConfig: { format: { type: 'json_schema', schema: outputSchema } },
+    responseFormat: {
+      type: 'json_schema',
+      json_schema: { name: 'structured_response', schema: outputSchema, strict: true },
+    },
   });
-  const content = response.content[0];
-  if (content.type !== 'text') {
+  const content = response.choices[0].message.content;
+  if (!content) {
     throw new Error('Unexpected response type from Claude');
   }
-  return JSON.parse(content.text);
+  return JSON.parse(content);
 }
 
 // ─── Post-processing ─────────────────────────────────────────────────
@@ -919,7 +953,7 @@ export async function getResponse(
     history_count: historyCount,
     latest_input_type: Array.isArray(latestContent) ? 'multimodal' : 'text',
     has_agent_config: Boolean(agentConfig),
-    model: config.anthropic.model,
+    model: MODELS.SONNET,
     context_info: buildTraceContextInfo(contextInfo),
   });
 

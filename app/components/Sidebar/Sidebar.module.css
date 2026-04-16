@@ -1,14 +1,28 @@
+/*
+ * Prome Engine sidebar — 2026-04 refresh (matches UED mock).
+ *
+ * Behavior: collapsed 60px rail by default; expands to 240px on hover with a
+ * soft drop shadow. When collapsed only icons + the 26px P-mark show; when
+ * expanded the full wordmark logo and section/nav labels fade in.
+ *
+ * Visual: sidebar surface is the page grey (--bg), so the active nav item
+ * reads as a white "lifted card" with a subtle shadow + accent-colored
+ * icon/text — the inverted pattern in the mock.
+ */
+
 .sidebar {
   width: 60px;
   flex-shrink: 0;
   position: relative;
   z-index: 50;
 }
+/* The spacer layer keeps document flow stable while `.inner` slides over it
+ * on hover (avoids reflowing the entire app every time the mouse enters). */
 .sidebar::before {
   content: '';
   position: absolute;
   inset: 0;
-  background: var(--bg2);
+  background: var(--bg);
   border-right: 1px solid var(--border);
   pointer-events: none;
 }
@@ -18,7 +32,7 @@
   left: 0;
   bottom: 0;
   width: 60px;
-  background: var(--bg2);
+  background: var(--bg);
   border-right: 1px solid var(--border);
   display: flex;
   flex-direction: column;
@@ -26,95 +40,113 @@
   transition: width 0.18s ease, box-shadow 0.18s ease;
 }
 .sidebar:hover .inner {
-  width: 200px;
-  box-shadow: 4px 0 24px rgba(0, 0, 0, 0.08);
+  width: 240px;
+  box-shadow: 4px 0 24px rgba(15, 23, 42, 0.08);
 }
 
+/* ── Logo area ──────────────────────────────────────────────────── */
+/* Mark stays fixed at the rail's icon column. Full logo overlays it on
+ * hover — larger, centered, with a touch more vertical room. */
 .logoWrap {
-  height: 52px;
+  height: 72px;
   padding: 0 17px;
-  border-bottom: 1px solid var(--border);
   display: flex;
   align-items: center;
-  gap: 10px;
   flex-shrink: 0;
+  position: relative;
 }
-.logoGem {
-  width: 26px; height: 26px;
-  background: var(--accent);
-  border-radius: 6px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
+.logoMark {
+  width: 26px;
+  height: 26px;
   flex-shrink: 0;
-}
-.logoGem svg { width: 14px; height: 14px; fill: #fff; }
-.logoName {
-  font-family: var(--font-display);
-  font-size: 14px;
-  font-weight: 700;
-  letter-spacing: -0.2px;
-  color: var(--text);
-  white-space: nowrap;
-  opacity: 0;
+  object-fit: contain;
+  margin: -1px 0;
   transition: opacity 0.15s ease;
 }
-.logoVer {
-  font-size: 10px;
-  color: var(--text3);
-  font-family: var(--font-mono);
-  margin-left: auto;
-  margin-top: 1px;
-  white-space: nowrap;
+.logoFull {
+  position: absolute;
+  left: 20px;
+  top: 50%;
+  transform: translateY(-50%);
+  /* Full Prome Engine logo is a 2-line stacked wordmark in the tight crop;
+   * height 56 gives breathing room without feeling cramped. */
+  height: 56px;
+  width: auto;
+  max-width: calc(100% - 32px);
+  object-fit: contain;
   opacity: 0;
+  pointer-events: none;
   transition: opacity 0.15s ease;
 }
-.sidebar:hover .logoName,
-.sidebar:hover .logoVer { opacity: 1; }
+.sidebar:hover .logoMark { opacity: 0; }
+.sidebar:hover .logoFull { opacity: 1; }
 
-.navSection {
-  padding: 14px 14px 30px;
-  font-size: 16px;
-  font-family: var(--font-mono);
-  text-transform: uppercase;
-  letter-spacing: 1px;
-  color: var(--text3);
-  white-space: nowrap;
-  opacity: 0;
-  transition: opacity 0.15s ease;
-  height: 12px;
-}
-.sidebar:hover .navSection { opacity: 1; }
-
+/* ── Nav container ──────────────────────────────────────────────── */
 .nav {
-  padding: 4px 8px;
+  padding: 8px 12px 16px;
   flex: 1;
   overflow-y: auto;
   overflow-x: hidden;
 }
+
+/* ── Section header (数据概览 / 自动化营销 / 智能外贸员) ─────────── */
+/* Sans-serif, semibold, normal case — replaces the old mono-uppercase treatment
+ * so it reads as a clean Chinese-typography section divider. */
+.navSection {
+  padding: 22px 10px 8px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text2);
+  letter-spacing: 0;
+  text-transform: none;
+  white-space: nowrap;
+  opacity: 0;
+  transition: opacity 0.15s ease;
+  height: auto;
+}
+.sidebar:hover .navSection { opacity: 1; }
+
+/* ── Nav item ──────────────────────────────────────────────────── */
 .ni {
   display: flex;
   align-items: center;
-  gap: 12px;
-  padding: 8px 11px;
-  border-radius: var(--r);
+  gap: 14px;
+  padding: 10px 10px;
+  border-radius: 10px;
   cursor: pointer;
-  color: var(--text2);
-  font-size: 18px;
+  color: var(--text);
+  font-size: 14px;
   font-weight: 500;
-  transition: background 0.12s, color 0.12s;
-  margin-bottom: 12px;
+  margin-bottom: 2px;
   user-select: none;
   position: relative;
   text-decoration: none;
   white-space: nowrap;
+  transition: background 0.12s, color 0.12s, box-shadow 0.12s;
 }
-.ni:hover { background: var(--bg3); color: var(--text); }
-.ni.active { background: var(--accent-dim); color: var(--accent); font-weight: 500; }
-.ni svg { width: 20px; height: 20px; flex-shrink: 0; opacity: 0.75; }
-.ni.active svg { opacity: 1; }
+.ni:hover:not(.active) { background: var(--bg3); }
 
-/* label text fades in only when expanded */
+/* Active state: inverted "lifted white card" against the grey sidebar — the
+ * signature treatment from the mock. Shadow gives the card lift; the entire
+ * row (icon + label) turns accent blue. */
+.ni.active {
+  background: var(--bg2);
+  color: var(--accent);
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.06), 0 1px 3px rgba(15, 23, 42, 0.08);
+}
+
+.ni svg {
+  width: 22px;
+  height: 22px;
+  flex-shrink: 0;
+  opacity: 0.75;
+  transition: opacity 0.12s, color 0.12s;
+}
+.ni:hover svg,
+.ni.active svg { opacity: 1; }
+.ni.active svg { color: var(--accent); }
+
+/* Label — same fade behavior as section headers (hidden until expand). */
 .niLabel {
   opacity: 0;
   transition: opacity 0.15s ease;

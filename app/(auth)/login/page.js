@@ -40,10 +40,14 @@ export default function V5LoginPage() {
       <div className={s.wrapper}>
         {/* Logo */}
         <div className={s.logoSection}>
-          <div className={s.logoGem}>
-            <svg viewBox="0 0 14 14"><path d="M7 0L13 3.5V10.5L7 14L1 10.5V3.5L7 0Z"/></svg>
-          </div>
-          <div className={s.title}>Lead Engine</div>
+          <img
+            src="/brand/prome-mark.png"
+            alt="Prome Engine"
+            className={s.logoMark}
+            width={56}
+            height={56}
+          />
+          <div className={s.title}>Prome Engine</div>
           <div className={s.subtitle}>B2B 出口线索智能运营平台</div>
         </div>
 

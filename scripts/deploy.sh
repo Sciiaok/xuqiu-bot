@@ -1,11 +1,21 @@
 #!/bin/bash
-
 # Usage: ./scripts/deploy.sh
-
 set -e
 
+
+
+## setup instructions for a fresh server (Ubuntu 22.04):
+# sudo apt update
+# sudo apt install -y curl git build-essential tar
+# curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
+# sudo apt install -y nodejs
+# sudo npm install -g pm2
+# sudo apt install -y redis-server
+# sudo systemctl enable redis-server
+# sudo systemctl start redis-server
+
 # Configuration
-SERVER="aws-leadengine"
+SERVER="aws-online"
 REMOTE_DIR="~/lead_engine_next"
 APP_NAME="lead-engine-next"
 TMP_FILE="/tmp/lead_engine_next.tar.gz"
@@ -74,4 +84,3 @@ echo "  ssh $SERVER 'pm2 logs lead-engine-next'"
 echo "  ssh $SERVER 'pm2 logs lead-sync-cron'"
 echo "  ssh $SERVER 'pm2 logs queue-cron'"
 echo "  ssh $SERVER 'pm2 logs report-cron'"
-echo "  ssh $SERVER 'pm2 logs orchestrator-recovery'"

@@ -1,16 +1,12 @@
 'use client';
 
-import { CampaignStudioScreen } from '../campaign-studio/CampaignStudioScreen';
+import { Suspense } from 'react';
+import AutopilotApp from './AutopilotApp';
 
 export default function AIAutomationPage() {
   return (
-    <CampaignStudioScreen
-      title="AI 自动化投放"
-      subtitle="从需求输入、素材上传到多阶段投放编排"
-      visibleTabKeys={['ai']}
-      defaultTab="ai"
-      showMetrics={false}
-      workspaceMode
-    />
+    <Suspense>
+      <AutopilotApp />
+    </Suspense>
   );
 }

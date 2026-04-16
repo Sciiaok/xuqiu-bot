@@ -4,14 +4,14 @@
  * Provides vector search, structured query, and hybrid search over the kb_* tables.
  * Used by the Agent tool-use loop and the knowledge management API.
  */
-import { openai, openaiModel, MODELS, anthropic } from './llm-client.js';
+import { openrouter, MODELS } from './llm-client.js';
 import supabase from '../lib/supabase.js';
 
 // ── Embedding ────────────────────────────────────────────────────────
 
 async function generateEmbedding(text) {
-  const response = await openai.embeddings.create({
-    model: openaiModel(MODELS.EMBEDDING),
+  const response = await openrouter.embeddings.create({
+    model: MODELS.EMBEDDING,
     input: text,
   });
   return response.data[0].embedding;
@@ -49,15 +49,18 @@ async function rewriteQuery(query, conversationContext) {
     .map(m => `${m.role}: ${m.content}`)
     .join('\n');
 
-  const response = await anthropic.messages.create({
-    model: MODELS.HAIKU,
+  const response = await openrouter.messages.create({
+    models: [MODELS.HAIKU],
     max_tokens: 200,
-    system: `You are a query rewrite assistant. Based on the conversation history, rewrite the user's latest message into a complete, self-contained search query. Requirements:
+    messages: [
+      {
+        role: 'system',
+        content: `You are a query rewrite assistant. Based on the conversation history, rewrite the user's latest message into a complete, self-contained search query. Requirements:
 - Fill in omitted subjects/product models from context
 - Keep specific place names, model numbers, quantities
 - Output in English (for knowledge base search)
 - Output ONLY the rewritten query, nothing else`,
-    messages: [
+      },
       {
         role: 'user',
         content: `Conversation history:\n${contextStr}\n\nLatest message to rewrite: ${query}`,
@@ -65,7 +68,7 @@ async function rewriteQuery(query, conversationContext) {
     ],
   });
 
-  return response.content[0]?.text?.trim() || query;
+  return response.choices[0].message.content?.trim() || query;
 }
 
 // ── Vector Search ────────────────────────────────────────────────────
@@ -169,13 +172,15 @@ async function searchShippingRoutes(agentId, { destinationCountry, destinationPo
 // ── Translation ──────────────────────────────────────────────────────
 
 async function translateToEnglish(text) {
-  const response = await anthropic.messages.create({
-    model: MODELS.HAIKU,
+  const response = await openrouter.messages.create({
+    models: [MODELS.HAIKU],
     max_tokens: 2000,
-    system: 'Translate the following text to English. Keep product names, model numbers, and technical terms accurate. Output ONLY the translation.',
-    messages: [{ role: 'user', content: text }],
+    messages: [
+      { role: 'system', content: 'Translate the following text to English. Keep product names, model numbers, and technical terms accurate. Output ONLY the translation.' },
+      { role: 'user', content: text },
+    ],
   });
-  return response.content[0]?.text?.trim() || text;
+  return response.choices[0].message.content?.trim() || text;
 }
 
 /**
@@ -194,14 +199,16 @@ async function translateWithGlossary(text, agentId) {
       glossary.map(g => `"${g.term_zh}" → "${g.term_en}"`).join('\n');
   }
 
-  const response = await anthropic.messages.create({
-    model: MODELS.HAIKU,
+  const response = await openrouter.messages.create({
+    models: [MODELS.HAIKU],
     max_tokens: 4000,
-    system: `Translate the following text to English. Keep product names, model numbers, and technical terms accurate. Output ONLY the translation.${glossaryStr}`,
-    messages: [{ role: 'user', content: text }],
+    messages: [
+      { role: 'system', content: `Translate the following text to English. Keep product names, model numbers, and technical terms accurate. Output ONLY the translation.${glossaryStr}` },
+      { role: 'user', content: text },
+    ],
   });
 
-  return response.content[0]?.text?.trim() || text;
+  return response.choices[0].message.content?.trim() || text;
 }
 
 // ── Priority Scoring ─────────────────────────────────────────────────
@@ -248,10 +255,13 @@ async function analyzeQueryIntent(query, agentId) {
     ? `Available product spec fields: ${specFields.join(', ')}`
     : 'No structured product data available';
 
-  const response = await anthropic.messages.create({
-    model: MODELS.HAIKU,
+  const response = await openrouter.messages.create({
+    models: [MODELS.HAIKU],
     max_tokens: 500,
-    system: `You analyze customer queries to determine the best search strategy for a B2B knowledge base.
+    messages: [
+      {
+        role: 'system',
+        content: `You analyze customer queries to determine the best search strategy for a B2B knowledge base.
 
 ${specFieldsHint}
 Also available: fob_price_usd, moq, category, model, sku in the products table.
@@ -273,10 +283,12 @@ Rules:
 - "hybrid": combination (e.g. "cheapest tractor under 100HP") → SQL filter + vector rank
 - For filters, use: {"field": {"$lte": value}} or {"field": "exact_value"} or {"specs.field_name": {"$gte": value}}
 - Infer layers from topic: price/specs → product, shipping → logistics, certification → compliance, etc.`,
-    messages: [{ role: 'user', content: query }],
+      },
+      { role: 'user', content: query },
+    ],
   });
 
-  const text = response.content[0]?.text?.trim() || '{}';
+  const text = response.choices[0].message.content?.trim() || '{}';
   try {
     const jsonMatch = text.match(/```(?:json)?\s*([\s\S]*?)```/) || [null, text];
     return JSON.parse(jsonMatch[1].trim());

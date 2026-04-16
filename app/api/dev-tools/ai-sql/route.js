@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { createClient } from '@/lib/supabase-server';
-import { anthropic, MODELS } from '@/src/llm-client';
+import { openrouter, MODELS } from '@/src/llm-client';
 
 // Minimal schema digest given to the model so it generates sensible column
 // names without us shipping the full Supabase schema. Extend as needed.
@@ -61,17 +61,16 @@ export async function POST(request) {
       return NextResponse.json({ error: 'prompt is required' }, { status: 400 });
     }
 
-    const res = await anthropic.messages.create({
-      model: MODELS.HAIKU,
+    const res = await openrouter.messages.create({
+      models: [MODELS.HAIKU],
       max_tokens: 600,
-      system: SYSTEM_PROMPT,
-      messages: [{ role: 'user', content: prompt }],
+      messages: [
+        { role: 'system', content: SYSTEM_PROMPT },
+        { role: 'user', content: prompt },
+      ],
     });
 
-    const text = (res?.content || [])
-      .filter((b) => b?.type === 'text')
-      .map((b) => b.text)
-      .join('\n');
+    const text = res?.choices?.[0]?.message?.content || '';
 
     const sql = stripSqlFences(text);
     if (!sql) {

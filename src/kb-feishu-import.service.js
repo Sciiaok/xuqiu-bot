@@ -4,7 +4,7 @@
  * Imports content from Feishu docs/sheets/wiki into the knowledge base.
  * Supports one-time import and periodic sync.
  */
-import { anthropic, MODELS } from './llm-client.js';
+import { openrouter, MODELS } from './llm-client.js';
 import { processDocument } from './kb-upload.service.js';
 import supabase from '../lib/supabase.js';
 import { createTraceLogger } from '../lib/core-trace.js';

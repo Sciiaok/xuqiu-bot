@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { anthropic, MODELS } from '../../../../src/llm-client.js';
+import { openrouter, MODELS } from '../../../../src/llm-client.js';
 import { generateEmbedding, translateWithGlossary, detectLanguage } from '../../../../src/kb-search.service.js';
 import supabase from '../../../../lib/supabase.js';
 
@@ -20,10 +20,13 @@ export async function POST(request) {
     }
 
     // Step 1: Use LLM to extract knowledge from the message
-    const response = await anthropic.messages.create({
-      model: MODELS.SONNET,
+    const response = await openrouter.messages.create({
+      models: [MODELS.SONNET],
       max_tokens: 2000,
-      system: `You are a knowledge extraction assistant for a B2B export company. The user is telling you business information in natural language. Extract discrete knowledge points and classify them.
+      messages: [
+        {
+          role: 'system',
+          content: `You are a knowledge extraction assistant for a B2B export company. The user is telling you business information in natural language. Extract discrete knowledge points and classify them.
 
 Output as JSON:
 {
@@ -43,10 +46,12 @@ Output as JSON:
     }
   ]
 }`,
-      messages: [{ role: 'user', content: message }],
+        },
+        { role: 'user', content: message },
+      ],
     });
 
-    const text = response.content[0]?.text || '{}';
+    const text = response.choices[0].message.content || '{}';
     let parsed;
     try {
       const jsonMatch = text.match(/```(?:json)?\s*([\s\S]*?)```/) || [null, text];

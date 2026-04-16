@@ -5,7 +5,7 @@
  * to extract implicit business knowledge as draft knowledge points.
  * Intended to be triggered by a weekly cron job.
  */
-import { anthropic, MODELS } from './llm-client.js';
+import { openrouter, MODELS } from './llm-client.js';
 import { generateEmbedding, translateWithGlossary, detectLanguage } from './kb-search.service.js';
 import supabase from '../lib/supabase.js';
 import { createTraceLogger } from '../lib/core-trace.js';
@@ -65,10 +65,13 @@ export async function runAutoLearn(agentId, days = 7) {
     .map(([convId, msgs]) => `--- Conversation ${convId} ---\n${msgs.join('\n')}`)
     .join('\n\n');
 
-  const response = await anthropic.messages.create({
-    model: MODELS.SONNET,
+  const response = await openrouter.messages.create({
+    models: [MODELS.SONNET],
     max_tokens: 4000,
-    system: `You analyze human operator replies in WhatsApp B2B sales conversations to extract reusable business knowledge. The operator is from a Chinese export company selling to international buyers.
+    messages: [
+      {
+        role: 'system',
+        content: `You analyze human operator replies in WhatsApp B2B sales conversations to extract reusable business knowledge. The operator is from a Chinese export company selling to international buyers.
 
 Extract knowledge that an AI agent could use to answer similar questions in the future. Focus on:
 - Specific prices, MOQs, discounts mentioned
@@ -96,12 +99,12 @@ Output as JSON:
 }
 
 If nothing useful is found, output: { "extracted": [] }`,
-    messages: [
+      },
       { role: 'user', content: `Operator messages from the last ${days} days:\n\n${allOperatorText.slice(0, 12000)}` },
     ],
   });
 
-  const text = response.content[0]?.text || '{}';
+  const text = response.choices[0].message.content || '{}';
   let parsed;
   try {
     const jsonMatch = text.match(/```(?:json)?\s*([\s\S]*?)```/) || [null, text];
