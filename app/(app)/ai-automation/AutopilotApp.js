@@ -8,6 +8,24 @@ import WhatsAppGateCard from './components/WhatsAppGateCard';
 import AdPlanCard from './components/AdPlanCard';
 import { useMessageStream } from './hooks/useMessageStream';
 
+// ── Module-level session cache ────────────────────────────────────────────
+// Survives unmount/remount (e.g. user navigates away and back to /ai-automation)
+// so the sidebar list renders instantly from the last-known state instead of
+// showing the loading skeleton + waiting on a DB round-trip every time.
+// Cache is per-tab, in-memory only (no localStorage) — fine for this UX since
+// any actually new sessions will be picked up by the silent background refresh.
+const SESSIONS_CACHE_FRESH_MS = 30_000; // skip background refresh within this window
+let __sessionsCache = null; // { sessions, gate, ts } | null
+function readSessionsCache() {
+  return __sessionsCache;
+}
+function writeSessionsCache(patch) {
+  __sessionsCache = { ...(__sessionsCache || { sessions: [], gate: null }), ...patch, ts: Date.now() };
+}
+function isSessionsCacheFresh() {
+  return __sessionsCache && (Date.now() - __sessionsCache.ts) < SESSIONS_CACHE_FRESH_MS;
+}
+
 /**
  * AutopilotApp — the whole /ai-automation page.
  *
@@ -26,9 +44,12 @@ export default function AutopilotApp() {
   const searchParams = useSearchParams();
 
   // ── Data state ───────────────────────────────────────────────
-  const [gate, setGate] = useState(null);               // { status, numbers, all_numbers, error }
-  const [sessions, setSessions] = useState([]);
-  const [loadingSessions, setLoadingSessions] = useState(true);
+  // Hydrate from the module cache so a remount doesn't blank out the sidebar
+  // and then wait on the network — common when the user clicks away and back.
+  const cachedOnMount = readSessionsCache();
+  const [gate, setGate] = useState(cachedOnMount?.gate ?? null);
+  const [sessions, setSessions] = useState(cachedOnMount?.sessions ?? []);
+  const [loadingSessions, setLoadingSessions] = useState(!cachedOnMount);
   const [selectedId, setSelectedId] = useState(null);
   const [messages, setMessages] = useState([]);
   const [plan, setPlan] = useState(null);               // latest plan_json for active session
@@ -50,26 +71,51 @@ export default function AutopilotApp() {
   }, []);
 
   // ── Initial load: WA gate + sessions ────────────────────────
+  // Strategy:
+  //   - Cold (no cache)        → fetch with loading spinner.
+  //   - Warm but stale         → render cache instantly; silently refresh.
+  //   - Warm and fresh (<30s)  → render cache instantly; skip network entirely.
+  // After the initial hydration we always restore the URL-selected session.
   useEffect(() => {
     const urlConv = searchParams.get('c');
+    const cached = readSessionsCache();
+
+    // Restore URL selection from whatever data we already have on hand.
+    if (cached) {
+      const initialFromCache = urlConv && cached.sessions.find(x => x.id === urlConv)
+        ? urlConv
+        : cached.sessions[0]?.id || null;
+      if (initialFromCache) selectSession(initialFromCache);
+      // Skip network entirely if cache is still fresh.
+      if (isSessionsCacheFresh()) return;
+    }
+
+    let cancelled = false;
     (async () => {
       try {
         const [gateRes, sessRes] = await Promise.all([
           fetch('/api/autopilot/whatsapp-accounts').then(r => r.json()),
           fetch('/api/autopilot/conversations').then(r => r.json()),
         ]);
+        if (cancelled) return;
         setGate(gateRes);
         const list = sessRes.data || [];
         setSessions(list);
-        const initial = urlConv && list.find(x => x.id === urlConv) ? urlConv : list[0]?.id || null;
-        if (initial) selectSession(initial);
+        writeSessionsCache({ sessions: list, gate: gateRes });
+        if (!cached) {
+          // Only drive selection on cold load — warm path already did it above.
+          const initial = urlConv && list.find(x => x.id === urlConv) ? urlConv : list[0]?.id || null;
+          if (initial) selectSession(initial);
+        }
       } catch (err) {
+        if (cancelled) return;
         console.error('[AutopilotApp] initial load failed:', err);
-        setGate({ status: 'token_error', error: err.message });
+        if (!cached) setGate({ status: 'token_error', error: err.message });
       } finally {
-        setLoadingSessions(false);
+        if (!cancelled) setLoadingSessions(false);
       }
     })();
+    return () => { cancelled = true; };
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const recheckGate = useCallback(async () => {
@@ -78,6 +124,7 @@ export default function AutopilotApp() {
     // immediately after binding a new number on Meta.
     const r = await fetch('/api/autopilot/whatsapp-accounts?force=1').then(r => r.json());
     setGate(r);
+    writeSessionsCache({ gate: r });
   }, []);
 
   // ── Load messages when a session is selected ─────────────────
@@ -145,7 +192,11 @@ export default function AutopilotApp() {
     }
     const row = await r.json();
     if (!row?.id) throw new Error('创建对话返回空数据');
-    setSessions(prev => [{ ...row, plan_json: null, meta_campaign_ids: [] }, ...prev]);
+    setSessions(prev => {
+      const next = [{ ...row, plan_json: null, meta_campaign_ids: [] }, ...prev];
+      writeSessionsCache({ sessions: next });
+      return next;
+    });
     return row.id;
   }, []);
 
@@ -165,7 +216,11 @@ export default function AutopilotApp() {
     e.stopPropagation();
     if (!window.confirm('确认删除这个对话？')) return;
     await fetch(`/api/autopilot/conversations/${sessionId}`, { method: 'DELETE' });
-    setSessions(prev => prev.filter(x => x.id !== sessionId));
+    setSessions(prev => {
+      const next = prev.filter(x => x.id !== sessionId);
+      writeSessionsCache({ sessions: next });
+      return next;
+    });
     if (selectedId === sessionId) {
       const next = sessions.find(x => x.id !== sessionId);
       selectSession(next?.id || null);

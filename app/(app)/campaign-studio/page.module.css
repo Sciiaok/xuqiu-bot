@@ -407,6 +407,18 @@
   white-space: nowrap;
 }
 
+.adConvLink {
+  color: var(--accent, #2563eb);
+  text-decoration: none;
+  border-bottom: 1px dashed var(--accent, #2563eb);
+  font-family: inherit;
+}
+
+.adConvLink:hover {
+  text-decoration: none;
+  border-bottom-style: solid;
+}
+
 .proofBadge {
   display: inline-block;
   font-size: 11px;

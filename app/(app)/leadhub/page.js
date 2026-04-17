@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import { useSearchParams, useRouter, usePathname } from 'next/navigation';
 import s from './page.module.css';
 import Tag from '../../components/Tag/Tag';
 import Button from '../../components/Button/Button';
@@ -12,6 +13,7 @@ import {
   BUSINESS_VALUE_LABELS as VALUE_LABELS,
 } from '../../../lib/inquiries-filters';
 import Markdown from '../../components/Markdown/Markdown';
+import AdPreviewModal from '../../components/AdPreviewModal/AdPreviewModal';
 import { listAgents } from '../../../lib/api/agents.js';
 import { getDisplayLabel } from '../../../lib/constants/product-lines.js';
 
@@ -40,14 +42,15 @@ const QUALITY_OPTIONS = ['全部质量', 'PROOF', 'QUALIFY', 'GOOD'];
 const SEARCH_DEBOUNCE_MS = 300;
 
 const DATE_PRESETS = [
-  { key: '1d', label: '最近1天' },
-  { key: '7d', label: '最近7天' },
-  { key: '30d', label: '最近30天' },
-  { key: 'all', label: '所有时间' },
+  { key: 'all', label: '全部时间' },
+  { key: '1d', label: '昨天' },
+  { key: '7d', label: '前一周' },
+  { key: '30d', label: '前一个月' },
+  { key: '365d', label: '前一年' },
   { key: 'custom', label: '自定义' },
 ];
 
-const PRESET_DAYS = { '1d': 1, '7d': 7, '30d': 30 };
+const PRESET_DAYS = { '1d': 1, '7d': 7, '30d': 30, '365d': 365 };
 
 // Convert a <input type="date"> value (YYYY-MM-DD, Beijing-local) to an ISO
 // timestamp. `endOfDay=true` snaps to 23:59:59.999 so the "to" side is inclusive.
@@ -58,6 +61,11 @@ function dateInputToIso(dateStr, { endOfDay = false } = {}) {
 }
 
 // Resolve a preset + custom inputs to the final { dateFrom, dateTo } sent to the API.
+// Presets are yesterday-based windows to match analytics / campaign-studio:
+//   '1d'   → yesterday (00:00 ~ 23:59 Beijing)
+//   '7d'   → [yesterday-6, yesterday]
+//   '30d'  → [yesterday-29, yesterday]
+//   '365d' → [yesterday-364, yesterday]
 function resolveDateRange(preset, customFrom, customTo) {
   if (preset === 'all') return { dateFrom: '', dateTo: '' };
   if (preset === 'custom') {
@@ -68,9 +76,18 @@ function resolveDateRange(preset, customFrom, customTo) {
   }
   const days = PRESET_DAYS[preset];
   if (!days) return { dateFrom: '', dateTo: '' };
-  const now = new Date();
-  const from = new Date(now.getTime() - days * 24 * 60 * 60 * 1000);
-  return { dateFrom: from.toISOString(), dateTo: now.toISOString() };
+  // Build yesterday (Beijing) as the inclusive end of the window.
+  const todayBeijing = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Shanghai' });
+  const yesterday = new Date(`${todayBeijing}T00:00:00+08:00`);
+  yesterday.setUTCDate(yesterday.getUTCDate() - 1);
+  const yesterdayStr = yesterday.toLocaleDateString('en-CA', { timeZone: 'Asia/Shanghai' });
+  const start = new Date(`${yesterdayStr}T00:00:00+08:00`);
+  start.setUTCDate(start.getUTCDate() - (days - 1));
+  const startStr = start.toLocaleDateString('en-CA', { timeZone: 'Asia/Shanghai' });
+  return {
+    dateFrom: dateInputToIso(startStr),
+    dateTo: dateInputToIso(yesterdayStr, { endOfDay: true }),
+  };
 }
 
 /* ── Helpers ────────────────────────────────────────────── */
@@ -185,6 +202,8 @@ function mapGroupToCard(group) {
     flag,
     country: leads[0]?.destination_country || country,
     ts: toBeijingTime(meta.last_message_at),
+    lastMessageAt: meta.last_message_at, // raw ISO — used for realtime resort
+    isHumanTakeover: !!meta.is_human_takeover,
     quality: quality.lower,
     qualityLabel: quality.label,
     route: meta.route || '',
@@ -312,12 +331,37 @@ export default function LeadHubPage() {
   const [datePreset, setDatePreset] = useState('all');
   const [customFrom, setCustomFrom] = useState('');
   const [customTo, setCustomTo] = useState('');
+  const searchParams = useSearchParams();
+  const router = useRouter();
+  const pathname = usePathname();
+  const [metaAdIds, setMetaAdIds] = useState(() => searchParams?.getAll('metaAdId') || []);
+  const [previewAdId, setPreviewAdId] = useState(null);
+
+  // Keep metaAdIds in sync with the URL (e.g. when navigating from
+  // campaign-studio with one ad, or ai-automation with a whole campaign).
+  useEffect(() => {
+    setMetaAdIds(searchParams?.getAll('metaAdId') || []);
+  }, [searchParams]);
+
+  const clearMetaAdIds = useCallback(() => {
+    setMetaAdIds([]);
+    const next = new URLSearchParams(searchParams?.toString() || '');
+    next.delete('metaAdId');
+    const qs = next.toString();
+    router.replace(qs ? `${pathname}?${qs}` : pathname, { scroll: false });
+  }, [searchParams, router, pathname]);
   const [availableCountries, setAvailableCountries] = useState([]);
   const [search, setSearch] = useState('');
   const [debouncedSearch, setDebouncedSearch] = useState('');
 
   const [messages, setMessages] = useState([]);
   const [loadingMessages, setLoadingMessages] = useState(false);
+  const chatMessagesRef = useRef(null);
+  // True when the user is at (or close to) the bottom of the chat. We only
+  // auto-scroll on new messages while this is true so that scrolling up to
+  // read history isn't interrupted. Reset to true on conversation switch.
+  const stickToBottomRef = useRef(true);
+  const SCROLL_BOTTOM_THRESHOLD_PX = 80;
   const [isHumanTakeover, setIsHumanTakeover] = useState(false);
   const [msgText, setMsgText] = useState('');
   const [sending, setSending] = useState(false);
@@ -428,12 +472,13 @@ export default function LeadHubPage() {
     const { dateFrom, dateTo } = resolveDateRange(datePreset, customFrom, customTo);
     if (dateFrom) qs.set('dateFrom', dateFrom);
     if (dateTo) qs.set('dateTo', dateTo);
+    for (const adId of metaAdIds) qs.append('metaAdId', adId);
     if (cursor) {
       qs.set('cursorTs', cursor.cursorTs);
       qs.set('cursorId', cursor.cursorId);
     }
     return qs;
-  }, [supplyChain, quality, country, datePreset, customFrom, customTo, debouncedSearch]);
+  }, [supplyChain, quality, country, datePreset, customFrom, customTo, debouncedSearch, metaAdIds]);
 
   // Shared fetch for the first page — used by both initial load and realtime refresh.
   // `resetSelection` = true on filter changes (pick first card), false on realtime
@@ -478,43 +523,137 @@ export default function LeadHubPage() {
     return cancel;
   }, [refreshList]);
 
-  // Real-time: refresh conversation list on new / updated conversations.
-  // We keep the latest refreshList in a ref so the subscription effect has a
-  // stable dependency array and doesn't tear down / rebuild the WebSocket
-  // channel every time filters change.
-  const refreshListRef = useRef(refreshList);
-  useEffect(() => { refreshListRef.current = refreshList; }, [refreshList]);
+  // ── Real-time list updates ─────────────────────────────────────────────
+  // Old behavior re-fetched the entire first page (plus 4 separate count
+  // queries) on every conversations row change anywhere in the DB — wiping
+  // infinite-scroll progress and flashing the loading state. We now do
+  // surgical merges instead: known ids get patched in place, unknown ids get
+  // batched into one targeted ?conversationIds=… fetch.
 
-  const refreshDebounceRef = useRef(null);
+  // Snapshot of currently-loaded conversation ids so the realtime handler can
+  // tell "patch in place" from "fetch fresh" without re-subscribing on every
+  // cards mutation. Updated whenever cards changes; the channel reads via ref.
+  const cardIdsRef = useRef(new Set());
+  useEffect(() => {
+    cardIdsRef.current = new Set(cards.map((c) => c.id));
+  }, [cards]);
+
+  // Latest buildQs (so the surgical fetch stays consistent with current filters)
+  // kept in a ref so the realtime effect doesn't rebind on every filter change.
+  const buildQsRef = useRef(buildQs);
+  useEffect(() => { buildQsRef.current = buildQs; }, [buildQs]);
+
+  // Patch a single card in place from a realtime payload. Returns the new card
+  // list (or null if the id wasn't in `cards`, in which case caller will fetch).
+  const patchCardFromPayload = useCallback((payloadNew) => {
+    if (!payloadNew?.id) return false;
+    const id = payloadNew.id;
+    let touched = false;
+    setCards((prev) => {
+      const idx = prev.findIndex((c) => c.id === id);
+      if (idx === -1) return prev;
+      touched = true;
+      const existing = prev[idx];
+      const nextLastMsg = payloadNew.last_message_at || existing.lastMessageAt;
+      const updated = {
+        ...existing,
+        lastMessageAt: nextLastMsg,
+        ts: nextLastMsg ? toBeijingTime(nextLastMsg) : existing.ts,
+        isHumanTakeover: payloadNew.is_human_takeover ?? existing.isHumanTakeover,
+        // route is derived: takeover always wins over the stored lead.route
+        route: payloadNew.is_human_takeover ? 'HUMAN_NOW' : existing.route,
+      };
+      // Re-sort by lastMessageAt desc so the freshly bumped row floats to top.
+      const next = [...prev.slice(0, idx), updated, ...prev.slice(idx + 1)];
+      next.sort((a, b) => (b.lastMessageAt || '').localeCompare(a.lastMessageAt || ''));
+      return next;
+    });
+    return touched;
+  }, []);
+
+  // Pending unknown ids waiting for a batched fetch.
+  const pendingFetchIdsRef = useRef(new Set());
+  const fetchTimerRef = useRef(null);
+  const flushPendingFetch = useCallback(() => {
+    const ids = Array.from(pendingFetchIdsRef.current);
+    pendingFetchIdsRef.current = new Set();
+    if (ids.length === 0) return;
+    // Reuse current filters so we only surface conversations the user is
+    // actually looking at (e.g. a brand-new convo that doesn't match the
+    // active supply-chain filter shouldn't appear).
+    const qs = buildQsRef.current();
+    qs.delete('cursorTs');
+    qs.delete('cursorId');
+    qs.set('limit', String(Math.min(ids.length, 50)));
+    for (const id of ids) qs.append('conversationIds', id);
+    fetch(`/api/inquiries?${qs.toString()}`)
+      .then((r) => r.json())
+      .then((json) => {
+        const incoming = (json.groups || []).map(mapGroupToCard);
+        if (incoming.length === 0) return;
+        setCards((prev) => {
+          const byId = new Map(prev.map((c) => [c.id, c]));
+          let newCount = 0;
+          for (const card of incoming) {
+            if (!byId.has(card.id)) newCount += 1;
+            byId.set(card.id, card);
+          }
+          if (newCount > 0) {
+            // Nudge totals so the header doesn't lie until next filter refresh.
+            setTotalConversations((n) => n + newCount);
+          }
+          const merged = Array.from(byId.values());
+          merged.sort((a, b) => (b.lastMessageAt || '').localeCompare(a.lastMessageAt || ''));
+          return merged;
+        });
+      })
+      .catch((err) => {
+        // Realtime is best-effort; failures shouldn't surface as errors.
+        console.warn('Realtime conversation fetch failed:', err);
+      });
+  }, []);
+
+  const queueFetchForId = useCallback((id) => {
+    if (!id) return;
+    pendingFetchIdsRef.current.add(id);
+    clearTimeout(fetchTimerRef.current);
+    fetchTimerRef.current = setTimeout(flushPendingFetch, 400);
+  }, [flushPendingFetch]);
+
   useEffect(() => {
     const supabase = createClient();
-    let active = true;
-    const debouncedRefresh = () => {
-      if (!active) return;
-      clearTimeout(refreshDebounceRef.current);
-      refreshDebounceRef.current = setTimeout(() => refreshListRef.current(false), 500);
+    const handle = (payload) => {
+      const row = payload?.new;
+      if (!row?.id) return;
+      const known = cardIdsRef.current.has(row.id);
+      if (known) {
+        patchCardFromPayload(row);
+      } else {
+        // Unknown id — could be a brand-new conversation or one that scrolled
+        // out of our window. Either way, queue a targeted fetch.
+        queueFetchForId(row.id);
+      }
     };
     // Unique channel name avoids collisions when Strict Mode re-mounts.
     const channel = supabase
       .channel(`leadhub-conv-list-${Date.now()}`)
       .on('postgres_changes',
         { event: 'INSERT', schema: 'public', table: 'conversations' },
-        debouncedRefresh
+        handle
       )
       .on('postgres_changes',
         { event: 'UPDATE', schema: 'public', table: 'conversations' },
-        debouncedRefresh
+        handle
       )
       .subscribe();
 
     return () => {
-      active = false;
-      clearTimeout(refreshDebounceRef.current);
+      clearTimeout(fetchTimerRef.current);
       // Defer removal so the singleton Supabase client's shared WebSocket stays
       // alive through React Strict Mode's unmount → re-mount cycle.
       setTimeout(() => supabase.removeChannel(channel), 1000);
     };
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [patchCardFromPayload, queueFetchForId]);
 
   // Load more (cursor pagination)
   const loadMore = useCallback(() => {
@@ -594,6 +733,25 @@ export default function LeadHubPage() {
 
     return () => { cancelled = true; supabase.removeChannel(channel); };
   }, [selectedId]);
+
+  // Reset stick-to-bottom whenever the user switches to a different conversation
+  // so the freshly opened chat always lands at the latest message.
+  useEffect(() => {
+    stickToBottomRef.current = true;
+  }, [selectedId]);
+
+  // Auto-scroll the chat to the bottom when new messages arrive — but only if
+  // the user was already at (or near) the bottom. This way reading older
+  // history isn't interrupted by an incoming reply.
+  useEffect(() => {
+    const el = chatMessagesRef.current;
+    if (!el) return;
+    if (!stickToBottomRef.current) return;
+    // rAF lets the new message render before we measure scrollHeight.
+    requestAnimationFrame(() => {
+      el.scrollTop = el.scrollHeight;
+    });
+  }, [messages, loadingMessages, detailTab]);
 
   // Fetch leads when Leads tab is active and conversation changes
   useEffect(() => {
@@ -860,6 +1018,16 @@ export default function LeadHubPage() {
               {totalContacts} 个联系人 · {totalConversations} 个对话 · {totalLeads} 条线索
             </span>
           </div>
+          {metaAdIds.length > 0 && (
+            <div className={s.adFilterBanner}>
+              <span>
+                {metaAdIds.length === 1
+                  ? <>仅显示广告 <code>{metaAdIds[0]}</code> 带来的对话</>
+                  : <>仅显示 {metaAdIds.length} 个广告带来的对话</>}
+              </span>
+              <button type="button" onClick={clearMetaAdIds} className={s.adFilterClear}>清除</button>
+            </div>
+          )}
 
           {/* List */}
           <div className={s.list}>
@@ -920,7 +1088,14 @@ export default function LeadHubPage() {
                       <span className={s.cardChain}>WABA: {selected.waPhoneNumberId}</span>
                     )}
                     {selected.metaAdId && (
-                      <span className={s.cardChain}>AID: {selected.metaAdId}</span>
+                      <button
+                        type="button"
+                        className={`${s.cardChain} ${s.cardChainClickable}`}
+                        onClick={() => setPreviewAdId(selected.metaAdId)}
+                        title="点击查看广告预览"
+                      >
+                        AID: {selected.metaAdId}
+                      </button>
                     )}
                   </div>
                 </div>
@@ -939,7 +1114,15 @@ export default function LeadHubPage() {
               <div className={s.detailBody}>
                 {detailTab === 'chat' && (
                   <div className={s.chatWrap}>
-                    <div className={s.chatMessages}>
+                    <div
+                      className={s.chatMessages}
+                      ref={chatMessagesRef}
+                      onScroll={(e) => {
+                        const el = e.currentTarget;
+                        const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
+                        stickToBottomRef.current = distanceFromBottom <= SCROLL_BOTTOM_THRESHOLD_PX;
+                      }}
+                    >
                       {loadingMessages ? (
                         <div className={s.emptyState}>加载消息中…</div>
                       ) : messages.length === 0 ? (
@@ -1211,6 +1394,10 @@ export default function LeadHubPage() {
             </div>
           </div>
         </div>
+      )}
+
+      {previewAdId && (
+        <AdPreviewModal adId={previewAdId} onClose={() => setPreviewAdId(null)} />
       )}
     </div>
   );

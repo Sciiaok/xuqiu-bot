@@ -159,7 +159,20 @@ function AdRow({ ad, isExpanded, onToggle, rangeLabel, isSingleDay, onPreview })
         <td className={s.adNum}>{formatCurrency(period.spend)}</td>
         <td className={s.adNum}>{formatCount(period.impressions)}</td>
         <td className={s.adNum}>{period.ctr || 0}%</td>
-        <td className={s.adNum}>{formatCount(period.waConversations)}</td>
+        <td className={s.adNum}>
+          {period.waConversations > 0 && ad.adId ? (
+            <a
+              href={`/leadhub?metaAdId=${encodeURIComponent(ad.adId)}`}
+              className={s.adConvLink}
+              onClick={(e) => e.stopPropagation()}
+              title="查看该广告带来的对话"
+            >
+              {formatCount(period.waConversations)}
+            </a>
+          ) : (
+            formatCount(period.waConversations)
+          )}
+        </td>
         <td className={s.adNum}>{formatCurrency(period.cpa)}</td>
         <td className={s.adNum}>
           <span className={s.proofBadge}>{period.proofRate || 0}%</span>

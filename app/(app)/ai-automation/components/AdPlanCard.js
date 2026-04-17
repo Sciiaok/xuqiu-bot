@@ -1,7 +1,9 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import { useRouter } from 'next/navigation';
 import s from '../autopilot.module.css';
+import AdCreativePreview from './AdCreativePreview';
 
 /**
  * AdPlanCard — the central artifact of /ai-automation.
@@ -35,6 +37,44 @@ export default function AdPlanCard({
   const [activeTab, setActiveTab] = useState(0);
   const safeTab = Math.min(activeTab, Math.max(0, adSets.length - 1));
   const activeAdSet = adSets[safeTab];
+  const activeAds = activeAdSet?.ads || [];
+  const [activeCreative, setActiveCreative] = useState(0);
+  const safeCreative = Math.min(activeCreative, Math.max(0, activeAds.length - 1));
+  const activeAd = activeAds[safeCreative];
+
+  // Reset creative selection when switching ad sets so we never point at
+  // a creative index that doesn't exist in the newly active set.
+  useEffect(() => { setActiveCreative(0); }, [safeTab]);
+
+  const router = useRouter();
+  const [resolvingInquiries, setResolvingInquiries] = useState(false);
+  const handleViewInquiries = async () => {
+    const campaignIds = plan.meta_campaign_ids || [];
+    if (!campaignIds.length || resolvingInquiries) return;
+    setResolvingInquiries(true);
+    try {
+      const qs = new URLSearchParams();
+      for (const id of campaignIds) qs.append('campaignId', id);
+      const res = await fetch(`/api/ads/by-campaign?${qs.toString()}`);
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || `请求失败 (${res.status})`);
+      const adIds = (json.ads || []).map((a) => a.ad_id).filter(Boolean);
+      if (!adIds.length) {
+        // Campaign has no ads (yet) — go to leadhub unfiltered so the user
+        // still sees something rather than an empty state.
+        router.push('/leadhub');
+        return;
+      }
+      const target = new URLSearchParams();
+      for (const id of adIds) target.append('metaAdId', id);
+      router.push(`/leadhub?${target.toString()}`);
+    } catch (err) {
+      console.error('Failed to resolve campaign ads:', err);
+      router.push('/leadhub');
+    } finally {
+      setResolvingInquiries(false);
+    }
+  };
 
   // Full-size image overlay. Kept local to the card because it's the only
   // place images are clickable; lifting it would add prop-drilling for no gain.
@@ -128,7 +168,7 @@ export default function AdPlanCard({
           {adSets.length > 1 && (
             <div className={s.tabs} role="tablist" aria-label="广告组">
               {adSets.map((as, i) => {
-                const label = (as.targeting?.countries || []).join('/') || as.name || `组 ${i + 1}`;
+                const label = as.name || `组 ${i + 1}`;
                 const active = i === safeTab;
                 return (
                   <button
@@ -156,41 +196,47 @@ export default function AdPlanCard({
             )}
           </div>
 
-          <ul className={s.adList}>
-            {(activeAdSet.ads || []).map((ad, i) => (
-              <li key={i} className={s.ad}>
-                {ad.creative?.image_url ? (
+          {/* Creative tabs — only show when there's more than one */}
+          {activeAds.length > 1 && (
+            <div className={s.creativeTabs} role="tablist" aria-label="广告创意">
+              {activeAds.map((ad, i) => {
+                const active = i === safeCreative;
+                return (
                   <button
-                    type="button"
-                    className={s.adThumbBtn}
-                    onClick={() => setLightboxUrl(ad.creative.image_url)}
-                    title="点击查看大图"
-                    aria-label="查看大图"
+                    key={i}
+                    role="tab"
+                    aria-selected={active}
+                    className={`${s.creativeTab} ${active ? s.creativeTabActive : ''}`}
+                    onClick={() => setActiveCreative(i)}
+                    title={ad.name || ad.creative?.headline || `创意 ${i + 1}`}
                   >
-                    <img
-                      src={ad.creative.image_url}
-                      alt={ad.creative?.headline || ad.name}
-                      className={s.adThumb}
-                    />
+                    {ad.name || `创意 ${i + 1}`}
                   </button>
-                ) : (
-                  <div className={`${s.adThumb} ${s.adThumbMissing}`} title="素材未生成">?</div>
-                )}
-                <div className={s.adText}>
-                  {ad.creative?.headline && <div className={s.adHead}>{ad.creative.headline}</div>}
-                  {ad.creative?.primary_text && (
-                    <p className={s.adCopy}>{ad.creative.primary_text}</p>
-                  )}
-                  {ad.welcome_message && (
-                    <div className={s.adWelcome}>
-                      <span className={s.adWelcomeMark}>💬</span>
-                      <span>{ad.welcome_message}</span>
-                    </div>
-                  )}
+                );
+              })}
+            </div>
+          )}
+
+          {activeAd && (
+            <div className={s.previewWrap}>
+              <button
+                type="button"
+                className={s.previewClickable}
+                onClick={() => activeAd.creative?.image_url && setLightboxUrl(activeAd.creative.image_url)}
+                aria-label="查看大图"
+                title={activeAd.creative?.image_url ? '点击查看大图' : undefined}
+              >
+                <AdCreativePreview ad={activeAd} whatsapp={plan.whatsapp} />
+              </button>
+
+              {activeAd.welcome_message && (
+                <div className={s.adWelcome} style={{ marginTop: 12 }}>
+                  <span className={s.adWelcomeMark}>💬</span>
+                  <span>{activeAd.welcome_message}</span>
                 </div>
-              </li>
-            ))}
-          </ul>
+              )}
+            </div>
+          )}
         </section>
       )}
 
@@ -231,7 +277,13 @@ export default function AdPlanCard({
       {isLaunched && plan.meta_campaign_ids?.length > 0 && (
         <nav className={s.planLinks}>
           <a href={`/campaign-studio?campaign_id=${encodeURIComponent(plan.meta_campaign_ids[0])}`}>看数据 →</a>
-          <a href="/leadhub">看询盘 →</a>
+          <a
+            href="/leadhub"
+            onClick={(e) => { e.preventDefault(); handleViewInquiries(); }}
+            aria-busy={resolvingInquiries || undefined}
+          >
+            {resolvingInquiries ? '加载中…' : '看询盘 →'}
+          </a>
           <a
             href={`https://business.facebook.com/adsmanager/manage/campaigns?selected_campaign_ids=${plan.meta_campaign_ids.join(',')}`}
             target="_blank"

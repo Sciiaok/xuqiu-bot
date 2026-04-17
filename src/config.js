@@ -25,19 +25,18 @@ export const config = {
 
   // WhatsApp Cloud API
   whatsapp: {
-    token: process.env.WA_TOKEN,
-    phoneNumberId: process.env.WA_PHONE_NUMBER_ID,
+    token: process.env.WA_SYSTEM_TOKEN,
     verifyToken: process.env.WA_VERIFY_TOKEN,
     apiVersion: process.env.WA_API_VERSION || 'v21.0',
   },
 
   // Meta Marketing API — ad campaign execution
   meta: {
-    accessToken: process.env.META_SYSTEM_TOKEN || process.env.META_ACCESS_TOKEN,
     adAccountId: process.env.META_AD_ACCOUNT_ID,
     pageId: process.env.META_PAGE_ID,
     apiVersion: process.env.META_API_VERSION || 'v21.0',
     apiTimeoutMs: parseInt(process.env.META_API_TIMEOUT_MS) || 30_000,
+    accessToken: process.env.META_SYSTEM_TOKEN,
   },
 
   // Meta Ads MCP (spawned subprocess OR remote HTTP bridge)

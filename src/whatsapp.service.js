@@ -7,7 +7,7 @@ import { config } from './config.js';
  * @returns {Promise<Object>} - WhatsApp API response
  */
 export async function sendMessage(waId, messageText, phoneNumberId) {
-  const pnid = phoneNumberId || config.whatsapp.phoneNumberId;
+  const pnid = phoneNumberId;
   const url = `https://graph.facebook.com/${config.whatsapp.apiVersion}/${pnid}/messages`;
 
   const payload = {
@@ -49,7 +49,7 @@ export async function sendMessage(waId, messageText, phoneNumberId) {
  * @param {string} messageId - WhatsApp message ID
  */
 export async function markAsRead(messageId, phoneNumberId) {
-  const pnid = phoneNumberId || config.whatsapp.phoneNumberId;
+  const pnid = phoneNumberId;
   const url = `https://graph.facebook.com/${config.whatsapp.apiVersion}/${pnid}/messages`;
 
   const payload = {
@@ -127,7 +127,7 @@ export function validateMedia(mimeType, sizeBytes) {
  * @returns {Promise<Object>} - WhatsApp API response
  */
 export async function sendMedia(waId, type, fileBuffer, mimeType, filename, caption, phoneNumberId) {
-  const pnid = phoneNumberId || config.whatsapp.phoneNumberId;
+  const pnid = phoneNumberId;
   const baseUrl = `https://graph.facebook.com/${config.whatsapp.apiVersion}`;
 
   // Step 1: Upload media to WhatsApp

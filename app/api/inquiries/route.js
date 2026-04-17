@@ -106,6 +106,11 @@ function parseFilters(sp) {
     dateTo: Number.isNaN(Date.parse(dateTo)) ? '' : dateTo,
     agentIds: sp.getAll('agentIds').filter(Boolean),
     humanTakeover: parseHumanTakeover(sp),
+    // Accept either ?metaAdId=X or repeated ?metaAdId=X&metaAdId=Y
+    metaAdIds: sp.getAll('metaAdId').map((v) => v.trim()).filter(Boolean),
+    // Targeted fetch by conversation id — used by the leadhub realtime path to
+    // refresh just the rows that changed instead of the full first page.
+    conversationIds: sp.getAll('conversationIds').map((v) => v.trim()).filter(Boolean),
 
     // quantity lives inside leads.color_quantity JSON → JS-side
     ...normalizeQuantityFilter({
@@ -146,6 +151,16 @@ function applyConversationFilters(query, filters, { foreignTable } = {}) {
   if (filters.agentIds.length > 0) query = query.in(col('agent_id'), filters.agentIds);
   if (filters.dateFrom) query = query.gte(col('last_message_at'), filters.dateFrom);
   if (filters.dateTo) query = query.lte(col('last_message_at'), filters.dateTo);
+  if (filters.metaAdIds.length === 1) {
+    query = query.eq(col('meta_ad_id'), filters.metaAdIds[0]);
+  } else if (filters.metaAdIds.length > 1) {
+    query = query.in(col('meta_ad_id'), filters.metaAdIds);
+  }
+  if (filters.conversationIds.length === 1) {
+    query = query.eq(col('id'), filters.conversationIds[0]);
+  } else if (filters.conversationIds.length > 1) {
+    query = query.in(col('id'), filters.conversationIds);
+  }
   return query;
 }
 

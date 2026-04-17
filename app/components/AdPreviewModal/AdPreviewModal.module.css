@@ -1,0 +1,138 @@
+.backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.55);
+  z-index: 9999;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+}
+
+.panel {
+  --preview-w: 360px;
+  --preview-h: 720px;
+  /* Chrome around the iframe: header (~50) + format tabs (~46) + body padding (28) */
+  --chrome-h: 124px;
+  background: var(--bg, #fff);
+  color: var(--text, #111);
+  border-radius: 12px;
+  /* Width: enough to fit the preview + body padding (14px each side), capped at viewport. */
+  width: min(calc(var(--preview-w) + 28px), calc(100vw - 48px));
+  /* Height: chrome + preview, capped at viewport. */
+  max-height: min(calc(var(--preview-h) + var(--chrome-h)), calc(100vh - 48px));
+  display: flex;
+  flex-direction: column;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.35);
+  overflow: hidden;
+  transition: width 0.18s ease, max-height 0.18s ease;
+}
+
+.head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 18px;
+  border-bottom: 1px solid var(--border, #e5e7eb);
+}
+
+.title {
+  font-size: 14px;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.adId {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px;
+  background: var(--bg3, rgba(0, 0, 0, 0.06));
+  padding: 2px 8px;
+  border-radius: 4px;
+  color: var(--text2, #374151);
+}
+
+.closeBtn {
+  background: transparent;
+  border: none;
+  font-size: 22px;
+  line-height: 1;
+  color: var(--text3, #6b7280);
+  cursor: pointer;
+  padding: 0 6px;
+}
+
+.closeBtn:hover { color: var(--text, #111); }
+
+.formats {
+  display: flex;
+  gap: 4px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--border, #e5e7eb);
+  overflow-x: auto;
+}
+
+.formats::-webkit-scrollbar { height: 0; }
+
+.formatBtn {
+  flex-shrink: 0;
+  padding: 6px 12px;
+  border: 1px solid var(--border, #e5e7eb);
+  background: var(--bg, #fff);
+  color: var(--text2, #374151);
+  font-size: 12px;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+
+.formatBtn:hover:not(.formatBtnActive) {
+  background: var(--bg3, rgba(0, 0, 0, 0.04));
+}
+
+.formatBtnActive {
+  background: var(--accent, #2563eb);
+  color: #fff;
+  border-color: var(--accent, #2563eb);
+}
+
+.body {
+  flex: 1;
+  min-height: 0;
+  padding: 14px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg2, #f3f4f6);
+  overflow: hidden;
+}
+
+.frame {
+  /* Sized to comfortably hold Meta's preview at its natural width.
+   * Inner iframe scrolls if its content is taller than the wrapper. */
+  width: var(--preview-w);
+  max-width: 100%;
+  height: var(--preview-h);
+  max-height: 100%;
+  border: none;
+  border-radius: 8px;
+  background: #fff;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.08);
+  display: block;
+}
+
+.state {
+  color: var(--text3, #6b7280);
+  font-size: 13px;
+  align-self: center;
+  padding: 40px 0;
+}
+
+.stateError {
+  color: var(--red, #dc2626);
+  font-size: 13px;
+  align-self: center;
+  padding: 40px 12px;
+  text-align: center;
+}

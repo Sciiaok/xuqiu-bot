@@ -764,6 +764,207 @@
 }
 .adWelcomeMark { flex-shrink: 0; }
 
+/* ── Creative tabs (one per ad inside an ad set) ── */
+.creativeTabs {
+  display: flex;
+  gap: 2px;
+  margin: 10px 0 12px;
+  border-bottom: 1px solid var(--border);
+  overflow-x: auto;
+}
+.creativeTabs::-webkit-scrollbar { height: 0; }
+.creativeTab {
+  flex-shrink: 0;
+  padding: 8px 14px;
+  border: none;
+  background: transparent;
+  color: var(--text3);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+  transition: color 0.15s, border-color 0.15s;
+}
+.creativeTab:hover:not(.creativeTabActive) { color: var(--text2); }
+.creativeTabActive {
+  color: var(--accent);
+  border-bottom-color: var(--accent);
+}
+
+/* ── Ad preview (Facebook-style feed mockup) ── */
+.previewWrap {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  margin-top: 4px;
+  min-width: 0;
+}
+.previewClickable {
+  padding: 0;
+  border: none;
+  background: transparent;
+  cursor: zoom-in;
+  width: 100%;
+  max-width: 340px;
+  min-width: 0;
+  border-radius: 12px;
+  transition: box-shadow 0.15s;
+}
+.previewClickable:hover,
+.previewClickable:focus-visible {
+  box-shadow: 0 0 0 2px var(--accent);
+  outline: none;
+}
+.preview {
+  width: 100%;
+  background: #fff;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  overflow: hidden;
+  text-align: left;
+  color: #1c1e21;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
+}
+.previewHeader {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 14px 8px;
+}
+.previewAvatar {
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #fff;
+  font-weight: 700;
+  font-size: 16px;
+  flex-shrink: 0;
+}
+.previewHeaderText { flex: 1; min-width: 0; }
+.previewPageName {
+  font-size: 14px;
+  font-weight: 600;
+  color: #050505;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.previewSponsored {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  color: #65676b;
+}
+.previewGlobe { font-size: 10px; }
+.previewMore {
+  color: #65676b;
+  font-size: 18px;
+  letter-spacing: 1px;
+  padding: 0 4px;
+}
+.previewPrimary {
+  padding: 4px 14px 10px;
+}
+.previewPrimary p {
+  margin: 0;
+  font-size: 14px;
+  line-height: 1.45;
+  color: #050505;
+  white-space: pre-wrap;
+  word-wrap: break-word;
+}
+.previewImageWrap {
+  width: 100%;
+  background: #f0f2f5;
+  aspect-ratio: 1 / 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+}
+.previewImage {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+.previewImageMissing {
+  color: #8a8d91;
+  font-size: 13px;
+}
+.previewCta {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  background: #f0f2f5;
+  border-top: 1px solid #e4e6eb;
+  border-bottom: 1px solid #e4e6eb;
+}
+.previewCtaThumb {
+  width: 44px;
+  height: 44px;
+  border-radius: 6px;
+  overflow: hidden;
+  flex-shrink: 0;
+  background: #dcdfe3;
+}
+.previewCtaThumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+.previewCtaText { flex: 1; min-width: 0; }
+.previewCtaKicker {
+  font-size: 10px;
+  font-weight: 600;
+  color: #65676b;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+}
+.previewCtaHeadline {
+  font-size: 13px;
+  font-weight: 600;
+  color: #050505;
+  line-height: 1.3;
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+.previewCtaBtn {
+  background: #e4e6eb;
+  color: #050505;
+  font-size: 13px;
+  font-weight: 600;
+  padding: 7px 14px;
+  border-radius: 6px;
+  flex-shrink: 0;
+}
+.previewActions {
+  display: flex;
+  padding: 8px 10px;
+  gap: 4px;
+}
+.previewAction {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  font-size: 13px;
+  color: #65676b;
+  font-weight: 500;
+  padding: 6px 0;
+}
+
 /* ── Footer ── */
 .planFoot {
   padding: 12px 18px;
