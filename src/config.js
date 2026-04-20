@@ -27,7 +27,7 @@ export const config = {
   whatsapp: {
     token: process.env.WA_SYSTEM_TOKEN,
     verifyToken: process.env.WA_VERIFY_TOKEN,
-    apiVersion: process.env.WA_API_VERSION || 'v21.0',
+    apiVersion: 'v21.0',
   },
 
   // Meta Marketing API — ad campaign execution
@@ -88,7 +88,7 @@ export const config = {
 
   // Redis (queue + rate limiter + cache)
   redis: {
-    url: process.env.REDIS_URL || 'redis://127.0.0.1:6379',
+    url: 'redis://127.0.0.1:6379',
   },
 
   // Outbound HTTP proxy (Meta API from China, etc.)
