@@ -38,7 +38,7 @@ def main() -> int:
     status = env("DEPLOY_STATUS")
     repo = env("REPO")
     if status == "success":
-        title = f"✅ 部署成功 | {repo}"
+        title = f"✅ 部署成功 | {repo} | http://54.209.104.204:3002/login"
         color = "green"
     else:
         title = f"❌ 部署失败 | {repo}"

@@ -105,7 +105,7 @@ export const config = {
   app: {
     baseUrl: process.env.NEXT_PUBLIC_APP_URL,
     demoMode: process.env.DEMO_MODE === 'true',
-    takeoverAutoExpireDisabled: process.env.TAKEOVER_AUTO_EXPIRE === 'off',
+    takeoverAutoExpireDisabled: 'off' === 'off',
   },
 
   // Internal API secrets (cron jobs, partner APIs)

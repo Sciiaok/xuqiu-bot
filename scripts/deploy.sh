@@ -1,5 +1,6 @@
 #!/bin/bash
-# Usage: ./scripts/deploy.sh
+# Usage: ./scripts/deploy.sh <server>
+#   e.g. ./scripts/deploy.sh aws-online
 set -e
 
 
@@ -15,7 +16,7 @@ set -e
 # sudo systemctl start redis-server
 
 # Configuration
-SERVER="aws-online"
+SERVER="${1:?Usage: $0 <server>   (e.g. aws-online)}"
 REMOTE_DIR="~/lead_engine_next"
 APP_NAME="lead-engine-next"
 TMP_FILE="/tmp/lead_engine_next.tar.gz"
