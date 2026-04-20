@@ -126,7 +126,7 @@ Output as JSON:
 
   const response = await openrouter.messages.create({
     models: [MODELS.SONNET],
-    max_tokens: 8000,
+    max_tokens: 16000,
     messages: [
       { role: 'system', content: systemPrompt },
       { role: 'user', content: `File type: ${fileType}\n\nDocument content:\n${truncate(content, 15000)}` },
@@ -134,14 +134,34 @@ Output as JSON:
   });
 
   const text = response.choices[0].message.content || '{}';
+  const finishReason = response.choices[0].finish_reason;
   try {
-    // Extract JSON from response (may be wrapped in markdown code fences)
-    const jsonMatch = text.match(/```(?:json)?\s*([\s\S]*?)```/) || [null, text];
-    return JSON.parse(jsonMatch[1].trim());
-  } catch {
-    logger.warn('kb.extract.parse_failed', { text: text.slice(0, 500) });
-    return { knowledge_points: [], detected_type: 'unknown' };
+    return parseJsonFromLlm(text);
+  } catch (err) {
+    logger.warn('kb.extract.parse_failed', {
+      text: text.slice(0, 500),
+      finish_reason: finishReason,
+      parse_error: err.message,
+    });
+    throw new Error(
+      `LLM returned unparseable JSON (finish_reason=${finishReason}): ${err.message}`
+    );
   }
+}
+
+/**
+ * Extract JSON from an LLM response. Tolerates markdown code fences,
+ * including truncated responses where the closing ``` is missing.
+ */
+function parseJsonFromLlm(text) {
+  let payload = text.trim();
+  // Strip opening fence (```json or ```)
+  const fenceMatch = payload.match(/^```(?:json)?\s*\n?/);
+  if (fenceMatch) payload = payload.slice(fenceMatch[0].length);
+  // Strip closing fence if present
+  const closingFence = payload.lastIndexOf('```');
+  if (closingFence !== -1) payload = payload.slice(0, closingFence);
+  return JSON.parse(payload.trim());
 }
 
 // ── Process Single Knowledge Point ───────────────────────────────────
@@ -206,7 +226,7 @@ If no product data found, output: { "products": [] }`;
 
   const response = await openrouter.messages.create({
     models: [MODELS.SONNET],
-    max_tokens: 8000,
+    max_tokens: 16000,
     messages: [
       { role: 'system', content: systemPrompt },
       { role: 'user', content: `File type: ${fileType}\n\nContent:\n${truncate(content, 15000)}` },
@@ -214,12 +234,16 @@ If no product data found, output: { "products": [] }`;
   });
 
   const text = response.choices[0].message.content || '{}';
+  const finishReason = response.choices[0].finish_reason;
   let parsed;
   try {
-    const jsonMatch = text.match(/```(?:json)?\s*([\s\S]*?)```/) || [null, text];
-    parsed = JSON.parse(jsonMatch[1].trim());
-  } catch {
-    logger.warn('kb.products.parse_failed');
+    parsed = parseJsonFromLlm(text);
+  } catch (err) {
+    logger.warn('kb.products.parse_failed', {
+      docId,
+      finish_reason: finishReason,
+      parse_error: err.message,
+    });
     return;
   }
 
@@ -273,12 +297,16 @@ If no shipping data found, output: { "routes": [] }`;
   });
 
   const text = response.choices[0].message.content || '{}';
+  const finishReason = response.choices[0].finish_reason;
   let parsed;
   try {
-    const jsonMatch = text.match(/```(?:json)?\s*([\s\S]*?)```/) || [null, text];
-    parsed = JSON.parse(jsonMatch[1].trim());
-  } catch {
-    logger.warn('kb.shipping.parse_failed');
+    parsed = parseJsonFromLlm(text);
+  } catch (err) {
+    logger.warn('kb.shipping.parse_failed', {
+      docId,
+      finish_reason: finishReason,
+      parse_error: err.message,
+    });
     return;
   }
 

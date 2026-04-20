@@ -723,7 +723,7 @@ function buildSubmitResponseTool(outputSchema) {
   return {
     name: 'submit_response',
     description:
-      'Submit your final response. Call this after gathering any needed product information. You MUST call this tool as your final action.',
+      'Submit your final response. This is the ONLY way to reply to the customer — every turn must end with a submit_response tool call. Do NOT reply with plain assistant text; plain text will be discarded. If you do not need to call any other tool, call submit_response immediately as your single tool call for the turn.',
     input_schema: outputSchema,
     cache_control: { type: 'ephemeral' },
   };
