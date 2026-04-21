@@ -1,10 +1,13 @@
-name: Deploy to aws-test on manual trigger
+name: Deploy to aws-preonline on PR merge to main
 
 on:
-  workflow_dispatch:
+  pull_request:
+    types: [closed]
+    branches: [main]
 
 jobs:
   deploy:
+    if: github.event.pull_request.merged == true
     runs-on: ubuntu-latest
     concurrency:
       group: deploy-main
@@ -15,7 +18,7 @@ jobs:
         with:
           ref: ${{ github.event.pull_request.head.sha }}
 
-      - name: Configure SSH for aws-test alias
+      - name: Configure SSH for aws-preonline alias
         run: |
           mkdir -p ~/.ssh
           chmod 700 ~/.ssh
@@ -26,12 +29,12 @@ jobs:
           sed -i 's/\r$//' ~/.ssh/id_deploy
           chmod 600 ~/.ssh/id_deploy
 
-          printf '%s\n' "${{ secrets.EC2_TEST_HOST_KEY }}" > ~/.ssh/known_hosts
+          printf '%s\n' "${{ secrets.EC2_HOST_KEY }}" > ~/.ssh/known_hosts
           chmod 644 ~/.ssh/known_hosts
 
           cat > ~/.ssh/config <<EOF
-          Host aws-test
-            HostName ${{ secrets.EC2_TEST_HOST }}
+          Host aws-preonline
+            HostName ${{ secrets.EC2_HOST }}
             User ${{ secrets.EC2_USER }}
             IdentityFile ~/.ssh/id_deploy
             IdentitiesOnly yes
@@ -44,7 +47,7 @@ jobs:
         run: ssh-keygen -y -f ~/.ssh/id_deploy >/dev/null
 
       - name: Test SSH connection
-        run: ssh -o BatchMode=yes aws-test 'echo connected'
+        run: ssh -o BatchMode=yes aws-preonline 'echo connected'
 
       - name: Write .env.local from secrets
         env:
@@ -71,7 +74,7 @@ jobs:
         id: deploy
         run: |
           chmod +x scripts/deploy.sh
-          ./scripts/deploy.sh aws-test
+          ./scripts/deploy.sh aws-preonline
 
       - name: Notify Feishu
         if: always()
@@ -79,8 +82,8 @@ jobs:
           FEISHU_APP_ID: ${{ secrets.FEISHU_APP_ID }}
           FEISHU_APP_SECRET: ${{ secrets.FEISHU_APP_SECRET }}
           FEISHU_CHAT_ID: ${{ secrets.FEISHU_CHAT_ID }}
-          DEPLOY_ENV: test
-          APP_URL: http://${{ secrets.EC2_TEST_HOST }}:3002/login
+          DEPLOY_ENV: preonline
+          APP_URL: http://${{ secrets.EC2_HOST }}:3002/login
           DEPLOY_STATUS: ${{ steps.deploy.outcome }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
           PR_TITLE: ${{ github.event.pull_request.title }}

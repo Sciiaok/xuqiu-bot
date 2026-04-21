@@ -37,14 +37,34 @@ def main() -> int:
 
     status = env("DEPLOY_STATUS")
     repo = env("REPO")
+    deploy_env = env("DEPLOY_ENV")
+    app_url = env("APP_URL")
+    env_tag = f"[{deploy_env}] " if deploy_env else ""
     if status == "success":
-        title = f"✅ 部署成功 | {repo} | http://54.209.104.204:3002/login"
+        title = f"✅ 部署成功 {env_tag}| {repo} | {app_url}"
         color = "green"
     else:
-        title = f"❌ 部署失败 | {repo}"
+        title = f"❌ 部署失败 {env_tag}| {repo} | {app_url}"
         color = "red"
 
-    commit_sha = env("COMMIT_SHA")
+    pr_number = env("PR_NUMBER")
+    commit_sha = env("COMMIT_SHA") or env("GITHUB_SHA")
+    if pr_number:
+        fields = [
+            {"is_short": True, "text": {"tag": "lark_md", "content": f"**状态**\n{status}"}},
+            {"is_short": True, "text": {"tag": "lark_md", "content": f"**PR**\n[#{pr_number}]({env('PR_URL')})"}},
+            {"is_short": True, "text": {"tag": "lark_md", "content": f"**作者**\n{env('PR_AUTHOR')}"}},
+            {"is_short": True, "text": {"tag": "lark_md", "content": f"**合并人**\n{env('MERGED_BY')}"}},
+            {"is_short": False, "text": {"tag": "lark_md", "content": f"**标题**\n{env('PR_TITLE')}"}},
+            {"is_short": False, "text": {"tag": "lark_md", "content": f"**Commit**\n`{commit_sha[:10]}`"}},
+        ]
+    else:
+        fields = [
+            {"is_short": True, "text": {"tag": "lark_md", "content": f"**状态**\n{status}"}},
+            {"is_short": True, "text": {"tag": "lark_md", "content": f"**触发人**\n{env('GITHUB_ACTOR')}"}},
+            {"is_short": False, "text": {"tag": "lark_md", "content": f"**Commit**\n`{commit_sha[:10]}`"}},
+        ]
+
     card = {
         "config": {"wide_screen_mode": True},
         "header": {
@@ -54,14 +74,7 @@ def main() -> int:
         "elements": [
             {
                 "tag": "div",
-                "fields": [
-                    {"is_short": True, "text": {"tag": "lark_md", "content": f"**状态**\n{status}"}},
-                    {"is_short": True, "text": {"tag": "lark_md", "content": f"**PR**\n[#{env('PR_NUMBER')}]({env('PR_URL')})"}},
-                    {"is_short": True, "text": {"tag": "lark_md", "content": f"**作者**\n{env('PR_AUTHOR')}"}},
-                    {"is_short": True, "text": {"tag": "lark_md", "content": f"**合并人**\n{env('MERGED_BY')}"}},
-                    {"is_short": False, "text": {"tag": "lark_md", "content": f"**标题**\n{env('PR_TITLE')}"}},
-                    {"is_short": False, "text": {"tag": "lark_md", "content": f"**Commit**\n`{commit_sha[:10]}`"}},
-                ],
+                "fields": fields,
             },
             {
                 "tag": "action",
