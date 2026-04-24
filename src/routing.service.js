@@ -9,36 +9,114 @@ import { sendFeishuMessage } from './feishu.service.js';
 import { createTraceLogger } from '../lib/core-trace.js';
 import { config } from './config.js';
 
-const INQUIRY_QUALITY_LABEL = { GOOD: '优质', POOR: '低质' };
-const BUSINESS_VALUE_LABEL = { HIGH: '高', MEDIUM: '中', LOW: '低' };
+// 枚举标签需要与 Medici / lead_fields 对齐。`quality` 和 `value` 的字典已改正
+// 过一次（之前错成 `POOR / MEDIUM` 这种不存在的值，PROOF/AVERAGE 裸字符串显示）。
+const INQUIRY_QUALITY_LABEL = {
+  PROOF: 'PROOF · 可立即对接',
+  QUALIFY: 'QUALIFY · 已具备条件',
+  GOOD: 'GOOD · 信息基础',
+  BAD: 'BAD · 低质',
+};
+const BUSINESS_VALUE_LABEL = { HIGH: '高', AVERAGE: '中', LOW: '低' };
+const INTENT_LABEL = {
+  business_inquiry: '业务询盘',
+  business_cooperation: '合作探讨',
+  personal_consumer: '个人消费',
+  other: '其他',
+};
+
+// 每条 lead 在 DB 里会有的 canonical 列 + 展示标签。lead_fields 里的自定义
+// 字段（通过 lead.details JSONB 回传）单独在下面那段 detailsBlock 渲染。
+const CANONICAL_FIELDS = [
+  ['brand',                          '品牌'],
+  ['product_name',                   '产品'],
+  ['car_model',                      '型号'],
+  ['sku_description',                '规格'],
+  ['qty_bucket',                     '数量'],
+  ['color_quantity',                 '颜色/数量'],
+  ['destination_country',            '目的国'],
+  ['destination_port',               '目的港'],
+  ['loading_port',                   '装运港'],
+  ['international_commercial_term',  '贸易条款'],
+  ['timeline',                       '时间线'],
+  ['buyer_type',                     '买家类型'],
+];
+
+function formatFieldValue(v) {
+  if (v === null || v === undefined || v === '') return '';
+  if (Array.isArray(v)) {
+    if (v.length === 0) return '';
+    if (typeof v[0] === 'object' && v[0] !== null && 'color' in v[0] && 'qty' in v[0]) {
+      return v.map((x) => `${x.color} × ${x.qty}`).join('、');
+    }
+    if (v.every((x) => typeof x === 'string')) return v.join('、');
+    return v.map((x) => (typeof x === 'string' ? x : JSON.stringify(x))).join('、');
+  }
+  if (typeof v === 'object') return JSON.stringify(v);
+  if (typeof v === 'boolean') return v ? '是' : '否';
+  return String(v);
+}
 
 function buildFeishuLeadMessage(lead, handoffSummary) {
+  const intents = Array.isArray(lead.conversation_intent) ? lead.conversation_intent : [];
+  const intentText = intents.map((i) => INTENT_LABEL[i] || i).join(' · ') || '-';
+
+  // Header: 质量 / 价值 / 产品线 / 意图
+  const headerBits = [
+    `**质量** ${INQUIRY_QUALITY_LABEL[lead.inquiry_quality] || lead.inquiry_quality || '-'}`,
+    `**商业价值** ${BUSINESS_VALUE_LABEL[lead.business_value] || lead.business_value || '-'}`,
+  ];
+  if (lead.product_line) headerBits.push(`**产品线** \`${lead.product_line}\``);
+  headerBits.push(`**意图** ${intentText}`);
+
+  // Canonical 字段按非空过滤；lead.details 里超出 CANONICAL 的 key 单独展开
+  const canonicalRows = CANONICAL_FIELDS
+    .map(([key, label]) => ({ label, value: formatFieldValue(lead[key]) }))
+    .filter((r) => r.value !== '');
+  const canonicalKeys = new Set(CANONICAL_FIELDS.map(([k]) => k));
+
+  const detailsEntries = lead.details && typeof lead.details === 'object'
+    ? Object.entries(lead.details).filter(([k, v]) => {
+        if (canonicalKeys.has(k)) return false; // 已经渲染过
+        if (k === 'customer_profile') return false; // 单独处理公司/国籍
+        const str = formatFieldValue(v);
+        return str !== '';
+      })
+    : [];
+
   const lines = [
-    '🔥 **高意向线索 - 需立即跟进**',
+    '🔥 **高意向线索 · 需立即跟进**',
     '',
-    `**询盘质量：** ${INQUIRY_QUALITY_LABEL[lead.inquiry_quality] || lead.inquiry_quality || '-'}`,
-    `**商业价值：** ${BUSINESS_VALUE_LABEL[lead.business_value] || lead.business_value || '-'}`,
+    headerBits.join(' · '),
     '',
-    `**联系人：** ${lead.contact?.name || '未知'}`,
-    `**公司：** ${lead.contact?.company_name || '未知'}`,
-    `**WhatsApp：** ${lead.contact?.wa_id || '未知'}`,
-    '',
-    `**车型：** ${lead.car_model || '-'}`,
-    `**目的国：** ${lead.destination_country || '-'}`,
-    `**目的港：** ${lead.destination_port || '-'}`,
-    `**数量：** ${lead.qty_bucket || '-'}`,
-    `**颜色/数量：** ${lead.color_quantity?.length ? lead.color_quantity.map(c => `${c.color} × ${c.qty}`).join('、') : '-'}`,
-    `**贸易条款：** ${lead.incoterm || '-'}`,
-    `**装运港：** ${lead.loading_port || '-'}`,
-    `**时间线：** ${lead.timeline || '-'}`,
+    '**客户**',
+    `👤 ${lead.contact?.name || '未知'}${lead.company_name || lead.contact?.company_name ? ` — ${lead.company_name || lead.contact.company_name}` : ''}`,
+    `📞 +${lead.contact?.wa_id || '未知'}`,
   ];
 
+  if (canonicalRows.length > 0) {
+    lines.push('', '**询盘**');
+    for (const r of canonicalRows) lines.push(`• ${r.label}：${r.value}`);
+  }
+
+  if (detailsEntries.length > 0) {
+    lines.push('', '**其他字段**');
+    for (const [k, v] of detailsEntries) lines.push(`• ${k}：${formatFieldValue(v)}`);
+  }
+
   if (lead.conversation_intent_summary) {
-    lines.push('', `**意图摘要：** ${lead.conversation_intent_summary}`);
+    lines.push('', '**意图摘要**', lead.conversation_intent_summary);
   }
 
   if (handoffSummary) {
-    lines.push('', `**对接建议：** ${handoffSummary}`);
+    lines.push('', '**对接建议**', handoffSummary);
+  }
+
+  // leadhub 深链 —— 预填 customer 搜索框为 wa_id，销售点一下直达该客户对话
+  const baseUrl = config.app?.baseUrl;
+  if (baseUrl && lead.contact?.wa_id) {
+    const url = `${baseUrl.replace(/\/$/, '')}/leadhub?customer=${encodeURIComponent(lead.contact.wa_id)}`;
+    lines.push('', `🔗 [在 LeadHub 查看对话](${url})`);
   }
 
   return lines.join('\n');

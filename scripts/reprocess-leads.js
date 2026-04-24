@@ -339,6 +339,9 @@ async function main() {
   const leadRepo = await import('../lib/repositories/lead.repository.js');
   replaceConversationLeads = leadRepo.replaceConversationLeads;
 
+  const { findConversationById } = await import('../lib/repositories/conversation.repository.js');
+  const { loadMediciConfig } = await import('../src/agents/medici/config.js');
+
   console.log('Reprocess Leads - Regression Testing Tool');
   console.log('=========================================\n');
 
@@ -379,14 +382,17 @@ async function main() {
       continue;
     }
     const oldLeads = await getExistingLeads(contact.conversationId);
+    const conv = await findConversationById(contact.conversationId);
+    const agentConfig = conv ? await loadMediciConfig(conv) : null;
+    if (!agentConfig) {
+      console.log(`Skipping ${contact.waId} - no product_line bound (phone unbound)`);
+      continue;
+    }
     contactsWithData.push({
       ...contact,
       messages,
       oldLeads,
-      contextInfo: {
-        contactName: contact.name,
-        companyName: contact.companyName,
-      },
+      agentConfig,
     });
   }
 

@@ -3,7 +3,7 @@ import {
   createSession,
   listSessions,
 } from '../../../../lib/repositories/autopilot.repository.js';
-import { prewarmWhatsAppAccountsForUser } from '../../../../src/autopilot/whatsapp-accounts.service.js';
+import { prewarmWhatsAppAccountsForUser } from '../../../../src/agents/ogilvy/whatsapp-accounts.service.js';
 
 /**
  * GET /api/autopilot/conversations

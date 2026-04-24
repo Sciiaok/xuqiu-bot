@@ -5,7 +5,7 @@ import { defaultLocale, locales } from './i18n/config';
 const PROTECTED_PREFIXES = [
   '/analytics',
   '/reports',
-  '/agents',
+  '/product-lines',
   '/ai-automation',
   '/campaign-studio',
   '/leadhub',
@@ -98,7 +98,7 @@ export const config = {
   matcher: [
     '/analytics/:path*',
     '/reports/:path*',
-    '/agents/:path*',
+    '/product-lines/:path*',
     '/ai-automation/:path*',
     '/campaign-studio/:path*',
     '/leadhub/:path*',

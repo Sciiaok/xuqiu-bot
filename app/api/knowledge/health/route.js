@@ -3,7 +3,8 @@ import { getHealthSummary } from '../../../../lib/repositories/knowledge-base.re
 
 /**
  * GET /api/knowledge/health?agent_id=xxx
- * Returns knowledge base health assessment per layer with AI recommendations.
+ *
+ * Returns the per-layer coverage + recommendations shown on the OverviewTab.
  */
 export async function GET(request) {
   try {
@@ -15,13 +16,7 @@ export async function GET(request) {
     }
 
     const summary = await getHealthSummary(agentId);
-    const recommendations = generateRecommendations(
-      summary.layers,
-      summary.outdated_docs,
-      summary.total_products,
-      summary.total_pricing_rules,
-      summary.total_glossary_terms,
-    );
+    const recommendations = generateRecommendations(summary.layers, summary.outdated_docs);
 
     return NextResponse.json({ ...summary, ai_recommendations: recommendations });
   } catch (error) {
@@ -31,12 +26,12 @@ export async function GET(request) {
 }
 
 /**
- * Generate actionable recommendations based on knowledge base health.
+ * Actionable recommendations based on per-layer status + outdated docs.
  */
-function generateRecommendations(layers, outdatedDocs, productCount, pricingRulesCount, glossaryCount) {
+function generateRecommendations(layers, outdatedDocs) {
   const recs = [];
 
-  // Empty layers — highest priority
+  // Empty layers — highest priority.
   for (const [layer, data] of Object.entries(layers)) {
     if (data.status === 'error') {
       const actions = {
@@ -56,7 +51,7 @@ function generateRecommendations(layers, outdatedDocs, productCount, pricingRule
     }
   }
 
-  // Weak layers
+  // Weak layers.
   for (const [layer, data] of Object.entries(layers)) {
     if (data.status === 'warn') {
       recs.push({
@@ -68,17 +63,7 @@ function generateRecommendations(layers, outdatedDocs, productCount, pricingRule
     }
   }
 
-  // No pricing rules but has products
-  if ((productCount || 0) > 0 && (pricingRulesCount || 0) === 0) {
-    recs.push({
-      priority: 'high',
-      layer: 'product',
-      action: '配置报价规则（数量折扣、CIF 计算、保险费率）',
-      impact: 'Agent 无法精确报价，只能提供 FOB 参考价',
-    });
-  }
-
-  // Outdated documents
+  // Outdated documents.
   if (outdatedDocs?.length > 0) {
     for (const doc of outdatedDocs.slice(0, 3)) {
       const days = doc.days_since_update;
@@ -89,15 +74,6 @@ function generateRecommendations(layers, outdatedDocs, productCount, pricingRule
         impact: '数据可能过时，Agent 报价或回答可能不准确',
       });
     }
-  }
-
-  // No glossary
-  if ((glossaryCount || 0) === 0) {
-    recs.push({
-      priority: 'low',
-      action: '添加中英术语对照表',
-      impact: '提升知识翻译准确度，特别是行业专业术语',
-    });
   }
 
   return recs;

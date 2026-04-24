@@ -1,5 +1,5 @@
 import { createClient } from '../../../../lib/supabase-server.js';
-import { listWhatsAppAccountsForUser } from '../../../../src/autopilot/whatsapp-accounts.service.js';
+import { listWhatsAppAccountsForUser } from '../../../../src/agents/ogilvy/whatsapp-accounts.service.js';
 
 /**
  * GET /api/autopilot/whatsapp-accounts

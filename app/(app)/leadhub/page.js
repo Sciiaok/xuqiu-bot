@@ -14,8 +14,8 @@ import {
 } from '../../../lib/inquiries-filters';
 import Markdown from '../../components/Markdown/Markdown';
 import AdPreviewModal from '../../components/AdPreviewModal/AdPreviewModal';
-import { listAgents } from '../../../lib/api/agents.js';
-import { getDisplayLabel } from '../../../lib/constants/product-lines.js';
+import LeadDetail from '../../components/LeadDetail/LeadDetail';
+import { listProductLines } from '../../../lib/api/product-lines.js';
 
 /* ── Constants ─────────────────────────────────────────── */
 
@@ -37,7 +37,16 @@ const DETAIL_TABS = [
 // Sentinel for "no supply-chain filter". Backend's inquiries route already
 // accepts product_line slugs (not just UUIDs) as agentIds — see resolveAgentIdsFilter.
 const SUPPLY_CHAIN_ALL = '全部供应链';
-const QUALITY_OPTIONS = ['全部质量', 'PROOF', 'QUALIFY', 'GOOD'];
+const QUALITY_ALL = '全部质量';
+// Dropdown entries: value = enum sent to /api/inquiries, label = zh-CN from
+// INQUIRY_QUALITY_LABELS. BAD leads aren't listed here — they land in
+// FAQ_END routing and aren't useful to browse.
+const QUALITY_OPTIONS = [
+  { value: QUALITY_ALL, label: QUALITY_ALL },
+  { value: 'PROOF',   label: QUALITY_LABELS.PROOF },
+  { value: 'QUALIFY', label: QUALITY_LABELS.QUALIFY },
+  { value: 'GOOD',    label: QUALITY_LABELS.GOOD },
+];
 
 const SEARCH_DEBOUNCE_MS = 300;
 
@@ -326,7 +335,7 @@ export default function LeadHubPage() {
   const [detailTab, setDetailTab] = useState('chat');
   const [supplyChain, setSupplyChain] = useState(SUPPLY_CHAIN_ALL);
   const [supplyChainOptions, setSupplyChainOptions] = useState([]);
-  const [quality, setQuality] = useState('全部质量');
+  const [quality, setQuality] = useState(QUALITY_ALL);
   const [country, setCountry] = useState('all');
   const [datePreset, setDatePreset] = useState('all');
   const [customFrom, setCustomFrom] = useState('');
@@ -351,7 +360,9 @@ export default function LeadHubPage() {
     router.replace(qs ? `${pathname}?${qs}` : pathname, { scroll: false });
   }, [searchParams, router, pathname]);
   const [availableCountries, setAvailableCountries] = useState([]);
-  const [search, setSearch] = useState('');
+  // `?customer=<wa_id>` pre-fills the search box. Used by the Feishu high-intent
+  // lead card so sales can one-click into the specific customer's conversation.
+  const [search, setSearch] = useState(() => searchParams?.get('customer') || '');
   const [debouncedSearch, setDebouncedSearch] = useState('');
 
   const [messages, setMessages] = useState([]);
@@ -375,6 +386,7 @@ export default function LeadHubPage() {
   const fileRef = useRef(null);
 
   const [convLeads, setConvLeads] = useState([]);
+  const [convLeadFields, setConvLeadFields] = useState([]);
   const [loadingLeads, setLoadingLeads] = useState(false);
 
   const [profile, setProfile] = useState(null);
@@ -422,21 +434,18 @@ export default function LeadHubPage() {
     return () => clearTimeout(t);
   }, [search]);
 
-  // Fetch active agents → supply-chain dropdown options (mount once).
+  // Fetch active product lines → supply-chain dropdown options (mount once).
   // Backend's inquiries route accepts product_line slugs as `agentIds`, so we
-  // send the slug as the filter value rather than needing the UUID.
+  // send the slug (line.id) as the filter value.
   useEffect(() => {
     let cancelled = false;
-    listAgents({ activeOnly: true })
-      .then(agents => {
+    listProductLines({ activeOnly: true })
+      .then(lines => {
         if (cancelled) return;
-        const options = agents
-          .filter(a => a.product_line)
-          .map(a => ({
-            value: a.product_line,
-            label: getDisplayLabel(a),
-          }));
-        setSupplyChainOptions(options);
+        setSupplyChainOptions(lines.map(line => ({
+          value: line.id,
+          label: line.name || line.id,
+        })));
       })
       .catch(() => {});
     return () => { cancelled = true; };
@@ -466,7 +475,7 @@ export default function LeadHubPage() {
     const qs = new URLSearchParams();
     qs.set('limit', '20');
     if (supplyChain !== SUPPLY_CHAIN_ALL) qs.append('agentIds', supplyChain);
-    if (quality !== '全部质量') qs.append('inquiryQuality', quality);
+    if (quality !== QUALITY_ALL) qs.append('inquiryQuality', quality);
     if (country !== 'all') qs.set('country', country);
     if (debouncedSearch) qs.set('customer', debouncedSearch);
     const { dateFrom, dateTo } = resolveDateRange(datePreset, customFrom, customTo);
@@ -759,12 +768,14 @@ export default function LeadHubPage() {
     let cancelled = false;
     setLoadingLeads(true);
     setConvLeads([]);
+    setConvLeadFields([]);
 
     fetch(`/api/conversations/${selectedId}/leads`)
       .then(r => r.json())
       .then(json => {
         if (cancelled) return;
         setConvLeads(json.leads || []);
+        setConvLeadFields(Array.isArray(json.lead_fields) ? json.lead_fields : []);
       })
       .catch(() => {})
       .finally(() => { if (!cancelled) setLoadingLeads(false); });
@@ -966,7 +977,9 @@ export default function LeadHubPage() {
                 ))}
               </select>
               <select className={s.filterSelect} value={quality} onChange={e => setQuality(e.target.value)}>
-                {QUALITY_OPTIONS.map(q => <option key={q}>{q}</option>)}
+                {QUALITY_OPTIONS.map(opt => (
+                  <option key={opt.value} value={opt.value}>{opt.label}</option>
+                ))}
               </select>
               <select className={s.filterSelect} value={country} onChange={e => setCountry(e.target.value)}>
                 <option value="all">全部国家</option>
@@ -1198,33 +1211,8 @@ export default function LeadHubPage() {
                   <div className={s.tabScrollPane}>
                     {loadingLeads ? (
                       <div className={s.emptyState}>加载线索中…</div>
-                    ) : convLeads.length === 0 ? (
-                      <div className={s.emptyState}>暂无线索记录</div>
                     ) : (
-                      convLeads.map(lead => (
-                        <div key={lead.id} className={s.leadRow}>
-                          <div className={s.leadRowTop}>
-                            <span className={s.leadProduct}>{lead.car_model || lead.product_name || '—'}, {lead.brand}</span>
-                            <Tag variant={(lead.inquiry_quality || 'good').toLowerCase()}>
-                              {QUALITY_LABELS[(lead.inquiry_quality || 'GOOD').toUpperCase()] || lead.inquiry_quality}
-                            </Tag>
-                          </div>
-                          <div className={s.leadRowBottom}>
-                            {lead.destination_country && (
-                              <span className={s.leadMeta}>{lead.destination_country}</span>
-                            )}
-                            {lead.destination_port && (
-                              <span className={s.leadMeta}>{lead.destination_port}</span>
-                            )}
-                            {lead.qty_bucket && (
-                              <span className={s.leadMeta}>{lead.qty_bucket}</span>
-                            )}
-                            {lead.business_value && (
-                              <span className={s.leadMeta}>{VALUE_LABELS[lead.business_value?.toUpperCase()] || lead.business_value}</span>
-                            )}
-                          </div>
-                        </div>
-                      ))
+                      <LeadDetail leads={convLeads} leadFields={convLeadFields} />
                     )}
                   </div>
                 )}

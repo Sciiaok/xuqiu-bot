@@ -5,7 +5,7 @@
  * embedding generation, and structured data extraction.
  */
 import { openrouter, MODELS } from './llm-client.js';
-import { generateEmbedding, translateWithGlossary, detectLanguage } from './kb-search.service.js';
+import { generateEmbedding, translateToEnglish, detectLanguage } from './kb-search.service.js';
 import supabase from '../lib/supabase.js';
 import { createTraceLogger } from '../lib/core-trace.js';
 
@@ -173,7 +173,7 @@ async function processKnowledgePoint(agentId, docId, layer, point) {
   // Translate to English if not already English
   let englishContent = originalContent;
   if (sourceLang !== 'en') {
-    englishContent = await translateWithGlossary(originalContent, agentId);
+    englishContent = await translateToEnglish(originalContent, agentId);
   }
 
   // Generate embeddings for both versions

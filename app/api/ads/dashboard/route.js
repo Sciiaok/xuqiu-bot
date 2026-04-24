@@ -425,6 +425,39 @@ function extractCreativeVideoId(creative) {
   return firstVideo?.video_id || null;
 }
 
+/**
+ * Pull the user-facing text fields (headline / body / landing URL) out of a
+ * Meta ad's creative. Used by the Medici simulator to synthesize a realistic
+ * CTWA referral — without this, simulator leads show empty `ad_referral`
+ * context and Medici can't anchor on the ad copy.
+ *
+ * FB field mapping:
+ *   link_data.name    → headline
+ *   link_data.message → primary_text / body
+ *   link_data.link    → landing URL
+ * Falls back to asset_feed_spec for Advantage+ / dynamic creatives.
+ */
+function extractCreativeText(creative) {
+  const linkData = creative?.object_story_spec?.link_data;
+  const videoData = creative?.object_story_spec?.video_data;
+  const primary = linkData || videoData;
+  if (primary) {
+    return {
+      headline: primary.name || primary.title || '',
+      body: primary.message || '',
+      source_url: primary.link || primary.call_to_action?.value?.link || '',
+    };
+  }
+  const titles = Array.isArray(creative?.asset_feed_spec?.titles) ? creative.asset_feed_spec.titles : [];
+  const bodies = Array.isArray(creative?.asset_feed_spec?.bodies) ? creative.asset_feed_spec.bodies : [];
+  const linkUrls = Array.isArray(creative?.asset_feed_spec?.link_urls) ? creative.asset_feed_spec.link_urls : [];
+  return {
+    headline: titles[0]?.text || '',
+    body: bodies[0]?.text || '',
+    source_url: linkUrls[0]?.website_url || '',
+  };
+}
+
 function getPreferredVideoThumbnail(videoPayload) {
   const thumbnails = Array.isArray(videoPayload?.thumbnails?.data) ? videoPayload.thumbnails.data : [];
   const preferred = thumbnails.find((item) => item?.is_preferred && item?.uri);
@@ -970,6 +1003,7 @@ export async function GET(request) {
         const resolvedHeight = image ? toInteger(image.height) : toInteger(video?.height);
         const originalWidth = image ? toInteger(image.original_width) : toInteger(video?.width);
         const originalHeight = image ? toInteger(image.original_height) : toInteger(video?.height);
+        const text = extractCreativeText(ad.creative);
         previewByAdId.set(adId, {
           creativePreviewUrl: resolvedUrl,
           creativePreviewPermalinkUrl: image?.permalink_url || '',
@@ -977,6 +1011,10 @@ export async function GET(request) {
           creativePreviewHeight: resolvedHeight,
           creativeOriginalWidth: originalWidth,
           creativeOriginalHeight: originalHeight,
+          creativeHeadline: text.headline,
+          creativeBody: text.body,
+          creativeSourceUrl: text.source_url,
+          creativeMediaType: videoId ? 'video' : (hash ? 'image' : ''),
         });
       }
     } catch (error) {
@@ -1027,6 +1065,10 @@ export async function GET(request) {
             creativePreviewHeight: 0,
             creativeOriginalWidth: 0,
             creativeOriginalHeight: 0,
+            creativeHeadline: '',
+            creativeBody: '',
+            creativeSourceUrl: '',
+            creativeMediaType: '',
           }),
           businessLine: classification.businessLine,
           businessLineLabel: getProductLineLabel(classification.businessLine),

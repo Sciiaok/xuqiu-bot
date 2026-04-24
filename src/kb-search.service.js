@@ -151,63 +151,23 @@ async function structuredProductSearch(agentId, filters = {}, { sortBy, sortOrde
   return data || [];
 }
 
-/**
- * Query kb_shipping_routes.
- */
-async function searchShippingRoutes(agentId, { destinationCountry, destinationPort, shippingMethod } = {}) {
-  let query = supabase
-    .from('kb_shipping_routes')
-    .select('*')
-    .eq('agent_id', agentId);
-
-  if (destinationCountry) query = query.ilike('destination_country', `%${destinationCountry}%`);
-  if (destinationPort) query = query.ilike('destination_port', `%${destinationPort}%`);
-  if (shippingMethod) query = query.eq('shipping_method', shippingMethod);
-
-  const { data, error } = await query;
-  if (error) throw new Error(`KB shipping search failed: ${error.message}`);
-  return data || [];
-}
-
 // ── Translation ──────────────────────────────────────────────────────
 
-async function translateToEnglish(text) {
+/**
+ * Translate arbitrary text to English via Haiku. Preserves product names,
+ * model numbers, and technical terms. `_agentId` is accepted but ignored —
+ * kept for call-site symmetry with the legacy glossary-augmented variant
+ * (the `kb_glossary` table is dormant; the lookup was removed).
+ */
+async function translateToEnglish(text, _agentId) {
   const response = await openrouter.messages.create({
     models: [MODELS.HAIKU],
-    max_tokens: 2000,
+    max_tokens: 4000,
     messages: [
       { role: 'system', content: 'Translate the following text to English. Keep product names, model numbers, and technical terms accurate. Output ONLY the translation.' },
       { role: 'user', content: text },
     ],
   });
-  return response.choices[0].message.content?.trim() || text;
-}
-
-/**
- * Translate text to English with glossary support.
- */
-async function translateWithGlossary(text, agentId) {
-  // Fetch glossary for this agent
-  const { data: glossary } = await supabase
-    .from('kb_glossary')
-    .select('term_zh, term_en')
-    .eq('agent_id', agentId);
-
-  let glossaryStr = '';
-  if (glossary && glossary.length > 0) {
-    glossaryStr = '\n\nTerminology reference (use these exact translations):\n' +
-      glossary.map(g => `"${g.term_zh}" → "${g.term_en}"`).join('\n');
-  }
-
-  const response = await openrouter.messages.create({
-    models: [MODELS.HAIKU],
-    max_tokens: 4000,
-    messages: [
-      { role: 'system', content: `Translate the following text to English. Keep product names, model numbers, and technical terms accurate. Output ONLY the translation.${glossaryStr}` },
-      { role: 'user', content: text },
-    ],
-  });
-
   return response.choices[0].message.content?.trim() || text;
 }
 
@@ -448,18 +408,21 @@ export async function searchKnowledge(agentId, query, options = {}) {
 // ── Price Calculation ────────────────────────────────────────────────
 
 /**
- * Calculate price using structured rules from kb_pricing_rules.
+ * Calculate price from `kb_products` (base FOB) + optional `kb_shipping_routes`
+ * for CIF/DDP. Insurance flat 0.3%.
+ *
+ * Historical note: there used to be a `kb_pricing_rules` layer for quantity
+ * discounts / per-SKU overrides, populated by `/api/knowledge/pricing-rules`.
+ * That endpoint had no UI, the table was never written, and the read added
+ * a dead round-trip every call. Removed in 2026-04; the fixed insurance rate
+ * replaces the configurable one.
  *
  * @param {string} agentId
- * @param {Object} params
- * @param {string} params.sku
- * @param {number} params.quantity
- * @param {string} params.destinationPort
- * @param {string} params.tradeTerm - FOB / CIF / DDP
- * @returns {Promise<Object>} Price breakdown
+ * @param {Object} params  { sku, quantity?, destinationPort?, tradeTerm? }
+ * @returns {Promise<Object>} { product, breakdown, rules_applied, needs_approval, confidence }
  */
 export async function calculatePrice(agentId, { sku, quantity = 1, destinationPort, tradeTerm = 'FOB' }) {
-  // 1. Get product base price
+  // 1. Base FOB from kb_products.
   const { data: products } = await supabase
     .from('kb_products')
     .select('*')
@@ -473,48 +436,15 @@ export async function calculatePrice(agentId, { sku, quantity = 1, destinationPo
     return { error: 'product_not_found', message: `No pricing data found for ${sku}` };
   }
 
-  // 2. Get applicable pricing rules
-  const { data: rules } = await supabase
-    .from('kb_pricing_rules')
-    .select('*')
-    .eq('agent_id', agentId)
-    .eq('is_active', true)
-    .order('priority', { ascending: false });
-
-  const appliedRules = [];
-  let unitPrice = parseFloat(product.fob_price_usd);
-  let needsApproval = false;
-
-  // 3. Apply quantity discount
-  const discountRule = (rules || []).find(r =>
-    r.rule_type === 'quantity_discount' &&
-    matchesConditions(r.conditions, product)
-  );
-
-  let discountPct = 0;
-  if (discountRule?.calculation?.tiers) {
-    const tier = discountRule.calculation.tiers.find(
-      t => quantity >= t.min_qty && (t.max_qty === null || quantity <= t.max_qty)
-    );
-    if (tier) {
-      discountPct = tier.discount_pct || 0;
-      unitPrice = unitPrice * (1 - discountPct / 100);
-      appliedRules.push({
-        rule: discountRule.rule_name,
-        detail: `${quantity} units, ${discountPct}% off`,
-      });
-      if (discountRule.requires_approval) needsApproval = true;
-    }
-  }
-
+  const unitPrice = parseFloat(product.fob_price_usd);
   const breakdown = {
-    unit_fob_price: parseFloat(product.fob_price_usd),
+    unit_fob_price: unitPrice,
     quantity,
-    quantity_discount: discountPct > 0 ? `${discountPct}%` : 'none',
     discounted_unit_price: round2(unitPrice),
   };
+  const appliedRules = [];
 
-  // 4. Apply shipping if CIF/DDP
+  // 2. CIF/DDP adds shipping (kb_shipping_routes) + flat 0.3% insurance.
   if (tradeTerm !== 'FOB' && destinationPort) {
     const { data: routes } = await supabase
       .from('kb_shipping_routes')
@@ -526,15 +456,12 @@ export async function calculatePrice(agentId, { sku, quantity = 1, destinationPo
     const route = routes?.[0];
     if (route?.cost_per_unit_usd) {
       const shippingCost = parseFloat(route.cost_per_unit_usd);
+      const insuranceRate = 0.003;
+      const insuranceCost = round2(unitPrice * insuranceRate);
+
       breakdown.shipping_per_unit = shippingCost;
       breakdown.transit_days = route.transit_days;
-
-      // Insurance (0.3% of FOB)
-      const shippingRule = (rules || []).find(r => r.rule_type === 'shipping_markup');
-      const insuranceRate = shippingRule?.calculation?.insurance_rate || 0.003;
-      const insuranceCost = round2(unitPrice * insuranceRate);
       breakdown.insurance_per_unit = insuranceCost;
-
       breakdown.unit_cif_price = round2(unitPrice + shippingCost + insuranceCost);
       appliedRules.push({
         rule: 'CIF calculation',
@@ -546,7 +473,6 @@ export async function calculatePrice(agentId, { sku, quantity = 1, destinationPo
     }
   }
 
-  // 5. Total
   const finalUnitPrice = breakdown.unit_cif_price || breakdown.discounted_unit_price;
   breakdown.total_price = round2(finalUnitPrice * quantity);
   breakdown.trade_term = tradeTerm;
@@ -559,18 +485,9 @@ export async function calculatePrice(agentId, { sku, quantity = 1, destinationPo
     },
     breakdown,
     rules_applied: appliedRules,
-    needs_approval: needsApproval,
+    needs_approval: false,
     confidence: breakdown.unit_cif_price !== null || tradeTerm === 'FOB' ? 'exact' : 'partial',
   };
-}
-
-function matchesConditions(conditions, product) {
-  if (!conditions || Object.keys(conditions).length === 0) return true;
-  for (const [key, value] of Object.entries(conditions)) {
-    if (key === 'category' && product.category !== value) return false;
-    if (key === 'sku' && product.sku !== value) return false;
-  }
-  return true;
 }
 
 function round2(n) {
@@ -582,8 +499,7 @@ function round2(n) {
 export {
   generateEmbedding,
   detectLanguage,
-  translateWithGlossary,
+  translateToEnglish,
   vectorSearch,
   structuredProductSearch,
-  searchShippingRoutes,
 };

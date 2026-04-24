@@ -151,6 +151,8 @@ async function main() {
   const options = parseArgs();
   const { extractLeadsFromMessages } = await import('../lib/lead-extractor.js');
   const { replaceConversationLeads } = await import('../lib/repositories/lead.repository.js');
+  const { findConversationById } = await import('../lib/repositories/conversation.repository.js');
+  const { loadMediciConfig } = await import('../src/agents/medici/config.js');
 
   console.log('Retry buyer_type constraint failures');
   console.log('===================================');
@@ -184,10 +186,15 @@ async function main() {
       continue;
     }
 
-    const extractionResult = await extractLeadsFromMessages(messages, {
-      contactName: contact.name,
-      companyName: contact.company_name,
-    });
+    const conv = await findConversationById(item.conversationId);
+    const agentConfig = conv ? await loadMediciConfig(conv) : null;
+    if (!agentConfig) {
+      console.log('Skipped: no product_line bound (phone unbound)');
+      await markRowsCompleted(rowIds);
+      continue;
+    }
+
+    const extractionResult = await extractLeadsFromMessages(messages, agentConfig);
 
     const leadsToReplace = buildLeadsForReplace(extractionResult);
     if (leadsToReplace.length === 0) {

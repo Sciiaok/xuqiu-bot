@@ -6,9 +6,9 @@ import dotenv from 'dotenv';
 dotenv.config({ path: '.env.local' });
 
 import { createClient } from '@supabase/supabase-js';
-import { getResponse } from '../src/claude.service.js';
+import { runMedici } from '../src/agents/medici/index.js';
 import { getMissingFields } from '../src/inquiry-quality.js';
-import { buildRuntimeAgentConfig } from '../src/agent-runtime.service.js';
+import { loadMediciConfig } from '../src/agents/medici/config.js';
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL,
@@ -75,18 +75,13 @@ async function main() {
     console.log(`[${m.role}] ${m.content?.slice(0, 120)}`);
   }
 
-  // 5. Load agent config
-  let agentConfig = null;
-  if (conv.agent_id) {
-    const { data: agent } = await supabase
-      .from('agents')
-      .select('*')
-      .eq('id', conv.agent_id)
-      .single();
-    if (agent) {
-      agentConfig = buildRuntimeAgentConfig(agent);
-      console.log(`\nAgent: ${agent.name} (${agent.product_line})`);
-    }
+  // 5. Load runtime config (assembled from product_lines slots; resolved by
+  //    conv.product_line or conv.wa_phone_number_id → product_lines mapping).
+  const agentConfig = await loadMediciConfig(conv);
+  if (agentConfig) {
+    console.log(`\nProduct line: ${agentConfig.product_line} (${agentConfig.name})`);
+  } else {
+    console.log('\n(no product_line resolved — phone not bound?)');
   }
 
   // 6. Build context info (same as queue-processor)
@@ -125,14 +120,14 @@ async function main() {
 
   console.log(`\n=== CALLING CLAUDE (history=${history.length} msgs, latest="${latestUserInput?.slice(0, 80)}") ===\n`);
 
-  // 8. Call Claude
-  const response = await getResponse(
+  // 8. Call Medici
+  const response = await runMedici({
     history,
-    latestUserInput,
-    contextInfo,
+    input: latestUserInput,
+    context: contextInfo,
     agentConfig,
-    { traceId: 'reload-test', conversationId: conv.id, waId }
-  );
+    trace: { traceId: 'reload-test', conversationId: conv.id, waId },
+  });
 
   console.log('=== CLAUDE RESPONSE ===');
   console.log(JSON.stringify(response, null, 2));

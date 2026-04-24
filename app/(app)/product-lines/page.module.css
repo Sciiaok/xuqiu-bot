@@ -1,0 +1,227 @@
+.root {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 24px;
+  min-height: 100%;
+}
+
+.header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.headerLeft {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.title {
+  font-family: var(--font-display);
+  font-size: 21px;
+  font-weight: 700;
+  color: var(--text);
+  margin: 0;
+  line-height: 1.2;
+}
+
+.subtitle {
+  font-size: 12px;
+  color: var(--text3);
+  font-family: var(--font-sans);
+}
+
+.cardList {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  gap: 14px;
+}
+
+.card {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 18px;
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  border-radius: var(--rl);
+  transition: border-color 0.15s, transform 0.15s;
+  text-decoration: none;
+  color: inherit;
+}
+
+.card:hover {
+  border-color: var(--accent);
+  transform: translateY(-1px);
+}
+
+.cardInactive {
+  opacity: 0.6;
+  border-style: dashed;
+}
+
+.cardInactive:hover {
+  border-color: var(--border);
+  transform: none;
+}
+
+.cardHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.cardName {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.cardId {
+  font-size: 12px;
+  color: var(--text3);
+  font-family: var(--font-mono, monospace);
+}
+
+.statusOk,
+.statusWarn,
+.statusOff {
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 10px;
+  font-family: var(--font-sans);
+}
+
+.statusOk {
+  background: color-mix(in srgb, var(--green, #3fb950) 18%, transparent);
+  color: var(--green, #3fb950);
+}
+
+.statusWarn {
+  background: color-mix(in srgb, var(--amber, #d29922) 18%, transparent);
+  color: var(--amber, #d29922);
+}
+
+.statusOff {
+  background: var(--bg);
+  color: var(--text3);
+}
+
+.bindingRow {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--text2);
+}
+
+.bindingLabel {
+  color: var(--text3);
+}
+
+.bindingValue {
+  font-family: var(--font-mono, monospace);
+}
+
+.unbound {
+  color: var(--amber, #d29922);
+}
+
+.loadingWrap {
+  display: flex;
+  justify-content: center;
+  padding: 60px 0;
+}
+
+.errorBanner {
+  padding: 10px 14px;
+  background: color-mix(in srgb, var(--red, #f85149) 12%, transparent);
+  color: var(--red, #f85149);
+  border-radius: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 13px;
+}
+
+.modalOverlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 50;
+}
+
+.modal {
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  border-radius: var(--rl);
+  padding: 24px;
+  width: min(520px, 90vw);
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.modalTitle {
+  margin: 0;
+  font-size: 17px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.form {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.formLabel {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 13px;
+  color: var(--text2);
+}
+
+.formInput {
+  padding: 8px 10px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text);
+  font-family: var(--font-sans);
+  font-size: 13px;
+}
+
+.formInput:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.formInputError {
+  border-color: var(--red, #f85149);
+}
+
+.formHint {
+  font-size: 11px;
+  color: var(--text3);
+}
+
+.fieldError {
+  font-size: 11px;
+  color: var(--red, #f85149);
+}
+
+.formActions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}

@@ -1,6 +1,6 @@
 import { createClient } from '../../../../../../lib/supabase-server.js';
 import { getSession } from '../../../../../../lib/repositories/autopilot.repository.js';
-import { runAutopilotAgent } from '../../../../../../src/autopilot/agent.service.js';
+import { runOgilvy } from '../../../../../../src/agents/ogilvy/index.js';
 import { streamSSE } from '../../../../../../lib/sse.js';
 
 /**
@@ -32,6 +32,6 @@ export async function POST(request, { params }) {
     return Response.json({ error: 'Message or attachments required' }, { status: 400 });
   }
 
-  const generator = runAutopilotAgent(id, message, attachments, user.id);
+  const generator = runOgilvy(id, message, attachments, user.id);
   return streamSSE(generator, { heartbeatIntervalMs: 15_000 });
 }

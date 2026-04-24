@@ -1,0 +1,232 @@
+.root {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  padding: 24px;
+  min-height: 100%;
+  max-width: 920px;
+}
+
+.breadcrumb {
+  font-size: 12px;
+  color: var(--text3);
+}
+
+.breadcrumbLink {
+  color: var(--text3);
+  text-decoration: none;
+}
+
+.breadcrumbLink:hover {
+  color: var(--accent);
+}
+
+.header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.headerLeft {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.title {
+  font-family: var(--font-display);
+  font-size: 21px;
+  font-weight: 700;
+  color: var(--text);
+  margin: 0;
+}
+
+.lineId {
+  font-size: 12px;
+  color: var(--text3);
+  font-family: var(--font-mono, monospace);
+}
+
+.headerActions {
+  display: flex;
+  gap: 8px;
+}
+
+.section {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 18px 20px;
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  border-radius: var(--rl);
+}
+
+.sectionTitle {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text);
+  margin: 0 0 4px 0;
+}
+
+.sectionHint {
+  font-size: 12px;
+  color: var(--text3);
+  margin: 0;
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 13px;
+  color: var(--text2);
+}
+
+.fieldLabel {
+  font-size: 12px;
+  color: var(--text3);
+}
+
+.input {
+  padding: 8px 10px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text);
+  font-family: var(--font-sans);
+  font-size: 13px;
+}
+
+.input:focus,
+.textarea:focus,
+.select:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.textarea {
+  padding: 8px 10px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text);
+  font-family: var(--font-sans);
+  font-size: 13px;
+  resize: vertical;
+  min-height: 90px;
+}
+
+.jsonTextarea {
+  padding: 8px 10px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text);
+  font-family: var(--font-mono, monospace);
+  font-size: 12px;
+  resize: vertical;
+  min-height: 220px;
+  white-space: pre;
+}
+
+.jsonTextareaError {
+  border-color: var(--red, #f85149);
+}
+
+.select {
+  padding: 8px 10px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text);
+  font-family: var(--font-sans);
+  font-size: 13px;
+}
+
+.errorBanner {
+  padding: 10px 14px;
+  background: color-mix(in srgb, var(--red, #f85149) 12%, transparent);
+  color: var(--red, #f85149);
+  border-radius: 6px;
+  font-size: 13px;
+}
+
+.okBanner {
+  padding: 10px 14px;
+  background: color-mix(in srgb, var(--green, #3fb950) 14%, transparent);
+  color: var(--green, #3fb950);
+  border-radius: 6px;
+  font-size: 13px;
+}
+
+.saveBar {
+  position: sticky;
+  bottom: 0;
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 14px 0;
+  background: linear-gradient(to top, var(--bg), transparent);
+}
+
+.bindingPreview {
+  font-size: 12px;
+  color: var(--text3);
+  padding-top: 4px;
+}
+
+.bindingPreviewStrong {
+  color: var(--text2);
+  font-family: var(--font-mono, monospace);
+}
+
+.inactiveNotice {
+  padding: 10px 14px;
+  background: color-mix(in srgb, var(--amber, #d29922) 12%, transparent);
+  color: var(--amber, #d29922);
+  border-radius: 6px;
+  font-size: 13px;
+}
+
+.tabBar {
+  display: flex;
+  align-items: center;
+  border-bottom: 1px solid var(--border);
+  gap: 0;
+}
+
+.tab {
+  padding: 10px 18px;
+  background: transparent;
+  border: none;
+  border-bottom: 2px solid transparent;
+  font-family: var(--font-sans);
+  font-size: 13px;
+  color: var(--text2);
+  cursor: pointer;
+  transition: color 0.15s, border-color 0.15s;
+  margin-bottom: -1px;
+}
+
+.tab:hover { color: var(--text); }
+
+.tabActive {
+  color: var(--accent);
+  border-bottom-color: var(--accent);
+  font-weight: 500;
+}
+
+.kbWrap {
+  margin-top: 8px;
+}
+
+.kbMissingAgent {
+  padding: 24px 18px;
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  border-radius: var(--rl);
+  color: var(--text3);
+  font-size: 13px;
+}

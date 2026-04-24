@@ -1,6 +1,10 @@
-# LeadEngine · Prome Engine
+# LeadEngine
 
 WhatsApp 智能获客 + AI 广告投放一体化平台。基于 Next.js 全栈架构，集成 WhatsApp Cloud API 自动接待询盘、Claude AI 多轮对话线索孵化，以及 ChatGPT 风格的 Click-to-WhatsApp 广告自动化投放（Autopilot）。
+
+系统内两个核心 Agent：
+- **Medici** — 询盘接待 Agent（`src/agents/medici/`）。每条客户消息走一次 LLM 调用同时产出回复 + 意图/质量/价值分类 + 线索抽取 + 路由决策。见 [docs/medici-design.md](src/agents/medici/medici-design.md)。
+- **Ogilvy** — 广告投手 Agent（`src/agents/ogilvy/`，UI 叫"Autopilot / 自动获客"）。用户聊产品、上传参考图，AI 产创意 + 投放计划 + 一键上架 Meta + 投放中调优。见 [docs/ogilvy-design.md](src/agents/ogilvy/ogilvy-design.md)。
 
 ## Tech Stack
 
@@ -32,12 +36,12 @@ graph TB
     end
 
     subgraph LeadEngine["LeadEngine Platform"]
-        UC1["WhatsApp 自动接待<br/>多轮对话 + 线索孵化"]
-        UC2["AI 线索评分 & 分级<br/>GREET → QUALIFY → PROOF"]
+        UC1["WhatsApp 自动接待 (Medici)<br/>多轮对话 + 线索孵化"]
+        UC2["AI 线索分级<br/>BAD → GOOD → QUALIFY → PROOF"]
         UC3["询盘管理 / 监控看板<br/>LeadHub · Analytics"]
-        UC4["Autopilot — AI 广告投放<br/>Click-to-WhatsApp"]
+        UC4["Autopilot — AI 广告投放 (Ogilvy)<br/>Click-to-WhatsApp"]
         UC5["广告数据归因<br/>Campaign Studio"]
-        UC6["智能体配置 + 知识库<br/>Agents / KB"]
+        UC6["产品线配置 + 知识库<br/>Product Lines / KB"]
         UC7["AI 周报日报<br/>Reports"]
     end
 
@@ -83,11 +87,11 @@ graph TB
 │  └────────────────┘ └──────┬───────┘ └────────────────────┘  │
 ├────────────────────────────┼─────────────────────────────────┤
 │  Service Layer  (src/)     │                                 │
-│  ┌───────────┐ ┌───────────┴─────┐ ┌──────────────────────┐ │
-│  │ WhatsApp  │ │  Autopilot      │ │ Agent Router /       │ │
-│  │ Service   │ │  (src/autopilot)│ │ Runtime (tool-use)   │ │
-│  └───────────┘ │  single-loop    │ └──────────────────────┘ │
-│                └─────────────────┘                           │
+│  ┌───────────┐ ┌─────────────────┐ ┌─────────────────────┐  │
+│  │ WhatsApp  │ │  Medici         │ │  Ogilvy             │  │
+│  │ Service   │ │  agents/medici  │ │  agents/ogilvy      │  │
+│  │           │ │  询盘接待        │ │  广告投手            │  │
+│  └───────────┘ └─────────────────┘ └─────────────────────┘  │
 │  ┌────────────┐ ┌──────────────┐ ┌─────────────────────┐    │
 │  │ LLM Client │ │ Knowledge    │ │ Meta Ads / MCP      │    │
 │  │ (OpenRouter)│ │ Base (kb-*)  │ │ Whisper / Feishu    │    │
@@ -124,16 +128,17 @@ LeadEngine/
 │   ├── (app)/                   #   认证后页面 (Sidebar layout)
 │   │   ├── analytics/           #     监控看板
 │   │   ├── reports/             #     AI 周报日报
-│   │   ├── ai-automation/       #     Autopilot (AI 广告投放)
+│   │   ├── ai-automation/       #     Autopilot / Ogilvy (AI 广告投放)
 │   │   ├── campaign-studio/     #     广告数据 + 归因分析
 │   │   ├── leadhub/             #     询盘私信
-│   │   ├── agents/              #     智能体配置
-│   │   │   └── [id]/knowledge-base/  # 知识库 (嵌入 agent 详情页)
-│   │   └── dev-tools/           #     开发者工具
+│   │   ├── product-lines/       #     产品线配置
+│   │   │   └── [id]/knowledge-base/  # 知识库 (嵌入产品线详情页 tab)
+│   │   └── dev-tools/           #     开发者工具 (含 medici-simulator)
 │   ├── (auth)/                  #   登录页
 │   ├── api/                     #   API Route Handlers
 │   │   ├── webhook/             #     WhatsApp Webhook 入口
-│   │   ├── autopilot/           #     Autopilot 会话 / 启动 / 上传
+│   │   ├── autopilot/           #     Ogilvy 会话 / 启动 / 上传（路由名保留 "autopilot"）
+│   │   ├── product-lines/       #     产品线 CRUD（含 agent_id 桥接）
 │   │   ├── ads/                 #     Meta Ads 数据 / dashboard / creative-image
 │   │   ├── inquiries/           #     询盘列表 + 质量筛选
 │   │   ├── inquiry-dashboard/   #     询盘看板聚合
@@ -141,14 +146,12 @@ LeadEngine/
 │   │   ├── conversations/       #     对话详情
 │   │   ├── leads/               #     线索 CRUD / 审批 / 同步
 │   │   ├── knowledge/           #     知识库 CRUD / 搜索 / 教学
-│   │   ├── agents/              #     Agent CRUD
 │   │   ├── reports/             #     AI 报告读取 / 导出
 │   │   ├── ai/report/           #     触发单次报告生成
 │   │   ├── media/               #     WhatsApp 媒体反代
 │   │   ├── send-message/        #     手动发送 WA 消息
-│   │   ├── product-assets/      #     产品资产上传
 │   │   ├── health/              #     健康检查
-│   │   ├── dev-tools/           #     内部诊断端点
+│   │   ├── dev-tools/           #     内部诊断端点 (含 medici-simulator/send)
 │   │   └── cron/                #     PM2 cron 内部端点
 │   │       ├── sync-leads/
 │   │       ├── process-queue/
@@ -166,21 +169,25 @@ LeadEngine/
 │   ├── whatsapp.service.js      #   WhatsApp Cloud API 封装
 │   ├── whatsapp-media.service.js#   WA 媒体下载 / 反代
 │   ├── whisper.service.js       #   OpenAI Whisper 语音转文字
-│   ├── agent-router.service.js  #   多 Agent 路由（按产品线分流）
-│   ├── agent-runtime.service.js #   Agent 执行引擎（tool-use loop）
-│   ├── routing.service.js       #   线索路由 + scoring
+│   ├── routing.service.js       #   线索路由 + scoring（下游路由，非 agent 路由）
 │   ├── inquiry-quality.js       #   询盘质量评估规则
 │   ├── feishu.service.js        #   飞书卡片通知
-│   ├── kb-*.service.js          #   知识库系列：search / upload / auto-learn / tools / feishu-import / file-parsers
-│   ├── product-knowledge.service.js / product-search.service.js
+│   ├── kb-*.service.js          #   知识库共享基础：search / upload / auto-learn / feishu-import / file-parsers
 │   ├── meta-account.service.js  #   Meta 账户资产（WABA/Page/Pixel）
 │   ├── meta-ads-mcp-client.js   #   Meta Ads MCP Client（可选）
-│   └── autopilot/               #   Autopilot 独立子系统 (5 files)
-│       ├── agent.service.js     #     单 Agent 循环 (tool-use + streaming)
-│       ├── tools.service.js     #     web_search / read_webpage 工具实现
-│       ├── creative.service.js  #     广告图生成（三模型降级链）
-│       ├── meta-launch.service.js #   Meta Graph 三层上架 (stage → activate)
-│       └── whatsapp-accounts.service.js # 可用 WA 号码发现 + 60s 缓存
+│   └── agents/
+│       ├── medici/              #   询盘接待 Agent（一发 JSON 抽取）
+│       │   ├── index.js         #     runMedici 全部运行时（prompt + msgs + tools + call-loop + post-process）
+│       │   ├── config.js        #     row → agentConfig 装配 + 60s 缓存 + loadMediciConfig 解析
+│       │   ├── base-prompt.js   #     BASE_PROMPT_TEMPLATE + enum 常量（纯数据）
+│       │   ├── output-schema.js #     GENERIC_LEAD_OUTPUT_SCHEMA（纯数据）
+│       │   └── kb-tools.js      #     KB tool 适配器（包装 kb-search）
+│       └── ogilvy/              #   广告投手 Agent（流式 tool-use 循环）
+│           ├── index.js         #     runOgilvy 单循环 (tool-use + streaming)
+│           ├── tools.service.js #     web_search / read_webpage 工具实现
+│           ├── creative.service.js #   广告图生成（三模型降级链）
+│           ├── meta-launch.service.js # Meta Graph 三层上架 (stage → activate)
+│           └── whatsapp-accounts.service.js # 可用 WA 号码发现 + 60s 缓存
 │
 ├── lib/                         # 工具层 & 数据访问层
 │   ├── supabase-server.js       #   Server-side Supabase client
@@ -188,24 +195,24 @@ LeadEngine/
 │   ├── redis.js                 #   Redis singleton (shared + blocking clients)
 │   ├── sse.js                   #   SSE 推送 (generator → ReadableStream)
 │   ├── consume-sse.js           #   SSE 消费 (断线重连 + lastEventId)
-│   ├── queue-processor.js       #   消息聚合队列
-│   ├── conversation-context.service.js # 路由后对话上下文
+│   ├── queue-processor.js       #   消息聚合队列 → 调 Medici → 持久化 + 回复
+│   ├── car-catalog-context.js   #   车型关键词命中注入给 Medici context
 │   ├── referral-context.js      #   广告归因解析
-│   ├── lead-extractor.js        #   线索字段提取
+│   ├── lead-extractor.js        #   离线脚本用：messages → Medici 结果
 │   ├── demo-mode.js             #   Demo 模式拦截
 │   ├── core-trace.js            #   请求链路 traceId 日志
 │   ├── repositories/            #   Repository 层 (Supabase CRUD)
 │   │   ├── contact.repository.js / conversation.repository.js
 │   │   ├── message.repository.js / queue.repository.js
-│   │   ├── lead.repository.js / agent.repository.js
+│   │   ├── lead.repository.js
+│   │   ├── product-line.repository.js  # 含 findAgentIdByProductLine 桥接
 │   │   ├── knowledge-base.repository.js
 │   │   ├── autopilot.repository.js
 │   │   └── sync-log.repository.js
 │   ├── services/                #   跨模块业务胶水
 │   │   ├── external-sync.js     #     线索 → REVO SCM
 │   │   └── report-generator.js  #     AI 报告生成器
-│   ├── api/                     #   前端 fetch 封装 (agents / knowledge / http)
-│   └── constants/product-lines.js
+│   └── api/                     #   前端 fetch 封装 (product-lines / knowledge / http)
 │
 ├── supabase/migrations/         # 数据库 Schema 迁移 (~40 SQL 文件)
 ├── scripts/                     # 运维脚本 & Cron 入口
@@ -213,9 +220,13 @@ LeadEngine/
 │   ├── cron-sync-leads.js       #   线索同步 (30s)
 │   ├── cron-process-queue.js    #   队列兜底 (10s)
 │   ├── cron-generate-reports.js #   AI 报告 (每日 08:00 CST)
-│   ├── seed-*-agent.js          #   Agent 种子数据
+│   ├── reload-leads.js          #   单会话重跑 Medici（调试用）
+│   ├── reprocess-leads.js       #   批量重跑 Medici 重抽取线索（回归测试）
+│   ├── retry-buyer-type-failures.js #  重试 buyer_type 校验失败的记录
 │   └── test-*.js                #   本地诊断 / 调试脚本
-├── docs/autopilot-design.md     # Autopilot 详细设计文档
+├── docs/
+│   ├── medici-design.md         # Medici (询盘接待 Agent) 设计文档
+│   └── ogilvy-design.md         # Ogilvy (广告投手 Agent / Autopilot) 设计文档
 └── ecosystem.config.cjs         # PM2 进程配置
 ```
 
@@ -233,8 +244,8 @@ sequenceDiagram
     participant WH as POST /api/webhook
     participant Q as message_queue (Supabase)
     participant QP as Queue Processor
-    participant AR as Agent Router
-    participant AI as Claude (tool-use loop)
+    participant PL as loadMediciConfig<br/>(phone → product_line)
+    participant Medici as Medici Agent
     participant DB as Supabase
     participant F as Feishu Bot
 
@@ -247,23 +258,28 @@ sequenceDiagram
 
     Q->>QP: 触发 (setTimeout 回调 / queue-cron 10s 兜底)
     QP->>DB: RPC acquire_queue_messages<br/>(SELECT FOR UPDATE SKIP LOCKED)
-    QP->>AR: routeToAgent(contact, messages)
-    AR->>AI: Claude 选择最佳 Agent (按产品线匹配)
-    AI-->>AR: agent_id
+    QP->>QP: 人工接管检查 → 早退
+    QP->>PL: loadMediciConfig(conversation)
+    PL-->>QP: product_line 配置 (system_prompt + output_schema + lead_fields)
+    alt 未绑定号码 (Strategy C)
+        QP->>C: 固定兜底回复 "正在设置中..."
+        QP->>DB: 记消息，不跑 Medici
+    end
+    QP->>QP: 构造 contextInfo (missing_fields / prior_state / 广告素材)
 
-    QP->>AI: Agent Runtime 多轮对话
-    Note over AI: tool-use loop:<br/>搜索知识库 / 计算报价 /<br/>提取线索字段 / 评分
+    QP->>Medici: runMedici({history, input, context, agentConfig, trace})
+    Note over Medici: 单次 LLM 调用:<br/>tool-use loop (商品/KB) → submit_response<br/>同时产出意图/质量/价值/leads/路由/回复
 
-    AI-->>QP: 回复文本 + 线索数据 + score_delta
+    Medici-->>QP: 结构化 JSON (intent, quality, value, leads[], route, next_message)
 
-    QP->>DB: updateLead (score, stage, route, fields)
-    QP->>C: 发送 WhatsApp 回复
+    QP->>DB: processMessageForConversation (写 message + lead)
+    QP->>C: sendMessage (WhatsApp 回复)
 
-    alt route = HUMAN_NOW (高意向)
-        QP->>F: 飞书通知 → 人工接管
+    alt route = HUMAN_NOW (PROOF)
+        QP->>F: executeConversationRouting → 飞书通知
     end
     alt route = FAQ_END
-        QP->>QP: 自动关闭对话
+        QP->>QP: 结束对话
     end
 ```
 
@@ -273,16 +289,19 @@ sequenceDiagram
 |------|------|
 | **消息聚合** | 客户连续发多条消息时等 2s 合并为一次 LLM 调用，降本提效 |
 | **分布式锁** | `SELECT FOR UPDATE SKIP LOCKED` 保证多实例不重复处理 |
-| **Agent 路由** | Claude 根据对话上下文 + 产品信号自动选择 Agent（汽配/农机/整车等） |
-| **线索评分** | 每轮对话更新 score/stage/route，达阈值触发飞书通知人工 |
+| **确定性路由** | `wa_phone_number_id → product_lines` 1:1 查表（老版本的"Claude 选 agent"已下线） |
+| **产品线驱动** | 每条绑定号码对应一个 `product_line`，UI 改 `lead_fields` 60s 内生效，AI 提示词运维侧自主改 |
+| **Medici 单次调用** | 一发 JSON 同时产出回复 + 意图分类 + 商业价值 + leads[] + 路由决策 |
+| **质量分级** | `BAD → GOOD → QUALIFY → PROOF`，PROOF 自动触发飞书通知人工 |
 | **Cron 兜底** | `queue-cron` 每 10s 检查，防止 `setTimeout` 回调在进程重启时丢失 |
 | **人工接管自释放** | `isHumanTakeover` 拦截 AI 自动回复；闲置 1h 后由 `release-takeovers` 端点恢复 |
+| **未绑定号码 Strategy C** | 没有对应 product_line 时固定兜底话术，不跑 Medici |
 
 ### Flow 2 — Autopilot（Click-to-WhatsApp 广告编排）
 
 ChatGPT 风格的单 Agent 循环：用户聊产品、上传参考图，AI 一口气产方案 + 生成素材 + 一键上架 Meta。
 
-> 详细设计见 [docs/autopilot-design.md](docs/autopilot-design.md)。
+> 详细设计见 [docs/ogilvy-design.md](docs/ogilvy-design.md)。
 
 ```mermaid
 sequenceDiagram
@@ -397,7 +416,8 @@ erDiagram
     contacts ||--o{ conversations : has
     conversations ||--o{ messages : contains
     conversations ||--o| leads : generates
-    agents ||--o{ conversations : serves
+    product_lines ||--o{ conversations : routes
+    agents ||--o{ kb_documents : owns
 
     contacts {
         uuid id PK
@@ -411,7 +431,8 @@ erDiagram
     conversations {
         uuid id PK
         uuid contact_id FK
-        uuid agent_id FK
+        text product_line FK "绑定号码 → 产品线"
+        uuid agent_id FK "legacy 桥，KB/商品 tool 仍 key 于此"
         text status "active / idle / closed"
         int message_count
         bool is_human_takeover
@@ -424,31 +445,45 @@ erDiagram
         uuid conversation_id FK
         text role "user / assistant / operator"
         text content
-        int score_delta
         jsonb metadata "media_url / referral"
     }
 
     leads {
         uuid id PK
         uuid conversation_id FK
-        text stage "GREET / QUALIFY / PROOF"
-        int score "0-100"
+        text product_line
+        text inquiry_quality "BAD / GOOD / QUALIFY / PROOF"
+        text business_value "LOW / AVERAGE / HIGH"
         text route "CONTINUE / HUMAN_NOW / FAQ_END"
         text destination_country
-        text inquiry_quality
-        text business_value
-        jsonb details
+        text product_name
+        text qty_bucket
+        jsonb details "自定义 lead_fields 兜底"
         bool approved
+    }
+
+    product_lines {
+        text id PK "slug，如 vehicle / agri_machinery"
+        text name
+        text wa_phone_number_id UK "1:1 绑定"
+        text catalog_description
+        text domain_glossary
+        text business_value_guidance
+        text message_style_examples
+        jsonb lead_fields "驱动 output_schema + 资质规则"
+        bool is_active
     }
 
     agents {
         uuid id PK
-        text name
-        text product_line UK
-        text system_prompt
-        jsonb qualification_config
+        text product_line UK "跟 product_lines.id 对齐"
+        text system_prompt "legacy: 后台 UI 改的是 product_lines 表"
+        jsonb output_schema
+        bool is_active
     }
 ```
+
+> `agents` 表保留是历史原因：KB (`kb_documents / kb_knowledge_points / kb_products / ...`) 列仍然 key 于 `agent_id`。`product-line.repository::findAgentIdByProductLine` 做 slug→UUID 桥接。真要切到 `product_line_id` 列是另一阶段的事。
 
 ### Autopilot Tables (2026-04 new)
 
@@ -529,9 +564,10 @@ erDiagram
 |------|------|
 | **双标识符联系人** | `wa_id` + `bsuid` 至少一个非空，查询时 bsuid 优先 |
 | **消息聚合队列** | `message_queue` + `SELECT FOR UPDATE SKIP LOCKED` 分布式锁 |
-| **对话 Agent 作用域** | 同联系人 × 同 Agent 最多 1 个活跃对话（部分唯一索引）|
+| **phone → product_line 1:1 路由** | `conversations.wa_phone_number_id` → `product_lines` UNIQUE 索引，确定性查表，无 LLM 参与选 agent |
+| **agent_id 桥** | `product_lines.id` (slug) → `agents.id` (UUID)，KB/商品工具仍 key 于 UUID，由 repo 层转换 |
 | **pgvector 双语嵌入** | `kb_knowledge_points` 中英文双向量，分层 RPC 检索 |
-| **Autopilot 单表计划** | 最新方案全部塞 `autopilot_sessions.plan_json`，历史由消息流回放 |
+| **Ogilvy 单表计划** | 最新方案全部塞 `autopilot_sessions.plan_json`，历史由消息流回放 |
 | **AIGC 资产解耦** | 图像落 `aigc_assets` + `aigc-assets` bucket；autopilot session id 放 `metadata` 字段，FK 对 WA `conversations` 写 null |
 
 ---
@@ -624,10 +660,10 @@ flowchart TD
     E --> F["processConversationQueue()"]
     F --> F1["acquire_queue_messages<br/>(SELECT FOR UPDATE SKIP LOCKED)"]
     F1 --> F2["合并同一客户的多条消息"]
-    F2 --> F3["Agent Router → 选择 Agent"]
-    F3 --> F4["Agent Runtime → Claude tool-use loop"]
+    F2 --> F3["loadMediciConfig<br/>phone_number_id → agentConfig"]
+    F3 --> F4["runMedici({history, input, context, agentConfig})"]
     F4 --> F5["发送 WhatsApp 回复"]
-    F5 --> F6["更新 lead score / stage / route"]
+    F5 --> F6["更新 lead (intent / quality / value / leads[])"]
     F6 --> F7["标记 queue status=completed"]
 ```
 
@@ -781,4 +817,4 @@ E2E 使用 `@playwright/test`（已装未默认脚本化），按需 `npx playwr
 - **`src/` 不 import React/Next** — 必须对 runtime 中立，能被脚本和 API 同时调用
 - **测试必须真跑** — 不能只做静态 review（见 [CLAUDE.md](CLAUDE.md)）
 - **谨慎加"改进"** — 不添加 fallback 值、默认行为或用户未要求的字段（见 [CLAUDE.md](CLAUDE.md)）
-- 更多约定见 [CLAUDE.md](CLAUDE.md) 和 [docs/autopilot-design.md](docs/autopilot-design.md)
+- 更多约定见 [CLAUDE.md](CLAUDE.md)、[docs/medici-design.md](docs/medici-design.md)、[docs/ogilvy-design.md](docs/ogilvy-design.md)

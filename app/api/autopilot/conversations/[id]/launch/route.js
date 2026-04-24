@@ -3,7 +3,7 @@ import {
   getSession,
   updateSession,
 } from '../../../../../../lib/repositories/autopilot.repository.js';
-import { stageCampaigns, activateCampaigns } from '../../../../../../src/autopilot/meta-launch.service.js';
+import { stageCampaigns, activateCampaigns } from '../../../../../../src/agents/ogilvy/meta-launch.service.js';
 import { streamSSE } from '../../../../../../lib/sse.js';
 
 /**

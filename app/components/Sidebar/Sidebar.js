@@ -23,8 +23,7 @@ const NAV = [
     section: '智能外贸员',
     items: [
       { href: '/leadhub', label: '询盘私信', icon: 'leadhub' },
-      { href: '/agents', label: '智能体', icon: 'agents' },
-      // 知识库已嵌入到 agent 详情页（/agents/[id]/knowledge-base），不再作为独立入口
+      { href: '/product-lines', label: '产品线', icon: 'agents' },
     ],
   },
 ];

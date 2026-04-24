@@ -1,0 +1,86 @@
+.list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.empty {
+  padding: 40px 16px;
+  text-align: center;
+  color: var(--text3);
+  font-size: 13px;
+  font-family: var(--font-sans);
+  font-style: italic;
+}
+
+.card {
+  padding: 14px 16px;
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  border-radius: var(--rl);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.cardHead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.cardTitle {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text);
+  font-family: var(--font-sans);
+}
+
+.cardTags {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.fieldList {
+  display: grid;
+  grid-template-columns: minmax(120px, max-content) 1fr;
+  column-gap: 16px;
+  row-gap: 6px;
+  margin: 0;
+  padding: 8px 0 2px;
+  border-top: 1px dashed var(--border);
+}
+
+.fieldRow {
+  display: contents;
+}
+
+.fieldLabel {
+  font-size: 12px;
+  color: var(--text3);
+  font-family: var(--font-sans);
+  padding-top: 2px;
+  white-space: nowrap;
+}
+
+.fieldValue {
+  font-size: 13px;
+  color: var(--text);
+  font-family: var(--font-sans);
+  margin: 0;
+  word-break: break-word;
+  white-space: pre-wrap;
+}
+
+.fieldEmpty {
+  font-size: 12px;
+  color: var(--text3);
+  font-family: var(--font-sans);
+  font-style: italic;
+  padding-top: 6px;
+  border-top: 1px dashed var(--border);
+}

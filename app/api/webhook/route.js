@@ -9,8 +9,9 @@ import {
   buildWhatsAppMediaProxyUrl,
 } from '../../../src/whatsapp-media.service.js';
 import { getOrCreateRoutedConversationContext } from '../../../lib/conversation-context.service.js';
-import { enqueueMessage } from '../../../lib/repositories/queue.repository.js';
+import { enqueueMessage, hasPendingMessages } from '../../../lib/repositories/queue.repository.js';
 import { isHumanTakeover } from '../../../lib/repositories/conversation.repository.js';
+import { processConversationQueue } from '../../../lib/queue-processor.js';
 import { updateContactMetadata } from '../../../lib/repositories/contact.repository.js';
 import {
   mergeContactReferralMetadata,
@@ -43,25 +44,16 @@ export async function GET(request) {
  * Trigger queue processing after aggregation window
  * @param {string} conversationId - Conversation UUID
  */
-async function scheduleProcessing(conversationId) {
-  const delay = config.queue.aggregationWindowMs;
-
+function scheduleProcessing(conversationId) {
   setTimeout(async () => {
     try {
-      const baseUrl = config.app.baseUrl || `http://localhost:${config.server.port}`;
-      const response = await fetch(`${baseUrl}/api/webhook/process`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ conversationId }),
-      });
-
-      if (!response.ok) {
-        console.error('Failed to trigger queue processing:', await response.text());
-      }
+      const hasReady = await hasPendingMessages(conversationId);
+      if (!hasReady) return;
+      await processConversationQueue(conversationId);
     } catch (error) {
-      console.error('Error triggering queue processing:', error);
+      console.error('Error processing queue:', error);
     }
-  }, delay);
+  }, config.queue.aggregationWindowMs);
 }
 
 async function buildQueuedMessage({
