@@ -1,0 +1,397 @@
+.editor {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+/* ── Toolbar ───────────────────────────────────────────── */
+.toolbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+}
+
+.toolbarLeft {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.toolbarRight {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.helpToggle {
+  padding: 4px 8px;
+  background: transparent;
+  color: var(--text3);
+  border: none;
+  border-radius: 4px;
+  font-size: 12px;
+  cursor: pointer;
+  font-family: var(--font-sans);
+}
+.helpToggle:hover { color: var(--accent); }
+
+.helpPanel {
+  padding: 14px 16px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--accent);
+  border-radius: 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  font-size: 13px;
+  color: var(--text2);
+  line-height: 1.55;
+}
+
+.helpIntro {
+  margin: 0;
+}
+
+.helpTable {
+  width: 100%;
+  border-collapse: collapse;
+}
+.helpTable td {
+  padding: 8px 10px;
+  vertical-align: top;
+  border-top: 1px solid var(--border);
+  font-size: 12px;
+}
+.helpTable tr:first-child td { border-top: none; }
+
+.helpTier {
+  width: 110px;
+  white-space: nowrap;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.helpExample {
+  display: inline-block;
+  margin-top: 2px;
+  font-size: 11px;
+  color: var(--text3);
+  font-family: var(--font-mono);
+}
+
+.helpFooter {
+  margin: 0;
+  padding: 8px 10px;
+  background: var(--bg2);
+  border-radius: 4px;
+  font-size: 12px;
+  color: var(--text2);
+}
+
+.toolbarHint {
+  font-size: 12px;
+  color: var(--text3);
+  font-family: var(--font-mono);
+}
+
+.btnPrimary {
+  padding: 6px 14px;
+  background: var(--accent);
+  color: var(--bg);
+  border: 1px solid var(--accent);
+  border-radius: 4px;
+  font-size: 12px;
+  cursor: pointer;
+  font-family: var(--font-sans);
+}
+.btnPrimary:hover { opacity: 0.9; }
+
+.btnGhost {
+  padding: 5px 10px;
+  background: transparent;
+  color: var(--text3);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  font-size: 11px;
+  cursor: pointer;
+  font-family: var(--font-mono);
+}
+.btnGhost:hover { color: var(--text); border-color: var(--text3); }
+
+.advancedToggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--text3);
+  font-family: var(--font-mono);
+  cursor: pointer;
+  user-select: none;
+}
+.advancedToggle input { cursor: pointer; }
+
+/* ── Empty ─────────────────────────────────────────────── */
+.empty {
+  padding: 28px;
+  text-align: center;
+  color: var(--text3);
+  font-size: 12px;
+  background: var(--bg);
+  border: 1px dashed var(--border);
+  border-radius: 4px;
+}
+
+/* ── List & rows ───────────────────────────────────────── */
+.list {
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.row {
+  display: grid;
+  grid-template-columns: 28px 1fr 110px 130px 30px 28px;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--border);
+}
+.row:last-child { border-bottom: none; }
+
+.rowAdvanced {
+  grid-template-columns: 28px 1fr 160px 110px 130px 30px 28px;
+}
+
+.headerRow {
+  background: var(--bg2);
+  font-size: 10px;
+  color: var(--text3);
+  font-family: var(--font-mono);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 6px 10px;
+}
+
+.dataRow {
+  min-height: 38px;
+  background: var(--bg);
+}
+.dataRow:hover { background: var(--bg2); }
+
+.rowInvalid {
+  background: color-mix(in srgb, var(--red, #f85149) 6%, transparent);
+}
+
+/* ── Reorder ───────────────────────────────────────────── */
+.reorder {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.iconBtn {
+  width: 22px;
+  height: 14px;
+  padding: 0;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 3px;
+  color: var(--text3);
+  cursor: pointer;
+  font-size: 10px;
+  line-height: 1;
+}
+.iconBtn:not(:disabled):hover { color: var(--text); border-color: var(--border); background: var(--bg); }
+.iconBtn:disabled { opacity: 0.25; cursor: not-allowed; }
+
+.iconBtnSm {
+  width: 28px;
+  height: 26px;
+  padding: 0;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  color: var(--text3);
+  cursor: pointer;
+  font-size: 16px;
+  line-height: 1;
+}
+.iconBtnSm:hover { color: var(--text); border-color: var(--border); background: var(--bg); }
+.iconBtnActive { color: var(--text); background: var(--bg2); border-color: var(--border); }
+
+.deleteBtn {
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  background: transparent;
+  color: var(--text3);
+  border: 1px solid transparent;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 12px;
+}
+.deleteBtn:hover { color: var(--red, #f85149); border-color: var(--red, #f85149); }
+
+/* ── Inline cell inputs ────────────────────────────────── */
+.cellInput {
+  width: 100%;
+  padding: 5px 8px;
+  background: var(--bg);
+  border: 1px solid transparent;
+  border-radius: 4px;
+  color: var(--text);
+  font-family: var(--font-sans);
+  font-size: 13px;
+}
+.cellInput:hover { border-color: var(--border); }
+.cellInput:focus { outline: none; border-color: var(--accent); background: var(--bg); }
+
+.cellInputError {
+  border-color: var(--red, #f85149) !important;
+}
+
+.cellSelect {
+  padding: 5px 6px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text);
+  font-family: var(--font-sans);
+  font-size: 12px;
+  cursor: pointer;
+}
+.cellSelect:focus { outline: none; border-color: var(--accent); }
+
+.mono {
+  font-family: var(--font-mono) !important;
+  font-size: 12px !important;
+}
+
+/* ── Sub row (inline enum chips) ───────────────────────── */
+.subRow {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 4px 10px 8px 36px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg);
+}
+.subRow:last-child { border-bottom: none; }
+
+.subRowInvalid {
+  background: color-mix(in srgb, var(--red, #f85149) 6%, transparent);
+}
+
+.subRowLabel {
+  font-size: 11px;
+  color: var(--text3);
+  font-family: var(--font-mono);
+  padding-top: 8px;
+  flex-shrink: 0;
+}
+
+/* ── Expand panel ──────────────────────────────────────── */
+.expandPanel {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 10px 14px 14px 36px;
+  background: var(--bg2);
+  border-bottom: 1px solid var(--border);
+}
+.expandPanel:last-child { border-bottom: none; }
+
+.expandField {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.expandFieldLabel {
+  font-size: 11px;
+  color: var(--text3);
+  font-family: var(--font-mono);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.expandFieldHint {
+  font-size: 10px;
+  color: var(--text3);
+  font-weight: normal;
+  font-family: var(--font-sans);
+}
+
+/* ── Row-level errors ──────────────────────────────────── */
+.rowErrors {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  padding: 4px 10px 6px 36px;
+  background: color-mix(in srgb, var(--red, #f85149) 6%, transparent);
+  border-bottom: 1px solid var(--border);
+}
+.rowErrors:last-child { border-bottom: none; }
+
+.rowErrorMsg {
+  font-size: 11px;
+  color: var(--red, #f85149);
+}
+
+/* ── Enum chips ────────────────────────────────────────── */
+.chips {
+  flex: 1;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 4px 6px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  min-height: 30px;
+  align-items: center;
+}
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 1px 4px 1px 8px;
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text);
+}
+
+.chipX {
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  background: transparent;
+  border: none;
+  color: var(--text3);
+  cursor: pointer;
+  font-size: 14px;
+  line-height: 1;
+}
+.chipX:hover { color: var(--red, #f85149); }
+
+.chipInput {
+  flex: 1;
+  min-width: 120px;
+  padding: 2px 4px;
+  background: transparent;
+  border: none;
+  outline: none;
+  color: var(--text);
+  font-family: var(--font-sans);
+  font-size: 12px;
+}

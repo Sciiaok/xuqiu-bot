@@ -16,6 +16,7 @@ import {
 import OverviewTab from './knowledge-base/OverviewTab.js';
 import UploadTab from './knowledge-base/UploadTab.js';
 import AssetTab from './knowledge-base/AssetTab.js';
+import LeadFieldsEditor, { normalizeLeadFields } from './LeadFieldsEditor.js';
 
 /** Fields whose in-flight form state maps 1:1 to DB columns. */
 const TEXT_SLOTS = [
@@ -27,6 +28,8 @@ const TEXT_SLOTS = [
     hint: '本线判定 LOW / AVERAGE / HIGH 的数量阈值。' },
   { key: 'message_style_examples',  label: '消息风格例子 (message_style_examples)', rows: 4,
     hint: '❌ TOO LONG 和 ✅ GOOD 的具体例子，教 Claude 怎么回复。' },
+  { key: 'faq_message',             label: 'FAQ 兜底消息 (faq_message)',          rows: 8,
+    hint: '当 lead 被判定为低质 (BAD) 时，自动发给客户的兜底文案。建议附上官网链接、销售联系方式。留空 → 使用平台默认通用文案。' },
 ];
 
 const TABS = [
@@ -48,8 +51,8 @@ export default function ProductLineEditPage() {
   const [loadError, setLoadError] = useState('');
 
   const [form, setForm] = useState(null);
-  const [leadFieldsText, setLeadFieldsText] = useState('');
-  const [leadFieldsError, setLeadFieldsError] = useState('');
+  const [leadFields, setLeadFields] = useState([]);
+  const [leadFieldsValid, setLeadFieldsValid] = useState(true);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState('');
   const [savedAt, setSavedAt] = useState(0);
@@ -72,10 +75,11 @@ export default function ProductLineEditPage() {
         domain_glossary:          fetched.domain_glossary || '',
         business_value_guidance:  fetched.business_value_guidance || '',
         message_style_examples:   fetched.message_style_examples || '',
+        faq_message:              fetched.faq_message || '',
         wa_phone_number_id:       fetched.wa_phone_number_id || '',
       });
-      setLeadFieldsText(JSON.stringify(fetched.lead_fields || [], null, 2));
-      setLeadFieldsError('');
+      setLeadFields(Array.isArray(fetched.lead_fields) ? fetched.lead_fields : []);
+      setLeadFieldsValid(true);
 
       setNumbers(accounts.numbers || []);
       const takenBy = {};
@@ -106,19 +110,13 @@ export default function ProductLineEditPage() {
     setForm((p) => ({ ...p, [key]: value }));
   }
 
-  function handleLeadFieldsText(value) {
-    setLeadFieldsText(value);
-    try {
-      const parsed = JSON.parse(value);
-      if (!Array.isArray(parsed)) throw new Error('lead_fields must be a JSON array');
-      setLeadFieldsError('');
-    } catch (err) {
-      setLeadFieldsError(err.message);
-    }
+  function handleLeadFieldsChange(nextFields, isValid) {
+    setLeadFields(nextFields);
+    setLeadFieldsValid(isValid);
   }
 
   async function handleSave() {
-    if (leadFieldsError) { setSaveError('lead_fields JSON 不合法：' + leadFieldsError); return; }
+    if (!leadFieldsValid) { setSaveError('lead_fields 校验未通过，请先修正再保存。'); return; }
     setSaving(true);
     setSaveError('');
     try {
@@ -128,7 +126,8 @@ export default function ProductLineEditPage() {
         domain_glossary: form.domain_glossary,
         business_value_guidance: form.business_value_guidance,
         message_style_examples: form.message_style_examples,
-        lead_fields: JSON.parse(leadFieldsText),
+        faq_message: form.faq_message,
+        lead_fields: normalizeLeadFields(leadFields),
         wa_phone_number_id: form.wa_phone_number_id || null,
       };
       const updated = await updateProductLine(id, body);
@@ -176,7 +175,13 @@ export default function ProductLineEditPage() {
 
       <div className={s.header}>
         <div className={s.headerLeft}>
-          <h1 className={s.title}>{line.name}</h1>
+          <input
+            className={s.titleInput}
+            value={form.name}
+            onChange={(ev) => handleText('name', ev.target.value)}
+            placeholder="产品线名称"
+            title="点击编辑产品线名称"
+          />
           <span className={s.lineId}>{line.id}</span>
         </div>
         {activeTab === 'config' && (
@@ -184,7 +189,7 @@ export default function ProductLineEditPage() {
             <Button variant="ghost" onClick={handleToggleActive} disabled={togglingActive}>
               {togglingActive ? '处理中…' : (line.is_active ? '停用' : '启用')}
             </Button>
-            <Button variant="primary" onClick={handleSave} disabled={saving || !!leadFieldsError}>
+            <Button variant="primary" onClick={handleSave} disabled={saving || !leadFieldsValid}>
               {saving ? '保存中…' : '保存'}
             </Button>
           </div>
@@ -211,20 +216,6 @@ export default function ProductLineEditPage() {
         <>
           {savedAt > 0 && <div className={s.okBanner}>已保存 · 运行时最多 60 秒内生效</div>}
           {saveError && <div className={s.errorBanner}>{saveError}</div>}
-
-          {/* Basic */}
-          <div className={s.section}>
-            <h3 className={s.sectionTitle}>基本信息</h3>
-            <label className={s.field}>
-              <span className={s.fieldLabel}>显示名称</span>
-              <input
-                className={s.input}
-                type="text"
-                value={form.name}
-                onChange={(e) => handleText('name', e.target.value)}
-              />
-            </label>
-          </div>
 
           {/* Binding */}
           <div className={s.section}>
@@ -282,27 +273,18 @@ export default function ProductLineEditPage() {
             </div>
           ))}
 
-          {/* lead_fields — JSON */}
+          {/* lead_fields */}
           <div className={s.section}>
-            <h3 className={s.sectionTitle}>Lead 字段定义 (lead_fields) — JSON</h3>
+            <h3 className={s.sectionTitle}>线索字段列表</h3>
             <p className={s.sectionHint}>
-              每项 {`{ key, label, type, description, required_for, display_order, [enum_values], [items] }`}。
-              运行时从这里派生 Claude 输出 schema + 资质评级规则。
-              type 支持 text / number / enum / boolean / array（array 需提供 items 作为内层 JSON Schema）。
-              required_for ∈ null / &quot;GOOD&quot; / &quot;QUALIFY&quot; / &quot;PROOF&quot;。
+              告诉 AI 在跟客户聊的时候要尝试问出哪些信息。每条会进入 AI 的输出，并影响线索的评级。高质线索应该包含足够信息让销售能直接跟进；低质线索则可能只包含客户的基本联系方式，或根本没有有效信息。请根据实际情况调整字段列表，删除不必要的字段，添加重要但目前缺失的字段。
             </p>
-            <textarea
-              className={`${s.jsonTextarea} ${leadFieldsError ? s.jsonTextareaError : ''}`}
-              value={leadFieldsText}
-              onChange={(e) => handleLeadFieldsText(e.target.value)}
-              spellCheck={false}
-            />
-            {leadFieldsError && <div className={s.errorBanner}>JSON 不合法：{leadFieldsError}</div>}
+            <LeadFieldsEditor value={leadFields} onChange={handleLeadFieldsChange} />
           </div>
 
           <div className={s.saveBar}>
             <Button variant="ghost" onClick={() => router.push('/product-lines')}>返回</Button>
-            <Button variant="primary" onClick={handleSave} disabled={saving || !!leadFieldsError}>
+            <Button variant="primary" onClick={handleSave} disabled={saving || !leadFieldsValid}>
               {saving ? '保存中…' : '保存'}
             </Button>
           </div>

@@ -151,7 +151,7 @@ export default function ProductLinesPage() {
             <h2 className={s.modalTitle}>新建产品线</h2>
             <form className={s.form} onSubmit={handleCreate}>
               <label className={s.formLabel}>
-                标识（slug，创建后不可改）
+                唯一标识（slug，创建后不可改）
                 <input
                   className={`${s.formInput} ${slugError ? s.formInputError : ''}`}
                   type="text"

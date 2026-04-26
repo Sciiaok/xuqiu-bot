@@ -8,9 +8,25 @@ import {
   listDocuments,
   uploadDocument,
   deleteDocument,
+  getDocumentDownloadUrl,
   teach,
   resolveConflict,
 } from '../../../../../lib/api/knowledge.js';
+
+const MAX_FILE_SIZE_BYTES = 50 * 1024 * 1024; // 50 MB — keep in sync with /api/knowledge/upload
+
+function formatSizeKB(bytes) {
+  if (bytes == null) return '—';
+  const kb = bytes / 1024;
+  return `${kb < 10 ? kb.toFixed(1) : Math.round(kb)} KB`;
+}
+
+function formatUploadTime(iso) {
+  if (!iso) return '—';
+  const d = new Date(iso);
+  const pad = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
 import { LAYERS, LAYER_LABELS } from './constants.js';
 
 export default function UploadTab({ agentId }) {
@@ -58,6 +74,14 @@ export default function UploadTab({ agentId }) {
 
     const results = [];
     for (const file of files) {
+      if (file.size > MAX_FILE_SIZE_BYTES) {
+        results.push({
+          name: file.name,
+          ok: false,
+          error: `超过 50 MB 上限（${(file.size / 1024 / 1024).toFixed(1)} MB），已跳过`,
+        });
+        continue;
+      }
       try {
         const data = await uploadDocument(agentId, file, uploadLayer);
         if (data.conflicts?.length) {
@@ -83,6 +107,16 @@ export default function UploadTab({ agentId }) {
   const onDragOver = (e) => {
     e.preventDefault();
     setDragOver(true);
+  };
+
+  const handleDownload = async (docId) => {
+    try {
+      const url = await getDocumentDownloadUrl(docId);
+      if (url) window.open(url, '_blank');
+    } catch (err) {
+      console.error('[kb/documents] download failed', err);
+      alert(`下载失败: ${err.message}`);
+    }
   };
 
   const handleDelete = async (docId) => {
@@ -145,7 +179,7 @@ export default function UploadTab({ agentId }) {
           >
             <div className={s.dropzoneIcon}>+</div>
             <div className={s.dropzoneText}>拖拽文件到此处或点击选择</div>
-            <div className={s.dropzoneHint}>.xlsx .pdf .docx .csv .txt</div>
+            <div className={s.dropzoneHint}>.xlsx .pdf .docx .csv .txt · 单文件最大 50 MB</div>
           </div>
 
           <input
@@ -262,8 +296,16 @@ export default function UploadTab({ agentId }) {
             {documents.map(doc => (
               <div key={doc.id} className={s.docItem}>
                 <span className={s.docName}>{doc.filename}</span>
+                <span className={s.docMeta}>{formatSizeKB(doc.file_size)}</span>
+                <span className={s.docMeta}>{formatUploadTime(doc.created_at)}</span>
                 <span className={s.docLayer}>{LAYER_LABELS[doc.layer] || doc.layer}</span>
                 <span className={s.docPoints}>{doc.status}</span>
+                <button
+                  className={s.docDeleteBtn}
+                  onClick={() => handleDownload(doc.id)}
+                  disabled={!doc.storage_path}
+                  title={doc.storage_path ? '下载到本地预览' : '该文档无原始文件'}
+                >预览</button>
                 <button className={s.docDeleteBtn} onClick={() => handleDelete(doc.id)}>删除</button>
               </div>
             ))}

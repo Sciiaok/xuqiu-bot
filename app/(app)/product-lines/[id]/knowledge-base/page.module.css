@@ -523,6 +523,14 @@
   flex-shrink: 0;
 }
 
+.docMeta {
+  font-size: 10px;
+  color: var(--text3);
+  font-family: var(--font-mono);
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
 /* ── Asset grid (sendable images) ─────────────────────── */
 .assetGrid {
   display: grid;

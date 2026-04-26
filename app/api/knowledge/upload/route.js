@@ -17,6 +17,8 @@ const ALLOWED_TYPES = {
 
 const VALID_LAYERS = ['company', 'product', 'logistics', 'compliance', 'sales', 'competitive'];
 
+const MAX_FILE_SIZE_BYTES = 50 * 1024 * 1024; // 50 MB
+
 export async function POST(request) {
   const demoResponse = demoGuard({ success: true, message: 'Demo mode' });
   if (demoResponse) return demoResponse;
@@ -44,6 +46,13 @@ export async function POST(request) {
       return NextResponse.json(
         { error: `Invalid layer. Must be one of: ${VALID_LAYERS.join(', ')}` },
         { status: 400 }
+      );
+    }
+
+    if (file.size > MAX_FILE_SIZE_BYTES) {
+      return NextResponse.json(
+        { error: `文件超过上限 50 MB（当前 ${(file.size / 1024 / 1024).toFixed(1)} MB），请压缩或拆分后再上传。` },
+        { status: 413 }
       );
     }
 
@@ -91,6 +100,7 @@ export async function POST(request) {
         agent_id: agentId,
         filename: file.name,
         storage_path: storageOk ? storagePath : null,
+        file_size: file.size,
         layer,
         source_type: 'file',
         description,

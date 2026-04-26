@@ -4,6 +4,7 @@
  * Handles file upload, AI-powered parsing, bilingual translation,
  * embedding generation, and structured data extraction.
  */
+import { jsonrepair } from 'jsonrepair';
 import { openrouter, MODELS } from './llm-client.js';
 import { generateEmbedding, translateToEnglish, detectLanguage } from './kb-search.service.js';
 import supabase from '../lib/supabase.js';
@@ -161,7 +162,13 @@ function parseJsonFromLlm(text) {
   // Strip closing fence if present
   const closingFence = payload.lastIndexOf('```');
   if (closingFence !== -1) payload = payload.slice(0, closingFence);
-  return JSON.parse(payload.trim());
+  payload = payload.trim();
+  try {
+    return JSON.parse(payload);
+  } catch (err) {
+    // Fallback: repair common LLM JSON issues (unescaped quotes/newlines, trailing commas, truncation)
+    return JSON.parse(jsonrepair(payload));
+  }
 }
 
 // ── Process Single Knowledge Point ───────────────────────────────────

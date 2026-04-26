@@ -5,9 +5,17 @@
 
 import { sendMessage } from './whatsapp.service.js';
 import { updateLead, getLeadsByConversation } from '../lib/repositories/lead.repository.js';
+import { findProductLineByPhoneNumberId } from '../lib/repositories/product-line.repository.js';
 import { sendFeishuMessage } from './feishu.service.js';
 import { createTraceLogger } from '../lib/core-trace.js';
 import { config } from './config.js';
+
+// Used when a product line hasn't customized faq_message in the config UI.
+const DEFAULT_FAQ_MESSAGE = `Thank you for your interest!
+
+For more information or immediate assistance, please contact our sales team directly.
+
+We look forward to serving you!`;
 
 // 枚举标签需要与 Medici / lead_fields 对齐。`quality` 和 `value` 的字典已改正
 // 过一次（之前错成 `POOR / MEDIUM` 这种不存在的值，PROOF/AVERAGE 裸字符串显示）。
@@ -85,17 +93,17 @@ function buildFeishuLeadMessage(lead, handoffSummary) {
     : [];
 
   const lines = [
-    '🔥 **高意向线索 · 需立即跟进**',
+    '🔥 **侦测到重要线索，请人工跟进**',
     '',
     headerBits.join(' · '),
     '',
-    '**客户**',
+    '**客户信息**',
     `👤 ${lead.contact?.name || '未知'}${lead.company_name || lead.contact?.company_name ? ` — ${lead.company_name || lead.contact.company_name}` : ''}`,
     `📞 +${lead.contact?.wa_id || '未知'}`,
   ];
 
   if (canonicalRows.length > 0) {
-    lines.push('', '**询盘**');
+    lines.push('', '**线索信息**');
     for (const r of canonicalRows) lines.push(`• ${r.label}：${r.value}`);
   }
 
@@ -132,22 +140,22 @@ export async function sendFAQResources(waId, phoneNumberId, traceContext = {}) {
     conversation_id: traceContext.conversationId,
     wa_id: traceContext.waId || waId,
   });
-  const faqMessage = `Thank you for your interest in our vehicle export services!
-
-Here are some helpful resources:
-
-📋 **Vehicle Catalog**: https://revopanda.com/explore-cars
-❓ **FAQ**: https://revopanda.com/contact-us
-
-For immediate assistance, please contact our sales team:
-📧 Email: official@revopanda.com
-📱 WhatsApp: +86 13392464782
-
-We look forward to serving you!`;
+  let faqMessage = DEFAULT_FAQ_MESSAGE;
+  let resolvedLineId = null;
+  try {
+    const line = await findProductLineByPhoneNumberId(phoneNumberId);
+    if (line) {
+      resolvedLineId = line.id;
+      const custom = (line.faq_message || '').trim();
+      if (custom) faqMessage = custom;
+    }
+  } catch (lookupErr) {
+    logger.warn('routing.faq.line_lookup_failed', { error: lookupErr.message });
+  }
 
   try {
     await sendMessage(waId, faqMessage, phoneNumberId);
-    logger.info('routing.faq.sent');
+    logger.info('routing.faq.sent', { product_line: resolvedLineId, used_default: faqMessage === DEFAULT_FAQ_MESSAGE });
     return { success: true };
   } catch (error) {
     logger.error('routing.faq.failed', { error: error.message });
@@ -172,7 +180,7 @@ export async function routeLeadToSales(lead, handoffSummary, traceContext = {}) 
   // Feishu uuid max 50 chars; lead.id(36) + '_' + timestamp(13) = 50
   const routeUuid = `${lead.id}_${Date.parse(lead.updated_at || '') || 0}`;
 
-  sendFeishuMessage(message, true, config.feishu.chatId, routeUuid).catch(err =>
+  sendFeishuMessage(message, false, config.feishu.chatId, routeUuid).catch(err =>
     logger.error('routing.feishu.failed', { error: err.message })
   );
 
