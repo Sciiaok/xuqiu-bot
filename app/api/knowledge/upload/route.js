@@ -1,8 +1,8 @@
 import { NextResponse } from 'next/server';
-import { demoGuard } from '../../../../lib/demo-mode.js';
-import { createClient } from '../../../../lib/supabase-server.js';
 import supabase from '../../../../lib/supabase.js';
+import { getTenantContext, findAgentInTenant } from '../../../../lib/tenant-context.js';
 import { processDocument } from '../../../../src/kb-upload.service.js';
+import { markFirstKbUpload } from '../../../../lib/repositories/onboarding.repository.js';
 
 export const maxDuration = 120;
 
@@ -20,13 +20,9 @@ const VALID_LAYERS = ['company', 'product', 'logistics', 'compliance', 'sales', 
 const MAX_FILE_SIZE_BYTES = 50 * 1024 * 1024; // 50 MB
 
 export async function POST(request) {
-  const demoResponse = demoGuard({ success: true, message: 'Demo mode' });
-  if (demoResponse) return demoResponse;
-
   try {
-    const authClient = await createClient();
-    const { data: { user } } = await authClient.auth.getUser();
-    if (!user) {
+    const ctx = await getTenantContext();
+    if (!ctx) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
@@ -65,7 +61,10 @@ export async function POST(request) {
       );
     }
 
-    // Get agent info
+    // Get agent info — also enforces tenant ownership.
+    if (!(await findAgentInTenant({ tenantId: ctx.tenantId, agentId }))) {
+      return NextResponse.json({ error: 'Agent not found' }, { status: 404 });
+    }
     const { data: agent, error: agentError } = await supabase
       .from('agents')
       .select('id, product_line')
@@ -83,7 +82,7 @@ export async function POST(request) {
 
     let storageOk = false;
     try {
-      const { error: uploadError } = await authClient.storage
+      const { error: uploadError } = await supabase.storage
         .from('kb-assets')
         .upload(storagePath, buffer, { contentType: file.type });
       if (!uploadError) storageOk = true;
@@ -97,7 +96,9 @@ export async function POST(request) {
     const { data: doc, error: docError } = await supabase
       .from('kb_documents')
       .insert({
+        tenant_id: ctx.tenantId,
         agent_id: agentId,
+        product_line_id: agent.product_line,
         filename: file.name,
         storage_path: storageOk ? storagePath : null,
         file_size: file.size,
@@ -115,6 +116,7 @@ export async function POST(request) {
         { status: 500 }
       );
     }
+    await markFirstKbUpload(ctx.tenantId);
 
     // Extract text content from file
     // For now, handle text-based formats directly; PDF/Excel need additional parsing
@@ -138,10 +140,13 @@ export async function POST(request) {
     // Process document (extract knowledge, translate, embed)
     let result;
     try {
-      result = await processDocument(agentId, doc.id, textContent, layer, {
-        filename: file.name,
-        fileType,
-      });
+      result = await processDocument(
+        { tenantId: ctx.tenantId, agentId, productLineId: agent.product_line },
+        doc.id,
+        textContent,
+        layer,
+        { filename: file.name, fileType },
+      );
     } catch (err) {
       console.error(`[knowledge/upload] Failed to process ${file.name}:`, err.message);
       return NextResponse.json({

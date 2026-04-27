@@ -1,820 +1,584 @@
 # LeadEngine
 
-WhatsApp 智能获客 + AI 广告投放一体化平台。基于 Next.js 全栈架构，集成 WhatsApp Cloud API 自动接待询盘、Claude AI 多轮对话线索孵化，以及 ChatGPT 风格的 Click-to-WhatsApp 广告自动化投放（Autopilot）。
+**多租户邀请制 SaaS：WhatsApp 询盘自动化 + Click-to-Chat 广告编排。**
 
-系统内两个核心 Agent：
-- **Medici** — 询盘接待 Agent（`src/agents/medici/`）。每条客户消息走一次 LLM 调用同时产出回复 + 意图/质量/价值分类 + 线索抽取 + 路由决策。见 [docs/medici-design.md](src/agents/medici/medici-design.md)。
-- **Ogilvy** — 广告投手 Agent（`src/agents/ogilvy/`，UI 叫"Autopilot / 自动获客"）。用户聊产品、上传参考图，AI 产创意 + 投放计划 + 一键上架 Meta + 投放中调优。见 [docs/ogilvy-design.md](src/agents/ogilvy/ogilvy-design.md)。
-
-## Tech Stack
-
-| 层级 | 技术 |
-|------|------|
-| Framework | Next.js 16 (App Router, RSC) |
-| Frontend | React 18, CSS Modules, next-intl (i18n) |
-| Backend | Next.js API Routes + Node.js ES Modules |
-| Database | Supabase (PostgreSQL + Storage + RLS) |
-| Cache / Stream | Redis (ioredis) — SSE event stream、广告数据缓存 |
-| LLM | OpenRouter → Anthropic Claude (Sonnet 4.6 / Haiku 4.5)；OpenAI (Whisper + embeddings) |
-| AIGC | OpenRouter 图像链：Gemini 3.1 Flash Image → 2.5 Flash Image → GPT-5 Image（降级链） |
-| External | WhatsApp Cloud API、Meta Marketing Graph API v21、Firecrawl、SerpAPI、Feishu Bot |
-| Process | PM2 (4 进程: app + 3 cron) |
-| Deploy | tar + scp + PM2 restart (`scripts/deploy.sh`) |
-| Test | Vitest (unit), Playwright (e2e 已配置) |
+每个租户接入自己的 Meta Business Manager，平台跑两个 Claude Agent：
+- **Medici** — 入站 WhatsApp 自动应答 + 资格化询盘
+- **Ogilvy / Autopilot** — 对话式生成 Click-to-WhatsApp 广告，一键投放到 Meta
 
 ---
 
-## Architecture Overview
+## 目录
 
-### Use Case Diagram — 系统全貌
+- [技术栈](#技术栈)
+- [系统架构](#系统架构)
+- [前后端骨架](#前后端骨架)
+- [数据模型](#数据模型)
+- [核心流程](#核心流程)
+- [开发 / 测试 / 部署](#开发--测试--部署)
+- [工程约定](#工程约定)
+
+---
+
+## 技术栈
+
+| 层 | 选型 | 版本 |
+|---|---|---|
+| 框架 | Next.js（App Router · JS） | 16.x |
+| UI | React + Tailwind CSS | 18 / 4.x |
+| DB / Auth | Supabase（Postgres + RLS + Realtime + Storage） | js-sdk 2.45 |
+| LLM | Anthropic Claude（via OpenRouter）+ OpenAI Embeddings | Sonnet 4.x · text-embedding-3-small |
+| 向量检索 | pgvector（`kb_knowledge_points.embedding_en` 1536d, IVFFLAT） | — |
+| 队列 | Postgres `message_queue` + `FOR UPDATE SKIP LOCKED` | — |
+| 缓存 / SSE | ioredis | 5.x |
+| 通知 | 飞书自定义机器人 webhook（per-tenant） | — |
+| 进程 | PM2（app + 3 cron） | — |
+
+---
+
+## 系统架构
 
 ```mermaid
-graph TB
-    subgraph Actors
-        Customer["Customer<br/>(WhatsApp)"]
-        Operator["运营人员<br/>(Web Dashboard)"]
+flowchart TB
+  subgraph Ext["外部"]
+    META[Meta Graph API<br/>WhatsApp + Ads]
+    LARK[飞书自定义机器人]
+    OPR[OpenRouter / Anthropic]
+    OAI[OpenAI Embeddings]
+  end
+
+  subgraph App["LeadEngine（Next.js + 3 cron）"]
+    direction TB
+    UI[Dashboard SSR/CSR<br/>app/&#40;app&#41;/*]
+    API[REST API<br/>app/api/**/route.js]
+    WH[/POST /api/webhook<br/>WhatsApp 入站/]
+    CRON[PM2 crons:<br/>process-queue · sync-leads · generate-reports]
+
+    subgraph Domain["lib + src 业务层"]
+      direction LR
+      TENANT[tenant-context]
+      META_CONN[meta-connection<br/>repo + AES-256-GCM]
+      QUEUE[queue-processor]
+      MEDICI[Agent · Medici]
+      OGILVY[Agent · Ogilvy/Autopilot]
+      KB[kb-search]
+      FEISHU[feishu.service]
     end
 
-    subgraph LeadEngine["LeadEngine Platform"]
-        UC1["WhatsApp 自动接待 (Medici)<br/>多轮对话 + 线索孵化"]
-        UC2["AI 线索分级<br/>BAD → GOOD → QUALIFY → PROOF"]
-        UC3["询盘管理 / 监控看板<br/>LeadHub · Analytics"]
-        UC4["Autopilot — AI 广告投放 (Ogilvy)<br/>Click-to-WhatsApp"]
-        UC5["广告数据归因<br/>Campaign Studio"]
-        UC6["产品线配置 + 知识库<br/>Product Lines / KB"]
-        UC7["AI 周报日报<br/>Reports"]
-    end
+    UI --> API
+    WH --> QUEUE
+    CRON --> QUEUE
+    API --> TENANT
+    QUEUE --> MEDICI
+    MEDICI --> KB
+    MEDICI --> FEISHU
+    UI --> OGILVY
+    OGILVY --> META
+  end
 
-    subgraph External["External Services"]
-        WA["WhatsApp Cloud API"]
-        Claude["Claude (OpenRouter)<br/>Sonnet 4.6 / Haiku 4.5"]
-        Meta["Meta Graph API v21"]
-        Image["OpenRouter Image<br/>(Gemini / GPT-5 Image)"]
-        Firecrawl["Firecrawl / SerpAPI"]
-        Feishu["Feishu Bot"]
-    end
+  subgraph DB["Supabase Postgres"]
+    AUTH[(auth.users)]
+    TENANTS[(tenants · users · invitations<br/>onboarding · audit_log)]
+    BIZ[(contacts · conversations · messages · leads<br/>product_lines · agents · kb_*)]
+    META_T[(meta_connections<br/>meta_phone_numbers · meta_ad_accounts)]
+    NOTIF[(notification_settings)]
+    QT[(message_queue)]
+  end
 
-    Customer -->|发送消息| UC1
-    UC1 -->|评分孵化| UC2
-    UC2 -->|高意向通知| Operator
-    Operator --> UC3
-    Operator --> UC4
-    Operator --> UC5
-    Operator --> UC6
-    Operator --> UC7
-
-    UC1 <--> WA
-    UC1 <--> Claude
-    UC4 <--> Meta
-    UC4 <--> Claude
-    UC4 <--> Image
-    UC5 <--> Meta
-    UC6 <--> Claude
-    UC2 --> Feishu
-    UC6 -.知识提取.-> Firecrawl
+  WH -.verify.-> META
+  MEDICI -.reply.-> META
+  MEDICI -.LLM.-> OPR
+  KB -.embed.-> OAI
+  FEISHU -.notify.-> LARK
+  TENANT --> AUTH
+  Domain --> DB
 ```
 
-### Layered Architecture
-
-```
-┌──────────────────────────────────────────────────────────────┐
-│  Browser  (React 18 + CSS Modules + SSE Client + next-intl) │
-├──────────────────────────────────────────────────────────────┤
-│  Next.js App Router                                          │
-│  ┌────────────────┐ ┌──────────────┐ ┌────────────────────┐  │
-│  │ Pages  app/()/ │ │ API Routes   │ │ Middleware         │  │
-│  │ RSC + CSR      │ │ app/api/*    │ │ Auth + i18n        │  │
-│  └────────────────┘ └──────┬───────┘ └────────────────────┘  │
-├────────────────────────────┼─────────────────────────────────┤
-│  Service Layer  (src/)     │                                 │
-│  ┌───────────┐ ┌─────────────────┐ ┌─────────────────────┐  │
-│  │ WhatsApp  │ │  Medici         │ │  Ogilvy             │  │
-│  │ Service   │ │  agents/medici  │ │  agents/ogilvy      │  │
-│  │           │ │  询盘接待        │ │  广告投手            │  │
-│  └───────────┘ └─────────────────┘ └─────────────────────┘  │
-│  ┌────────────┐ ┌──────────────┐ ┌─────────────────────┐    │
-│  │ LLM Client │ │ Knowledge    │ │ Meta Ads / MCP      │    │
-│  │ (OpenRouter)│ │ Base (kb-*)  │ │ Whisper / Feishu    │    │
-│  └────────────┘ └──────────────┘ └─────────────────────┘    │
-├──────────────────────────────────────────────────────────────┤
-│  Utility Layer  (lib/)                                       │
-│  ┌────────┐ ┌───────┐ ┌────────────┐ ┌───────────────────┐  │
-│  │ SSE    │ │ Redis │ │ Queue      │ │ Repositories      │  │
-│  │ stream │ │       │ │ Processor  │ │ (Supabase CRUD)   │  │
-│  └────────┘ └───────┘ └────────────┘ └───────────────────┘  │
-├──────────────────────────────────────────────────────────────┤
-│  Infrastructure                                              │
-│  ┌───────────────┐  ┌────────┐  ┌──────────────────────┐    │
-│  │ Supabase      │  │ Redis  │  │ PM2  (4 processes)   │    │
-│  │ PG + Storage  │  │        │  │                      │    │
-│  └───────────────┘  └────────┘  └──────────────────────┘    │
-└──────────────────────────────────────────────────────────────┘
-```
-
-**分层约定：**
-- `app/api/*` — 只做参数校验 + 调用 `src/` 服务 + 拼响应，不写复杂业务
-- `src/` — 重业务（调 LLM / Meta API / WhatsApp），不得 import React / Next
-- `lib/` — 前后端共用的工具和数据仓储，可被 `src/` 和 `app/` 同时引用
-- `lib/repositories/` — 所有 Supabase CRUD 封装，统一数据访问入口
-- **env 只能从 `src/config.js` 读** — 业务代码禁止直接访问 `process.env.XXX`（唯一例外：`lib/supabase-browser.js` 的 `NEXT_PUBLIC_*` 行内读取）
+**关键边界：**
+- 每条 API 路由开头都过 `getTenantContext()`（webhook 走 `resolveTenantByPhoneNumberId()`）。无 demo 模式、无 env 兜底，拿不到 tenant 直接 401。
+- 跨租户隔离两层：业务代码主动 `.eq('tenant_id', ctx.tenantId)` + RLS `tenant_id = (SELECT tenant_id FROM users WHERE id = auth.uid())`。
+- `meta_connections.system_user_token_encrypted` / `notification_settings.feishu_webhook_url_encrypted` 全部 AES-256-GCM 落 bytea，密钥来自 `META_TOKEN_ENCRYPTION_KEY`。
+- KB 检索按 `(tenant_id, product_line_id)` 索引，Medici 工具不依赖 agent UUID 桥。
 
 ---
 
-## Directory Structure
+## 前后端骨架
 
 ```
 LeadEngine/
-├── app/                         # Next.js App Router
-│   ├── (app)/                   #   认证后页面 (Sidebar layout)
-│   │   ├── analytics/           #     监控看板
-│   │   ├── reports/             #     AI 周报日报
-│   │   ├── ai-automation/       #     Autopilot / Ogilvy (AI 广告投放)
-│   │   ├── campaign-studio/     #     广告数据 + 归因分析
-│   │   ├── leadhub/             #     询盘私信
-│   │   ├── product-lines/       #     产品线配置
-│   │   │   └── [id]/knowledge-base/  # 知识库 (嵌入产品线详情页 tab)
-│   │   └── dev-tools/           #     开发者工具 (含 medici-simulator)
-│   ├── (auth)/                  #   登录页
-│   ├── api/                     #   API Route Handlers
-│   │   ├── webhook/             #     WhatsApp Webhook 入口
-│   │   ├── autopilot/           #     Ogilvy 会话 / 启动 / 上传（路由名保留 "autopilot"）
-│   │   ├── product-lines/       #     产品线 CRUD（含 agent_id 桥接）
-│   │   ├── ads/                 #     Meta Ads 数据 / dashboard / creative-image
-│   │   ├── inquiries/           #     询盘列表 + 质量筛选
-│   │   ├── inquiry-dashboard/   #     询盘看板聚合
-│   │   ├── contacts/            #     联系人 CRUD
-│   │   ├── conversations/       #     对话详情
-│   │   ├── leads/               #     线索 CRUD / 审批 / 同步
-│   │   ├── knowledge/           #     知识库 CRUD / 搜索 / 教学
-│   │   ├── reports/             #     AI 报告读取 / 导出
-│   │   ├── ai/report/           #     触发单次报告生成
-│   │   ├── media/               #     WhatsApp 媒体反代
-│   │   ├── send-message/        #     手动发送 WA 消息
-│   │   ├── health/              #     健康检查
-│   │   ├── dev-tools/           #     内部诊断端点 (含 medici-simulator/send)
-│   │   └── cron/                #     PM2 cron 内部端点
-│   │       ├── sync-leads/
-│   │       ├── process-queue/
-│   │       ├── generate-reports/
-│   │       └── release-takeovers/
-│   └── components/              #   共享 UI 组件
-│       ├── Sidebar/             #     Prome Engine 导航
-│       ├── Markdown/            #     Markdown 渲染器
-│       ├── DataTable/ Card/ Button/ Tag/ PillBar/ TabBar/ MetricCard/
-│       └── AIPanel/             #     AI 侧栏
-│
-├── src/                         # Backend 业务逻辑层
-│   ├── config.js                #   统一环境变量配置（唯一真源）
-│   ├── llm-client.js            #   OpenRouter / OpenAI 封装（fetch-based，零 SDK）
-│   ├── whatsapp.service.js      #   WhatsApp Cloud API 封装
-│   ├── whatsapp-media.service.js#   WA 媒体下载 / 反代
-│   ├── whisper.service.js       #   OpenAI Whisper 语音转文字
-│   ├── routing.service.js       #   线索路由 + scoring（下游路由，非 agent 路由）
-│   ├── inquiry-quality.js       #   询盘质量评估规则
-│   ├── feishu.service.js        #   飞书卡片通知
-│   ├── kb-*.service.js          #   知识库共享基础：search / upload / auto-learn / feishu-import / file-parsers
-│   ├── meta-account.service.js  #   Meta 账户资产（WABA/Page/Pixel）
-│   ├── meta-ads-mcp-client.js   #   Meta Ads MCP Client（可选）
-│   └── agents/
-│       ├── medici/              #   询盘接待 Agent（一发 JSON 抽取）
-│       │   ├── index.js         #     runMedici 全部运行时（prompt + msgs + tools + call-loop + post-process）
-│       │   ├── config.js        #     row → agentConfig 装配 + 60s 缓存 + loadMediciConfig 解析
-│       │   ├── base-prompt.js   #     BASE_PROMPT_TEMPLATE + enum 常量（纯数据）
-│       │   ├── output-schema.js #     GENERIC_LEAD_OUTPUT_SCHEMA（纯数据）
-│       │   └── kb-tools.js      #     KB tool 适配器（包装 kb-search）
-│       └── ogilvy/              #   广告投手 Agent（流式 tool-use 循环）
-│           ├── index.js         #     runOgilvy 单循环 (tool-use + streaming)
-│           ├── tools.service.js #     web_search / read_webpage 工具实现
-│           ├── creative.service.js #   广告图生成（三模型降级链）
-│           ├── meta-launch.service.js # Meta Graph 三层上架 (stage → activate)
-│           └── whatsapp-accounts.service.js # 可用 WA 号码发现 + 60s 缓存
-│
-├── lib/                         # 工具层 & 数据访问层
-│   ├── supabase-server.js       #   Server-side Supabase client
-│   ├── supabase-browser.js      #   Browser-side Supabase client
-│   ├── redis.js                 #   Redis singleton (shared + blocking clients)
-│   ├── sse.js                   #   SSE 推送 (generator → ReadableStream)
-│   ├── consume-sse.js           #   SSE 消费 (断线重连 + lastEventId)
-│   ├── queue-processor.js       #   消息聚合队列 → 调 Medici → 持久化 + 回复
-│   ├── car-catalog-context.js   #   车型关键词命中注入给 Medici context
-│   ├── referral-context.js      #   广告归因解析
-│   ├── lead-extractor.js        #   离线脚本用：messages → Medici 结果
-│   ├── demo-mode.js             #   Demo 模式拦截
-│   ├── core-trace.js            #   请求链路 traceId 日志
-│   ├── repositories/            #   Repository 层 (Supabase CRUD)
-│   │   ├── contact.repository.js / conversation.repository.js
-│   │   ├── message.repository.js / queue.repository.js
-│   │   ├── lead.repository.js
-│   │   ├── product-line.repository.js  # 含 findAgentIdByProductLine 桥接
-│   │   ├── knowledge-base.repository.js
-│   │   ├── autopilot.repository.js
-│   │   └── sync-log.repository.js
-│   ├── services/                #   跨模块业务胶水
-│   │   ├── external-sync.js     #     线索 → REVO SCM
-│   │   └── report-generator.js  #     AI 报告生成器
-│   └── api/                     #   前端 fetch 封装 (product-lines / knowledge / http)
-│
-├── supabase/migrations/         # 数据库 Schema 迁移 (~40 SQL 文件)
-├── scripts/                     # 运维脚本 & Cron 入口
-│   ├── deploy.sh                #   一键部署 (tar → scp → npm ci → PM2 restart)
-│   ├── cron-sync-leads.js       #   线索同步 (30s)
-│   ├── cron-process-queue.js    #   队列兜底 (10s)
-│   ├── cron-generate-reports.js #   AI 报告 (每日 08:00 CST)
-│   ├── reload-leads.js          #   单会话重跑 Medici（调试用）
-│   ├── reprocess-leads.js       #   批量重跑 Medici 重抽取线索（回归测试）
-│   ├── retry-buyer-type-failures.js #  重试 buyer_type 校验失败的记录
-│   └── test-*.js                #   本地诊断 / 调试脚本
-├── docs/
-│   ├── medici-design.md         # Medici (询盘接待 Agent) 设计文档
-│   └── ogilvy-design.md         # Ogilvy (广告投手 Agent / Autopilot) 设计文档
-└── ecosystem.config.cjs         # PM2 进程配置
+├─ app/
+│  ├─ (app)/                    已登录页面
+│  │  ├─ admin/                   founder-only：邀请 / 租户管理
+│  │  ├─ ai-automation/           Autopilot 对话 UI
+│  │  ├─ analytics/ reports/      数据看板 / 报表
+│  │  ├─ campaign-studio/         投放数据
+│  │  ├─ leadhub/                 询盘工作台
+│  │  ├─ product-lines/[id]/      产品线 CRUD + 知识库 tab
+│  │  ├─ settings/{meta-connection,notifications}
+│  │  └─ dev-tools/               founder-only：SQL / Medici 模拟器
+│  ├─ (auth)/{login,signup}/    公开
+│  ├─ api/**/route.js           REST API（每条都 getTenantContext）
+│  └─ components/               共享 UI
+├─ lib/                         应用层
+│  ├─ tenant-context.js           getTenantContext / resolveTenantByPhoneNumberId
+│  ├─ founder-id.js               FOUNDER_TENANT_ID（client-safe 纯常量）
+│  ├─ meta-token-crypto.js        AES-256-GCM
+│  ├─ supabase{,-server,-browser,-admin}.js
+│  ├─ queue-processor.js          message_queue → runMedici 主循环
+│  ├─ conversation-context.service.js
+│  ├─ meta-bm-resolver.js
+│  └─ repositories/               所有 supabase.from(...) 收口
+├─ src/                         领域服务
+│  ├─ config.js                   ★ 唯一读 process.env 的入口
+│  ├─ agents/medici/              入站 Agent（runMedici / kb-tools / config）
+│  ├─ agents/ogilvy/              Autopilot Agent
+│  ├─ kb-search.service.js        searchKnowledge（vector / structured / hybrid）
+│  ├─ kb-upload.service.js        文件解析 → 向量入库
+│  ├─ feishu.service.js           per-tenant webhook 通知
+│  ├─ whatsapp.service.js         WA Cloud API（5 分钟 token 缓存）
+│  ├─ whisper.service.js          OpenAI Whisper 音频转写
+│  └─ llm-client.js               OpenRouter / Anthropic 统一封装
+├─ scripts/                     PM2 入口 + 一次性数据脚本
+└─ ecosystem.config.cjs         PM2 4 进程
 ```
+
+### 路由模式
+
+每条 API 都是同一个骨架：
+
+```js
+export async function POST(request) {
+  const ctx = await getTenantContext();
+  if (!ctx) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  // founder-only 路由再加一道：
+  // if (ctx.tenantId !== FOUNDER_TENANT_ID) return 403;
+
+  // 业务逻辑：所有 query .eq('tenant_id', ctx.tenantId)
+}
+```
+
+`/api/webhook` 是唯一例外 —— Meta 不带用户身份，靠 `phone_number_id` 反查 tenant。
+
+### 前端模式
+
+`(app)/layout.js` 是 client component，挂 Sidebar + MetaConnectionBanner。Sidebar 客户端拉 `users.tenant_id` 跟 `FOUNDER_TENANT_ID` 比对：
+- founder → 只显示「平台管理」 + dev-tools
+- 普通租户 → 业务模块 + Meta 连接 / 通知
+
+`(app)/page.js` 是 server component 做根路径分发：founder → `/admin/tenants`，租户 → `/analytics`。
 
 ---
 
-## Core Flows
+## 数据模型
 
-### Flow 1 — WhatsApp 消息处理
-
-客户从 WhatsApp 发消息到线索入库的全链路：
-
-```mermaid
-sequenceDiagram
-    participant C as Customer (WhatsApp)
-    participant WH as POST /api/webhook
-    participant Q as message_queue (Supabase)
-    participant QP as Queue Processor
-    participant PL as loadMediciConfig<br/>(phone → product_line)
-    participant Medici as Medici Agent
-    participant DB as Supabase
-    participant F as Feishu Bot
-
-    C->>WH: 发送消息 (text / image / audio / doc)
-    WH->>WH: 解析消息类型 + 提取广告归因 (referral)
-    WH->>DB: upsertContact + upsertConversation + insertMessage
-    WH->>Q: enqueueMessage (process_after = now + 2s)
-
-    Note over Q: 2s 聚合窗口<br/>合并同一客户的连续消息
-
-    Q->>QP: 触发 (setTimeout 回调 / queue-cron 10s 兜底)
-    QP->>DB: RPC acquire_queue_messages<br/>(SELECT FOR UPDATE SKIP LOCKED)
-    QP->>QP: 人工接管检查 → 早退
-    QP->>PL: loadMediciConfig(conversation)
-    PL-->>QP: product_line 配置 (system_prompt + output_schema + lead_fields)
-    alt 未绑定号码 (Strategy C)
-        QP->>C: 固定兜底回复 "正在设置中..."
-        QP->>DB: 记消息，不跑 Medici
-    end
-    QP->>QP: 构造 contextInfo (missing_fields / prior_state / 广告素材)
-
-    QP->>Medici: runMedici({history, input, context, agentConfig, trace})
-    Note over Medici: 单次 LLM 调用:<br/>tool-use loop (商品/KB) → submit_response<br/>同时产出意图/质量/价值/leads/路由/回复
-
-    Medici-->>QP: 结构化 JSON (intent, quality, value, leads[], route, next_message)
-
-    QP->>DB: processMessageForConversation (写 message + lead)
-    QP->>C: sendMessage (WhatsApp 回复)
-
-    alt route = HUMAN_NOW (PROOF)
-        QP->>F: executeConversationRouting → 飞书通知
-    end
-    alt route = FAQ_END
-        QP->>QP: 结束对话
-    end
-```
-
-**关键设计点：**
-
-| 设计 | 说明 |
-|------|------|
-| **消息聚合** | 客户连续发多条消息时等 2s 合并为一次 LLM 调用，降本提效 |
-| **分布式锁** | `SELECT FOR UPDATE SKIP LOCKED` 保证多实例不重复处理 |
-| **确定性路由** | `wa_phone_number_id → product_lines` 1:1 查表（老版本的"Claude 选 agent"已下线） |
-| **产品线驱动** | 每条绑定号码对应一个 `product_line`，UI 改 `lead_fields` 60s 内生效，AI 提示词运维侧自主改 |
-| **Medici 单次调用** | 一发 JSON 同时产出回复 + 意图分类 + 商业价值 + leads[] + 路由决策 |
-| **质量分级** | `BAD → GOOD → QUALIFY → PROOF`，PROOF 自动触发飞书通知人工 |
-| **Cron 兜底** | `queue-cron` 每 10s 检查，防止 `setTimeout` 回调在进程重启时丢失 |
-| **人工接管自释放** | `isHumanTakeover` 拦截 AI 自动回复；闲置 1h 后由 `release-takeovers` 端点恢复 |
-| **未绑定号码 Strategy C** | 没有对应 product_line 时固定兜底话术，不跑 Medici |
-
-### Flow 2 — Autopilot（Click-to-WhatsApp 广告编排）
-
-ChatGPT 风格的单 Agent 循环：用户聊产品、上传参考图，AI 一口气产方案 + 生成素材 + 一键上架 Meta。
-
-> 详细设计见 [docs/ogilvy-design.md](docs/ogilvy-design.md)。
-
-```mermaid
-sequenceDiagram
-    participant U as 用户 (Browser)
-    participant API as /api/autopilot/conversations
-    participant A as Autopilot Agent Loop
-    participant WA as WA 账户服务 (60s cache)
-    participant Tools as Tools<br/>(web_search / read_webpage)
-    participant CR as Creative Service<br/>(Gemini / GPT-5 Image)
-    participant Meta as Meta Graph API v21
-    participant DB as Supabase (autopilot_*)
-
-    U->>API: POST /conversations (新对话)
-    API->>DB: 建 session
-    U->>API: POST /conversations/:id/messages (SSE)
-
-    rect rgb(235, 245, 255)
-    Note over A: 单 Agent 循环 (MAX 20 iter)
-    loop 每轮
-        A->>DB: 重放消息历史 → OpenAI messages
-        A->>WA: 列可用 WA 号码（筛 verified + 非 RED）
-        A->>A: 构建 system prompt<br/>(STATIC 段 + cache_control: ephemeral)
-        A->>A: 路由模型 — 合成轮→Haiku / 对话轮→Sonnet
-        A-->>U: SSE: delta 打字机 / tool_call / plan_partial
-        alt 有 tool_call (可并发)
-            par web_search
-                A->>Tools: Anthropic native
-            and generate_ad_creative
-                A->>CR: 引用图索引反解 URL → 批量出图
-                CR-->>A: aigc_assets public URL
-            end
-            A->>DB: 持久化 tool_result
-        else 无 tool_call
-            A-->>U: SSE: done
-        end
-    end
-    end
-
-    A->>DB: draft_ad_plan() → session.plan_json
-    U->>API: POST /conversations/:id/launch
-
-    rect rgb(245, 255, 240)
-    Note over Meta: stage → activate (SSE 进度)
-    A->>Meta: campaign (CBO, PAUSED, OUTCOME_ENGAGEMENT)
-    A->>Meta: ad_set (promoted_object: WA phone, advantage_audience:0)
-    A->>Meta: ad_creative (link_data + WHATSAPP_MESSAGE CTA)
-    A->>Meta: ad (PAUSED)
-    A->>Meta: campaign/adset/ad → ACTIVE (三层都要翻)
-    end
-
-    A-->>U: 卡片状态 draft → staging → staged → launched
-```
-
-**关键设计点：**
-
-| 设计 | 说明 |
-|------|------|
-| **1 对话 = 1 campaign** | schema / dispatcher / prompt 三层把 `campaigns.length` 锁死为 1；多市场多受众靠同 campaign 下的多 ad_sets 表达 |
-| **固定广告目标** | `objective=OUTCOME_ENGAGEMENT` + `optimization_goal=CONVERSATIONS` + `destination_type=WHATSAPP` |
-| **双模型路由** | 对话轮用 Sonnet 4.6，合成轮 (末消息 role=tool) 用 Haiku 4.5，省成本提速 3–5× |
-| **Prompt 拆静/动** | STATIC 段挂 `cache_control: ephemeral`，provider 固定 `anthropic`（避免 Bedrock 剥除 flag），命中省 70%+ input tokens |
-| **同轮 tool_calls 并行** | `Promise.all` + 事件队列，3 张素材 60s → 20s |
-| **渐进式预览** | `plan_partial` 事件每积累 ~200 字 `tryPartialJson()` 一次，前端 AdPlanCard 实时"看到字段在填" |
-| **素材降级链** | Gemini 3.1 Flash Image → 2.5 Flash Image → GPT-5 Image；任一成功即返 |
-| **引用图索引化** | 用户上传图通过 `reference_image_ids: [1,2]` 引用，dispatcher 反解为 Supabase URL，杜绝 URL 幻觉 |
-| **流看门狗** | `STREAM_IDLE_TIMEOUT_MS=30s / STREAM_TOTAL_TIMEOUT_MS=180s`，任一超触发 AbortController |
-| **三层 ACTIVE** | Meta 只有 campaign + ad_set + ad 三层全部翻 ACTIVE 才真正出广告，漏一层就显示"广告组已关闭" |
-| **冷冻老编排器** | 旧 5 阶段 Orchestrator (campaign_briefs / orchestrator_*) 已冷冻存档，老表不 drop、不再写入 |
-
-### Flow 3 — SSE 实时推送
-
-项目里有两种 SSE 模型：
-
-#### (a) Autopilot — 直连 SSE（无 Redis）
-
-`lib/sse.js::streamSSE(generator)` 把 async generator 包成 `ReadableStream` 直接返回给浏览器。前端 `AbortController.abort()` 即可中断流；`ReadableStream.cancel()` 回调触发 `generator.return?.()` 后端清理干净。**不支持断线续传**——刷新中断后已持久化的消息不丢，in-flight delta 丢失可接受。
-
-#### (b) 长任务 — Redis Stream（支持 lastEventId 续传）
-
-```mermaid
-sequenceDiagram
-    participant B as Browser
-    participant Stream as GET .../stream
-    participant Redis as Redis Stream (TTL 4h)
-    participant Worker as Producer
-
-    Worker->>Redis: XADD sse:{key} event1
-    Worker->>Redis: XADD sse:{key} event2
-
-    B->>Stream: GET ?lastEventId=0-0
-    Stream->>Redis: XRANGE (补发历史)
-    Redis-->>B: event1, event2
-
-    loop Real-time streaming
-        Stream->>Redis: XREAD BLOCK 30000 (专用连接)
-        Worker->>Redis: XADD event3
-        Redis-->>Stream: event3
-        Stream-->>B: SSE data: event3
-    end
-```
-
-`XREAD BLOCK` 走独立 `createBlockingClient()`，避免阻塞主连接池。
-
----
-
-## Data Model
-
-### Core Tables (ER Diagram)
+### 账号 + Meta 连接
 
 ```mermaid
 erDiagram
-    contacts ||--o{ conversations : has
-    conversations ||--o{ messages : contains
-    conversations ||--o| leads : generates
-    product_lines ||--o{ conversations : routes
-    agents ||--o{ kb_documents : owns
+  tenants ||--o{ users : "has"
+  tenants ||--o{ invitations : "issued by"
+  tenants ||--|| onboarding_progress : "1:1"
+  tenants ||--|| notification_settings : "1:1"
+  tenants ||--o{ audit_log : "records"
+  tenants ||--o{ meta_connections : "has"
+  meta_connections ||--o{ meta_phone_numbers : "syncs"
+  meta_connections ||--o{ meta_ad_accounts : "syncs"
 
-    contacts {
-        uuid id PK
-        text wa_id UK "WhatsApp E.164"
-        text bsuid UK "Business Scoped User ID"
-        text name
-        text company_name
-        jsonb metadata
-    }
-
-    conversations {
-        uuid id PK
-        uuid contact_id FK
-        text product_line FK "绑定号码 → 产品线"
-        uuid agent_id FK "legacy 桥，KB/商品 tool 仍 key 于此"
-        text status "active / idle / closed"
-        int message_count
-        bool is_human_takeover
-        text meta_ad_id "广告归因"
-        text wa_phone_number_id
-    }
-
-    messages {
-        uuid id PK
-        uuid conversation_id FK
-        text role "user / assistant / operator"
-        text content
-        jsonb metadata "media_url / referral"
-    }
-
-    leads {
-        uuid id PK
-        uuid conversation_id FK
-        text product_line
-        text inquiry_quality "BAD / GOOD / QUALIFY / PROOF"
-        text business_value "LOW / AVERAGE / HIGH"
-        text route "CONTINUE / HUMAN_NOW / FAQ_END"
-        text destination_country
-        text product_name
-        text qty_bucket
-        jsonb details "自定义 lead_fields 兜底"
-        bool approved
-    }
-
-    product_lines {
-        text id PK "slug，如 vehicle / agri_machinery"
-        text name
-        text wa_phone_number_id UK "1:1 绑定"
-        text catalog_description
-        text domain_glossary
-        text business_value_guidance
-        text message_style_examples
-        jsonb lead_fields "驱动 output_schema + 资质规则"
-        bool is_active
-    }
-
-    agents {
-        uuid id PK
-        text product_line UK "跟 product_lines.id 对齐"
-        text system_prompt "legacy: 后台 UI 改的是 product_lines 表"
-        jsonb output_schema
-        bool is_active
-    }
+  tenants {
+    uuid id PK
+    text name
+    text slug UK
+    text status "active|suspended|deleted"
+  }
+  users {
+    uuid id PK_FK_auth
+    uuid tenant_id FK
+    text email
+    text role "owner"
+  }
+  invitations {
+    uuid id PK
+    text email
+    text token UK
+    timestamptz expires_at
+    text status "pending|accepted|expired|revoked"
+  }
+  onboarding_progress {
+    uuid tenant_id PK_FK
+    timestamptz meta_connected_at
+    timestamptz first_kb_uploaded_at
+    timestamptz first_message_received_at
+  }
+  notification_settings {
+    uuid tenant_id PK_FK
+    bytea feishu_webhook_url_encrypted "AES-256-GCM"
+    boolean feishu_enabled
+  }
+  meta_connections {
+    uuid id PK
+    uuid tenant_id FK "UNIQUE WHERE status=active"
+    text bm_id "GLOBAL UNIQUE WHERE status=active"
+    bytea system_user_token_encrypted "AES-256-GCM"
+    text status "active|disconnected|revoked"
+  }
+  meta_phone_numbers {
+    text phone_number_id PK
+    uuid tenant_id FK
+    uuid meta_connection_id FK
+    text waba_id "TENANT-EXCLUSIVE via trigger"
+    text display_number
+    text quality_rating
+  }
+  meta_ad_accounts {
+    text ad_account_id PK
+    uuid tenant_id FK
+    int account_status "1=ACTIVE only"
+  }
 ```
 
-> `agents` 表保留是历史原因：KB (`kb_documents / kb_knowledge_points / kb_products / ...`) 列仍然 key 于 `agent_id`。`product-line.repository::findAgentIdByProductLine` 做 slug→UUID 桥接。真要切到 `product_line_id` 列是另一阶段的事。
+**跨租户独占规则**：`bm_id` / `waba_id` / `phone_number_id` / `ad_account_id` 任一时刻只能归属一个租户，DB 层面通过 partial unique index + trigger 强制保证。
 
-### Autopilot Tables (2026-04 new)
+### 业务核心
 
 ```mermaid
 erDiagram
-    autopilot_sessions ||--o{ autopilot_messages : logs
-    autopilot_sessions {
-        uuid id PK
-        uuid user_id FK
-        text title "首条 user msg 前 60 字"
-        text status "active / staging / launched / failed / archived"
-        jsonb plan_json "最新广告计划（含 meta_* IDs）"
-        text_array meta_campaign_ids
-    }
-    autopilot_messages {
-        uuid id PK
-        uuid session_id FK
-        int message_index
-        text role "user / assistant / tool"
-        text content
-        text tool_name
-        text tool_use_id
-        jsonb tool_input
-        jsonb tool_result
-        jsonb attachments
-    }
+  contacts ||--o{ conversations : "has"
+  conversations ||--o{ messages : "contains"
+  conversations ||--o{ leads : "produces"
+  conversations ||--o{ message_queue : "buffers"
+  product_lines ||--o{ conversations : "routes"
+  product_lines ||--|| agents : "1:1 by slug"
+  meta_phone_numbers ||--o{ conversations : "matches via wa_phone_number_id"
 
-    aigc_assets {
-        uuid id PK
-        text kind "image / video"
-        text storage_path "aigc-assets bucket"
-        text public_url
-        jsonb metadata "autopilot_session_id 在这里"
-    }
+  contacts {
+    uuid id PK
+    uuid tenant_id FK
+    text wa_id UK
+    text name
+    text company_name
+    jsonb metadata
+  }
+  conversations {
+    uuid id PK
+    uuid tenant_id FK
+    uuid contact_id FK
+    text product_line FK
+    text wa_phone_number_id "MATCH meta_phone_numbers"
+    text status "active|idle|closed"
+    boolean is_human_takeover
+    text meta_ad_id "归因"
+  }
+  messages {
+    uuid id PK
+    uuid tenant_id FK
+    uuid conversation_id FK
+    text role "user|assistant|operator"
+    text content
+    jsonb metadata
+  }
+  leads {
+    uuid id PK
+    uuid tenant_id FK
+    uuid conversation_id FK
+    text product_line FK
+    text inquiry_quality "BAD|GOOD|QUALIFY|PROOF"
+    text business_value "LOW|AVERAGE|HIGH"
+    text route "CONTINUE|HUMAN_NOW|FAQ_END"
+    jsonb details "custom lead_fields"
+  }
+  product_lines {
+    text id PK "slug, eg vehicle"
+    uuid tenant_id FK
+    text name
+    jsonb lead_fields "自定义字段定义"
+    text wa_phone_number_id UK
+    text system_prompt_extra
+  }
+  message_queue {
+    uuid id PK
+    uuid conversation_id FK
+    text wa_id
+    text content
+    text status "pending|processing|completed"
+    timestamptz process_after "聚合窗口"
+  }
 ```
 
-> 旧的 `campaign_briefs` / `orchestrator_sessions` / `orchestrator_messages` / `fix_knowledge` 表**冷冻存档**——老代码已清理干净，新系统不写入，表也不 drop，保留历史会话可查。
+### 知识库 v2
 
-### Knowledge Base Tables
+KB 表统一按 `(tenant_id, product_line_id)` 索引。`product_line_id` 是 `product_lines.id` (slug)，写入时由 trigger 从 `agent_id` 自动反查兜底。
 
 ```mermaid
 erDiagram
-    kb_documents ||--o{ kb_knowledge_points : contains
-    agents ||--o{ kb_documents : owns
+  product_lines ||--o{ kb_documents : "owns"
+  kb_documents ||--o{ kb_knowledge_points : "chunked into"
+  kb_documents ||--o{ kb_products : "extracts"
+  kb_documents ||--o{ kb_shipping_routes : "extracts"
+  product_lines ||--o{ kb_assets : "owns"
 
-    kb_documents {
-        uuid id PK
-        uuid agent_id FK
-        text filename
-        text layer "company / product / logistics"
-        text source_type "file / feishu / chat_extract"
-        text status "pending / processing / ready"
-    }
-
-    kb_knowledge_points {
-        uuid id PK
-        uuid doc_id FK
-        text content_original
-        text content_en
-        vector embedding_original "1536d"
-        vector embedding_en "1536d"
-        text layer
-        int authority_level "1-5"
-    }
-
-    kb_products {
-        uuid id PK
-        text sku UK
-        text product_name
-        jsonb specs "GIN indexed"
-        numeric fob_price_usd
-    }
+  kb_documents {
+    uuid id PK
+    uuid tenant_id FK
+    text product_line_id FK
+    text filename
+    text layer "company|product|logistics|compliance|sales|competitive"
+    text source_type "file|chat_extract|manual"
+    text status "pending|ready|error"
+  }
+  kb_knowledge_points {
+    uuid id PK
+    uuid tenant_id FK
+    text product_line_id FK
+    uuid doc_id FK
+    text content_original
+    text content_en
+    vector embedding_en "1536d, IVFFLAT"
+    text layer
+    text status "active|expired|superseded|draft"
+  }
+  kb_products {
+    uuid id PK
+    text product_line_id FK
+    text sku
+    jsonb specs
+    numeric fob_price_usd
+  }
+  kb_assets {
+    uuid id PK
+    text product_line_id FK
+    text asset_type "product_image|spec_sheet|certificate"
+    text storage_path
+    text[] linked_skus
+    boolean is_sendable
+  }
+  kb_shipping_routes {
+    uuid id PK
+    text product_line_id FK
+    text destination_port
+    numeric cost_per_unit_usd
+  }
 ```
 
-### Key Design Patterns
+### Autopilot 与报表
 
-| 模式 | 说明 |
-|------|------|
-| **双标识符联系人** | `wa_id` + `bsuid` 至少一个非空，查询时 bsuid 优先 |
-| **消息聚合队列** | `message_queue` + `SELECT FOR UPDATE SKIP LOCKED` 分布式锁 |
-| **phone → product_line 1:1 路由** | `conversations.wa_phone_number_id` → `product_lines` UNIQUE 索引，确定性查表，无 LLM 参与选 agent |
-| **agent_id 桥** | `product_lines.id` (slug) → `agents.id` (UUID)，KB/商品工具仍 key 于 UUID，由 repo 层转换 |
-| **pgvector 双语嵌入** | `kb_knowledge_points` 中英文双向量，分层 RPC 检索 |
-| **Ogilvy 单表计划** | 最新方案全部塞 `autopilot_sessions.plan_json`，历史由消息流回放 |
-| **AIGC 资产解耦** | 图像落 `aigc_assets` + `aigc-assets` bucket；autopilot session id 放 `metadata` 字段，FK 对 WA `conversations` 写 null |
+```mermaid
+erDiagram
+  tenants ||--o{ autopilot_sessions : "owns"
+  autopilot_sessions ||--o{ autopilot_messages : "contains"
+  tenants ||--o{ ai_reports : "scheduled"
+
+  autopilot_sessions {
+    uuid id PK
+    uuid tenant_id FK
+    text status "active|staging|launched|failed"
+    jsonb plan_json "Ad 草稿"
+    text[] meta_campaign_ids
+  }
+  autopilot_messages {
+    uuid id PK
+    uuid session_id FK
+    int message_index
+    text role "user|assistant|tool"
+    jsonb tool_input
+    jsonb tool_result
+  }
+  ai_reports {
+    uuid id PK
+    uuid tenant_id FK
+    text type "daily|weekly|monthly"
+    daterange period
+    jsonb content
+  }
+```
 
 ---
 
-## PM2 Process Model
+## 核心流程
 
-生产环境由 PM2 管理 **4 个常驻进程**，配置见 `ecosystem.config.cjs`：
-
-```
-┌──────────────────────────────────────────────────────────────┐
-│  PM2 Daemon                                                  │
-│                                                              │
-│  ┌────────────────────────┐  Port 3002, fork, max 1GB        │
-│  │  1. lead-engine-next   │  Next.js 主进程                  │
-│  └────────────────────────┘                                  │
-│  ┌────────────────────────┐  setInterval 30s, max 256MB      │
-│  │  2. lead-sync-cron     │  线索 → REVO SCM 同步            │
-│  └────────────────────────┘                                  │
-│  ┌────────────────────────┐  setInterval 10s, max 256MB      │
-│  │  3. queue-cron         │  消息队列兜底                    │
-│  └────────────────────────┘                                  │
-│  ┌────────────────────────┐  每分钟检查, 08:00 CST 触发      │
-│  │  4. report-cron        │  AI 报告生成                     │
-│  └────────────────────────┘                                  │
-│                                                              │
-│  日志: logs/{app,lead-sync,queue-cron,report-cron}-{out,error}.log │
-└──────────────────────────────────────────────────────────────┘
-```
-
-> **精简历史**：早期有第 5 个 `orchestrator-recovery` 进程负责恢复旧 Campaign Orchestrator 的卡住会话；Autopilot 上线后旧编排器整体冷冻，该进程一起下线。Autopilot 的中断处理走 `AbortController`，不需要独立恢复进程。
-
-### Process 1: `lead-engine-next` — Next.js 主进程
+### Flow 1 · 入站 WhatsApp → Lead
 
 ```mermaid
-graph LR
-    Browser["Browser"] -->|HTTP| Next["lead-engine-next :3002"]
-    WA["WhatsApp Cloud API"] -->|POST /api/webhook| Next
-    Next -->|read/write| DB["Supabase"]
-    Next -->|XADD/XREAD| Redis["Redis"]
-    Next -->|OpenRouter| Claude["Claude / Image"]
-    Next -->|Graph v21| Meta["Meta Ads API"]
+sequenceDiagram
+  autonumber
+  participant Meta
+  participant WH as POST /api/webhook
+  participant Resolve as resolveTenantByPhoneNumberId
+  participant Conv as conversation-context
+  participant MQ as message_queue
+  participant QP as queue-processor
+  participant M as runMedici
+  participant KB as search_kb_knowledge_en RPC
+  participant DB
+  participant Lark as feishu
+  participant Send as Meta sendMessage
+
+  Meta->>WH: POST {phone_number_id, msg}
+  WH->>WH: 200 OK 立即返回（不阻塞 Meta 重投）
+  WH->>Resolve: phone_number_id
+  Resolve->>DB: SELECT tenant_id FROM meta_phone_numbers
+  Resolve-->>WH: tenantId
+  WH->>Conv: getOrCreateRoutedConversationContext
+  Conv->>DB: upsert contact + conversation
+  WH->>MQ: enqueueMessage
+  WH->>QP: scheduleProcessing(after AGGREGATION_MS)
+
+  QP->>MQ: acquire_queue_messages（FOR UPDATE SKIP LOCKED）
+  MQ-->>QP: 聚合后的 messages[]
+  QP->>DB: loadMediciConfig(conv) → agentConfig
+  QP->>M: runMedici({history, input, agentConfig})
+  loop tool loop ≤ 5
+    M->>KB: search_kb_knowledge_en(tenant_id, product_line_id, ...)
+    KB-->>M: 排序后的 points
+  end
+  M-->>QP: {next_message, lead, route}
+  QP->>DB: insert message + upsert lead
+  QP->>Lark: sendFeishuMessage({tenantId, content})
+  Lark-->>Lark: 解密 webhook URL → POST 飞书
+  QP->>Send: sendMessage(phone_number_id, reply, token)
 ```
 
-**职责：**
-- 前端页面 SSR + 静态资源服务
-- 所有 API Routes，包括 WhatsApp Webhook、Autopilot SSE、Campaign Studio 数据查询、知识库 CRUD、AI 报告等
-- Autopilot Agent 循环的实际执行体（在请求生命周期内流式推送，SSE `cancel()` 回调清理 generator）
-- 对外唯一暴露端口（3002），3 个 cron 进程均通过 HTTP 调用此进程的 `/api/cron/*` 端点
-
-### Process 2: `lead-sync-cron` — 线索同步到外部 SCM
-
-**脚本：** `scripts/cron-sync-leads.js` → `POST /api/cron/sync-leads`
-
-每 30 秒将运营人员审核通过（approved）的线索同步到外部 SCM 系统（REVO）。
+### Flow 2 · Meta 接入两步向导
 
 ```mermaid
-flowchart TD
-    A["setInterval 30s"] --> B["查询 leads 表<br/>approved=true, 近 24h"]
-    B --> C{"已成功同步?<br/>(lead_sync_logs)"}
-    C -->|是| Skip["跳过"]
-    C -->|否| D{"有可重试的<br/>失败记录?"}
-    D -->|是| E["incrementRetryCount<br/>→ 重试"]
-    D -->|否| F["createSyncLog<br/>→ 首次同步"]
-    E --> G["调用外部 SCM API<br/>(REVO_SCM_API_KEY)"]
-    F --> G
-    G --> H["updateSyncLog<br/>(success / failed)"]
-    H -->|failed & retry < 3| A
+sequenceDiagram
+  autonumber
+  participant U as 租户用户
+  participant UI as /settings/meta-connection
+  participant P as POST /api/meta/connect/preview
+  participant C as POST /api/meta/connect
+  participant Meta as Graph API
+  participant DB
+
+  U->>UI: 粘 system_user_token + BM ID
+  UI->>P: {token, bm_id}
+  P->>Meta: /debug_token + /{bm_id}（验 App ID 一致）
+  P->>Meta: /{bm_id}/{owned,client}_whatsapp_business_accounts
+  loop 每个 WABA
+    P->>Meta: /{waba_id}/phone_numbers
+    P->>P: filter Test Number / RED / 未认证
+  end
+  P->>Meta: /{bm_id}/{owned,client}_ad_accounts (fallback /me/adaccounts)
+  P->>P: filter account_status != 1（仅 ACTIVE）
+  P->>DB: 跨租户冲突预检（BM/WABA/Ad 是否被别人占）
+  P-->>UI: {bm, wabas, ad_accounts, logs[]}
+
+  U->>UI: 勾选 WABA(s) + 单选 1 个广告账户
+  UI->>C: {token, bm_id, waba_ids, ad_account_ids:[X]}
+  C->>DB: 跨租户独占校验 → 命中 409
+  C->>DB: 旧 active connection → disconnected
+  C->>DB: insert meta_connections（token AES-256-GCM 加密）
+  loop 每个 waba
+    C->>Meta: phone_numbers → upsert meta_phone_numbers
+    C->>Meta: POST /{waba_id}/subscribed_apps
+  end
+  C->>Meta: GET /{ad_account_id} → upsert meta_ad_accounts
+  C->>DB: markMetaConnected + recordAudit
+  C-->>UI: {connection, counts, logs[]}
 ```
 
-**内部逻辑：**
-1. 查询 `leads` 表中 `approved=true` 且近 24h 的记录
-2. 对比 `lead_sync_logs` 表，过滤已成功同步的，识别可重试的失败记录
-3. 调用外部 REVO SCM API 批量推送
-4. 将同步结果（success/failed/external_id）写回 `lead_sync_logs`
-5. 失败记录保留，下一轮自动重试（最多 3 次）
-
-### Process 3: `queue-cron` — 消息队列兜底处理
-
-**脚本：** `scripts/cron-process-queue.js` → `GET /api/cron/process-queue`
-
-每 10 秒扫描 `message_queue` 表，处理因 `setTimeout` 回调丢失或进程崩溃而未消费的消息。这是消息处理链路的**兜底保障**——正常情况下消息由 Webhook 直接触发处理。
+### Flow 3 · Autopilot
 
 ```mermaid
-flowchart TD
-    A["setInterval 10s"] --> B["releaseStaleLocks()<br/>清理超时 30s 的锁"]
-    B --> C["getConversationsWithPendingMessages()<br/>查 message_queue<br/>status=pending & process_after < now"]
-    C --> D{"有待处理<br/>的对话?"}
-    D -->|否| Done["静默返回"]
-    D -->|是| E["对每个 conversation_id"]
-    E --> F["processConversationQueue()"]
-    F --> F1["acquire_queue_messages<br/>(SELECT FOR UPDATE SKIP LOCKED)"]
-    F1 --> F2["合并同一客户的多条消息"]
-    F2 --> F3["loadMediciConfig<br/>phone_number_id → agentConfig"]
-    F3 --> F4["runMedici({history, input, context, agentConfig})"]
-    F4 --> F5["发送 WhatsApp 回复"]
-    F5 --> F6["更新 lead (intent / quality / value / leads[])"]
-    F6 --> F7["标记 queue status=completed"]
+sequenceDiagram
+  autonumber
+  participant U as 租户用户
+  participant UI as /ai-automation
+  participant API as /api/autopilot/conversations/[id]/messages
+  participant O as Ogilvy Agent (Claude)
+  participant SSE
+  participant Meta as Meta Ads MCP
+  participant DB
+
+  U->>UI: 描述广告需求 +/- 上传 PDF/图
+  UI->>API: POST {message, attachments?}
+  API->>DB: append user message
+  API->>O: runOgilvy(history, input, mcpTools)
+  loop tool use
+    O->>Meta: list_ad_accounts / get_creative / preview / ...
+    Meta-->>O: result
+    O->>SSE: stream tool_call + tool_result
+  end
+  O-->>API: assistant turn + plan_json patch
+  API->>DB: append assistant + update session.plan_json
+  API-->>UI: SSE done
+
+  U->>UI: 审核 plan → 点 Launch
+  UI->>API: POST /launch
+  API->>Meta: stage & launch campaign
+  API->>DB: session.status = launched + meta_campaign_ids[]
 ```
-
-### Process 4: `report-cron` — AI 报告自动生成
-
-**脚本：** `scripts/cron-generate-reports.js` → `POST /api/cron/generate-reports`
-
-每分钟检查时间，在每天 **08:00 CST（北京时间）** 触发一次报告生成。根据日期自动决定生成哪些类型的报告。
-
-```mermaid
-flowchart TD
-    A["setInterval 60s"] --> B{"当前是<br/>08:00 CST?"}
-    B -->|否| Done["跳过"]
-    B -->|是| C{"今天已运行过?"}
-    C -->|是| Done
-    C -->|否| D["确定报告类型"]
-    D --> D1["Daily 报告 (每天)"]
-    D --> D2{"周一?"}
-    D2 -->|是| D3["+ Weekly 报告"]
-    D --> D4{"1 号?"}
-    D4 -->|是| D5["+ Monthly 报告"]
-    D1 & D3 & D5 --> E["对每种类型"]
-    E --> F{"ai_reports 中<br/>已存在?"}
-    F -->|completed| Skip["跳过"]
-    F -->|不存在| G["generateReport()<br/>AI 生成报告内容"]
-    G --> H["写入 ai_reports"]
-    H --> I["扫描 status=failed<br/>& retry_count < 3"]
-    I --> J["retryReport()<br/>重试失败的报告"]
-```
-
-**内部逻辑：**
-1. 每分钟检查是否到达 08:00 CST，防止重复执行（`lastRunDate` 去重）
-2. 根据星期和日期确定生成类型：Daily（每天）、Weekly（周一）、Monthly（1 号）
-3. 对每种类型调用 `generateReport()`，AI 分析询盘/线索/广告数据生成报告
-4. 去重：`ai_reports` 表 UNIQUE `(type, period_start, period_end)` 防止重复
-5. 自动重试：扫描 `status=failed` 且 `retry_count < 3` 的历史失败报告
-
-### 辅助端点：`/api/cron/release-takeovers`
-
-释放闲置 1h+ 的人工接管状态（`conversations.is_human_takeover=false`），走常规 cron secret 鉴权。未挂 PM2，可由外部定时器（系统 cron / 云定时）按需调用；可用 `TAKEOVER_AUTO_EXPIRE=off` 临时禁用。
-
-### 进程间通信关系
-
-```mermaid
-graph TB
-    subgraph PM2
-        Main["1. lead-engine-next<br/>:3002"]
-        Sync["2. lead-sync-cron"]
-        Queue["3. queue-cron"]
-        Report["4. report-cron"]
-    end
-
-    Sync -->|"POST /api/cron/sync-leads"| Main
-    Queue -->|"GET /api/cron/process-queue"| Main
-    Report -->|"POST /api/cron/generate-reports"| Main
-
-    Main -->|read/write| DB["Supabase"]
-    Main -->|stream| Redis["Redis"]
-```
-
-> **设计说明：** 3 个 cron 进程本身不包含业务逻辑，仅作为定时触发器通过 HTTP 调用主进程的 `/api/cron/*` 端点。这样做的好处是：业务逻辑集中在一个进程中维护，cron 进程无需加载 Next.js 也无需直连数据库，且可通过浏览器手动调用同一端点进行测试。
 
 ---
 
-## Quick Start
+## 开发 / 测试 / 部署
 
-### Prerequisites
-
-- Node.js >= 18（推荐 20 LTS，与部署脚本一致）
-- Redis（local or remote）
-- Supabase project（migrations applied）
-
-### 本地开发
+### 一次性环境
 
 ```bash
-# 安装依赖
-npm install --legacy-peer-deps
-
-# 配置环境变量
-cp .env.demo .env.local
-# 编辑 .env.local 填入实际密钥 (参考下方环境变量表)
-
-# 数据库迁移
-# 在 Supabase Dashboard 或 CLI 中执行 supabase/migrations/ 下的 SQL
-# 最新：2026-04-16-autopilot.sql
-
-# 启动开发服务器
-npm run dev          # http://localhost:3002
-
-# (可选) 启动后台进程
-npm run cron:start   # lead-sync (PM2)
-npm run queue:start  # queue-processor (PM2)
+nvm use 22 && npm install
+cp .env.local.example .env.local && $EDITOR .env.local
+npm run dev   # next dev -p 3002
 ```
 
-### 部署
+### `.env.local` 必填项
+
+| 变量 | 用途 |
+|---|---|
+| `NEXT_PUBLIC_SUPABASE_URL` / `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_DEFAULT_KEY` | Supabase 客户端 |
+| `SUPABASE_SERVICE_ROLE_KEY` | service-role client |
+| `META_TOKEN_ENCRYPTION_KEY` | 64 字符 hex（`node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"`） |
+| `META_APP_ID` / `META_APP_SECRET` | 平台 Meta App |
+| `META_API_VERSION` | 默认 `v21.0` |
+| `OPENROUTER_API_KEY` / `OPENAI_API_KEY` | LLM + embeddings |
+| `CRON_SECRET` | cron 路由 Bearer 鉴权（必填，否则 401） |
+| `NEXT_PUBLIC_APP_URL` | 自身 URL（邀请链接、webhook callback） |
+
+### 常用命令
 
 ```bash
-npm run deploy       # 打包 → scp → 远程 npm ci → next build → PM2 全量重启
+npm run dev      # 本地启动（3002）
+npm run build    # 生产构建
+npm run start    # 生产启动
+npm run lint     # next lint
+npm run deploy   # rsync + 远端 npm ci + build + pm2 reload
 ```
 
-`scripts/deploy.sh` 里硬编码了目标机 `SERVER=aws-online`，首次部署请按注释准备机器（Node 20 + PM2 + redis-server）。
+### 测试关键路径
 
-### 测试
+| 场景 | 怎么测 |
+|---|---|
+| 入站 WhatsApp | 真号给绑定的 phone_number_id 发消息；或在 `/dev-tools/medici-simulator` 选定 product_line 后发消息看 trace |
+| Meta 连接 | `/settings/meta-connection` 粘 token + BM ID，preview 步骤的 logs 面板可见每步 Graph API 调用 |
+| 飞书通知 | `/settings/notifications` 配自定义机器人 webhook → 点测试 |
+| 邀请注册 | founder 在 `/admin/invitations` 生成链接 → 隐身窗口走 signup |
+| KB 检索 | `/dev-tools/medici-simulator` trace 里能看到 `search_knowledge` tool_call + tool_result |
 
-```bash
-npm test                  # Vitest 单元测试
-npm run test:webhook-tdd  # Webhook TDD 子集 (原生 node --test)
-```
+### PM2（4 进程）
 
-E2E 使用 `@playwright/test`（已装未默认脚本化），按需 `npx playwright test` 运行。
+[ecosystem.config.cjs](ecosystem.config.cjs)：
+
+| Process | 入口 | 周期 |
+|---|---|---|
+| `lead-engine-next` | `next start -p 3002` | 常驻 |
+| `queue-cron` | `scripts/cron-process-queue.js` | 每分钟 |
+| `lead-sync-cron` | `scripts/cron-sync-leads.js` | 每 5 分钟 |
+| `report-cron` | `scripts/cron-generate-reports.js` | 每天 |
+
+cron 进程通过 HTTP 调本机 `/api/cron/*`，带 Bearer `CRON_SECRET`。**`CRON_SECRET` 没配则全 401**（防 env 漏配后裸奔的反模式）。
 
 ---
 
-## Environment Variables
+## 工程约定
 
-完整配置见 [src/config.js](src/config.js)，关键变量：
-
-| 变量 | 用途 | 必填 |
-|------|------|------|
-| `NEXT_PUBLIC_SUPABASE_URL` | Supabase 项目 URL | Yes |
-| `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_DEFAULT_KEY` | Supabase Anon Key | Yes |
-| `OPENROUTER_API_KEY` | OpenRouter API Key (LLM + 图像生成全部走这里) | Yes |
-| `OPENAI_API_KEY` | OpenAI Direct (仅 Whisper + embeddings) | Yes |
-| `WA_TOKEN` | WhatsApp Cloud API Token | Yes |
-| `WA_PHONE_NUMBER_ID` | WhatsApp 发送号码 ID | Yes |
-| `WA_VERIFY_TOKEN` | Webhook 验证令牌 | Yes |
-| `REDIS_URL` | Redis 连接地址（默认 `redis://127.0.0.1:6379`） | Yes |
-| `META_SYSTEM_TOKEN` | Meta Graph API Token（需 `whatsapp_business_management` + `ads_management` + `business_management`）| Autopilot |
-| `META_AD_ACCOUNT_ID` | Meta 广告账户 ID | Autopilot |
-| `META_PAGE_ID` | Meta Page ID（作为广告投放主体） | Autopilot |
-| `HTTPS_PROXY` / `HTTP_PROXY` | 访问 Meta API 的出口代理（中国大陆部署用） | Optional |
-| `FIRECRAWL_API_KEY` | Firecrawl 网页抓取 | KB/AI |
-| `SERPAPI_KEY` | SerpAPI Google Trends | Optional |
-| `FEISHU_APP_ID` / `FEISHU_APP_SECRET` / `FEISHU_CHAT_ID` | 飞书通知 & KB 导入 | Optional |
-| `AIGC_IMAGE_MODEL` | 主图像模型，默认 `google/gemini-3.1-flash-image-preview` | Optional |
-| `AIGC_BEST_OF_N` / `AIGC_NO_FALLBACK` | 图像质量/降级策略 | Optional |
-| `CRON_SECRET` | 内部 `/api/cron/*` 端点鉴权 | Yes (prod) |
-| `REVO_SCM_API_KEY` | 外部 SCM 同步令牌 | Lead sync |
-| `QUEUE_AGGREGATION_MS` / `QUEUE_MAX_RETRIES` / `QUEUE_LOCK_TIMEOUT_MS` | 队列聚合/锁调优 | Optional |
-| `TAKEOVER_AUTO_EXPIRE` | `off` 关闭人工接管自动释放 | Optional |
-| `DEMO_MODE` | `true` 跳过登录 + 禁写操作 | Optional |
-| `NEXT_PUBLIC_APP_URL` | 自指 base URL（Webhook 内部回调用） | Prod |
+1. **`process.env.XXX` 只能在 [src/config.js](src/config.js) 读**。其他文件一律 `import { config } from '@/src/config'`。唯一例外 [lib/supabase-browser.js](lib/supabase-browser.js)（浏览器不能走 config 层）。
+2. **不要过度设计**。1 user = 1 tenant，没团队、没角色 ABAC。
+3. **单一路径无 fallback**。`getTenantContext()` 拿不到就 401，不自愈；`CRON_SECRET` 没配 cron 一律 401。
+4. **数据库改造永远向后兼容**。新功能用新列 / 新 overload / 新表，老接口保留不删，DB 旧数据不动。
+5. **每个仓储函数 tenant-aware**。例：`findActiveConversation({ tenantId, contactId })`，缺 tenantId 直接 throw。
+6. **Founder gate**：`/admin/*` + `/dev-tools/*` 路由额外 `ctx.tenantId === FOUNDER_TENANT_ID` 检查；普通租户 sidebar 也看不到这些入口。
+7. **加密**：Meta token + 飞书 webhook URL 都走 AES-256-GCM 落 bytea，密钥 `META_TOKEN_ENCRYPTION_KEY` 不可旋转（旋转会让历史行无法解密）。
+8. **聚合窗口**：webhook 入队后等 `QUEUE_AGGREGATION_MS`（默认 2s）再触发处理，让连续短消息合并送给 LLM。
 
 ---
 
-## Development Conventions
-
-- **改数据库 Schema** — 新建 `supabase/migrations/YYYY-MM-DD-xxx.sql`，不直接在控制台改
-- **新增字段前先查表关系** — 能用 JOIN 就不加冗余列（见 [CLAUDE.md](CLAUDE.md)）
-- **环境变量单一真源** — 业务代码只从 `src/config.js` 读，禁止直接 `process.env.XXX`（唯一例外：`lib/supabase-browser.js`）
-- **`src/` 不 import React/Next** — 必须对 runtime 中立，能被脚本和 API 同时调用
-- **测试必须真跑** — 不能只做静态 review（见 [CLAUDE.md](CLAUDE.md)）
-- **谨慎加"改进"** — 不添加 fallback 值、默认行为或用户未要求的字段（见 [CLAUDE.md](CLAUDE.md)）
-- 更多约定见 [CLAUDE.md](CLAUDE.md)、[docs/medici-design.md](docs/medici-design.md)、[docs/ogilvy-design.md](docs/ogilvy-design.md)
+**License**: Proprietary · **Maintainer**: Founder

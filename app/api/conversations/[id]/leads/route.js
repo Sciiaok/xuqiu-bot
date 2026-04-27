@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
-import { createClient } from '../../../../../lib/supabase-server.js';
 import supabase from '../../../../../lib/supabase.js';
+import { getTenantContext } from '../../../../../lib/tenant-context.js';
 import { findConversationById } from '../../../../../lib/repositories/conversation.repository.js';
 import { findProductLineById } from '../../../../../lib/repositories/product-line.repository.js';
 
@@ -17,9 +17,8 @@ import { findProductLineById } from '../../../../../lib/repositories/product-lin
  */
 export async function GET(_request, { params }) {
   try {
-    const authClient = await createClient();
-    const { data: { user } } = await authClient.auth.getUser();
-    if (!user) {
+    const ctx = await getTenantContext();
+    if (!ctx) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
@@ -45,7 +44,7 @@ export async function GET(_request, { params }) {
     const productLineId = conversation.product_line || leads?.[0]?.product_line || null;
     let leadFields = [];
     if (productLineId) {
-      const line = await findProductLineById(productLineId);
+      const line = await findProductLineById({ tenantId: ctx.tenantId, id: productLineId });
       if (line && Array.isArray(line.lead_fields)) {
         leadFields = line.lead_fields;
       }

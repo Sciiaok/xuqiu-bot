@@ -1,23 +1,25 @@
 import { NextResponse } from 'next/server';
-import { demoGuard } from '../../../../../../lib/demo-mode.js';
-import { createClient } from '../../../../../../lib/supabase-server.js';
 import supabase from '../../../../../../lib/supabase.js';
+import { getTenantContext } from '../../../../../../lib/tenant-context.js';
+import { findContactById } from '../../../../../../lib/repositories/contact.repository.js';
 
 /**
  * DELETE /api/contacts/[id]/notes/[noteId] - Delete a note
  */
 export async function DELETE(request, { params }) {
-  const demoResponse = demoGuard({ success: true });
-  if (demoResponse) return demoResponse;
-
   try {
-    const authClient = await createClient();
-    const { data: { user } } = await authClient.auth.getUser();
-    if (!user) {
+    const ctx = await getTenantContext();
+    if (!ctx) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
     const { id, noteId } = await params;
+
+    // 必须先验 contact 属于当前 tenant —— contact_notes 自身没有 tenant_id 列。
+    const contact = await findContactById(id);
+    if (!contact || contact.tenant_id !== ctx.tenantId) {
+      return NextResponse.json({ error: 'Contact not found' }, { status: 404 });
+    }
 
     const { error } = await supabase
       .from('contact_notes')

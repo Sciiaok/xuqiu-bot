@@ -14,7 +14,6 @@
  *     attaches the legacy agents.id for KB/product tool loading.
  */
 
-import supabase from '../../../lib/supabase.js';
 import {
   findProductLineById,
   findProductLineByPhoneNumberId,
@@ -196,6 +195,7 @@ export function assembleLineConfig(row) {
   return {
     product_line: row.id,
     name: row.name,
+    tenant_id: row.tenant_id,
     system_prompt: assembleSystemPrompt(row),
     output_schema: assembleOutputSchema(row),
     qualification_config: assembleQualificationConfig(row),
@@ -210,26 +210,46 @@ export function assembleLineConfig(row) {
 const TTL_MS = 60_000;
 const cache = new Map();
 
+const cacheKey = (tenantId, id) => `${tenantId}:${id}`;
+
 /**
  * Fetch + assemble the runtime config for a product line, with 60s caching.
- * Returns null when the id has no matching row.
+ * Cache 必须按 (tenantId, id) 隔离 —— product_lines.id 是 slug，跨 tenant 同名
+ * 共用 cache 会把 A 的 config 端给 B。
  */
-export async function getMediciConfig(id) {
-  if (!id) return null;
+export async function getMediciConfig({ tenantId, id }) {
+  if (!tenantId || !id) return null;
+  const key = cacheKey(tenantId, id);
   const now = Date.now();
-  const hit = cache.get(id);
+  const hit = cache.get(key);
   if (hit && now - hit.storedAt < TTL_MS) return hit.value;
 
-  const row = await findProductLineById(id);
+  const row = await findProductLineById({ tenantId, id });
   const value = row ? assembleLineConfig(row) : null;
-  cache.set(id, { value, storedAt: now });
+  cache.set(key, { value, storedAt: now });
   return value;
 }
 
-/** Admin UI / test hook to drop the cache. */
-export function invalidateMediciCache(id) {
-  if (id) cache.delete(id);
-  else cache.clear();
+/**
+ * Admin UI / test hook to drop the cache.
+ * 不传 tenantId 视为全清（测试用）；传了就只清那一行。
+ */
+export function invalidateMediciCache({ tenantId, id } = {}) {
+  if (!tenantId && !id) {
+    cache.clear();
+    return;
+  }
+  if (tenantId && id) {
+    cache.delete(cacheKey(tenantId, id));
+    return;
+  }
+  // 只给了 tenantId 或只给了 id：扫一遍清掉匹配的
+  for (const key of cache.keys()) {
+    const [keyTenant, keyId] = key.split(':');
+    if ((tenantId && keyTenant === tenantId) || (id && keyId === id)) {
+      cache.delete(key);
+    }
+  }
 }
 
 // ─── Per-conversation resolution ─────────────────────────────────────
@@ -252,6 +272,11 @@ export function invalidateMediciCache(id) {
 export async function loadMediciConfig(conversation) {
   if (!conversation) return null;
 
+  // tenant_id 从 conversation 行带来 —— webhook 路由阶段已经写入。
+  // 这里没有用户 session，无法回退到 cookie 推 tenant。
+  const tenantId = conversation.tenant_id;
+  if (!tenantId) return null;
+
   let productLineId = conversation.product_line;
 
   if (!productLineId && conversation.wa_phone_number_id) {
@@ -264,14 +289,6 @@ export async function loadMediciConfig(conversation) {
 
   if (!productLineId) return null;
 
-  const config = await getMediciConfig(productLineId);
-  if (!config) return null;
-
-  const { data: agent } = await supabase
-    .from('agents')
-    .select('id')
-    .eq('product_line', productLineId)
-    .maybeSingle();
-
-  return { ...config, id: agent?.id || null };
+  const config = await getMediciConfig({ tenantId, id: productLineId });
+  return config || null;
 }

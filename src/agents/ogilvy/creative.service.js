@@ -134,7 +134,8 @@ function filterSupportedRefs(urls = []) {
 
 // ── Persist to Supabase storage + aigc_assets table ─────────────────────
 
-async function saveAssetToStorage({ imageBuffer, prompt, model, productInfo, userId, sessionId, authClient }) {
+async function saveAssetToStorage({ imageBuffer, prompt, model, productInfo, userId, tenantId, sessionId, authClient }) {
+  if (!tenantId) throw new Error('saveAssetToStorage: tenantId required');
   const filename = `${Date.now()}_${model.replace(/\//g, '-')}.png`;
   const storagePath = `generated/${filename}`;
   const storageClient = authClient || supabase;
@@ -155,6 +156,7 @@ async function saveAssetToStorage({ imageBuffer, prompt, model, productInfo, use
   const { data: row, error: dbError } = await supabase
     .from('aigc_assets')
     .insert({
+      tenant_id: tenantId,
       conversation_id: null,
       user_id: userId || null,
       prompt,
@@ -192,8 +194,12 @@ export async function generateAdCreative({
   language = 'English',
   sessionId = null,
   userId = null,
+  tenantId = null,
   authClient = null,
 }) {
+  if (!tenantId) {
+    return { error: 'tenant_required', message: 'tenantId is required' };
+  }
   if (!config.openrouter.apiKey) {
     return { error: 'config_missing', message: 'OPENROUTER_API_KEY is not configured' };
   }
@@ -224,6 +230,7 @@ export async function generateAdCreative({
         model: generated.model,
         productInfo: { company_name: productName, products: [{ model: productName }] },
         userId,
+        tenantId,
         sessionId,
         authClient: authClient || supabase,
       });

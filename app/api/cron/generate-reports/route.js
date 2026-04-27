@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server';
+import supabase from '@/lib/supabase';
 import {
   generateReport,
   retryReport,
@@ -8,6 +9,15 @@ import {
 import { config } from '@/src/config';
 
 const MAX_AUTO_RETRIES = 3;
+
+async function listActiveTenantIds() {
+  const { data, error } = await supabase
+    .from('tenants')
+    .select('id')
+    .eq('status', 'active');
+  if (error) throw error;
+  return (data || []).map(r => r.id);
+}
 
 /**
  * POST /api/cron/generate-reports
@@ -25,7 +35,7 @@ export async function POST(request) {
     // Verify cron secret
     const authHeader = request.headers.get('authorization');
     const cronSecret = config.secrets.cron;
-    if (cronSecret && authHeader !== `Bearer ${cronSecret}`) {
+    if (!cronSecret || authHeader !== `Bearer ${cronSecret}`) {
       return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
     }
 
@@ -42,31 +52,33 @@ export async function POST(request) {
     if (chinaDayOfWeek === 1) typesToGenerate.push('weekly');
     if (chinaDayOfMonth === 1) typesToGenerate.push('monthly');
 
-    // Generate each report type
-    for (const type of typesToGenerate) {
-      const { periodStart, periodEnd } = computePeriod(type, now);
+    // Generate each report type for each active tenant
+    const tenantIds = await listActiveTenantIds();
+    for (const tenantId of tenantIds) {
+      for (const type of typesToGenerate) {
+        const { periodStart, periodEnd } = computePeriod(type, now);
 
-      try {
-        // Check if already exists
-        const existing = await reportExists(type, periodStart, periodEnd);
-        if (existing) {
-          if (existing.status === 'completed') {
-            results.skipped.push({ type, periodStart, periodEnd, reason: 'already exists' });
+        try {
+          const existing = await reportExists(tenantId, type, periodStart, periodEnd);
+          if (existing) {
+            if (existing.status === 'completed') {
+              results.skipped.push({ tenantId, type, periodStart, periodEnd, reason: 'already exists' });
+              continue;
+            }
+            if (existing.status === 'generating') {
+              results.skipped.push({ tenantId, type, periodStart, periodEnd, reason: 'already generating' });
+              continue;
+            }
+            // Failed — will be handled in retry phase below
             continue;
           }
-          if (existing.status === 'generating') {
-            results.skipped.push({ type, periodStart, periodEnd, reason: 'already generating' });
-            continue;
-          }
-          // Failed — will be handled in retry phase below
-          continue;
+
+          const report = await generateReport({ tenantId, type, periodStart, periodEnd });
+          results.generated.push({ tenantId, type, periodStart, periodEnd, id: report.id });
+        } catch (err) {
+          console.error(`[generate-reports] Failed to generate ${type} (${periodStart}~${periodEnd}) for ${tenantId}:`, err.message);
+          results.failed.push({ tenantId, type, periodStart, periodEnd, error: err.message });
         }
-
-        const report = await generateReport({ type, periodStart, periodEnd });
-        results.generated.push({ type, periodStart, periodEnd, id: report.id });
-      } catch (err) {
-        console.error(`[generate-reports] Failed to generate ${type} (${periodStart}~${periodEnd}):`, err.message);
-        results.failed.push({ type, periodStart, periodEnd, error: err.message });
       }
     }
 

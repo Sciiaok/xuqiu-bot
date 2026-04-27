@@ -31,15 +31,20 @@ const LAYER_LABELS = {
 /**
  * Process an uploaded file: parse → extract knowledge → translate → embed.
  *
- * @param {string} agentId
- * @param {string} docId - kb_documents.id (already created by the API route)
- * @param {string} fileContent - Text content of the file (already extracted by API route)
+ * 写入 kb_* 表时同时填 agent_id（NOT NULL，老 schema）和 product_line_id
+ * （新 schema，新查询路径）。读路径已切到 product_line_id。
+ *
+ * @param {Object} ctx - { tenantId, agentId, productLineId }
+ * @param {string} docId - kb_documents.id（already created by the API route）
+ * @param {string} fileContent
  * @param {string} layer
- * @param {Object} options
- * @param {string} options.filename
- * @param {string} options.fileType - csv / xlsx_text / pdf_text / markdown / txt
+ * @param {Object} options - { filename, fileType }
  */
-export async function processDocument(agentId, docId, fileContent, layer, options = {}) {
+export async function processDocument(ctx, docId, fileContent, layer, options = {}) {
+  const { tenantId, agentId, productLineId } = ctx || {};
+  if (!tenantId || !agentId || !productLineId) {
+    throw new Error('processDocument: tenantId, agentId, productLineId required');
+  }
   const { filename = '', fileType = 'txt' } = options;
 
   try {
@@ -50,21 +55,21 @@ export async function processDocument(agentId, docId, fileContent, layer, option
 
     // Step 2: For product/logistics layers, also extract structured data
     if (layer === 'product') {
-      await extractStructuredProducts(agentId, docId, fileContent, fileType);
+      await extractStructuredProducts(ctx, docId, fileContent, fileType);
     }
     if (layer === 'logistics') {
-      await extractStructuredShipping(agentId, docId, fileContent, fileType);
+      await extractStructuredShipping(ctx, docId, fileContent, fileType);
     }
 
     // Step 3: Process each knowledge point (translate + embed + store)
     let storedCount = 0;
     const conflicts = [];
     for (const point of extracted.knowledge_points) {
-      const pointId = await processKnowledgePoint(agentId, docId, layer, point);
+      const pointId = await processKnowledgePoint(ctx, docId, layer, point);
       storedCount++;
 
       // Step 3b: Conflict detection — check if this point conflicts with existing knowledge
-      const conflict = await detectConflict(agentId, docId, layer, point, pointId);
+      const conflict = await detectConflict({ tenantId, productLineId }, docId, layer, point, pointId);
       if (conflict) conflicts.push(conflict);
     }
 
@@ -173,14 +178,15 @@ function parseJsonFromLlm(text) {
 
 // ── Process Single Knowledge Point ───────────────────────────────────
 
-async function processKnowledgePoint(agentId, docId, layer, point) {
+async function processKnowledgePoint(ctx, docId, layer, point) {
+  const { tenantId, agentId, productLineId } = ctx;
   const originalContent = point.content;
   const sourceLang = detectLanguage(originalContent);
 
   // Translate to English if not already English
   let englishContent = originalContent;
   if (sourceLang !== 'en') {
-    englishContent = await translateToEnglish(originalContent, agentId);
+    englishContent = await translateToEnglish(originalContent);
   }
 
   // Generate embeddings for both versions
@@ -189,10 +195,12 @@ async function processKnowledgePoint(agentId, docId, layer, point) {
     sourceLang !== 'en' ? generateEmbedding(englishContent) : generateEmbedding(originalContent),
   ]);
 
-  // Store
+  // Store —— 同时写 agent_id (旧 NOT NULL 列) 和 product_line_id (新查询路径)
   const { data, error } = await supabase.from('kb_knowledge_points').insert({
+    tenant_id: tenantId,
     doc_id: docId,
     agent_id: agentId,
+    product_line_id: productLineId,
     layer,
     content_original: originalContent,
     content_en: englishContent,
@@ -212,7 +220,8 @@ async function processKnowledgePoint(agentId, docId, layer, point) {
 
 // ── Structured Product Extraction ────────────────────────────────────
 
-async function extractStructuredProducts(agentId, docId, content, fileType) {
+async function extractStructuredProducts(ctx, docId, content, fileType) {
+  const { tenantId, agentId, productLineId } = ctx;
   const systemPrompt = `Extract structured product data from this document. Output as JSON array.
 Each product should have:
 {
@@ -257,8 +266,10 @@ If no product data found, output: { "products": [] }`;
   if (!parsed.products?.length) return;
 
   const rows = parsed.products.map(p => ({
+    tenant_id: tenantId,
     doc_id: docId,
     agent_id: agentId,
+    product_line_id: productLineId,
     sku: p.sku || null,
     product_name: p.product_name || null,
     product_name_en: p.product_name_en || null,
@@ -278,7 +289,8 @@ If no product data found, output: { "products": [] }`;
 
 // ── Structured Shipping Extraction ───────────────────────────────────
 
-async function extractStructuredShipping(agentId, docId, content, fileType) {
+async function extractStructuredShipping(ctx, docId, content, fileType) {
+  const { tenantId, agentId, productLineId } = ctx;
   const systemPrompt = `Extract structured shipping route data from this document. Output as JSON array.
 Each route should have:
 {
@@ -320,8 +332,10 @@ If no shipping data found, output: { "routes": [] }`;
   if (!parsed.routes?.length) return;
 
   const rows = parsed.routes.map(r => ({
+    tenant_id: tenantId,
     doc_id: docId,
     agent_id: agentId,
+    product_line_id: productLineId,
     origin_port: r.origin_port || null,
     destination_port: r.destination_port || null,
     destination_country: r.destination_country || null,
@@ -343,7 +357,7 @@ If no shipping data found, output: { "routes": [] }`;
  * Checks for high-similarity points in the same layer from different documents.
  * Returns conflict info or null if no conflict.
  */
-async function detectConflict(agentId, newDocId, layer, point, newPointId) {
+async function detectConflict({ tenantId, productLineId }, newDocId, layer, point, newPointId) {
   // Only detect conflicts for points that have specific factual data
   const hasPriceData = point.metadata?.price_usd != null;
   const hasSku = !!point.metadata?.sku;
@@ -357,7 +371,8 @@ async function detectConflict(agentId, newDocId, layer, point, newPointId) {
     const { data } = await supabase
       .from('kb_knowledge_points')
       .select('id, content_original, content_en, metadata_json, doc_id, source_location, authority_level')
-      .eq('agent_id', agentId)
+      .eq('tenant_id', tenantId)
+      .eq('product_line_id', productLineId)
       .eq('layer', layer)
       .eq('status', 'active')
       .neq('doc_id', newDocId)

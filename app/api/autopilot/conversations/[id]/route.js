@@ -1,9 +1,15 @@
-import { createClient } from '../../../../../lib/supabase-server.js';
+import { getTenantContext } from '../../../../../lib/tenant-context.js';
 import {
   getSession,
   getMessages,
   deleteSession,
 } from '../../../../../lib/repositories/autopilot.repository.js';
+
+async function loadSessionInTenant(sessionId, tenantId) {
+  const session = await getSession(sessionId);
+  if (!session || session.tenant_id !== tenantId) return null;
+  return session;
+}
 
 /**
  * GET /api/autopilot/conversations/[id]
@@ -12,14 +18,13 @@ import {
  * restore a conversation.
  */
 export async function GET(_request, { params }) {
-  const supabase = await createClient();
-  const { data: { user } } = await supabase.auth.getUser();
-  if (!user) return Response.json({ error: 'Unauthorized' }, { status: 401 });
+  const ctx = await getTenantContext();
+  if (!ctx) return Response.json({ error: 'Unauthorized' }, { status: 401 });
 
   const { id } = await params;
 
   try {
-    const session = await getSession(id);
+    const session = await loadSessionInTenant(id, ctx.tenantId);
     if (!session) return Response.json({ error: 'Not found' }, { status: 404 });
 
     const messages = await getMessages(id);
@@ -51,13 +56,15 @@ export async function GET(_request, { params }) {
  * via the FK constraint.
  */
 export async function DELETE(_request, { params }) {
-  const supabase = await createClient();
-  const { data: { user } } = await supabase.auth.getUser();
-  if (!user) return Response.json({ error: 'Unauthorized' }, { status: 401 });
+  const ctx = await getTenantContext();
+  if (!ctx) return Response.json({ error: 'Unauthorized' }, { status: 401 });
 
   const { id } = await params;
 
   try {
+    if (!(await loadSessionInTenant(id, ctx.tenantId))) {
+      return Response.json({ error: 'Not found' }, { status: 404 });
+    }
     await deleteSession(id);
     return Response.json({ ok: true });
   } catch (err) {

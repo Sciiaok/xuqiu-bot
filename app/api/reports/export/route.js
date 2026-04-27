@@ -1,7 +1,6 @@
 import { NextResponse } from 'next/server';
 import { createClient } from '@/lib/supabase-server';
 import supabase from '@/lib/supabase';
-import { demoGuard } from '@/lib/demo-mode';
 
 const VALID_TYPES = new Set(['leads', 'campaign', 'analytics']);
 const VALID_FORMATS = new Set(['csv', 'xlsx']);
@@ -320,45 +319,7 @@ async function getAnalyticsRows(fromDate, toDate, fromISO, toISO) {
   });
 }
 
-function getDemoRows(type) {
-  if (type === 'campaign') {
-    return [{
-      'Ad ID': 'demo-ad-001',
-      Conversations: 12,
-      'Qualify Rate': '25%',
-      'Proof Rate': '8%',
-      'Last Activity': new Date().toISOString(),
-    }];
-  }
-
-  if (type === 'analytics') {
-    return [{
-      Date: new Date().toISOString().split('T')[0],
-      'New Conversations': 8,
-      'New Leads': 4,
-      'Qualify Count': 2,
-      'Proof Count': 1,
-      'Qualify Rate': '25%',
-    }];
-  }
-
-  return [{
-    Contact: 'Demo Contact',
-    Country: 'China',
-    Product: 'Demo Product',
-    Quantity: '1-5',
-    Quality: 'QUALIFY',
-    'Business Value': 'HIGH',
-    Route: 'HUMAN_NOW',
-    'Created At': new Date().toISOString(),
-  }];
-}
-
-async function getExportRows(type, range, useDemoData) {
-  if (useDemoData) {
-    return getDemoRows(type);
-  }
-
+async function getExportRows(type, range) {
   if (type === 'campaign') {
     return getCampaignRows(range.fromISO, range.toISO);
   }
@@ -404,7 +365,6 @@ async function buildXlsxResponse(type, columns, rows) {
 
 export async function GET(request) {
   try {
-    const isDemoMode = Boolean(demoGuard({ success: true }));
     const authClient = await createClient();
     const { data: { user } } = await authClient.auth.getUser();
 
@@ -429,7 +389,7 @@ export async function GET(request) {
     }
 
     const range = buildDateRange(days);
-    const rows = await getExportRows(type, range, isDemoMode);
+    const rows = await getExportRows(type, range);
     const columns = rows.length > 0 ? Object.keys(rows[0]) : (
       type === 'campaign'
         ? ['Ad ID', 'Conversations', 'Qualify Rate', 'Proof Rate', 'Last Activity']

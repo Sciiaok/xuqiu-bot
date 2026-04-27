@@ -8,6 +8,7 @@ import {
 import s from './page.module.css';
 import MetricCard from '../../components/MetricCard/MetricCard';
 import AIPanel from '../../components/AIPanel/AIPanel';
+import OnboardingProgressCard from '../../components/OnboardingProgressCard/OnboardingProgressCard';
 import Card from '../../components/Card/Card';
 import DataTable from '../../components/DataTable/DataTable';
 import TabBar from '../../components/TabBar/TabBar';
@@ -312,6 +313,7 @@ export default function AnalyticsPage() {
 
   return (
     <div className={s.root}>
+      <OnboardingProgressCard />
       {/* ── Header ── */}
       <div className={s.header}>
         <div className={s.headerLeft}>

@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
-import { createClient } from '@/lib/supabase-server';
+import { getTenantContext, FOUNDER_TENANT_ID } from '@/lib/tenant-context';
+import supabase from '@/lib/supabase';
 
 // Block obvious mutations before even hitting the DB. The RPC itself is
 // read-only via SET TRANSACTION, this is just a fast user-facing guard so
@@ -8,9 +9,11 @@ const WRITE_RE = /\b(insert|update|delete|drop|alter|create|truncate|grant|revok
 
 export async function POST(request) {
   try {
-    const supabase = await createClient();
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    const ctx = await getTenantContext();
+    if (!ctx) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    if (ctx.tenantId !== FOUNDER_TENANT_ID) {
+      return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+    }
 
     const body = await request.json().catch(() => ({}));
     const query = typeof body?.query === 'string' ? body.query.trim() : '';

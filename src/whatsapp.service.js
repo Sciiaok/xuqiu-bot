@@ -1,4 +1,38 @@
 import { config } from './config.js';
+import { findConnectionByPhoneNumberId } from '../lib/repositories/meta-connection.repository.js';
+
+/**
+ * Token 解析：从 meta_phone_numbers + meta_connections 反查 phoneNumberId 对应
+ * tenant 的 system token。找不到 → 抛错（说明该 phone 所属的 tenant 还没接
+ * Meta BM，不该走到这里）。无 env fallback。
+ *
+ * 5 分钟内存 cache，避免每条出向消息都打 DB。
+ */
+const TOKEN_CACHE_TTL_MS = 5 * 60 * 1000;
+const tokenCache = new Map(); // phoneNumberId -> { token, expiresAt }
+
+async function resolveToken(phoneNumberId) {
+  if (!phoneNumberId) {
+    throw new Error('whatsapp.service: phoneNumberId required to resolve tenant token');
+  }
+  const cached = tokenCache.get(phoneNumberId);
+  if (cached && cached.expiresAt > Date.now()) {
+    return cached.token;
+  }
+  const conn = await findConnectionByPhoneNumberId(phoneNumberId);
+  if (!conn?.token) {
+    throw new Error(
+      `whatsapp.service: no active Meta connection for phone_number_id=${phoneNumberId}; tenant must connect via /settings/meta-connection`
+    );
+  }
+  tokenCache.set(phoneNumberId, { token: conn.token, expiresAt: Date.now() + TOKEN_CACHE_TTL_MS });
+  return conn.token;
+}
+
+export function invalidateTokenCache(phoneNumberId) {
+  if (phoneNumberId) tokenCache.delete(phoneNumberId);
+  else tokenCache.clear();
+}
 
 /**
  * Send a message to a WhatsApp user
@@ -8,6 +42,7 @@ import { config } from './config.js';
  */
 export async function sendMessage(waId, messageText, phoneNumberId) {
   const pnid = phoneNumberId;
+  const token = await resolveToken(pnid);
   const url = `https://graph.facebook.com/${config.whatsapp.apiVersion}/${pnid}/messages`;
 
   const payload = {
@@ -23,7 +58,7 @@ export async function sendMessage(waId, messageText, phoneNumberId) {
     const response = await fetch(url, {
       method: 'POST',
       headers: {
-        'Authorization': `Bearer ${config.whatsapp.token}`,
+        'Authorization': `Bearer ${token}`,
         'Content-Type': 'application/json',
       },
       body: JSON.stringify(payload),
@@ -50,6 +85,7 @@ export async function sendMessage(waId, messageText, phoneNumberId) {
  */
 export async function markAsRead(messageId, phoneNumberId) {
   const pnid = phoneNumberId;
+  const token = await resolveToken(pnid);
   const url = `https://graph.facebook.com/${config.whatsapp.apiVersion}/${pnid}/messages`;
 
   const payload = {
@@ -62,7 +98,7 @@ export async function markAsRead(messageId, phoneNumberId) {
     const response = await fetch(url, {
       method: 'POST',
       headers: {
-        'Authorization': `Bearer ${config.whatsapp.token}`,
+        'Authorization': `Bearer ${token}`,
         'Content-Type': 'application/json',
       },
       body: JSON.stringify(payload),
@@ -117,17 +153,10 @@ export function validateMedia(mimeType, sizeBytes) {
 
 /**
  * Send a media message (image/video/document) to a WhatsApp user
- * @param {string} waId - WhatsApp user ID
- * @param {string} type - 'image' | 'video' | 'document' (validated by caller)
- * @param {Buffer} fileBuffer - File binary data
- * @param {string} mimeType - MIME type
- * @param {string} [filename] - Original filename
- * @param {string} [caption] - Optional caption text
- * @param {string} [phoneNumberId] - Override phone number ID (for multi-agent)
- * @returns {Promise<Object>} - WhatsApp API response
  */
 export async function sendMedia(waId, type, fileBuffer, mimeType, filename, caption, phoneNumberId) {
   const pnid = phoneNumberId;
+  const token = await resolveToken(pnid);
   const baseUrl = `https://graph.facebook.com/${config.whatsapp.apiVersion}`;
 
   // Step 1: Upload media to WhatsApp
@@ -139,7 +168,7 @@ export async function sendMedia(waId, type, fileBuffer, mimeType, filename, capt
   const uploadResponse = await fetch(`${baseUrl}/${pnid}/media`, {
     method: 'POST',
     headers: {
-      'Authorization': `Bearer ${config.whatsapp.token}`,
+      'Authorization': `Bearer ${token}`,
     },
     body: formData,
   });
@@ -167,7 +196,7 @@ export async function sendMedia(waId, type, fileBuffer, mimeType, filename, capt
   const sendResponse = await fetch(`${baseUrl}/${pnid}/messages`, {
     method: 'POST',
     headers: {
-      'Authorization': `Bearer ${config.whatsapp.token}`,
+      'Authorization': `Bearer ${token}`,
       'Content-Type': 'application/json',
     },
     body: JSON.stringify(payload),

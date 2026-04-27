@@ -18,49 +18,37 @@ export const config = {
   },
 
   // Supabase — URL + publishable/anon key (safe to include in client bundles)
+  // serviceRoleKey 仅 server 端可见 —— 创建 auth 用户、绕 RLS 等管理操作用。
   supabase: {
     url: process.env.NEXT_PUBLIC_SUPABASE_URL,
     publishableKey: process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_DEFAULT_KEY,
+    serviceRoleKey: process.env.SUPABASE_SERVICE_ROLE_KEY,
   },
 
   // WhatsApp Cloud API
   whatsapp: {
-    token: process.env.WA_SYSTEM_TOKEN,
-    verifyToken: process.env.WA_VERIFY_TOKEN,
+    verifyToken: 'revopanda_verify_token',
     apiVersion: 'v21.0',
   },
 
   // Meta Marketing API — ad campaign execution
   meta: {
-    adAccountId: process.env.META_AD_ACCOUNT_ID,
-    pageId: process.env.META_PAGE_ID,
-    apiVersion: process.env.META_API_VERSION || 'v21.0',
-    apiTimeoutMs: parseInt(process.env.META_API_TIMEOUT_MS) || 30_000,
-    accessToken: process.env.META_SYSTEM_TOKEN,
-  },
-
-  // Meta Ads MCP (spawned subprocess OR remote HTTP bridge)
-  metaAdsMcp: {
-    url: process.env.META_ADS_MCP_URL || '',
-    command: process.env.META_ADS_MCP_COMMAND || 'uvx',
-    args: (process.env.META_ADS_MCP_ARGS || 'meta-ads-mcp').split(' '),
-  },
-
-  // SerpAPI — Google Trends fallback
-  serpapi: {
-    apiKey: process.env.SERPAPI_KEY,
+    apiVersion: 'v21.0',
+    apiTimeoutMs: 30_000,
+    // 多租户：所有租户的 token 必须属于这个 App，订阅 webhook 才会推到我们后端
+    appId: "1436127511218148",
   },
 
   // Firecrawl — website scraping / extraction
   firecrawl: {
     apiKey: process.env.FIRECRAWL_API_KEY,
-    baseURL: process.env.FIRECRAWL_BASE_URL || 'https://api.firecrawl.dev/v1',
+    baseURL: 'https://api.firecrawl.dev/v1',
   },
 
   // AIGC — image generation knobs.
   // Client (apiKey/baseURL) is owned by llm-client's openrouter.
   aigc: {
-    imageModel: process.env.AIGC_IMAGE_MODEL || 'google/gemini-3.1-flash-image-preview',
+    imageModel: 'google/gemini-3.1-flash-image-preview',
     storageBucket: 'aigc-assets',
     bestOfN: parseInt(process.env.AIGC_BEST_OF_N, 10) || 1,
     noFallback: Boolean(process.env.AIGC_NO_FALLBACK),
@@ -68,23 +56,19 @@ export const config = {
 
   // Message Queue (aggregation for rapid messages)
   queue: {
-    aggregationWindowMs: parseInt(process.env.QUEUE_AGGREGATION_MS) || 2000,
-    maxRetries: parseInt(process.env.QUEUE_MAX_RETRIES) || 3,
-    lockTimeoutMs: parseInt(process.env.QUEUE_LOCK_TIMEOUT_MS) || 30000,
-    instanceId: process.env.INSTANCE_ID || `instance-${process.pid}`,
+    aggregationWindowMs: 2000,
+    maxRetries: 3,
+    lockTimeoutMs: 30000,
+    instanceId: `instance-${process.pid}`,
   },
 
   // Campaign orchestration tuning knobs
   campaign: {
-    creativeConcurrency: parseInt(process.env.CREATIVE_CONCURRENCY, 10) || 10,
+    creativeConcurrency: 10,
   },
 
-  // Feishu (Lark) — sales routing notifications + KB import
-  feishu: {
-    appId: process.env.FEISHU_APP_ID,
-    appSecret: process.env.FEISHU_APP_SECRET,
-    chatId: process.env.FEISHU_CHAT_ID,
-  },
+  // 飞书通知改成 per-tenant webhook 后，FEISHU_APP_ID/SECRET/CHAT_ID 不再使用，
+  // 配置在 notification_settings 表里（每个 tenant 自己粘 webhook URL）。
 
   // Redis (queue + rate limiter + cache)
   redis: {
@@ -104,7 +88,6 @@ export const config = {
   // App runtime flags & URLs
   app: {
     baseUrl: process.env.NEXT_PUBLIC_APP_URL,
-    demoMode: process.env.DEMO_MODE === 'true',
     takeoverAutoExpireDisabled: 'off' === 'off',
   },
 

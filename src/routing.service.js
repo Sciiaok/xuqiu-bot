@@ -176,17 +176,25 @@ export async function routeLeadToSales(lead, handoffSummary, traceContext = {}) 
     lead_id: lead.id,
     wa_id: traceContext.waId || lead.contact?.wa_id,
   });
+  if (!lead.tenant_id) {
+    logger.warn('routing.feishu.skipped_missing_tenant', { lead_id: lead.id });
+    return { success: false, error: 'lead missing tenant_id' };
+  }
+
   const message = buildFeishuLeadMessage(lead, handoffSummary);
-  // Feishu uuid max 50 chars; lead.id(36) + '_' + timestamp(13) = 50
-  const routeUuid = `${lead.id}_${Date.parse(lead.updated_at || '') || 0}`;
 
-  sendFeishuMessage(message, false, config.feishu.chatId, routeUuid).catch(err =>
-    logger.error('routing.feishu.failed', { error: err.message })
-  );
+  sendFeishuMessage(message, { tenantId: lead.tenant_id })
+    .then(result => {
+      if (result.skipped) {
+        logger.info('routing.feishu.skipped', { reason: result.reason });
+      } else if (!result.ok) {
+        logger.error('routing.feishu.failed', { error: result.error });
+      } else {
+        logger.info('routing.sales_routed', { tenant_id: lead.tenant_id });
+      }
+    })
+    .catch(err => logger.error('routing.feishu.failed', { error: err.message }));
 
-  logger.info('routing.sales_routed', {
-    route_uuid: routeUuid,
-  });
   return { success: true };
 }
 

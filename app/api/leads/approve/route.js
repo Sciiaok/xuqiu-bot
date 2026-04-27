@@ -1,14 +1,15 @@
 // app/api/leads/approve/route.js
 import { NextResponse } from 'next/server';
-import { demoGuard } from '../../../../lib/demo-mode.js';
 import supabase from '@/lib/supabase';
-import { batchApproveLeads } from '@/lib/repositories/lead.repository';
+import { getTenantContext } from '@/lib/tenant-context';
 
 export async function POST(request) {
-  const demoResponse = demoGuard({ success: true, approved: 0, message: 'Demo mode' });
-  if (demoResponse) return demoResponse;
-
   try {
+    const ctx = await getTenantContext();
+    if (!ctx) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
+
     const body = await request.json();
     const { leadIds, approveAll, filters } = body;
 
@@ -19,6 +20,7 @@ export async function POST(request) {
       let query = supabase
         .from('leads')
         .select('id')
+        .eq('tenant_id', ctx.tenantId)
         .eq('approved', false);
 
       if (filters?.stage) {
@@ -45,8 +47,24 @@ export async function POST(request) {
       });
     }
 
-    const approvedCount = await batchApproveLeads(idsToApprove, 'manual');
+    // 显式 tenant 过滤防止越权批准 —— 即使前端传了别 tenant 的 leadIds，
+    // 这里也会把它们 filter 掉。
+    const { data: approved, error: approveError } = await supabase
+      .from('leads')
+      .update({
+        approved: true,
+        approved_at: new Date().toISOString(),
+        approved_by: ctx.user.email || 'manual',
+        updated_at: new Date().toISOString(),
+      })
+      .eq('tenant_id', ctx.tenantId)
+      .in('id', idsToApprove)
+      .eq('approved', false)
+      .select('id');
 
+    if (approveError) throw approveError;
+
+    const approvedCount = approved?.length || 0;
     return NextResponse.json({
       success: true,
       approved: approvedCount,

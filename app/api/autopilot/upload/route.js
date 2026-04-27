@@ -1,5 +1,6 @@
-import { createClient } from '../../../../lib/supabase-server.js';
 import supabase from '../../../../lib/supabase.js';
+import { getTenantContext } from '../../../../lib/tenant-context.js';
+import { getSession } from '../../../../lib/repositories/autopilot.repository.js';
 
 /**
  * POST /api/autopilot/upload
@@ -16,9 +17,8 @@ const ALLOWED_IMAGE_TYPES = new Set(['image/jpeg', 'image/png', 'image/gif', 'im
 const MAX_SIZE_BYTES = 10 * 1024 * 1024;
 
 export async function POST(request) {
-  const authClient = await createClient();
-  const { data: { user } } = await authClient.auth.getUser();
-  if (!user) return Response.json({ error: 'Unauthorized' }, { status: 401 });
+  const ctx = await getTenantContext();
+  if (!ctx) return Response.json({ error: 'Unauthorized' }, { status: 401 });
 
   try {
     const formData = await request.formData();
@@ -35,9 +35,17 @@ export async function POST(request) {
       return Response.json({ error: 'File too large (max 10MB)' }, { status: 400 });
     }
 
+    // 给了 session_id 就要验它归当前 tenant —— 否则可上传到别 tenant 的 session 路径。
+    if (sessionId) {
+      const session = await getSession(sessionId);
+      if (!session || session.tenant_id !== ctx.tenantId) {
+        return Response.json({ error: 'Session not found' }, { status: 404 });
+      }
+    }
+
     const buffer = Buffer.from(await file.arrayBuffer());
     const ext = (file.name.split('.').pop() || 'png').toLowerCase();
-    const prefix = sessionId || `anon-${user.id}`;
+    const prefix = sessionId || `anon-${ctx.user.id}`;
     const storagePath = `${prefix}/${Date.now()}_${Math.random().toString(36).slice(2, 8)}.${ext}`;
 
     let { error: uploadError } = await supabase.storage

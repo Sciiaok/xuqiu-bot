@@ -203,7 +203,7 @@ async function main() {
       continue;
     }
 
-    await replaceConversationLeads(item.conversationId, item.contactId, leadsToReplace);
+    await replaceConversationLeads(item.conversationId, item.contactId, leadsToReplace, { tenantId: conv.tenant_id });
     await markRowsCompleted(rowIds);
 
     console.log(`Re-extracted leads=${leadsToReplace.length} route=${extractionResult.route || '-'}`);

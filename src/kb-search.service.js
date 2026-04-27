@@ -73,7 +73,10 @@ async function rewriteQuery(query, conversationContext) {
 
 // ── Vector Search ────────────────────────────────────────────────────
 
-async function vectorSearch(agentId, query, { layers = null, topK = 5, lang = null } = {}) {
+async function vectorSearch({ tenantId, productLineId, query, layers = null, topK = 5, lang = null }) {
+  if (!tenantId || !productLineId) {
+    throw new Error('vectorSearch: tenantId and productLineId required');
+  }
   const queryLang = lang || detectLanguage(query);
 
   // For non-English queries, translate to English for search
@@ -84,9 +87,10 @@ async function vectorSearch(agentId, query, { layers = null, topK = 5, lang = nu
 
   const embedding = await generateEmbedding(searchQuery);
 
-  // Always search English embeddings (primary), optionally also original
+  // 新 overload: (p_tenant_id, p_product_line_id, p_embedding, p_layers, p_top_k)
   const { data, error } = await supabase.rpc('search_kb_knowledge_en', {
-    p_agent_id: agentId,
+    p_tenant_id: tenantId,
+    p_product_line_id: productLineId,
     p_embedding: embedding,
     p_layers: layers,
     p_top_k: topK,
@@ -102,11 +106,12 @@ async function vectorSearch(agentId, query, { layers = null, topK = 5, lang = nu
  * Query kb_products with structured filters.
  * Filters format: { "specs.horsepower": { "$lte": 50 }, "category": "tractor" }
  */
-async function structuredProductSearch(agentId, filters = {}, { sortBy, sortOrder = 'asc', limit = 10 } = {}) {
+async function structuredProductSearch({ tenantId, productLineId, filters = {}, sortBy, sortOrder = 'asc', limit = 10 }) {
   let query = supabase
     .from('kb_products')
     .select('*')
-    .eq('agent_id', agentId)
+    .eq('tenant_id', tenantId)
+    .eq('product_line_id', productLineId)
     .eq('is_active', true);
 
   for (const [key, value] of Object.entries(filters)) {
@@ -155,11 +160,9 @@ async function structuredProductSearch(agentId, filters = {}, { sortBy, sortOrde
 
 /**
  * Translate arbitrary text to English via Haiku. Preserves product names,
- * model numbers, and technical terms. `_agentId` is accepted but ignored —
- * kept for call-site symmetry with the legacy glossary-augmented variant
- * (the `kb_glossary` table is dormant; the lookup was removed).
+ * model numbers, and technical terms.
  */
-async function translateToEnglish(text, _agentId) {
+async function translateToEnglish(text) {
   const response = await openrouter.messages.create({
     models: [MODELS.HAIKU],
     max_tokens: 4000,
@@ -200,15 +203,16 @@ function applyPriorityScoring(results) {
  * Use LLM to analyze query and determine optimal search strategy.
  * Extracts structured filters from natural language when applicable.
  */
-async function analyzeQueryIntent(query, agentId) {
-  // Get available spec fields for this agent
+async function analyzeQueryIntent({ tenantId, productLineId, query }) {
+  // Get available spec fields for this product line
   const { data: sampleProduct } = await supabase
     .from('kb_products')
     .select('specs, category')
-    .eq('agent_id', agentId)
+    .eq('tenant_id', tenantId)
+    .eq('product_line_id', productLineId)
     .eq('is_active', true)
     .limit(1)
-    .single();
+    .maybeSingle();
 
   const specFields = sampleProduct?.specs ? Object.keys(sampleProduct.specs) : [];
   const specFieldsHint = specFields.length > 0
@@ -262,26 +266,31 @@ Rules:
 /**
  * Main search function called by Agent tools.
  *
- * @param {string} agentId
- * @param {string} query - Natural language query
- * @param {Object} options
- * @param {string[]} options.layers - Filter by knowledge layers
- * @param {number} options.topK - Max results
- * @param {Object[]} options.conversationContext - Prior conversation turns
- * @param {Object} options.filters - Structured filters for product/shipping queries
- * @param {string} options.sortBy
- * @param {string} options.sortOrder
- * @returns {Promise<Object>} Search results with assets
+ * @param {Object} opts
+ * @param {string} opts.tenantId
+ * @param {string} opts.productLineId
+ * @param {string} opts.query
+ * @param {string[]} [opts.layers]
+ * @param {number} [opts.topK=5]
+ * @param {Array} [opts.conversationContext]
+ * @param {Object} [opts.filters]
+ * @param {string} [opts.sortBy]
+ * @param {string} [opts.sortOrder='asc']
  */
-export async function searchKnowledge(agentId, query, options = {}) {
-  const {
-    layers: explicitLayers = null,
-    topK = 5,
-    conversationContext = null,
-    filters: explicitFilters = null,
-    sortBy: explicitSortBy = null,
-    sortOrder: explicitSortOrder = 'asc',
-  } = options;
+export async function searchKnowledge({
+  tenantId,
+  productLineId,
+  query,
+  layers: explicitLayers = null,
+  topK = 5,
+  conversationContext = null,
+  filters: explicitFilters = null,
+  sortBy: explicitSortBy = null,
+  sortOrder: explicitSortOrder = 'asc',
+}) {
+  if (!tenantId || !productLineId) {
+    throw new Error('searchKnowledge: tenantId and productLineId required');
+  }
 
   // Step 1: Query rewrite if conversation context provided
   let effectiveQuery = query;
@@ -300,7 +309,7 @@ export async function searchKnowledge(agentId, query, options = {}) {
   // Only run intent analysis if no explicit filters were provided
   if (!explicitFilters) {
     try {
-      intentAnalysis = await analyzeQueryIntent(effectiveQuery, agentId);
+      intentAnalysis = await analyzeQueryIntent({ tenantId, productLineId, query: effectiveQuery });
       searchMode = intentAnalysis.search_mode || 'vector';
       if (intentAnalysis.filters) filters = intentAnalysis.filters;
       if (intentAnalysis.sort_by) sortBy = intentAnalysis.sort_by;
@@ -321,17 +330,14 @@ export async function searchKnowledge(agentId, query, options = {}) {
 
   // Step 3: Execute search based on determined mode
   if (searchMode === 'structured' && hasFilters) {
-    // Pure structured — skip vector search
-    structuredResults = await structuredProductSearch(agentId, filters, { sortBy, sortOrder, limit: topK });
+    structuredResults = await structuredProductSearch({ tenantId, productLineId, filters, sortBy, sortOrder, limit: topK });
   } else if (searchMode === 'hybrid' && hasFilters) {
-    // Hybrid — both vector and structured
     [vectorResults, structuredResults] = await Promise.all([
-      vectorSearch(agentId, effectiveQuery, { layers, topK }),
-      structuredProductSearch(agentId, filters, { sortBy, sortOrder, limit: topK }),
+      vectorSearch({ tenantId, productLineId, query: effectiveQuery, layers, topK }),
+      structuredProductSearch({ tenantId, productLineId, filters, sortBy, sortOrder, limit: topK }),
     ]);
   } else {
-    // Default vector search
-    vectorResults = await vectorSearch(agentId, effectiveQuery, { layers, topK });
+    vectorResults = await vectorSearch({ tenantId, productLineId, query: effectiveQuery, layers, topK });
   }
 
   // Step 4: Apply priority scoring to vector results
@@ -350,7 +356,8 @@ export async function searchKnowledge(agentId, query, options = {}) {
       const { data } = await supabase
         .from('kb_assets')
         .select('*')
-        .eq('agent_id', agentId)
+        .eq('tenant_id', tenantId)
+        .eq('product_line_id', productLineId)
         .overlaps('linked_skus', skus);
       assets = data || [];
     }
@@ -411,22 +418,18 @@ export async function searchKnowledge(agentId, query, options = {}) {
  * Calculate price from `kb_products` (base FOB) + optional `kb_shipping_routes`
  * for CIF/DDP. Insurance flat 0.3%.
  *
- * Historical note: there used to be a `kb_pricing_rules` layer for quantity
- * discounts / per-SKU overrides, populated by `/api/knowledge/pricing-rules`.
- * That endpoint had no UI, the table was never written, and the read added
- * a dead round-trip every call. Removed in 2026-04; the fixed insurance rate
- * replaces the configurable one.
- *
- * @param {string} agentId
- * @param {Object} params  { sku, quantity?, destinationPort?, tradeTerm? }
- * @returns {Promise<Object>} { product, breakdown, rules_applied, needs_approval, confidence }
+ * @param {Object} opts { tenantId, productLineId, sku, quantity?, destinationPort?, tradeTerm? }
  */
-export async function calculatePrice(agentId, { sku, quantity = 1, destinationPort, tradeTerm = 'FOB' }) {
+export async function calculatePrice({ tenantId, productLineId, sku, quantity = 1, destinationPort, tradeTerm = 'FOB' }) {
+  if (!tenantId || !productLineId) {
+    throw new Error('calculatePrice: tenantId and productLineId required');
+  }
   // 1. Base FOB from kb_products.
   const { data: products } = await supabase
     .from('kb_products')
     .select('*')
-    .eq('agent_id', agentId)
+    .eq('tenant_id', tenantId)
+    .eq('product_line_id', productLineId)
     .eq('is_active', true)
     .or(`sku.ilike.%${sku}%,model.ilike.%${sku}%`)
     .limit(1);
@@ -449,7 +452,8 @@ export async function calculatePrice(agentId, { sku, quantity = 1, destinationPo
     const { data: routes } = await supabase
       .from('kb_shipping_routes')
       .select('*')
-      .eq('agent_id', agentId)
+      .eq('tenant_id', tenantId)
+      .eq('product_line_id', productLineId)
       .ilike('destination_port', `%${destinationPort}%`)
       .limit(1);
 

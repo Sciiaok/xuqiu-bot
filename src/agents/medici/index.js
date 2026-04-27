@@ -131,7 +131,7 @@ export function buildSystemBlocks(systemPrompt, dynamicContext) {
  * Stored message → Anthropic content.
  * Returns a plain string for text-only, array of blocks for multimodal, '' for empty.
  */
-async function buildClaudeContent(message, logger) {
+async function buildClaudeContent(message, logger, metaToken = null) {
   const text = typeof message?.content === 'string' ? message.content.trim() : '';
   const metadata = message?.metadata || {};
   const blocks = [];
@@ -143,8 +143,12 @@ async function buildClaudeContent(message, logger) {
     metadata.media_type === 'image' &&
     metadata.wa_media_id
   ) {
+    if (!metaToken) {
+      logger.warn('medici.image_attachment.skip_no_token', { wa_media_id: metadata.wa_media_id });
+      return blocks.length === 1 && blocks[0].type === 'text' ? blocks[0].text : blocks;
+    }
     try {
-      const { buffer, mimeType } = await downloadWhatsAppMediaBuffer(metadata.wa_media_id);
+      const { buffer, mimeType } = await downloadWhatsAppMediaBuffer(metadata.wa_media_id, { token: metaToken });
       if (buffer.length > 0 && isClaudeSupportedImageMimeType(mimeType)) {
         blocks.push({
           type: 'image_url',
@@ -183,14 +187,14 @@ async function buildClaudeContent(message, logger) {
  * Latest user input can be: plain string / single message object / array of
  * aggregated messages. Flatten into one Anthropic content value.
  */
-async function normalizeLatestUserMessage(input, logger) {
+async function normalizeLatestUserMessage(input, logger, metaToken = null) {
   if (typeof input === 'string') return input;
 
   const items = Array.isArray(input) ? input : [input];
   const blocks = [];
 
   for (const item of items) {
-    const content = await buildClaudeContent({ role: 'user', ...item }, logger);
+    const content = await buildClaudeContent({ role: 'user', ...item }, logger, metaToken);
     if (typeof content === 'string') {
       if (content.trim()) blocks.push({ type: 'text', text: content });
       continue;
@@ -221,16 +225,16 @@ function markHistoryForCache(history) {
   }
 }
 
-async function buildMessages(conversationHistory, latestUserMessage, logger) {
+async function buildMessages(conversationHistory, latestUserMessage, logger, metaToken = null) {
   const historyMessages = Array.isArray(conversationHistory) ? conversationHistory : [];
 
   const sanitizedHistory = await Promise.all(
     historyMessages.map(async (msg) => ({
       role: msg.role,
-      content: await buildClaudeContent(msg, logger),
+      content: await buildClaudeContent(msg, logger, metaToken),
     })),
   );
-  const latestUserContent = await normalizeLatestUserMessage(latestUserMessage, logger);
+  const latestUserContent = await normalizeLatestUserMessage(latestUserMessage, logger, metaToken);
 
   const messages = [
     ...sanitizedHistory,
@@ -247,14 +251,13 @@ async function buildMessages(conversationHistory, latestUserMessage, logger) {
 // ─── Tools ───────────────────────────────────────────────────────────
 
 /**
- * agentConfig.id is the legacy agents.id UUID. KB tool rows are still keyed
- * on agent_id in DB; product-line.repository::findAgentIdByProductLine does
- * the slug→UUID bridge in queue-processor before calling us.
+ * KB 表 2026-04-28 加了 product_line_id 列后所有 KB 工具直接按
+ * (tenant_id, product_line_id) 查询，不再需要 agents.id UUID 这条桥。
  */
-async function loadAgentTools(agentId, logger) {
-  if (!agentId) return [];
+async function loadAgentTools({ tenantId, productLineId }, logger) {
+  if (!tenantId || !productLineId) return [];
   try {
-    return await buildKbTools(agentId);
+    return await buildKbTools({ tenantId, productLineId });
   } catch (e) {
     logger.warn('medici.kb_tools.failed', { error: e.message });
     return [];
@@ -262,18 +265,19 @@ async function loadAgentTools(agentId, logger) {
 }
 
 /**
- * Load sendable image assets for the agent. Returned as a plain list that
- * buildDynamicContext renders into the AVAILABLE ASSETS block; the LLM
+ * Load sendable image assets for the product line. Returned as a plain list
+ * that buildDynamicContext renders into the AVAILABLE ASSETS block; the LLM
  * references them by id via the `attachments` envelope field. Failures
  * downgrade to an empty list — Medici keeps replying without images.
  */
-async function loadAvailableAssets(agentId, logger) {
-  if (!agentId) return [];
+async function loadAvailableAssets({ tenantId, productLineId }, logger) {
+  if (!tenantId || !productLineId) return [];
   try {
     const { data, error } = await supabase
       .from('kb_assets')
       .select('id, description, mime_type, asset_type')
-      .eq('agent_id', agentId)
+      .eq('tenant_id', tenantId)
+      .eq('product_line_id', productLineId)
       .eq('is_sendable', true);
     if (error) throw error;
     return data || [];
@@ -365,61 +369,15 @@ export function stripEmptyStringFields(obj) {
 /**
  * Normalize non-standard agent responses to canonical leads[].
  *
- * Case 3 (the catch-all that moves non-column fields into `details`) is
- * LIVE — required for any product_line whose lead_fields introduce custom
- * columns beyond STANDARD_DB_FIELDS. Without this, DB inserts fail.
+ * 把任何非 STANDARD_DB_FIELDS 的字段移进 details JSONB —— 这是 product_line
+ * 自定义 lead_fields 落库的兜底。少了这个，custom 字段会让 DB insert 失败。
  *
- * Cases 1–2 are legacy:
- *   - Case 1 (rfq_items → leads): DEPRECATED. Remove once telemetry confirms
- *     no fresh rfq_items emissions for one release.
- *   - Case 2 (customer_profile merge): mostly dead post product_lines refactor;
- *     kept for any residual legacy agent.output_schema rows.
+ * 老的 rfq_items / root-level customer_profile 分支已经下掉（product_lines
+ * 重构后 output_schema 都是按 lead_fields 自动拼的，不再产出那种形状）。
  */
 export function normalizeAgentResponse(parsed) {
-  // Case 1 — DEPRECATED.
-  if (parsed.rfq_items) {
-    const customerProfile = parsed.customer_profile || {};
-    parsed.leads = parsed.rfq_items.map((item) => ({
-      brand: item.brand || '',
-      car_model: item.model || item.machinery_type || '',
-      destination_country: item.destination_country || '',
-      destination_port: item.destination_port || '',
-      loading_port: item.loading_port || '',
-      international_commercial_term: item.incoterm || '',
-      company_name: customerProfile.company_name || '',
-      timeline: item.timeline || '',
-      color_quantity: [],
-      qty_bucket: item.quantity || '',
-      product_name: item.machinery_type || '',
-      sku_description: item.specifications || '',
-      buyer_type: customerProfile.company_type || '',
-      details: {
-        machinery_type: item.machinery_type,
-        model: item.model,
-        specifications: item.specifications,
-        quantity: item.quantity,
-        customer_profile: cleanEmptyValues(customerProfile),
-      },
-    }));
-    delete parsed.rfq_items;
-    delete parsed.customer_profile;
-    return;
-  }
-
-  // Case 2 — legacy customer_profile merge.
-  if (parsed.customer_profile && parsed.leads) {
-    const cp = parsed.customer_profile;
-    parsed.leads = parsed.leads.map((lead) => ({
-      ...lead,
-      company_name: lead.company_name || cp.company_name || '',
-      buyer_type: lead.buyer_type || cp.company_type || '',
-      details: { ...(lead.details || {}), customer_profile: cleanEmptyValues(cp) },
-    }));
-    delete parsed.customer_profile;
-  }
-
-  // Case 3 — LIVE. Move non-canonical fields into details JSONB. Also applies
-  // a couple of hardcoded aliases for legacy agents (car_brand/part_name/quantity).
+  // Move non-canonical fields into details JSONB. Also applies a couple of
+  // hardcoded aliases for legacy agents (car_brand/part_name/quantity).
   if (parsed.leads) {
     parsed.leads = parsed.leads.map((lead) => {
       const hasExtraFields = Object.keys(lead).some((k) => !STANDARD_DB_FIELDS.has(k));
@@ -509,6 +467,7 @@ export async function runMedici({
   input,
   context = {},
   agentConfig,
+  metaToken = null,
   trace = {},
   onToolEvent,
 }) {
@@ -520,7 +479,7 @@ export async function runMedici({
   });
 
   // 1. messages[] (history + latest, cache_control on trailing history turn).
-  const { messages, historyCount, latestContent } = await buildMessages(history, input, logger);
+  const { messages, historyCount, latestContent } = await buildMessages(history, input, logger, metaToken);
 
   // 2. Resolve system prompt (REQUIRED) + output schema.
   const systemPrompt = resolveSystemPrompt(agentConfig);
@@ -529,10 +488,11 @@ export async function runMedici({
   // 3. Assemble tools + load sendable assets in parallel. Assets are injected
   //    into the dynamic context so the LLM can reference them by id via the
   //    `attachments` envelope field (no extra tool round needed).
-  const agentId = agentConfig?.id;
+  const tenantId = agentConfig?.tenant_id || null;
+  const productLineId = agentConfig?.product_line || null;
   const [agentTools, availableAssets] = await Promise.all([
-    loadAgentTools(agentId, logger),
-    loadAvailableAssets(agentId, logger),
+    loadAgentTools({ tenantId, productLineId }, logger),
+    loadAvailableAssets({ tenantId, productLineId }, logger),
   ]);
   const tools = [...markLastToolForCache(agentTools), buildSubmitResponseTool(outputSchema)];
 
@@ -580,7 +540,11 @@ export async function runMedici({
       logger.info('medici.tool_use.call', { tool: toolName, iteration: iterations });
       // All non-submit tools currently go through executeKbTool; unknown
       // tool names return a structured {error} result (safe fallback).
-      const result = await executeKbTool(toolName, toolInput, agentId, { conversationContext });
+      const result = await executeKbTool(toolName, toolInput, {
+        tenantId,
+        productLineId,
+        conversationContext,
+      });
       onToolEvent?.({ type: 'tool_result', tool: toolName, result, iteration: iterations });
       return { tc, result };
     }));

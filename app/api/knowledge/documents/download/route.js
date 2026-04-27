@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import supabase from '../../../../../lib/supabase.js';
+import { getTenantContext, findAgentInTenant } from '../../../../../lib/tenant-context.js';
 import { getDocumentById } from '../../../../../lib/repositories/knowledge-base.repository.js';
 
 /**
@@ -8,6 +9,9 @@ import { getDocumentById } from '../../../../../lib/repositories/knowledge-base.
  */
 export async function GET(request) {
   try {
+    const ctx = await getTenantContext();
+    if (!ctx) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+
     const { searchParams } = new URL(request.url);
     const docId = searchParams.get('doc_id');
     if (!docId) {
@@ -16,6 +20,10 @@ export async function GET(request) {
 
     const doc = await getDocumentById(docId);
     if (!doc) {
+      return NextResponse.json({ error: 'Document not found' }, { status: 404 });
+    }
+    // 验 doc 所属 agent 归属当前 tenant —— 否则 doc_id 一旦泄露就能跨 tenant 下载文件。
+    if (!(await findAgentInTenant({ tenantId: ctx.tenantId, agentId: doc.agent_id }))) {
       return NextResponse.json({ error: 'Document not found' }, { status: 404 });
     }
     if (!doc.storage_path) {

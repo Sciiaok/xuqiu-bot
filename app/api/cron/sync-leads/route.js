@@ -1,5 +1,6 @@
 // app/api/cron/sync-leads/route.js
 import { NextResponse } from 'next/server';
+import supabase from '@/lib/supabase';
 import { getLeadsNeedingSync } from '@/lib/repositories/lead.repository';
 import {
   createSyncLog,
@@ -11,21 +12,35 @@ import {
 import { syncLeadsToExternal, processSyncResults, expandLeadForSync } from '@/lib/services/external-sync';
 import { config } from '@/src/config';
 
+async function listActiveTenantIds() {
+  const { data, error } = await supabase
+    .from('tenants')
+    .select('id')
+    .eq('status', 'active');
+  if (error) throw error;
+  return (data || []).map(r => r.id);
+}
+
 export async function POST(request) {
   try {
     // Verify cron secret
     const authHeader = request.headers.get('authorization');
     const cronSecret = config.secrets.cron;
 
-    if (cronSecret && authHeader !== `Bearer ${cronSecret}`) {
+    if (!cronSecret || authHeader !== `Bearer ${cronSecret}`) {
       return NextResponse.json(
         { success: false, error: 'Unauthorized' },
         { status: 401 }
       );
     }
 
-    // Get all approved leads from last 24h
-    const allLeads = await getLeadsNeedingSync();
+    // Get all approved leads from last 24h across every active tenant.
+    const tenantIds = await listActiveTenantIds();
+    const allLeads = [];
+    for (const tenantId of tenantIds) {
+      const tenantLeads = await getLeadsNeedingSync({ tenantId });
+      allLeads.push(...tenantLeads);
+    }
 
     // Filter to those needing sync
     const leadsToSync = [];
@@ -42,8 +57,9 @@ export async function POST(request) {
         logsToUpdate.push({ lead, log: updatedLog, isRetry: true });
         leadsToSync.push(lead);
       } else if (!failedLog) {
-        // Create new sync log
+        // Create new sync log（lead 行自带 tenant_id）
         const newLog = await createSyncLog({
+          tenantId: lead.tenant_id,
           leadId: lead.id,
           status: 'syncing',
           requestPayload: expandLeadForSync(lead),  // Now returns array

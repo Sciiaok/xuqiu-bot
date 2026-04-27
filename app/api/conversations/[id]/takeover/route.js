@@ -1,34 +1,34 @@
 import { NextResponse } from 'next/server';
-import { demoGuard } from '../../../../../lib/demo-mode.js';
-import { createClient } from '../../../../../lib/supabase-server.js';
+import { getTenantContext } from '../../../../../lib/tenant-context.js';
 import {
   startHumanTakeover,
   endHumanTakeover,
   findConversationById,
 } from '../../../../../lib/repositories/conversation.repository.js';
 
+async function loadConversationInTenant(conversationId, tenantId) {
+  const conv = await findConversationById(conversationId);
+  if (!conv || conv.tenant_id !== tenantId) return null;
+  return conv;
+}
+
 /**
  * POST /api/conversations/[id]/takeover - Start human takeover
  */
 export async function POST(request, { params }) {
-  const demoResponse = demoGuard({ success: true, conversation: {} });
-  if (demoResponse) return demoResponse;
-
   try {
-    const supabase = await createClient();
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user) {
+    const ctx = await getTenantContext();
+    if (!ctx) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
     const { id } = await params;
-    const conversation = await findConversationById(id);
-    if (!conversation) {
+    if (!(await loadConversationInTenant(id, ctx.tenantId))) {
       return NextResponse.json({ error: 'Conversation not found' }, { status: 404 });
     }
 
     const updated = await startHumanTakeover(id);
-    console.log(`Human takeover started by ${user.email} for conversation ${id}`);
+    console.log(`Human takeover started by ${ctx.user.email} for conversation ${id}`);
 
     return NextResponse.json({ success: true, conversation: updated });
   } catch (error) {
@@ -44,19 +44,19 @@ export async function POST(request, { params }) {
  * DELETE /api/conversations/[id]/takeover - End human takeover
  */
 export async function DELETE(request, { params }) {
-  const demoResponse = demoGuard({ success: true, conversation: {} });
-  if (demoResponse) return demoResponse;
-
   try {
-    const supabase = await createClient();
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user) {
+    const ctx = await getTenantContext();
+    if (!ctx) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
     const { id } = await params;
+    if (!(await loadConversationInTenant(id, ctx.tenantId))) {
+      return NextResponse.json({ error: 'Conversation not found' }, { status: 404 });
+    }
+
     const updated = await endHumanTakeover(id);
-    console.log(`Human takeover ended by ${user.email} for conversation ${id}`);
+    console.log(`Human takeover ended by ${ctx.user.email} for conversation ${id}`);
 
     return NextResponse.json({ success: true, conversation: updated });
   } catch (error) {

@@ -94,12 +94,12 @@ export default function V5LoginPage() {
           </form>
 
           <div className={s.footer}>
-            Lead Engine v5 · 仅限授权用户
+            仅限授权用户
           </div>
         </div>
 
         <div className={s.copyright}>
-          © {new Date().getFullYear()} Lead Engine
+          © {new Date().getFullYear()} Prome Engine
         </div>
       </div>
     </div>

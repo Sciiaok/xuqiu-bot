@@ -10,6 +10,8 @@ const PROTECTED_PREFIXES = [
   '/campaign-studio',
   '/leadhub',
   '/knowledge-base',
+  '/admin',
+  '/settings',
 ];
 
 export async function middleware(request) {
@@ -103,6 +105,8 @@ export const config = {
     '/campaign-studio/:path*',
     '/leadhub/:path*',
     '/knowledge-base/:path*',
+    '/admin/:path*',
+    '/settings/:path*',
     '/login',
   ],
 };

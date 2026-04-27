@@ -1,25 +1,36 @@
 import { NextResponse } from 'next/server';
 import supabase from '../../../../lib/supabase.js';
+import { getTenantContext, findAgentInTenant } from '../../../../lib/tenant-context.js';
 import {
-  getDocumentsByAgent,
+  getDocumentsByProductLine,
   getDocumentById,
   deleteDocumentById,
 } from '../../../../lib/repositories/knowledge-base.repository.js';
 
 /**
  * GET /api/knowledge/documents?agent_id=xxx
- * List all knowledge documents for an agent.
+ * List all knowledge documents for an agent's product line.
  */
 export async function GET(request) {
   try {
+    const ctx = await getTenantContext();
+    if (!ctx) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+
     const { searchParams } = new URL(request.url);
     const agentId = searchParams.get('agent_id');
 
     if (!agentId) {
       return NextResponse.json({ error: 'agent_id is required' }, { status: 400 });
     }
+    const agent = await findAgentInTenant({ tenantId: ctx.tenantId, agentId });
+    if (!agent) {
+      return NextResponse.json({ error: 'Agent not found' }, { status: 404 });
+    }
 
-    const documents = await getDocumentsByAgent(agentId);
+    const documents = await getDocumentsByProductLine({
+      tenantId: ctx.tenantId,
+      productLineId: agent.product_line,
+    });
     return NextResponse.json({ documents });
   } catch (error) {
     console.error('[knowledge/documents] Error:', error);
@@ -34,10 +45,12 @@ export async function GET(request) {
  */
 export async function DELETE(request) {
   try {
+    const ctx = await getTenantContext();
+    if (!ctx) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+
     const { searchParams } = new URL(request.url);
     let docId = searchParams.get('doc_id');
     if (!docId) {
-      // Fallback: older clients POST JSON body
       const body = await request.json().catch(() => ({}));
       docId = body.doc_id;
     }
@@ -46,13 +59,19 @@ export async function DELETE(request) {
       return NextResponse.json({ error: 'doc_id is required' }, { status: 400 });
     }
 
-    // Clean up storage first (best-effort) — repo doesn't touch storage
+    // 验 doc 所属 agent 归属当前 tenant —— 否则 doc_id 一旦泄露就能跨 tenant 删数据。
     const doc = await getDocumentById(docId);
-    if (doc?.storage_path) {
+    if (!doc) {
+      return NextResponse.json({ error: 'Document not found' }, { status: 404 });
+    }
+    if (!(await findAgentInTenant({ tenantId: ctx.tenantId, agentId: doc.agent_id }))) {
+      return NextResponse.json({ error: 'Document not found' }, { status: 404 });
+    }
+
+    if (doc.storage_path) {
       await supabase.storage.from('kb-assets').remove([doc.storage_path]);
     }
 
-    // Delete document (cascades to kb_knowledge_points, kb_products, kb_shipping_routes)
     await deleteDocumentById(docId);
 
     return NextResponse.json({ success: true });

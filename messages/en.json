@@ -22,7 +22,7 @@
     "signOut": "Sign out"
   },
   "login": {
-    "title": "Lead Engine",
+    "title": "Prome Engine",
     "subtitle": "Sign in to access your dashboard",
     "email": "Email Address",
     "emailPlaceholder": "you@company.com",
@@ -31,7 +31,7 @@
     "signIn": "Sign In",
     "signingIn": "Signing in...",
     "footer": "B2B Vehicle Export Lead Qualification",
-    "copyright": "© {year} Lead Engine. All rights reserved.",
+    "copyright": "© {year} Prome Engine. All rights reserved.",
     "defaultError": "Failed to sign in. Please check your credentials.",
     "darkMode": "Switch to dark mode",
     "lightMode": "Switch to light mode"

@@ -1,7 +1,6 @@
 import { NextResponse } from 'next/server';
-import { demoGuard } from '../../../../../lib/demo-mode.js';
-import { createClient } from '../../../../../lib/supabase-server.js';
 import supabase from '../../../../../lib/supabase.js';
+import { getTenantContext } from '../../../../../lib/tenant-context.js';
 import { findContactById } from '../../../../../lib/repositories/contact.repository.js';
 import { generateSummaryWithFallback } from '../../../../../lib/ai-summary.js';
 
@@ -30,12 +29,8 @@ function buildAiSummaryInput(contact, conversations, leads, messages) {
 
 export async function GET(request, { params }) {
   try {
-    const authClient = await createClient();
-    const {
-      data: { user },
-    } = await authClient.auth.getUser();
-
-    if (!user) {
+    const ctx = await getTenantContext();
+    if (!ctx) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
@@ -44,7 +39,9 @@ export async function GET(request, { params }) {
     const withAiSummary = searchParams.get('withAiSummary') === 'true';
 
     const contact = await findContactById(id);
-    if (!contact) {
+    // 即使 contact 存在，也得验它属于当前 tenant —— 否则 contact id 一旦泄露
+    // 就能跨 tenant 拉到画像。404 而非 403 以避免 enumeration。
+    if (!contact || contact.tenant_id !== ctx.tenantId) {
       return NextResponse.json({ error: 'Contact not found' }, { status: 404 });
     }
 
@@ -54,6 +51,7 @@ export async function GET(request, { params }) {
     } = await supabase
       .from('conversations')
       .select('id, agent_id, status, created_at, is_human_takeover, agents(name, product_line)')
+      .eq('tenant_id', ctx.tenantId)
       .eq('contact_id', id)
       .order('created_at', { ascending: false });
 
@@ -74,10 +72,12 @@ export async function GET(request, { params }) {
         supabase
           .from('leads')
           .select('*')
+          .eq('tenant_id', ctx.tenantId)
           .in('conversation_id', conversationIds),
         supabase
           .from('messages')
           .select('role, content, sent_at')
+          .eq('tenant_id', ctx.tenantId)
           .in('conversation_id', conversationIds)
           .order('sent_at', { ascending: false })
           .limit(20),
@@ -102,14 +102,6 @@ export async function GET(request, { params }) {
     };
 
     if (withAiSummary) {
-      const demoResponse = demoGuard({
-        ...responseBody,
-        aiSummary: '演示模式下不生成 AI 客户画像摘要。',
-      });
-      if (demoResponse) {
-        return demoResponse;
-      }
-
       try {
         responseBody.aiSummary = await generateSummaryWithFallback({
           system: AI_SYSTEM_PROMPT,

@@ -79,9 +79,10 @@ Medici = 第 7 步。**前 1-6 为它准备输入，后 8-11 消化它的输出*
     ad_referral?:        string           // 客户点进来的 Meta 广告素材
   }
   agentConfig: {                          // 必填——product_line 已解析好的配置
+    tenant_id: string                     // 必填。KB 工具按 (tenant_id, product_line) 索引
+    product_line: string                  // 必填。slug，等于 product_lines.id
     system_prompt: string                 // 必填。缺了直接抛
     output_schema?: object                // 可选，缺则用 GENERIC_LEAD_OUTPUT_SCHEMA
-    id?: string                           // legacy agents.id UUID，用来加载 KB/商品 tools
     qualification_config?: object
   }
   trace?: { traceId?: string; conversationId?: string; waId?: string }
@@ -180,19 +181,18 @@ runMedici(opts)
   │        [0] 静态产品线 prompt    cache_control: ephemeral  (缓存)
   │        [1] 动态 context         (不缓存，每轮都新鲜)
   │
-  ├─ 5. loadAgentTools(agentConfig.id)
+  ├─ 5. loadAgentTools({ tenantId, productLineId })
   │     └─ buildKbTools (./kb-tools.js，包装外部 src/kb-search.service.js)
-  │     agentConfig.id = legacy agents.id (UUID)，product-line.repository
-  │     的 findAgentIdByProductLine 在 queue-processor 里做 slug→UUID 桥接
+  │     KB 表已加 product_line_id 列（见 §9 已修复 #13），按
+  │     (tenant_id, product_line_id) 直接索引，无中间 UUID 桥
   │
   ├─ 6. ★ Tool-use 循环（runMedici 内联，见 4.2）
   │     tools = [...agentTools, submit_response]，每轮必以 submit_response 收尾
   │
   └─ 7. 输出归一化（runMedici 内联）
         ├─ 自定义 schema → normalizeAgentResponse
-        │  · rfq_items → leads (DEPRECATED, 见 §7)
-        │  · customer_profile 合并到每条 lead
-        │  · agent-specific 字段名 → canonical DB 列 + 原始字段存进 details
+        │  · agent-specific 字段名 → canonical DB 列 + 非标列字段存进 details JSONB
+        │  · 这是 product_line 自定义 lead_fields 落库的兜底
         └─ 全部 lead 去掉 "" 字段
 ```
 
@@ -238,7 +238,7 @@ Medici 的工具分两档：**1 个总是注册的 submit_response**（每轮必
 
 > 历史：早期存在 `search_products` / `query_products` 两个商品检索工具（由 [product-search.js]
 > 提供，底层打 `product_specs / product_embeddings` 两张表）。2026-04 确认为废弃实验代码，一并删除。
-> DB 表按"旧数据库表不动"的规矩保留但 dormant，见 §7 技术债。
+> DB 表按"旧数据库表不动"的规矩保留但 dormant，见 §8.1。
 
 #### 1. `submit_response` —— 强制收尾工具（关键）
 
@@ -322,7 +322,7 @@ Medici 的 `search_knowledge` / `calculate_price` 两个工具吃的就是这里
 | `kb_shipping_routes` | Excel 解析出的运费路由（destination_port、cost_per_unit_usd、transit_days） | upload Excel 分支 | `calculate_price` CIF/DDP 分支 |
 | `kb_knowledge_gaps` | 命中率低 / 置信度低的检索记录（盲区清单） | `search_knowledge` 检索时回写 | OverviewTab 盲区面板 + gaps API |
 | `kb_assets` | 可对外发送的图片资产（`asset_type='product_image'`、`is_sendable=true`） | `/api/knowledge/assets` (POST) + AssetTab UI | Medici `loadAvailableAssets` → 注入动态上下文 + queue-processor `sendMediciAttachments` → WhatsApp |
-| `kb_glossary` / `kb_pricing_rules` | **DORMANT**（见 §7.4） | — | — |
+| `kb_glossary` / `kb_pricing_rules` / `kb_product_assets` | **DORMANT**（见 §8.2） | — | — |
 
 **六层分类学**：`company / product / logistics / compliance / sales / competitive`。运营上传文档时选层，`search_knowledge` 可选按层过滤。
 
@@ -479,54 +479,19 @@ dev-tools 里的 **Medici 调试台** (`/dev-tools/medici-simulator`) 直接调 
 
 ## 8. 废弃 / 技术债
 
-### 8.1 `normalizeAgentResponse` 的 `rfq_items` 分支（index.js Post-process 段）
-
-背景：产品线重构前，农机 agent 的 prompt 产出 `rfq_items + customer_profile` 而不是标准 `leads[]`。现在产品线的 `output_schema` 由 `lead_fields` 自动拼，不会再产出这种形态。
-
-**处置**：分支保留一个 release，等遥测 log (`medici.request.completed`) 确认没有新的 `rfq_items` 输出后删。该函数的 Case 3 catch-all（把非 canonical 字段收到 `details` JSONB）是**活的**，不能删——任何自定义 `lead_fields` 都依赖它兜底。
-
-### 8.2 `agentConfig.id` 这条桥
-
-`product_lines.id`（slug）和 `agents.id`（UUID）是两套标识。KB 工具的表列（`kb_knowledge_points / kb_products / kb_pricing_rules` 等）还是 `agent_id`（保留旧 DB 不动），所以需要一个桥：
-
-```
-product_lines.id (slug)
-    │
-    ▼  product-line.repository::findAgentIdByProductLine
-    │
-agents.id (UUID)
-    │
-    ▼  loadMediciConfig 把 UUID 塞进 agentConfig.id
-    │
-    ▼  Medici 把它传给 buildKbTools
-```
-
-这是当前阶段的设计取舍。真要彻底切干净需要把 `kb_*` 和商品表列改成 `product_line_id`——那是另一个阶段的事，不是 Medici 的职责。
-
-### 8.3 dormant product 表 / RPC / bucket（废弃实验留下的 DB）
-
-2026-04 已把商品检索工具（`search_products / query_products`）从代码侧删干净，但 DB 侧按"旧数据库表不动"的约定**原样保留**：
-
-- 表：`product_documents / product_specs / product_embeddings / product_assets / product_doc_operations`
-- RPC：`get_spec_fields / query_product_specs / search_product_embeddings`
-- Storage buckets：`product-docs / product-assets`
-- Migrations：019 / 020 / 2026-03-27-product-assets（保留作历史记录，不回滚）
-
-这些对象**不再被任何代码读写**，继续占空间但无风险。等确认永不复用时再写一版 down-migration 一次性清掉。
-
-### 8.4 dormant KB 表（KB round 留下的 DB）
-
-同理，2026-04 KB round 删掉了 `/api/knowledge/{auto-learn, feishu-import, glossary, pricing-rules, assets, calculate-price}` 及对应 service，但以下 DB 对象保留：
-
-- `kb_assets` / `kb_product_assets`：`send_asset` tool 的配套素材表，tool 已在前一轮下掉
-- `kb_glossary`：术语表，原本只有已删除的 `/glossary` POST 端点写入，`translateToEnglish` 早期会读它做术语替换，现在已不读
-- `kb_pricing_rules`：价格折扣规则，原本只有已删除的 `/pricing-rules` POST 写入，`calculatePrice` 早期会读它算数量折扣，现在已不读（insurance 也降级为硬编码 0.3%）
-
-表 + migration `2026-04-02-knowledge-base-v2.sql` 保留。storage bucket `kb-assets` 也保留但无上传入口。
-
 ---
 
-## 9. 已修复（2026-04 round）
+## 9. 已修复
+
+### 2026-04-28 round
+
+| # | 问题 | 修复 |
+|---|---|---|
+| 11 | `normalizeAgentResponse` 的 `rfq_items` / 顶层 `customer_profile` 两条历史分支 —— product_lines 重构后 output_schema 都是按 `lead_fields` 自动拼的，永远不会再产出那种形状，遥测也确认 0 命中 | 删 Case 1 + Case 2，只保留 Case 3 catch-all（自定义 `lead_fields` 落 `details` JSONB 兜底） |
+| 12 | `kb-tools.js` 的 `pricingCount` 查询 + description 撒谎 —— 只用来在 description 里加一句 "Quantity discount rules are available."，但 `calculatePrice` 实际不读 `kb_pricing_rules`，那句话是 LLM 看着会被误导的死提示 | 删 `pricingCount` 查询；description 改成"insurance fixed at 0.3%"实情 |
+| 13 | `agentConfig.id` 的 slug↔UUID 桥（旧 §8.2）—— `product_lines.id` 是 slug，`agents.id` 是 UUID，`kb_*` 全部按 `agent_id` 索引，导致每条 KB 路径都得先 `findAgentIdByProductLine` 反查一次，外加 agentConfig 里挂着两套 ID | 给 `kb_documents / kb_knowledge_points / kb_products / kb_shipping_routes / kb_assets / kb_knowledge_gaps` 等表加 `product_line_id TEXT` 列 + 一次性 backfill + `(tenant_id, product_line_id)` 索引 + INSERT/UPDATE trigger 自动从 agent_id 反查填值；新增 `search_kb_knowledge_en(p_tenant_id, p_product_line_id, …)` overload；所有 KB 查询路径切到按 `(tenant_id, product_line_id)` 过滤；`loadMediciConfig` / simulator 不再查 agents 表填 `agentConfig.id`；`hasKnowledgeBase / buildKbTools / executeKbTool / searchKnowledge / vectorSearch / structuredProductSearch / calculatePrice / loadAvailableAssets` 全部签名改成 `{ tenantId, productLineId }`；老 `agent_id` 列保留不动 |
+
+### 2026-04 round
 
 | # | 问题 | 修复 |
 |---|---|---|
@@ -537,9 +502,9 @@ agents.id (UUID)
 | 5 | `search_products` 默认 top_k=3、`search_knowledge` 默认 top_k=5 不一致 | 都统一为 5 |
 | 6 | Medici 调试台 看不到 tool 调用过程（KB / 产品工具是黑盒） | runMedici 新增 `onToolEvent` 可选回调；simulator 把 tool_call（含入参）+ tool_result（截断预览）拼进 trace，前端蓝/绿色高亮 |
 | 7 | 删掉 `/product-lines/[id]` 的"AI 知识问答" tab + `/api/knowledge/test-chat/**` 三个 API——它测的是"KB + 通用 RAG prompt"，既不是 Medici 真实行为，也不是 KB 覆盖度的正确测法；Medici 调试台 + tool 可视化已覆盖这个场景 | 删 ChatTab、三个 API、lib/api/knowledge.js 里的 listSessions/getSession/sendMessage/deleteSession |
-| 8 | `product-search` 模块（`search_products / query_products` 两个工具）+ `app/api/product-assets/` 四个 route，整块是之前 RD 做的商品检索实验，事实上没被调用过 | 删 `src/agents/medici/product-search.js` + `app/api/product-assets/` 整目录；index.js 的 `loadAgentTools` / dispatcher 去掉商品分支；`isKbTool` 死导出一并删；DB 侧的表/RPC/bucket 保留 dormant（见 §8.3）|
+| 8 | `product-search` 模块（`search_products / query_products` 两个工具）+ `app/api/product-assets/` 四个 route，整块是之前 RD 做的商品检索实验，事实上没被调用过 | 删 `src/agents/medici/product-search.js` + `app/api/product-assets/` 整目录；index.js 的 `loadAgentTools` / dispatcher 去掉商品分支；`isKbTool` 死导出一并删；DB 侧的表/RPC/bucket 保留 dormant（见 §8.1）|
 | 9 | **KB 的 teach 功能完全坏了**：lib 客户端发 `content` 字段但 API 读 `message`，每次点"提交知识"都 400；即便修好 POST，UI 也没有确认 draft 的按钮，而 API 把知识插成 `status='draft'` → `search_knowledge` 过滤 `status='active'` 看不到——**teach 写入的知识点永远不会被 Claude 读到** | Option A 简化：字段名对齐成 `message`；POST 直接插 `status='active'`（删 draft 层和 PUT 方法）；UI 计数从错的 `drafts_created` 改成 `inserted_count` |
-| 10 | KB 一半端点是死代码：`/{auto-learn, feishu-import, glossary, pricing-rules, assets, calculate-price}` 全无调用方（UI / cron / Medici 都不碰），`src/kb-auto-learn.service.js` + `src/kb-feishu-import.service.js` 同理 | 12 个端点砍到 6 个；删 2 个 service 文件（共 ~420 行）+ 6 个 API route；`kb-search` 的 `searchShippingRoutes` 死函数 + `translateWithGlossary` 的空表 glossary 查询 + `calculatePrice` 的空表 pricing_rules 查询全部简化；repository 删 3 个永远返 0 的 count 函数，OverviewTab 去掉 2 个永远 0 的数字卡；配套 DB 表（`kb_assets / kb_glossary / kb_pricing_rules`）dormant 保留（见 §8.4）|
+| 10 | KB 一半端点是死代码：`/{auto-learn, feishu-import, glossary, pricing-rules, calculate-price}` 全无调用方（UI / cron / Medici 都不碰），`src/kb-auto-learn.service.js` + `src/kb-feishu-import.service.js` 同理 | 砍掉 5 个无调用端点；删 2 个 service 文件（共 ~420 行）；`kb-search` 的 `searchShippingRoutes` 死函数 + `translateWithGlossary` 的空表 glossary 查询 + `calculatePrice` 的空表 pricing_rules 查询全部简化；repository 删 3 个永远返 0 的 count 函数，OverviewTab 去掉 2 个永远 0 的数字卡；配套 DB 表（`kb_glossary / kb_pricing_rules / kb_product_assets`）dormant 保留（见 §8.2）|
 
 ---
 

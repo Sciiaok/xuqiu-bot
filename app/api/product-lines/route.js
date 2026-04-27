@@ -1,22 +1,21 @@
 import { NextResponse } from 'next/server';
-import { demoGuard } from '../../../lib/demo-mode.js';
-import { createClient } from '../../../lib/supabase-server.js';
+import { getTenantContext } from '../../../lib/tenant-context.js';
 import {
   getAllProductLines,
   createProductLine,
 } from '../../../lib/repositories/product-line.repository.js';
 import { invalidateMediciCache } from '../../../src/agents/medici/config.js';
+import { markFirstProductLine } from '../../../lib/repositories/onboarding.repository.js';
 
 const SLUG_RE = /^[a-z][a-z0-9_]{0,39}$/;
 
 export async function GET(request) {
   try {
-    const supabase = await createClient();
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    const ctx = await getTenantContext();
+    if (!ctx) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 
     const activeOnly = new URL(request.url).searchParams.get('active') === 'true';
-    const lines = await getAllProductLines(activeOnly);
+    const lines = await getAllProductLines({ tenantId: ctx.tenantId, activeOnly });
     return NextResponse.json({ lines });
   } catch (err) {
     console.error('GET /api/product-lines failed:', err);
@@ -25,13 +24,9 @@ export async function GET(request) {
 }
 
 export async function POST(request) {
-  const demoResponse = demoGuard({ line: { id: 'demo', name: 'Demo' } }, 201);
-  if (demoResponse) return demoResponse;
-
   try {
-    const supabase = await createClient();
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    const ctx = await getTenantContext();
+    if (!ctx) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 
     const { id, name } = await request.json();
     if (!id || !name) {
@@ -44,8 +39,9 @@ export async function POST(request) {
       );
     }
 
-    const line = await createProductLine({ id, name });
-    invalidateMediciCache(id);
+    const line = await createProductLine({ tenantId: ctx.tenantId, id, name });
+    invalidateMediciCache({ tenantId: ctx.tenantId, id });
+    await markFirstProductLine(ctx.tenantId);
     return NextResponse.json({ line }, { status: 201 });
   } catch (err) {
     if (err.code === '23505') {

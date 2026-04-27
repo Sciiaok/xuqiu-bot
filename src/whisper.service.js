@@ -4,14 +4,13 @@ import { downloadWhatsAppMediaBuffer } from './whatsapp-media.service.js';
 /**
  * Transcribe a WhatsApp voice message to text using OpenAI Whisper
  * @param {string} mediaId - WhatsApp media ID from webhook payload
- * @returns {Promise<string>} - Transcribed text
+ * @param {string} token - Tenant 的 Meta system token (caller resolves from phoneNumberId)
  */
-export async function transcribeWhatsAppAudio(mediaId) {
+export async function transcribeWhatsAppAudio(mediaId, token) {
   console.log(`Downloading WhatsApp audio: ${mediaId}`);
-  const { buffer } = await downloadWhatsAppMediaBuffer(mediaId);
+  const { buffer } = await downloadWhatsAppMediaBuffer(mediaId, { token });
   console.log(`Downloaded ${buffer.length} bytes, sending to Whisper...`);
 
-  // Pass buffer directly to Whisper — no S3 needed
   const file = new File([buffer], 'audio.ogg', { type: 'audio/ogg' });
 
   const transcription = await openai.audio.transcriptions.create({

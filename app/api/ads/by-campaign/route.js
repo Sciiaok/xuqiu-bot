@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { ProxyAgent } from 'undici';
-import { createClient } from '../../../../lib/supabase-server.js';
+import { getTenantContext } from '../../../../lib/tenant-context.js';
+import { resolveMetaContextForTenant } from '../../../../lib/meta-tenant-context.js';
 import { config } from '../../../../src/config.js';
 
 const META_API_VERSION = 'v21.0';
@@ -48,9 +49,8 @@ async function fetchAllPages(url) {
 
 export async function GET(request) {
   try {
-    const supabase = await createClient();
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    const ctx = await getTenantContext();
+    if (!ctx) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 
     const { searchParams } = new URL(request.url);
     const campaignIds = searchParams.getAll('campaignId').map((v) => v.trim()).filter(Boolean);
@@ -58,13 +58,14 @@ export async function GET(request) {
       return NextResponse.json({ ads: [] });
     }
 
-    const adAccountId = normalizeAdAccountId(config.meta.adAccountId);
-    const accessToken = config.meta.accessToken;
+    const metaCtx = await resolveMetaContextForTenant(ctx.tenantId);
+    const adAccountId = metaCtx.adAccountId ? normalizeAdAccountId(metaCtx.adAccountId) : null;
+    const accessToken = metaCtx.accessToken;
     if (!accessToken) {
-      return NextResponse.json({ error: 'META_ACCESS_TOKEN is not configured' }, { status: 500 });
+      return NextResponse.json({ error: '当前租户尚未连接 Meta BM' }, { status: 409 });
     }
     if (!adAccountId) {
-      return NextResponse.json({ error: 'META_AD_ACCOUNT_ID is not configured' }, { status: 500 });
+      return NextResponse.json({ error: '当前租户尚未配置 Meta 广告账户' }, { status: 409 });
     }
 
     const rows = await fetchAllPages(

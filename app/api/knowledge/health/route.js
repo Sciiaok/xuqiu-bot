@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server';
+import { getTenantContext, findAgentInTenant } from '../../../../lib/tenant-context.js';
 import { getHealthSummary } from '../../../../lib/repositories/knowledge-base.repository.js';
 
 /**
@@ -8,14 +9,24 @@ import { getHealthSummary } from '../../../../lib/repositories/knowledge-base.re
  */
 export async function GET(request) {
   try {
+    const ctx = await getTenantContext();
+    if (!ctx) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+
     const { searchParams } = new URL(request.url);
     const agentId = searchParams.get('agent_id');
 
     if (!agentId) {
       return NextResponse.json({ error: 'agent_id is required' }, { status: 400 });
     }
+    const agent = await findAgentInTenant({ tenantId: ctx.tenantId, agentId });
+    if (!agent) {
+      return NextResponse.json({ error: 'Agent not found' }, { status: 404 });
+    }
 
-    const summary = await getHealthSummary(agentId);
+    const summary = await getHealthSummary({
+      tenantId: ctx.tenantId,
+      productLineId: agent.product_line,
+    });
     const recommendations = generateRecommendations(summary.layers, summary.outdated_docs);
 
     return NextResponse.json({ ...summary, ai_recommendations: recommendations });

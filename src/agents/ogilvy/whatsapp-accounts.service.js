@@ -1,24 +1,47 @@
 /**
  * WhatsApp Accounts Service — lists Click-to-WhatsApp-eligible phone numbers
- * for the current Meta ad account.
+ * for the current tenant.
  *
- * Single-tenant for MVP: account comes from env via getMetaAccountForUser().
- * When we go multi-tenant, only that resolver changes — this module is stable.
+ * 数据源：meta_phone_numbers 表（connect 时同步好的，已按 isPhoneUsable 过滤过）。
+ * 不再每次去 Meta Graph API 重拉 —— 那条老路径依赖全局 env (META_SYSTEM_TOKEN/
+ * META_AD_ACCOUNT_ID/META_PAGE_ID)，多租户改造后已经废弃。
+ *
+ * 单一路径：租户必须先通过 /settings/meta-connection 接入 Meta，否则返
+ * not_configured；没号码返 no_phone。
  */
+import supabase from '../../../lib/supabase.js';
+import {
+  getActiveTokenByTenant,
+  listAdAccountsByTenant,
+  listPhonesByTenant,
+  findActiveConnectionByTenant,
+} from '../../../lib/repositories/meta-connection.repository.js';
 import { config } from '../../config.js';
-import { fetchAccountAssets } from '../../meta-account.service.js';
 
-/**
- * Multi-tenant pivot point. Today: env. Tomorrow: look up user_meta_accounts.
- */
-export async function getMetaAccountForUser(_userId) {
-  if (!config.meta?.accessToken || !config.meta?.adAccountId) {
-    return null;
-  }
+async function tenantIdForUser(userId) {
+  if (!userId) return null;
+  const { data } = await supabase
+    .from('users')
+    .select('tenant_id')
+    .eq('id', userId)
+    .maybeSingle();
+  return data?.tenant_id || null;
+}
+
+export async function getMetaAccountForUser(userId) {
+  const tenantId = await tenantIdForUser(userId);
+  if (!tenantId) return null;
+
+  const [token, ads] = await Promise.all([
+    getActiveTokenByTenant(tenantId),
+    listAdAccountsByTenant(tenantId),
+  ]);
+  if (!token || ads.length === 0) return null;
+
   return {
-    access_token: config.meta.accessToken,
-    ad_account_id: config.meta.adAccountId,
-    page_id: config.meta.pageId,
+    access_token: token,
+    ad_account_id: ads[0].ad_account_id,
+    page_id: config.meta?.pageId || null, // page_id 暂未入表
   };
 }
 
@@ -45,45 +68,31 @@ function isUsable(phone) {
 }
 
 function normalize(phone) {
+  // 兼容两种来源：meta_phone_numbers 行（display_number 列名）
+  // 和 Graph API 返回（display_phone_number 字段）。
+  const display = phone.display_number || phone.display_phone_number;
   return {
     phone_number_id: phone.phone_number_id,
-    phone_normalized: normalizePhoneNumber(phone.display_phone_number),
-    display_number: phone.display_phone_number,
+    phone_normalized: normalizePhoneNumber(display),
+    display_number: display,
     verified_name: phone.verified_name || null,
     quality_rating: phone.quality_rating || 'UNKNOWN',
     waba_id: phone.waba_id,
-    waba_name: phone.waba_name,
+    waba_name: phone.waba_name || null,
   };
 }
 
 /**
- * Categorize the gate state so the frontend can render the right message.
- *
- * - ok                      : at least one usable number
- * - only_test_or_unverified : numbers exist but all are test / RED / missing name
- * - no_phone                : WABAs exist but no phone numbers attached
- * - no_waba                 : no WABAs owned by the business
- * - not_configured          : META_ACCESS_TOKEN / AD_ACCOUNT_ID missing in env
- * - token_error             : Meta returned an error while fetching assets
+ * Gate status：
+ *   ok                      ：至少一个可用号
+ *   only_test_or_unverified ：有号但都是测试号 / RED / 未认证
+ *   no_phone                ：已绑 Meta，但当前 BM 下没号
+ *   not_configured          ：还没绑 Meta
  */
-function determineStatus(allNumbers, usableNumbers, assets) {
-  if (!assets.available) return 'token_error';
-  if (usableNumbers.length > 0) return 'ok';
-  if (allNumbers.length > 0) return 'only_test_or_unverified';
-  // 0 numbers — distinguish "no WABAs" vs "WABAs without phones".
-  // fetchAccountAssets flattens phones from all WABAs, so we can't tell
-  // those apart without re-fetching. Callers treat both the same anyway.
-  return 'no_waba';
-}
 
 // ── Process-local cache ─────────────────────────────────────────────────
-// WhatsApp numbers change rarely (minutes+), but fetchAccountAssets does
-// 3-4 Graph API calls serially and takes 3-6s. Every autopilot message call
-// used to pay that cost. We cache per-user (null key = single-tenant env)
-// for a short TTL so follow-up messages in the same conversation are fast.
-//
-// Negative results (errors / not_configured) are cached briefly too to avoid
-// hammering Meta when the token is broken.
+// 改成查 DB 后单次查询 ~10ms，理论上 cache 也可以删。先留着压低 autopilot
+// 高频调用 DB 的次数（每次 Agent 工具调用都会进来一次）。
 const CACHE_TTL_MS = 60_000;        // 60s for OK results
 const NEGATIVE_TTL_MS = 10_000;     // 10s for errors (so recovery is quick)
 const cache = new Map();            // userId-or-'anon' → { expiresAt, value }
@@ -106,11 +115,11 @@ function setCached(userId, value) {
 }
 
 /**
- * Main entry: list WhatsApp numbers available for this user to bind as
- * ad destinations, plus the gate status for rendering.
+ * Main entry：列当前租户已绑定的 WhatsApp 号码。
+ * 直接读 meta_phone_numbers 表 —— connect / refresh 时已经把可用号码同步进来了。
  *
  * Options:
- *   - force: skip the cache (used by UI "我已完成绑定，重新检查" button)
+ *   - force: 跳过 cache（UI "我已完成绑定，重新检查" 按钮用）
  */
 export async function listWhatsAppAccountsForUser(userId, { force = false } = {}) {
   if (!force) {
@@ -118,39 +127,35 @@ export async function listWhatsAppAccountsForUser(userId, { force = false } = {}
     if (cached) return cached;
   }
 
-  const account = await getMetaAccountForUser(userId);
-  if (!account) {
-    const v = {
-      status: 'not_configured',
-      numbers: [],
-      all_numbers: [],
-      error: 'META_ACCESS_TOKEN or META_AD_ACCOUNT_ID is not configured',
-    };
+  const tenantId = await tenantIdForUser(userId);
+  if (!tenantId) {
+    const v = { status: 'not_configured', numbers: [], all_numbers: [],
+                error: '当前账号尚未关联租户' };
     setCached(userId, v);
     return v;
   }
 
-  let assets;
-  try {
-    assets = await fetchAccountAssets();
-  } catch (err) {
-    const v = {
-      status: 'token_error',
-      numbers: [],
-      all_numbers: [],
-      error: err.message,
-    };
+  const phones = await listPhonesByTenant(tenantId);
+
+  if (phones.length === 0) {
+    const conn = await findActiveConnectionByTenant(tenantId);
+    const v = conn
+      ? { status: 'no_phone', numbers: [], all_numbers: [],
+          error: '已绑定 Meta，但当前 BM 下没有可用 WhatsApp 号码' }
+      : { status: 'not_configured', numbers: [], all_numbers: [],
+          error: '当前账号尚未连接 Meta Business —— 进入「设置 / Meta 连接」完成接入' };
     setCached(userId, v);
     return v;
   }
 
-  const all = assets.whatsapp_phone_numbers || [];
-  const usable = all.filter(isUsable).map(normalize);
-  const allNormalized = all.map(normalize);
+  const allNormalized = phones.map(normalize);
+  // connect 时已经按 isPhoneUsable 过滤过，DB 里基本都是可用的；
+  // 这里再跑一遍兜底（quality_rating 等字段可能事后被 cron 刷成 RED）
+  const usableNormalized = phones.filter(isUsable).map(normalize);
 
   const v = {
-    status: determineStatus(all, usable, assets),
-    numbers: usable,
+    status: usableNormalized.length > 0 ? 'ok' : 'only_test_or_unverified',
+    numbers: usableNormalized,
     all_numbers: allNormalized,
   };
   setCached(userId, v);

@@ -1,27 +1,24 @@
 // app/api/leads/sync/route.js
 import { NextResponse } from 'next/server';
-import { demoGuard } from '../../../../lib/demo-mode.js';
 import supabase from '@/lib/supabase';
+import { getTenantContext } from '@/lib/tenant-context';
 import { getLeadsNeedingSync, getLeadById } from '@/lib/repositories/lead.repository';
 import { createSyncLog, updateSyncLog, hasSuccessfulSync } from '@/lib/repositories/sync-log.repository';
 import { syncLeadsToExternal, processSyncResults, expandLeadForSync } from '@/lib/services/external-sync';
 import { config } from '@/src/config';
 
 export async function POST(request) {
-  const demoResponse = demoGuard({ success: true, queued: 0, synced: 0, failed: 0, message: 'Demo mode' });
-  if (demoResponse) return demoResponse;
-
   try {
+    const ctx = await getTenantContext();
+    if (!ctx) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
+
     const body = await request.json();
     const { leadIds, syncAll, syncFiltered, filters } = body;
 
     let leadsToSync = [];
 
     if (syncAll) {
-      // Sync all approved unsynced leads from last 24h
-      const allLeads = await getLeadsNeedingSync();
-
-      // Filter out already synced
+      const allLeads = await getLeadsNeedingSync({ tenantId: ctx.tenantId });
       for (const lead of allLeads) {
         const synced = await hasSuccessfulSync(lead.id);
         if (!synced) {
@@ -29,10 +26,10 @@ export async function POST(request) {
         }
       }
     } else if (syncFiltered && filters) {
-      // Sync based on filters (ignoring approved status)
       let query = supabase
         .from('leads')
-        .select(`*, contact:contacts(wa_id, company_name, name)`);
+        .select(`*, contact:contacts(wa_id, company_name, name)`)
+        .eq('tenant_id', ctx.tenantId);
 
       if (filters.stage && filters.stage !== 'all') {
         query = query.eq('stage', filters.stage);
@@ -45,10 +42,11 @@ export async function POST(request) {
       if (error) throw error;
       leadsToSync = data || [];
     } else if (leadIds && leadIds.length > 0) {
-      // Sync specific leads
+      // 显式传入 leadIds 时也要按 tenant 过滤 —— 即使前端传了别 tenant 的 id，
+      // 这里也把它们 filter 掉。
       for (const id of leadIds) {
         const lead = await getLeadById(id);
-        if (lead) {
+        if (lead && lead.tenant_id === ctx.tenantId) {
           leadsToSync.push(lead);
         }
       }
@@ -66,9 +64,10 @@ export async function POST(request) {
     const syncLogs = [];
     for (const lead of leadsToSync) {
       const log = await createSyncLog({
+        tenantId: ctx.tenantId,
         leadId: lead.id,
         status: 'syncing',
-        requestPayload: expandLeadForSync(lead),  // Now returns array
+        requestPayload: expandLeadForSync(lead),
       });
       syncLogs.push({ lead, log });
     }

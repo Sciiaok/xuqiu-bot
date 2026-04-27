@@ -393,6 +393,7 @@ async function main() {
       messages,
       oldLeads,
       agentConfig,
+      tenantId: conv.tenant_id,
     });
   }
 
@@ -483,7 +484,8 @@ async function main() {
             await replaceConversationLeads(
               contact.conversationId,
               contact.contactId,
-              newLeads
+              newLeads,
+              { tenantId: contact.tenantId },
             );
             console.log('Changes applied successfully.\n');
             contactResult.applied = true;

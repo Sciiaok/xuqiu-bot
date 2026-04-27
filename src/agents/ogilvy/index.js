@@ -481,6 +481,7 @@ export async function* runOgilvy(sessionId, userText, attachments = [], userId =
     const toolCtx = {
       sessionId,
       userId,
+      tenantId: session?.tenant_id || null,
       waNumbers: waGate.numbers || [],
       uploadedImageUrls,
     };
@@ -594,6 +595,7 @@ async function executeTool(name, input, ctx) {
         language:            input.language,
         sessionId:           ctx.sessionId,
         userId:              ctx.userId,
+        tenantId:            ctx.tenantId,
       });
     }
     default:

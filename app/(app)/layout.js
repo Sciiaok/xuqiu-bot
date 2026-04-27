@@ -3,6 +3,7 @@
 import { Inter, Syne, DM_Mono } from 'next/font/google';
 import '../v5-theme.css';
 import Sidebar from '../components/Sidebar/Sidebar';
+import MetaConnectionBanner from '../components/MetaConnectionBanner/MetaConnectionBanner';
 
 const inter = Inter({
   subsets: ['latin'],
@@ -28,8 +29,11 @@ export default function V5Layout({ children }) {
     <div className={`v5-root ${inter.variable} ${syne.variable} ${dmMono.variable}`}
          style={{ display: 'flex', height: '100vh' }}>
       <Sidebar />
-      <main style={{ flex: 1, overflowY: 'auto' }}>
-        {children}
+      <main style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column' }}>
+        <MetaConnectionBanner />
+        <div style={{ flex: 1, overflowY: 'auto' }}>
+          {children}
+        </div>
       </main>
     </div>
   );

@@ -1,12 +1,23 @@
 // app/api/leads/[id]/route.js
 import { NextResponse } from 'next/server';
-import { demoGuard } from '@/lib/demo-mode';
+import { getTenantContext } from '@/lib/tenant-context';
 import { getLeadById, updateLeadFields } from '@/lib/repositories/lead.repository';
+
+async function loadLeadInTenant(leadId, tenantId) {
+  const lead = await getLeadById(leadId);
+  if (!lead || lead.tenant_id !== tenantId) return null;
+  return lead;
+}
 
 export async function GET(request, { params }) {
   try {
+    const ctx = await getTenantContext();
+    if (!ctx) {
+      return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
+    }
+
     const { id } = await params;
-    const lead = await getLeadById(id);
+    const lead = await loadLeadInTenant(id, ctx.tenantId);
 
     if (!lead) {
       return NextResponse.json(
@@ -26,13 +37,21 @@ export async function GET(request, { params }) {
 }
 
 export async function PATCH(request, { params }) {
-  const demoResponse = demoGuard({ success: true, lead: {} });
-  if (demoResponse) return demoResponse;
-
   try {
-    const { id } = await params;
-    const body = await request.json();
+    const ctx = await getTenantContext();
+    if (!ctx) {
+      return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
+    }
 
+    const { id } = await params;
+    if (!(await loadLeadInTenant(id, ctx.tenantId))) {
+      return NextResponse.json(
+        { success: false, error: 'Lead not found' },
+        { status: 404 }
+      );
+    }
+
+    const body = await request.json();
     const lead = await updateLeadFields(id, body);
 
     return NextResponse.json({ success: true, lead });

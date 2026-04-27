@@ -1,7 +1,6 @@
 import { NextResponse } from 'next/server';
-import { demoGuard } from '../../../../lib/demo-mode.js';
-import { createClient } from '../../../../lib/supabase-server.js';
 import supabase from '../../../../lib/supabase.js';
+import { getTenantContext, findAgentInTenant } from '../../../../lib/tenant-context.js';
 
 export const maxDuration = 60;
 
@@ -20,17 +19,21 @@ const STORAGE_BUCKET = 'kb-assets';
  */
 export async function GET(request) {
   try {
-    const authClient = await createClient();
-    const { data: { user } } = await authClient.auth.getUser();
-    if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    const ctx = await getTenantContext();
+    if (!ctx) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 
     const agentId = new URL(request.url).searchParams.get('agent_id');
     if (!agentId) return NextResponse.json({ error: 'agent_id is required' }, { status: 400 });
+    const agent = await findAgentInTenant({ tenantId: ctx.tenantId, agentId });
+    if (!agent) {
+      return NextResponse.json({ error: 'Agent not found' }, { status: 404 });
+    }
 
     const { data, error } = await supabase
       .from('kb_assets')
       .select('id, filename, description, mime_type, file_size_bytes, storage_path, created_at, is_sendable')
-      .eq('agent_id', agentId)
+      .eq('tenant_id', ctx.tenantId)
+      .eq('product_line_id', agent.product_line)
       .eq('asset_type', 'product_image')
       .order('created_at', { ascending: false });
     if (error) throw error;
@@ -63,13 +66,9 @@ export async function GET(request) {
  * exactly this set later.
  */
 export async function POST(request) {
-  const demo = demoGuard({ success: true, message: 'Demo mode' });
-  if (demo) return demo;
-
   try {
-    const authClient = await createClient();
-    const { data: { user } } = await authClient.auth.getUser();
-    if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    const ctx = await getTenantContext();
+    if (!ctx) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 
     const formData = await request.formData();
     const file = formData.get('file');
@@ -78,6 +77,10 @@ export async function POST(request) {
 
     if (!file || !agentId) {
       return NextResponse.json({ error: 'file and agent_id are required' }, { status: 400 });
+    }
+    const agent = await findAgentInTenant({ tenantId: ctx.tenantId, agentId });
+    if (!agent) {
+      return NextResponse.json({ error: 'Agent not found' }, { status: 404 });
     }
     if (!ALLOWED_IMAGE_MIMES.has(file.type)) {
       return NextResponse.json(
@@ -102,7 +105,9 @@ export async function POST(request) {
     const { data: row, error: insertErr } = await supabase
       .from('kb_assets')
       .insert({
+        tenant_id: ctx.tenantId,
         agent_id: agentId,
+        product_line_id: agent.product_line,
         asset_type: 'product_image',
         filename: file.name,
         storage_path: storagePath,
@@ -131,24 +136,25 @@ export async function POST(request) {
  * Cleans up both the row and the underlying storage object.
  */
 export async function DELETE(request) {
-  const demo = demoGuard({ success: true });
-  if (demo) return demo;
-
   try {
-    const authClient = await createClient();
-    const { data: { user } } = await authClient.auth.getUser();
-    if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    const ctx = await getTenantContext();
+    if (!ctx) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 
     const assetId = new URL(request.url).searchParams.get('asset_id');
     if (!assetId) return NextResponse.json({ error: 'asset_id is required' }, { status: 400 });
 
     const { data: row, error: fetchErr } = await supabase
       .from('kb_assets')
-      .select('storage_path')
+      .select('storage_path, agent_id')
       .eq('id', assetId)
       .single();
     if (fetchErr && fetchErr.code !== 'PGRST116') throw fetchErr;
     if (!row) return NextResponse.json({ error: 'Asset not found' }, { status: 404 });
+
+    // 验该 asset 所属 agent 归属当前 tenant —— 否则 asset_id 一旦泄露就能跨 tenant 删数据。
+    if (!(await findAgentInTenant({ tenantId: ctx.tenantId, agentId: row.agent_id }))) {
+      return NextResponse.json({ error: 'Asset not found' }, { status: 404 });
+    }
 
     if (row.storage_path) {
       await supabase.storage.from(STORAGE_BUCKET).remove([row.storage_path]).catch(() => {});

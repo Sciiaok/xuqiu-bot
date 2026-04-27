@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { createClient } from '@/lib/supabase-server';
+import { getTenantContext } from '@/lib/tenant-context';
 import {
   BUSINESS_VALUE_OPTIONS,
   INQUIRY_QUALITY_OPTIONS,
@@ -52,7 +53,7 @@ function makeLikePattern(raw) {
 
 /* ─────────────────────────  param parsing  ───────────────────────── */
 
-async function resolveAgentIdsFilter(supabase, rawAgentIds) {
+async function resolveAgentIdsFilter(supabase, tenantId, rawAgentIds) {
   if (!rawAgentIds?.length) return [];
   const uuids = [];
   const productLines = [];
@@ -62,7 +63,11 @@ async function resolveAgentIdsFilter(supabase, rawAgentIds) {
   if (!productLines.length) return uuids;
 
   const { data } = throwIfError(
-    await supabase.from('agents').select('id').in('product_line', productLines)
+    await supabase
+      .from('agents')
+      .select('id')
+      .eq('tenant_id', tenantId)
+      .in('product_line', productLines)
   );
   return Array.from(new Set([...uuids, ...(data || []).map((row) => row.id)]));
 }
@@ -208,10 +213,11 @@ function applyCursor(query, cursor) {
  * the single scaffold; specialised builders pick a select and add pagination.
  * ─────────────────────────────────────────────────────────────────────── */
 
-function buildConversationsQuery(supabase, filters, { select, count = false }) {
+function buildConversationsQuery(supabase, tenantId, filters, { select, count = false }) {
   const base = supabase
     .from('conversations')
-    .select(select, count ? { count: 'exact', head: true } : undefined);
+    .select(select, count ? { count: 'exact', head: true } : undefined)
+    .eq('tenant_id', tenantId);
 
   let query = applyConversationFilters(base, filters);
   query = applyContactFilters(query, filters);
@@ -225,8 +231,8 @@ function leadsJoinFragment(filters) {
   return hasLeadScopedFilter(filters) ? 'leads!inner' : 'leads';
 }
 
-function buildListQuery(supabase, filters, limit, cursor) {
-  const query = buildConversationsQuery(supabase, filters, {
+function buildListQuery(supabase, tenantId, filters, limit, cursor) {
+  const query = buildConversationsQuery(supabase, tenantId, filters, {
     select: `${CONVERSATION_SELECT}, ${leadsJoinFragment(filters)}(${LEADS_SELECT})`,
   })
     .order('last_message_at', { ascending: false })
@@ -236,8 +242,8 @@ function buildListQuery(supabase, filters, limit, cursor) {
   return applyCursor(query, cursor);
 }
 
-function buildConversationCountQuery(supabase, filters) {
-  return buildConversationsQuery(supabase, filters, {
+function buildConversationCountQuery(supabase, tenantId, filters) {
+  return buildConversationsQuery(supabase, tenantId, filters, {
     select: `id, contact:contacts!inner(id), ${leadsJoinFragment(filters)}(id)`,
     count: true,
   });
@@ -245,8 +251,8 @@ function buildConversationCountQuery(supabase, filters) {
 
 // Quantity lives inside leads.color_quantity JSON, so the path must always
 // inner-join leads and filter in JS. Lead-less convs naturally excluded.
-function buildQuantityScanQuery(supabase, filters, from, to) {
-  return buildConversationsQuery(supabase, filters, {
+function buildQuantityScanQuery(supabase, tenantId, filters, from, to) {
+  return buildConversationsQuery(supabase, tenantId, filters, {
     select: `${CONVERSATION_SELECT}, leads!inner(${LEADS_SELECT})`,
   })
     .order('last_message_at', { ascending: false })
@@ -256,12 +262,13 @@ function buildQuantityScanQuery(supabase, filters, from, to) {
 }
 
 // Leads-centric count that still respects every active filter.
-function buildLeadCountQuery(supabase, filters, { approvedOnly = false } = {}) {
+function buildLeadCountQuery(supabase, tenantId, filters, { approvedOnly = false } = {}) {
   let query = supabase.from('leads').select(`
     id,
     contact:contacts!inner(id),
     conversation:conversations!inner(id, agent_id, is_human_takeover, last_message_at)
-  `, { count: 'exact', head: true });
+  `, { count: 'exact', head: true })
+    .eq('tenant_id', tenantId);
 
   query = applyLeadFilters(query, filters, '');
   query = applyConversationFilters(query, filters, { foreignTable: 'conversation' });
@@ -270,12 +277,12 @@ function buildLeadCountQuery(supabase, filters, { approvedOnly = false } = {}) {
   return query;
 }
 
-async function fetchDistinctContactCount(supabase, filters) {
+async function fetchDistinctContactCount(supabase, tenantId, filters) {
   const ids = new Set();
   const selectFragment = `contact_id, contact:contacts!inner(id), ${leadsJoinFragment(filters)}(id)`;
 
   for (let offset = 0; ; offset += CONTACT_ID_BATCH) {
-    const query = buildConversationsQuery(supabase, filters, { select: selectFragment })
+    const query = buildConversationsQuery(supabase, tenantId, filters, { select: selectFragment })
       .range(offset, offset + CONTACT_ID_BATCH - 1);
     const { data } = throwIfError(await query);
     const batch = data || [];
@@ -296,11 +303,11 @@ function filterByQuantity(rows, filters) {
   return out;
 }
 
-async function fetchAllQuantityFiltered(supabase, filters) {
+async function fetchAllQuantityFiltered(supabase, tenantId, filters) {
   const rows = [];
   for (let offset = 0; ; offset += FULL_SCAN_BATCH_SIZE) {
     const { data } = throwIfError(
-      await buildQuantityScanQuery(supabase, filters, offset, offset + FULL_SCAN_BATCH_SIZE - 1)
+      await buildQuantityScanQuery(supabase, tenantId, filters, offset, offset + FULL_SCAN_BATCH_SIZE - 1)
     );
     const batch = data || [];
     if (batch.length === 0) break;
@@ -429,8 +436,8 @@ function paginatedResponse(rows, limit, counts) {
 
 /* ─────────────────────────  handler  ───────────────────────── */
 
-async function handleQuantityBranch(supabase, filters, limit, cursor) {
-  const rows = await fetchAllQuantityFiltered(supabase, filters);
+async function handleQuantityBranch(supabase, tenantId, filters, limit, cursor) {
+  const rows = await fetchAllQuantityFiltered(supabase, tenantId, filters);
   const visible = rows.filter((r) => rowBeforeCursor(r, cursor));
 
   return paginatedResponse(visible, limit, {
@@ -444,14 +451,14 @@ async function handleQuantityBranch(supabase, filters, limit, cursor) {
   });
 }
 
-async function handleStandardBranch(supabase, filters, limit, cursor) {
+async function handleStandardBranch(supabase, tenantId, filters, limit, cursor) {
   const [dataRes, convCountRes, leadsCountRes, approvedCountRes, totalContacts] =
     await Promise.all([
-      buildListQuery(supabase, filters, limit, cursor),
-      buildConversationCountQuery(supabase, filters),
-      buildLeadCountQuery(supabase, filters),
-      buildLeadCountQuery(supabase, filters, { approvedOnly: true }),
-      fetchDistinctContactCount(supabase, filters),
+      buildListQuery(supabase, tenantId, filters, limit, cursor),
+      buildConversationCountQuery(supabase, tenantId, filters),
+      buildLeadCountQuery(supabase, tenantId, filters),
+      buildLeadCountQuery(supabase, tenantId, filters, { approvedOnly: true }),
+      fetchDistinctContactCount(supabase, tenantId, filters),
     ]);
 
   for (const r of [dataRes, convCountRes, leadsCountRes, approvedCountRes]) throwIfError(r);
@@ -466,9 +473,11 @@ async function handleStandardBranch(supabase, filters, limit, cursor) {
 
 export async function GET(request) {
   try {
+    const ctx = await getTenantContext();
+    if (!ctx) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+
     const supabase = await createClient();
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    const { tenantId } = ctx;
 
     const { searchParams } = new URL(request.url);
     const filters = parseFilters(searchParams);
@@ -476,7 +485,7 @@ export async function GET(request) {
     const cursor = parseCursor(searchParams);
 
     const rawAgentIds = searchParams.getAll('agentIds').filter(Boolean);
-    filters.agentIds = await resolveAgentIdsFilter(supabase, rawAgentIds);
+    filters.agentIds = await resolveAgentIdsFilter(supabase, tenantId, rawAgentIds);
 
     // Supply-chain token that maps to zero agents → no conversation can match.
     if (rawAgentIds.length > 0 && filters.agentIds.length === 0) {
@@ -484,8 +493,8 @@ export async function GET(request) {
     }
 
     return hasActiveQuantityFilter(filters)
-      ? await handleQuantityBranch(supabase, filters, limit, cursor)
-      : await handleStandardBranch(supabase, filters, limit, cursor);
+      ? await handleQuantityBranch(supabase, tenantId, filters, limit, cursor)
+      : await handleStandardBranch(supabase, tenantId, filters, limit, cursor);
   } catch (error) {
     console.error('Error listing inquiries:', error);
     return NextResponse.json(

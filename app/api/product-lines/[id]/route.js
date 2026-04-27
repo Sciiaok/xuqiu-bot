@@ -1,6 +1,5 @@
 import { NextResponse } from 'next/server';
-import { demoGuard } from '../../../../lib/demo-mode.js';
-import { createClient } from '../../../../lib/supabase-server.js';
+import { getTenantContext } from '../../../../lib/tenant-context.js';
 import {
   findProductLineById,
   findAgentIdByProductLine,
@@ -9,21 +8,15 @@ import {
 } from '../../../../lib/repositories/product-line.repository.js';
 import { invalidateMediciCache } from '../../../../src/agents/medici/config.js';
 
-async function requireUser() {
-  const supabase = await createClient();
-  const { data: { user } } = await supabase.auth.getUser();
-  return user;
-}
-
 export async function GET(_request, { params }) {
   try {
-    if (!(await requireUser())) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    }
+    const ctx = await getTenantContext();
+    if (!ctx) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+
     const { id } = await params;
-    const line = await findProductLineById(id);
+    const line = await findProductLineById({ tenantId: ctx.tenantId, id });
     if (!line) return NextResponse.json({ error: 'Not found' }, { status: 404 });
-    const agent_id = await findAgentIdByProductLine(line.id);
+    const agent_id = await findAgentIdByProductLine({ tenantId: ctx.tenantId, slug: line.id });
     return NextResponse.json({ line: { ...line, agent_id } });
   } catch (err) {
     console.error('GET /api/product-lines/[id] failed:', err);
@@ -32,17 +25,14 @@ export async function GET(_request, { params }) {
 }
 
 export async function PUT(request, { params }) {
-  const demoResponse = demoGuard({ line: { id: 'demo' } });
-  if (demoResponse) return demoResponse;
-
   try {
-    if (!(await requireUser())) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    }
+    const ctx = await getTenantContext();
+    if (!ctx) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+
     const { id } = await params;
     const body = await request.json();
-    const line = await updateProductLine(id, body);
-    invalidateMediciCache(id);
+    const line = await updateProductLine({ tenantId: ctx.tenantId, id, updates: body });
+    invalidateMediciCache({ tenantId: ctx.tenantId, id });
     return NextResponse.json({ line });
   } catch (err) {
     if (err.code === '23505') {
@@ -57,16 +47,13 @@ export async function PUT(request, { params }) {
 }
 
 export async function DELETE(_request, { params }) {
-  const demoResponse = demoGuard({ ok: true });
-  if (demoResponse) return demoResponse;
-
   try {
-    if (!(await requireUser())) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    }
+    const ctx = await getTenantContext();
+    if (!ctx) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+
     const { id } = await params;
-    const line = await deactivateProductLine(id);
-    invalidateMediciCache(id);
+    const line = await deactivateProductLine({ tenantId: ctx.tenantId, id });
+    invalidateMediciCache({ tenantId: ctx.tenantId, id });
     return NextResponse.json({ line });
   } catch (err) {
     console.error('DELETE /api/product-lines/[id] failed:', err);

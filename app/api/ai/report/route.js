@@ -1,7 +1,6 @@
 import { NextResponse } from 'next/server';
-import { createClient } from '../../../../lib/supabase-server.js';
 import supabase from '../../../../lib/supabase.js';
-import { demoGuard } from '../../../../lib/demo-mode.js';
+import { getTenantContext } from '../../../../lib/tenant-context.js';
 import { generateSummaryWithFallback } from '../../../../lib/ai-summary.js';
 
 const VALID_TYPES = new Set([
@@ -93,7 +92,7 @@ function mapToSortedEntries(map, keyName = 'name', valueName = 'count') {
     .sort((a, b) => b[valueName] - a[valueName]);
 }
 
-async function fetchLeadsByConversationIds(conversationIds, selectClause) {
+async function fetchLeadsByConversationIds(tenantId, conversationIds, selectClause) {
   if (conversationIds.length === 0) return [];
 
   const responses = await Promise.all(
@@ -101,6 +100,7 @@ async function fetchLeadsByConversationIds(conversationIds, selectClause) {
       supabase
         .from('leads')
         .select(selectClause)
+        .eq('tenant_id', tenantId)
         .in('conversation_id', ids)
         .limit(10000)
     ))
@@ -113,10 +113,11 @@ async function fetchLeadsByConversationIds(conversationIds, selectClause) {
   return responses.flatMap((response) => response.data || []);
 }
 
-async function buildDailyReportData(fromISO, toISO, fromDate, toDate) {
+async function buildDailyReportData(tenantId, fromISO, toISO, fromDate, toDate) {
   const { data: conversations, error: conversationsError } = await supabase
     .from('conversations')
     .select('id, created_at')
+    .eq('tenant_id', tenantId)
     .gte('created_at', fromISO)
     .lte('created_at', toISO)
     .limit(10000);
@@ -126,6 +127,7 @@ async function buildDailyReportData(fromISO, toISO, fromDate, toDate) {
   const { data: leads, error: leadsError } = await supabase
     .from('leads')
     .select('id, inquiry_quality, business_value, route, created_at')
+    .eq('tenant_id', tenantId)
     .gte('created_at', fromISO)
     .lte('created_at', toISO)
     .limit(10000);
@@ -197,10 +199,11 @@ function ensureAttributionBucket(map, metaAdId) {
   return map.get(metaAdId);
 }
 
-async function buildAttributionData(fromISO, toISO) {
+async function buildAttributionData(tenantId, fromISO, toISO) {
   const { data: conversations, error: conversationsError } = await supabase
     .from('conversations')
     .select('id, meta_ad_id, created_at')
+    .eq('tenant_id', tenantId)
     .not('meta_ad_id', 'is', null)
     .gte('created_at', fromISO)
     .lte('created_at', toISO)
@@ -227,6 +230,7 @@ async function buildAttributionData(fromISO, toISO) {
   }
 
   const leads = await fetchLeadsByConversationIds(
+    tenantId,
     Array.from(conversationMetaAdMap.keys()),
     'id, conversation_id, inquiry_quality, business_value, route, destination_country, agent_id, created_at, agent:agents(id, product_line)'
   );
@@ -290,10 +294,11 @@ async function buildAttributionData(fromISO, toISO) {
   };
 }
 
-async function buildMarketInsightData(fromISO, toISO) {
+async function buildMarketInsightData(tenantId, fromISO, toISO) {
   const { data: leads, error: leadsError } = await supabase
     .from('leads')
     .select('id, destination_country, inquiry_quality, business_value, route, created_at')
+    .eq('tenant_id', tenantId)
     .gte('created_at', fromISO)
     .lte('created_at', toISO)
     .not('destination_country', 'is', null)
@@ -368,10 +373,11 @@ function ensureCampaignBucket(map, metaAdId) {
   return map.get(metaAdId);
 }
 
-async function buildCampaignAnalysisData(fromISO, toISO, fromDate, toDate) {
+async function buildCampaignAnalysisData(tenantId, fromISO, toISO, fromDate, toDate) {
   const { data: conversations, error: conversationsError } = await supabase
     .from('conversations')
     .select('id, meta_ad_id, created_at')
+    .eq('tenant_id', tenantId)
     .not('meta_ad_id', 'is', null)
     .gte('created_at', fromISO)
     .lte('created_at', toISO)
@@ -396,6 +402,7 @@ async function buildCampaignAnalysisData(fromISO, toISO, fromDate, toDate) {
   }
 
   const leads = await fetchLeadsByConversationIds(
+    tenantId,
     Array.from(conversationMetaAdMap.keys()),
     'id, conversation_id, inquiry_quality'
   );
@@ -490,34 +497,25 @@ async function buildCampaignAnalysisData(fromISO, toISO, fromDate, toDate) {
   };
 }
 
-export async function buildReportData(type, fromISO, toISO, fromDate, toDate) {
+export async function buildReportData(tenantId, type, fromISO, toISO, fromDate, toDate) {
   switch (type) {
     case 'daily_report':
-      return buildDailyReportData(fromISO, toISO, fromDate, toDate);
+      return buildDailyReportData(tenantId, fromISO, toISO, fromDate, toDate);
     case 'attribution':
-      return buildAttributionData(fromISO, toISO);
+      return buildAttributionData(tenantId, fromISO, toISO);
     case 'market_insight':
-      return buildMarketInsightData(fromISO, toISO);
+      return buildMarketInsightData(tenantId, fromISO, toISO);
     case 'campaign_analysis':
-      return buildCampaignAnalysisData(fromISO, toISO, fromDate, toDate);
+      return buildCampaignAnalysisData(tenantId, fromISO, toISO, fromDate, toDate);
     default:
       throw new Error(`Unsupported report type: ${type}`);
   }
 }
 
 export async function POST(request) {
-  const demoResponse = demoGuard({
-    type: 'daily_report',
-    report: '演示模式：未调用真实数据和模型。',
-    generatedAt: new Date().toISOString(),
-    dataRange: { from: '', to: '' },
-  });
-  if (demoResponse) return demoResponse;
-
   try {
-    const authClient = await createClient();
-    const { data: { user } } = await authClient.auth.getUser();
-    if (!user) {
+    const ctx = await getTenantContext();
+    if (!ctx) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
@@ -538,7 +536,7 @@ export async function POST(request) {
     const { fromDate, toDate, fromISO, toISO } = buildDateRange(days);
     const generatedAt = new Date().toISOString();
 
-    const reportData = await buildReportData(type, fromISO, toISO, fromDate, toDate);
+    const reportData = await buildReportData(ctx.tenantId, type, fromISO, toISO, fromDate, toDate);
     const systemPrompt = REPORT_PROMPTS[type];
 
     const dataStr = JSON.stringify(reportData, null, 2);

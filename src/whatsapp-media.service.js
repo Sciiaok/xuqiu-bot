@@ -67,12 +67,24 @@ function isMediaGoneError(graphError) {
   return e?.code === 100 && e?.error_subcode === 33;
 }
 
-export async function getWhatsAppMediaMetadata(mediaId) {
+/**
+ * Token 必须由 caller 显式传入。caller 自己按 tenant / phoneNumberId 解析。
+ * 无 env fallback。
+ */
+function requireToken(token) {
+  if (!token) {
+    throw new Error('whatsapp-media: token required (caller must resolve from tenant context)');
+  }
+  return token;
+}
+
+export async function getWhatsAppMediaMetadata(mediaId, { token } = {}) {
+  const accessToken = requireToken(token);
   const response = await fetch(
     `https://graph.facebook.com/${config.whatsapp.apiVersion}/${mediaId}`,
     {
       headers: {
-        Authorization: `Bearer ${config.whatsapp.token}`,
+        Authorization: `Bearer ${accessToken}`,
       },
     }
   );
@@ -92,11 +104,12 @@ export async function getWhatsAppMediaMetadata(mediaId) {
   };
 }
 
-export async function downloadWhatsAppMediaBuffer(mediaId) {
-  const metadata = await getWhatsAppMediaMetadata(mediaId);
+export async function downloadWhatsAppMediaBuffer(mediaId, { token } = {}) {
+  const accessToken = requireToken(token);
+  const metadata = await getWhatsAppMediaMetadata(mediaId, { token: accessToken });
   const mediaResponse = await fetch(metadata.url, {
     headers: {
-      Authorization: `Bearer ${config.whatsapp.token}`,
+      Authorization: `Bearer ${accessToken}`,
     },
   });
 

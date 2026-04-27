@@ -157,3 +157,68 @@
   padding: 8px 8px 14px;
   border-top: 1px solid var(--border);
 }
+
+/* Separator between settings group and user/logout group */
+.footDivider {
+  height: 1px;
+  background: var(--border);
+  margin: 8px 4px;
+}
+
+/* User info row — non-clickable; shows avatar + email */
+.userRow {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 8px 10px;
+  margin-bottom: 2px;
+  user-select: none;
+}
+.avatar {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: var(--accent);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 600;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  text-transform: uppercase;
+  font-family: var(--font-mono);
+}
+.userEmail {
+  opacity: 0;
+  transition: opacity 0.15s ease;
+  font-size: 12px;
+  color: var(--text2);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.sidebar:hover .userEmail { opacity: 1; }
+
+/* Logout button — same .ni look but with button semantics + danger tint on hover */
+.logoutBtn {
+  background: transparent;
+  border: none;
+  width: 100%;
+  text-align: left;
+  font: inherit;
+  color: var(--text);
+}
+.logoutBtn:hover:not(:disabled) {
+  background: var(--red-dim);
+  color: var(--red);
+}
+.logoutBtn:hover:not(:disabled) svg {
+  color: var(--red);
+}
+.logoutBtn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}

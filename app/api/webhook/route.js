@@ -1,5 +1,4 @@
 import { NextResponse } from 'next/server';
-import { demoGuard } from '../../../lib/demo-mode.js';
 import { config } from '../../../src/config.js';
 import { sendMessage, markAsRead } from '../../../src/whatsapp.service.js';
 import { transcribeWhatsAppAudio } from '../../../src/whisper.service.js';
@@ -13,6 +12,9 @@ import { enqueueMessage, hasPendingMessages } from '../../../lib/repositories/qu
 import { isHumanTakeover } from '../../../lib/repositories/conversation.repository.js';
 import { processConversationQueue } from '../../../lib/queue-processor.js';
 import { updateContactMetadata } from '../../../lib/repositories/contact.repository.js';
+import { resolveTenantByPhoneNumberId } from '../../../lib/tenant-context.js';
+import { resolveMetaTokenForTenant } from '../../../lib/meta-tenant-context.js';
+import { markFirstMessageReceived } from '../../../lib/repositories/onboarding.repository.js';
 import {
   mergeContactReferralMetadata,
   normalizeReferral,
@@ -60,6 +62,7 @@ async function buildQueuedMessage({
   message,
   waId,
   phoneNumberId,
+  metaToken,
   isTakeover,
   logger,
 }) {
@@ -80,7 +83,7 @@ async function buildQueuedMessage({
     };
 
     try {
-      userMessage = await transcribeWhatsAppAudio(mediaId);
+      userMessage = await transcribeWhatsAppAudio(mediaId, metaToken);
       if (!userMessage) {
         if (!isTakeover) {
           await sendMessage(waId, "Sorry, I couldn't understand the voice message. Could you please type your message?", phoneNumberId);
@@ -142,9 +145,6 @@ async function buildQueuedMessage({
  * Messages are queued for aggregated processing
  */
 export async function POST(request) {
-  const demoResponse = demoGuard({ status: 'ok' });
-  if (demoResponse) return demoResponse;
-
   // Immediately acknowledge receipt to WhatsApp
   const responsePromise = NextResponse.json({ status: 'ok' }, { status: 200 });
 
@@ -180,8 +180,28 @@ export async function POST(request) {
       const waUsername = webhookContact?.username || null;  // WhatsApp username (optional)
       const phoneNumberId = change.metadata?.phone_number_id || null;
 
+      // 按 phoneNumberId 反查 tenant —— 单一路径：meta_phone_numbers。找不到
+      // 说明该号码所属 tenant 还没接 Meta BM，webhook 直接返 200 跳过（Meta
+      // 不重投，对方需先在 /settings/meta-connection 完成接入）。
+      const tenantId = await resolveTenantByPhoneNumberId(phoneNumberId);
+      if (!tenantId) {
+        logger.warn('webhook.unknown_phone_number', { phone_number_id: phoneNumberId });
+        return;
+      }
+
+      // 该 tenant 的 system token —— 媒体下载、模板回复等都走这条
+      const metaToken = await resolveMetaTokenForTenant(tenantId);
+      if (!metaToken) {
+        logger.warn('webhook.tenant_no_token', { tenant_id: tenantId, phone_number_id: phoneNumberId });
+        return;
+      }
+
+      // Onboarding：第一次收到客户消息（per-tenant）
+      markFirstMessageReceived(tenantId).catch(err =>
+        console.warn('[webhook] markFirstMessageReceived failed:', err.message));
+
       // Get the minimum context needed
-      const context = await getOrCreateRoutedConversationContext({ waId, profileName, phoneNumberId, bsuid, username: waUsername });
+      const context = await getOrCreateRoutedConversationContext({ tenantId, waId, profileName, phoneNumberId, bsuid, username: waUsername });
       const scopedLogger = logger.child({
         wa_id: waId,
         contact_id: context.contact_id,
@@ -206,6 +226,7 @@ export async function POST(request) {
           message,
           waId,
           phoneNumberId,
+          metaToken,
           isTakeover,
           logger: scopedLogger.child({ wa_message_id: message.id, message_type: message.type }),
         });

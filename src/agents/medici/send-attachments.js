@@ -54,12 +54,16 @@ async function fetchAsset(assetId) {
 export async function sendMediciAttachments({
   attachments,
   conversationId,
+  tenantId,
   waId,
   phoneNumberId,
   logger,
 }) {
   if (!Array.isArray(attachments) || attachments.length === 0) {
     return { sent: 0, failed: 0 };
+  }
+  if (!tenantId) {
+    throw new Error('sendMediciAttachments: tenantId required');
   }
 
   let sent = 0;
@@ -95,6 +99,7 @@ export async function sendMediciAttachments({
         : `[${mediaType}: ${row.filename}]`;
 
       await createMessage({
+        tenantId,
         conversationId,
         role: 'assistant',
         content: messageContent,

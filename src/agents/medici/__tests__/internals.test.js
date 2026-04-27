@@ -125,56 +125,6 @@ describe('stripEmptyStringFields', () => {
   });
 });
 
-describe('normalizeAgentResponse — rfq_items branch (DEPRECATED)', () => {
-  it('maps rfq_items into leads with customer_profile merged', () => {
-    const parsed = {
-      rfq_items: [
-        {
-          machinery_type: 'Tractor',
-          model: 'A100',
-          specifications: '45HP',
-          quantity: '5',
-          destination_country: 'KE',
-        },
-      ],
-      customer_profile: { company_name: 'Acme Farm', company_type: 'dealer' },
-    };
-    normalizeAgentResponse(parsed);
-    expect(parsed.rfq_items).toBeUndefined();
-    expect(parsed.customer_profile).toBeUndefined();
-    expect(parsed.leads).toHaveLength(1);
-    const lead = parsed.leads[0];
-    expect(lead.product_name).toBe('Tractor');
-    expect(lead.car_model).toBe('A100');
-    expect(lead.sku_description).toBe('45HP');
-    expect(lead.qty_bucket).toBe('5');
-    expect(lead.destination_country).toBe('KE');
-    expect(lead.company_name).toBe('Acme Farm');
-    expect(lead.buyer_type).toBe('dealer');
-    expect(lead.details.customer_profile).toEqual({
-      company_name: 'Acme Farm',
-      company_type: 'dealer',
-    });
-  });
-});
-
-describe('normalizeAgentResponse — customer_profile merge branch', () => {
-  it('merges customer_profile fields into each lead and drops top-level', () => {
-    const parsed = {
-      leads: [{ product_name: 'Seal', destination_country: 'AE', company_name: '', qty_bucket: '10' }],
-      customer_profile: { company_name: 'Acme Motors', company_type: 'reseller' },
-    };
-    normalizeAgentResponse(parsed);
-    expect(parsed.customer_profile).toBeUndefined();
-    expect(parsed.leads[0].company_name).toBe('Acme Motors');
-    expect(parsed.leads[0].buyer_type).toBe('reseller');
-    expect(parsed.leads[0].details.customer_profile).toEqual({
-      company_name: 'Acme Motors',
-      company_type: 'reseller',
-    });
-  });
-});
-
 describe('normalizeAgentResponse — catch-all extras → details', () => {
   it('moves non-canonical fields into details JSONB (LIVE path for custom lead_fields)', () => {
     const parsed = {

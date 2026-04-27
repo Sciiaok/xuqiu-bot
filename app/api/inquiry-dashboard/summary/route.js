@@ -1,5 +1,6 @@
 import supabase from '@/lib/supabase';
 import { streamSSE } from '@/lib/sse.js';
+import { getTenantContext } from '@/lib/tenant-context';
 import { parseDashboardParams, fetchDashboardData } from '@/lib/inquiry-dashboard';
 import { generateSummaryWithFallback } from '@/lib/ai-summary';
 
@@ -36,10 +37,11 @@ function parseSummaryParams(searchParams) {
 
 /* ─────────────────────────  cache  ───────────────────────── */
 
-async function readCache({ productLinesKey, periodKey }) {
+async function readCache({ tenantId, productLinesKey, periodKey }) {
   const { data } = await supabase
     .from('inquiry_dashboard_summaries')
     .select('content, generated_at')
+    .eq('tenant_id', tenantId)
     .eq('product_lines', productLinesKey)
     .eq('period_key', periodKey)
     .single();
@@ -48,17 +50,18 @@ async function readCache({ productLinesKey, periodKey }) {
   return age < TTL_MS ? data : null;
 }
 
-async function writeCache({ productLinesKey, periodKey, dateFrom, dateTo }, content) {
+async function writeCache({ tenantId, productLinesKey, periodKey, dateFrom, dateTo }, content) {
   await supabase
     .from('inquiry_dashboard_summaries')
     .upsert({
+      tenant_id: tenantId,
       product_lines: productLinesKey,
       period_key: periodKey,
       date_from: dateFrom,
       date_to: dateTo,
       content,
       generated_at: new Date().toISOString(),
-    }, { onConflict: 'product_lines,period_key' });
+    }, { onConflict: 'tenant_id,product_lines,period_key' });
 }
 
 /* ─────────────────────────  LLM  ───────────────────────── */
@@ -109,7 +112,11 @@ async function* streamSummary(params, { skipCache }) {
   }
 
   yield { event: 'status', data: { message: MSG.collecting[params.lang] || MSG.collecting.zh } };
-  const dashboardData = await fetchDashboardData(supabase, params);
+  const dashboardData = await fetchDashboardData(supabase, {
+    tenantId: params.tenantId,
+    windows: params.windows,
+    productLines: params.productLines,
+  });
 
   const statusKey = skipCache ? 'regenerating' : 'generating';
   yield { event: 'status', data: { message: MSG[statusKey][params.lang] || MSG[statusKey].zh } };
@@ -134,9 +141,13 @@ async function* streamSummary(params, { skipCache }) {
 
 /* ─────────────────────────  handlers  ───────────────────────── */
 
-function runStream(request, { skipCache }) {
+async function runStream(request, { skipCache }) {
+  const ctx = await getTenantContext();
+  if (!ctx) {
+    return Response.json({ error: 'Unauthorized' }, { status: 401 });
+  }
   const { searchParams } = new URL(request.url);
-  const params = parseSummaryParams(searchParams);
+  const params = { ...parseSummaryParams(searchParams), tenantId: ctx.tenantId };
   return streamSSE(streamSummary(params, { skipCache }), { heartbeatIntervalMs: 10000 });
 }
 

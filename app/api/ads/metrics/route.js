@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { ProxyAgent } from 'undici';
-import { demoGuard } from '../../../../lib/demo-mode.js';
-import { createClient } from '../../../../lib/supabase-server.js';
+import { getTenantContext } from '../../../../lib/tenant-context.js';
+import { resolveMetaContextForTenant } from '../../../../lib/meta-tenant-context.js';
 import { config } from '../../../../src/config.js';
 import { getRedis } from '../../../../lib/redis.js';
 import { formatDateInTimeZone, shiftDateString } from '../../../../lib/inquiry-dashboard.js';
@@ -206,17 +206,9 @@ async function setToCache(key, data) {
 }
 
 export async function GET(request) {
-  const demoResponse = demoGuard({
-    metrics: [],
-    totals: createEmptyTotals(),
-    warning: 'Demo mode - Meta ad metrics unavailable',
-  });
-  if (demoResponse) return demoResponse;
-
   try {
-    const supabase = await createClient();
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user) {
+    const ctx = await getTenantContext();
+    if (!ctx) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
@@ -226,8 +218,9 @@ export async function GET(request) {
     const startDate = searchParams.get('startDate') || '';
     const endDate = searchParams.get('endDate') || '';
     const totalsOnly = searchParams.get('totalsOnly') === 'true';
-    const adAccountId = normalizeAdAccountId(config.meta.adAccountId);
-    const accessToken = config.meta.accessToken;
+    const metaCtx = await resolveMetaContextForTenant(ctx.tenantId);
+    const adAccountId = metaCtx.adAccountId ? normalizeAdAccountId(metaCtx.adAccountId) : null;
+    const accessToken = metaCtx.accessToken;
 
     // Redis cache — skip the 20s+ Meta API call when identical params hit recently
     const cacheKey = buildCacheKey(days, adIds, startDate, endDate);

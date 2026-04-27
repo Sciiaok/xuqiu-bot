@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { openrouter, MODELS } from '../../../../src/llm-client.js';
 import { generateEmbedding, translateToEnglish, detectLanguage } from '../../../../src/kb-search.service.js';
 import supabase from '../../../../lib/supabase.js';
+import { getTenantContext, findAgentInTenant } from '../../../../lib/tenant-context.js';
 
 /**
  * POST /api/knowledge/teach
@@ -16,11 +17,18 @@ import supabase from '../../../../lib/supabase.js';
  */
 export async function POST(request) {
   try {
+    const ctx = await getTenantContext();
+    if (!ctx) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+
     const body = await request.json();
     const { agent_id, message } = body;
 
     if (!agent_id || !message) {
       return NextResponse.json({ error: 'agent_id and message are required' }, { status: 400 });
+    }
+    const agent = await findAgentInTenant({ tenantId: ctx.tenantId, agentId: agent_id });
+    if (!agent) {
+      return NextResponse.json({ error: 'Agent not found' }, { status: 404 });
     }
 
     // 1. Ask the LLM to extract discrete knowledge points from the user's text.
@@ -77,7 +85,7 @@ Output as JSON:
     for (const kp of extracted) {
       const sourceLang = detectLanguage(kp.content);
       const contentEn = kp.content_en || (sourceLang !== 'en'
-        ? await translateToEnglish(kp.content, agent_id)
+        ? await translateToEnglish(kp.content)
         : kp.content);
 
       const embeddingEn = await generateEmbedding(contentEn);
@@ -86,7 +94,9 @@ Output as JSON:
       const { error } = await supabase
         .from('kb_knowledge_points')
         .insert({
+          tenant_id: ctx.tenantId,
           agent_id,
+          product_line_id: agent.product_line,
           layer: kp.layer || 'company',
           content_original: kp.content,
           content_en: contentEn,

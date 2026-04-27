@@ -1,4 +1,6 @@
 import { NextResponse } from 'next/server';
+import supabase from '../../../../../lib/supabase.js';
+import { getTenantContext, findAgentInTenant } from '../../../../../lib/tenant-context.js';
 import { resolveConflict } from '../../../../../src/kb-upload.service.js';
 
 /**
@@ -13,6 +15,9 @@ import { resolveConflict } from '../../../../../src/kb-upload.service.js';
  */
 export async function POST(request) {
   try {
+    const ctx = await getTenantContext();
+    if (!ctx) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+
     const body = await request.json();
     const { resolution, new_point_id, old_point_id } = body;
 
@@ -28,6 +33,21 @@ export async function POST(request) {
         { error: 'resolution must be one of: use_new, keep_old, coexist' },
         { status: 400 }
       );
+    }
+
+    // 验两条 point 的 agent 都归当前 tenant
+    const { data: points, error: fetchErr } = await supabase
+      .from('kb_knowledge_points')
+      .select('id, agent_id')
+      .in('id', [new_point_id, old_point_id]);
+    if (fetchErr) throw fetchErr;
+    if (!points || points.length !== 2) {
+      return NextResponse.json({ error: 'Knowledge point not found' }, { status: 404 });
+    }
+    for (const p of points) {
+      if (!(await findAgentInTenant({ tenantId: ctx.tenantId, agentId: p.agent_id }))) {
+        return NextResponse.json({ error: 'Knowledge point not found' }, { status: 404 });
+      }
     }
 
     await resolveConflict(resolution, new_point_id, old_point_id);

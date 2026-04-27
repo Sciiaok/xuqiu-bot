@@ -11,11 +11,10 @@ import { config } from '../../../../src/config.js';
  * Handles messages that weren't processed due to setTimeout failures
  */
 export async function GET(request) {
-  // Optional: Verify cron secret for security
   const authHeader = request.headers.get('authorization');
   const cronSecret = config.secrets.cron;
 
-  if (cronSecret && authHeader !== `Bearer ${cronSecret}`) {
+  if (!cronSecret || authHeader !== `Bearer ${cronSecret}`) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
 

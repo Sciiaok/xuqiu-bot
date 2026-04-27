@@ -1,4 +1,4 @@
-import { createClient } from '../../../../../../lib/supabase-server.js';
+import { getTenantContext } from '../../../../../../lib/tenant-context.js';
 import { getSession } from '../../../../../../lib/repositories/autopilot.repository.js';
 import { runOgilvy } from '../../../../../../src/agents/ogilvy/index.js';
 import { streamSSE } from '../../../../../../lib/sse.js';
@@ -15,14 +15,15 @@ import { streamSSE } from '../../../../../../lib/sse.js';
  * Body: { message: string, attachments?: [{url, content_type, filename}] }
  */
 export async function POST(request, { params }) {
-  const supabase = await createClient();
-  const { data: { user } } = await supabase.auth.getUser();
-  if (!user) return Response.json({ error: 'Unauthorized' }, { status: 401 });
+  const ctx = await getTenantContext();
+  if (!ctx) return Response.json({ error: 'Unauthorized' }, { status: 401 });
 
   const { id } = await params;
 
   const session = await getSession(id);
-  if (!session) return Response.json({ error: 'Session not found' }, { status: 404 });
+  if (!session || session.tenant_id !== ctx.tenantId) {
+    return Response.json({ error: 'Session not found' }, { status: 404 });
+  }
 
   let body = {};
   try { body = await request.json(); } catch { /* empty body */ }
@@ -32,6 +33,6 @@ export async function POST(request, { params }) {
     return Response.json({ error: 'Message or attachments required' }, { status: 400 });
   }
 
-  const generator = runOgilvy(id, message, attachments, user.id);
+  const generator = runOgilvy(id, message, attachments, ctx.user.id);
   return streamSSE(generator, { heartbeatIntervalMs: 15_000 });
 }

@@ -3,17 +3,21 @@
  *
  * Wraps kb-search (which is shared infra — also used by /api/knowledge/*) into
  * tool definitions + executors that Medici plugs into its tool loop.
+ *
+ * 2026-04-28：KB 表已经加了 product_line_id 列（trigger 自动填充）。所有查询
+ * 切到按 product_line_id 索引，不再需要 agent UUID 这条桥。
  */
 import { searchKnowledge, calculatePrice } from '../../kb-search.service.js';
 import supabase from '../../../lib/supabase.js';
 
-// ── Check if KB has data for this agent ──────────────────────────────
+// ── Check if KB has data for this product line ──────────────────────
 
-export async function hasKnowledgeBase(agentId) {
+export async function hasKnowledgeBase({ tenantId, productLineId }) {
   const { count, error } = await supabase
     .from('kb_knowledge_points')
     .select('id', { count: 'exact', head: true })
-    .eq('agent_id', agentId)
+    .eq('tenant_id', tenantId)
+    .eq('product_line_id', productLineId)
     .eq('status', 'active')
     .limit(1);
 
@@ -25,24 +29,20 @@ export async function hasKnowledgeBase(agentId) {
 
 /**
  * Build knowledge base tools for Claude tool_use.
- * Returns empty array if no KB data exists for the agent.
+ * Returns empty array if no KB data exists for this product line.
  */
-export async function buildKbTools(agentId) {
-  const hasKb = await hasKnowledgeBase(agentId);
+export async function buildKbTools({ tenantId, productLineId }) {
+  const hasKb = await hasKnowledgeBase({ tenantId, productLineId });
   if (!hasKb) return [];
 
-  // Check what structured data is available — pricing tool only registered
-  // when there's something to price.
+  // calculate_price 工具只在有产品 SKU 时注册。
+  // （kb_pricing_rules 已 dormant —— calculatePrice 不再读它，
+  //   insurance 硬编码 0.3%，这里就不用 count 它了）
   const { count: productCount } = await supabase
     .from('kb_products')
     .select('id', { count: 'exact', head: true })
-    .eq('agent_id', agentId)
-    .eq('is_active', true);
-
-  const { count: pricingCount } = await supabase
-    .from('kb_pricing_rules')
-    .select('id', { count: 'exact', head: true })
-    .eq('agent_id', agentId)
+    .eq('tenant_id', tenantId)
+    .eq('product_line_id', productLineId)
     .eq('is_active', true);
 
   const tools = [];
@@ -81,8 +81,7 @@ export async function buildKbTools(agentId) {
     tools.push({
       name: 'calculate_price',
       description:
-        'Calculate exact price for a product. Use this instead of guessing prices. Supports FOB, CIF, and DDP pricing with quantity discounts. Returns detailed price breakdown.' +
-        ((pricingCount || 0) > 0 ? ' Quantity discount rules are available.' : ''),
+        'Calculate exact price for a product. Use this instead of guessing prices. Supports FOB, CIF, and DDP pricing. Returns detailed price breakdown (insurance fixed at 0.3%).',
       input_schema: {
         type: 'object',
         properties: {
@@ -119,26 +118,27 @@ export async function buildKbTools(agentId) {
  *
  * @param {string} toolName
  * @param {Object} input - Tool input from Claude
- * @param {string} agentId
- * @param {Object} [context] - { conversationContext?: Array<{role, content}> }
- *   — forwarded to searchKnowledge for multi-turn query rewrite. Without it,
- *   pronouns / implicit subjects in follow-up queries aren't resolved and
- *   retrieval quality drops.
+ * @param {Object} ctx - { tenantId, productLineId, conversationContext? }
  * @returns {Promise<string>} JSON string result for tool_result
  */
-export async function executeKbTool(toolName, input, agentId, context = {}) {
+export async function executeKbTool(toolName, input, ctx = {}) {
   try {
     if (toolName === 'search_knowledge') {
-      const results = await searchKnowledge(agentId, input.query, {
+      const results = await searchKnowledge({
+        tenantId: ctx.tenantId,
+        productLineId: ctx.productLineId,
+        query: input.query,
         layers: input.layers || null,
         topK: input.top_k || 5,
-        conversationContext: context.conversationContext || null,
+        conversationContext: ctx.conversationContext || null,
       });
       return JSON.stringify(results);
     }
 
     if (toolName === 'calculate_price') {
-      const result = await calculatePrice(agentId, {
+      const result = await calculatePrice({
+        tenantId: ctx.tenantId,
+        productLineId: ctx.productLineId,
         sku: input.sku,
         quantity: input.quantity || 1,
         destinationPort: input.destination_port || null,
@@ -152,4 +152,3 @@ export async function executeKbTool(toolName, input, agentId, context = {}) {
     return JSON.stringify({ error: error.message });
   }
 }
-

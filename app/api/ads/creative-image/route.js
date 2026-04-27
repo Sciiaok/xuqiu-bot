@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { ProxyAgent } from 'undici';
-import { createClient } from '../../../../lib/supabase-server.js';
+import { getTenantContext } from '../../../../lib/tenant-context.js';
+import { resolveMetaTokenForTenant } from '../../../../lib/meta-tenant-context.js';
 import { config } from '../../../../src/config.js';
 
 const META_API_VERSION = 'v21.0';
@@ -14,17 +15,16 @@ const META_PROXY_AGENT = config.proxy.httpsUrl ? new ProxyAgent(config.proxy.htt
  * by querying Meta's creative{image_url} field (full-size original).
  */
 export async function GET(request) {
-  const supabase = await createClient();
-  const { data: { user } } = await supabase.auth.getUser();
-  if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  const ctx = await getTenantContext();
+  if (!ctx) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 
   const { searchParams } = new URL(request.url);
   const adId = searchParams.get('adId');
   if (!adId) return NextResponse.json({ error: 'Missing adId' }, { status: 400 });
 
-  const accessToken = config.meta.accessToken;
+  const accessToken = await resolveMetaTokenForTenant(ctx.tenantId);
   if (!accessToken) {
-    return NextResponse.json({ error: 'META_SYSTEM_TOKEN is not configured' }, { status: 500 });
+    return NextResponse.json({ error: '当前租户尚未连接 Meta BM' }, { status: 409 });
   }
 
   try {

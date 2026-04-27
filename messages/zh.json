@@ -22,7 +22,7 @@
     "signOut": "退出登录"
   },
   "login": {
-    "title": "Lead Engine",
+    "title": "Prome Engine",
     "subtitle": "登录以访问您的工作台",
     "email": "邮箱地址",
     "emailPlaceholder": "you@company.com",
@@ -31,7 +31,7 @@
     "signIn": "登录",
     "signingIn": "登录中...",
     "footer": "B2B 汽车出口线索管理系统",
-    "copyright": "© {year} Lead Engine. 保留所有权利。",
+    "copyright": "© {year} Prome Engine. 保留所有权利。",
     "defaultError": "登录失败，请检查您的凭据。",
     "darkMode": "切换到深色模式",
     "lightMode": "切换到浅色模式"

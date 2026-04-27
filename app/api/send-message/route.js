@@ -1,18 +1,13 @@
 import { NextResponse } from 'next/server';
-import { demoGuard } from '../../../lib/demo-mode.js';
 import { sendMessage, sendMedia, validateMedia } from '../../../src/whatsapp.service.js';
-import { createClient } from '../../../lib/supabase-server.js';
+import supabase from '../../../lib/supabase.js';
+import { getTenantContext } from '../../../lib/tenant-context.js';
 import { addOperatorMessage, getSessionByConversationId } from '../../../lib/session.js';
 
 export async function POST(request) {
-  const demoResponse = demoGuard({ success: true, message: 'Demo mode - message not sent' });
-  if (demoResponse) return demoResponse;
-
   try {
-    const supabase = await createClient();
-    const { data: { user } } = await supabase.auth.getUser();
-
-    if (!user) {
+    const ctx = await getTenantContext();
+    if (!ctx) {
       return NextResponse.json(
         { error: 'Unauthorized', message: 'Authentication required' },
         { status: 401 }
@@ -78,26 +73,55 @@ export async function POST(request) {
     let extraMetadata = {};
     let conversationPhoneNumberId = null;
 
-    if (conversationId) {
-      const session = await getSessionByConversationId(conversationId);
-      if (waId && waId !== session.wa_id) {
-        return NextResponse.json(
-          { error: 'Bad Request', message: 'conversationId does not match waId' },
-          { status: 400 }
-        );
-      }
-      waId = session.wa_id;
-      conversationPhoneNumberId = session._conversation?.wa_phone_number_id || null;
-
-      if (mediaType) {
-        whatsappResponse = await sendMedia(waId, mediaType, fileBuffer, mimeType, filename, caption, conversationPhoneNumberId);
-      } else if (message) {
-        whatsappResponse = await sendMessage(waId, message, conversationPhoneNumberId);
-      }
+    // 必须有 conversationId —— 上面的 body 解析已经强制要求，这里再次验证保
+    // 险，并把 session 挪到这里作为唯一加载点（前后逻辑都依赖 session）。
+    if (!conversationId) {
+      return NextResponse.json(
+        { error: 'Bad Request', message: 'conversationId is required' },
+        { status: 400 }
+      );
     }
 
+    const session = await getSessionByConversationId(conversationId);
+    // 关键：会话必须属于当前 tenant —— 否则 conversationId 一旦泄露就能跨
+    // tenant 替对方发消息。
+    if (session._conversation?.tenant_id !== ctx.tenantId) {
+      return NextResponse.json(
+        { error: 'Conversation not found' },
+        { status: 404 }
+      );
+    }
+    if (waId && waId !== session.wa_id) {
+      return NextResponse.json(
+        { error: 'Bad Request', message: 'conversationId does not match waId' },
+        { status: 400 }
+      );
+    }
+    waId = session.wa_id;
+    conversationPhoneNumberId = session._conversation?.wa_phone_number_id || null;
+
+    // 防御：会话没绑 phoneNumberId 时不能往 Meta 推（URL 里会变 /null/messages
+    // 直接 400，但更早 fail 出来诊断信息更清楚）。
+    if (!conversationPhoneNumberId) {
+      console.error('send-message: conversation has no wa_phone_number_id', {
+        conversation_id: conversationId,
+        tenant_id: ctx.tenantId,
+      });
+      return NextResponse.json(
+        { error: 'Conversation not bound to a WhatsApp number' },
+        { status: 409 }
+      );
+    }
+
+    console.log('[send-message] outbound', {
+      conversation_id: conversationId,
+      wa_id: waId,
+      phone_number_id: conversationPhoneNumberId,
+      kind: mediaType ? 'media' : 'text',
+    });
+
     if (mediaType) {
-      whatsappResponse = whatsappResponse || await sendMedia(
+      whatsappResponse = await sendMedia(
         waId,
         mediaType,
         fileBuffer,
@@ -129,19 +153,19 @@ export async function POST(request) {
         console.warn('Storage upload failed, media will show as placeholder:', storageErr.message);
       }
     } else {
-      whatsappResponse = whatsappResponse || await sendMessage(waId, message, conversationPhoneNumberId);
+      whatsappResponse = await sendMessage(waId, message, conversationPhoneNumberId);
       messageContent = message;
     }
 
     const updatedSession = await addOperatorMessage(
       conversationId,
       messageContent,
-      user.email || 'operator',
+      ctx.user.email || 'operator',
       extraMetadata
     );
 
     console.log(
-      `Operator ${mediaType || 'text'} message sent to ${waId} (conversation=${updatedSession.conversation_id}) by ${user.email}`
+      `Operator ${mediaType || 'text'} message sent to ${waId} (conversation=${updatedSession.conversation_id}) by ${ctx.user.email}`
     );
 
     return NextResponse.json({

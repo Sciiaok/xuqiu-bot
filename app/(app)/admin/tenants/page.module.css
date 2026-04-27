@@ -1,0 +1,106 @@
+.page {
+  padding: 32px 40px;
+  max-width: 1300px;
+  margin: 0 auto;
+  font-family: var(--font-sans);
+  color: var(--text);
+}
+.header {
+  margin-bottom: 24px;
+}
+.title {
+  font-family: var(--font-display);
+  font-size: 26px;
+  font-weight: 700;
+  letter-spacing: -0.5px;
+  margin: 0 0 8px;
+}
+.subtitle {
+  font-size: 13px;
+  color: var(--text2);
+  line-height: 1.6;
+  margin: 0;
+}
+.muted { color: var(--text3); font-size: 12px; }
+.warn { color: #c89a3c; font-size: 11px; margin-top: 2px; }
+
+.error {
+  background: var(--red-dim);
+  border: 1px solid rgba(196, 66, 48, 0.2);
+  color: var(--red);
+  padding: 10px 14px;
+  border-radius: var(--r);
+  font-size: 12px;
+  margin-bottom: 16px;
+}
+
+.tableWrap {
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  border-radius: var(--rl);
+  overflow-x: auto;
+}
+.table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+.table th, .table td {
+  text-align: left;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--border);
+  vertical-align: top;
+}
+.table th {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--text2);
+  font-weight: 500;
+  background: var(--bg3);
+}
+.table tr:last-child td { border-bottom: none; }
+
+.tenantName {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 500;
+}
+.badge {
+  font-size: 10px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: var(--bg3);
+  color: var(--text2);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  font-family: var(--font-mono);
+}
+
+.statusBadge {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid;
+  font-size: 11px;
+  font-weight: 500;
+}
+
+.primaryBtn,
+.dangerBtn {
+  background: var(--bg3);
+  border: 1px solid var(--border2);
+  border-radius: var(--r);
+  padding: 5px 12px;
+  font-size: 12px;
+  cursor: pointer;
+  transition: background 0.13s;
+}
+.primaryBtn { color: var(--accent); border-color: var(--accent); }
+.dangerBtn  { color: var(--red); border-color: var(--red); }
+.primaryBtn:hover { background: rgba(37, 99, 235, 0.1); }
+.dangerBtn:hover  { background: var(--red-dim); }
+.primaryBtn:disabled,
+.dangerBtn:disabled { opacity: 0.5; cursor: not-allowed; }

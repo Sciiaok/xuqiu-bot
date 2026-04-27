@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import supabase from '@/lib/supabase';
+import { getTenantContext } from '@/lib/tenant-context';
 
 function parseDateRange(searchParams) {
   const days = parseInt(searchParams.get('days') || '30', 10);
@@ -45,12 +46,16 @@ function buildDateSeries(fromDate, toDate, dailyCounts) {
 
 export async function GET(request) {
   try {
+    const ctx = await getTenantContext();
+    if (!ctx) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+
     const { searchParams } = new URL(request.url);
     const { days, fromDate, toDate } = parseDateRange(searchParams);
     const fromISO = fromDate.toISOString();
     const toISO = toDate.toISOString();
 
     const { data: rows, error } = await supabase.rpc('ad_conversation_stats', {
+      p_tenant_id: ctx.tenantId,
       from_ts: fromISO,
       to_ts: toISO,
     });

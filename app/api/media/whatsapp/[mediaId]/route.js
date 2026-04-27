@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
-import { createClient } from '../../../../../lib/supabase-server.js';
+import { getTenantContext } from '../../../../../lib/tenant-context.js';
+import { resolveMetaTokenForTenant } from '../../../../../lib/meta-tenant-context.js';
 import {
   downloadWhatsAppMediaBuffer,
   WhatsAppMediaGoneError,
@@ -7,12 +8,8 @@ import {
 
 export async function GET(_request, { params }) {
   try {
-    const supabase = await createClient();
-    const {
-      data: { user },
-    } = await supabase.auth.getUser();
-
-    if (!user) {
+    const ctx = await getTenantContext();
+    if (!ctx) {
       return NextResponse.json(
         { error: 'Unauthorized', message: 'Authentication required' },
         { status: 401 }
@@ -27,7 +24,15 @@ export async function GET(_request, { params }) {
       );
     }
 
-    const { buffer, mimeType } = await downloadWhatsAppMediaBuffer(mediaId);
+    const token = await resolveMetaTokenForTenant(ctx.tenantId);
+    if (!token) {
+      return NextResponse.json(
+        { error: '当前租户尚未连接 Meta Business' },
+        { status: 409 }
+      );
+    }
+
+    const { buffer, mimeType } = await downloadWhatsAppMediaBuffer(mediaId, { token });
 
     return new Response(buffer, {
       status: 200,
@@ -38,9 +43,6 @@ export async function GET(_request, { params }) {
     });
   } catch (error) {
     if (error instanceof WhatsAppMediaGoneError) {
-      // Expected: WhatsApp Cloud API has rotated this media out of its retention
-      // window. Log at warn level without a stack trace so real failures stay
-      // visible, and tell the client with 410 Gone.
       console.warn(`[whatsapp-media] ${error.mediaId} gone (Graph code 100/33)`);
       return NextResponse.json(
         { error: 'Media Gone', message: '该媒体已过期，WhatsApp 不再保留原始文件' },

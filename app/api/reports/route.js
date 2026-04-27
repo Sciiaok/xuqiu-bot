@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
-import { createClient } from '@/lib/supabase-server';
 import supabase from '@/lib/supabase';
+import { getTenantContext } from '@/lib/tenant-context';
 import { generateReport } from '@/lib/services/report-generator';
 
 /**
@@ -9,9 +9,8 @@ import { generateReport } from '@/lib/services/report-generator';
  */
 export async function GET(request) {
   try {
-    const authClient = await createClient();
-    const { data: { user } } = await authClient.auth.getUser();
-    if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    const ctx = await getTenantContext();
+    if (!ctx) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 
     const { searchParams } = new URL(request.url);
     const type = searchParams.get('type'); // daily|weekly|monthly|manual
@@ -23,6 +22,7 @@ export async function GET(request) {
     let query = supabase
       .from('ai_reports')
       .select('id, type, status, agent_ids, period_start, period_end, summary_line, kpi_snapshot, retry_count, error_message, generated_at, created_at', { count: 'exact' })
+      .eq('tenant_id', ctx.tenantId)
       .order('created_at', { ascending: false })
       .range(offset, offset + limit - 1);
 
@@ -46,9 +46,8 @@ export async function GET(request) {
  */
 export async function POST(request) {
   try {
-    const authClient = await createClient();
-    const { data: { user } } = await authClient.auth.getUser();
-    if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    const ctx = await getTenantContext();
+    if (!ctx) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 
     const body = await request.json();
     const { periodStart, periodEnd, agentIds } = body;
@@ -58,6 +57,7 @@ export async function POST(request) {
     }
 
     const report = await generateReport({
+      tenantId: ctx.tenantId,
       type: 'manual',
       periodStart,
       periodEnd,

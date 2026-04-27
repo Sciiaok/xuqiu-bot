@@ -1,4 +1,4 @@
-import { createClient } from '../../../../lib/supabase-server.js';
+import { getTenantContext } from '../../../../lib/tenant-context.js';
 import { listWhatsAppAccountsForUser } from '../../../../src/agents/ogilvy/whatsapp-accounts.service.js';
 
 /**
@@ -7,11 +7,14 @@ import { listWhatsAppAccountsForUser } from '../../../../src/agents/ogilvy/whats
  * Returns the list of Click-to-WhatsApp-eligible phone numbers for the
  * currently authenticated user, plus a gate status the UI uses to decide
  * whether to render the chat or a "set up first" blocker.
+ *
+ * Note: 这条路径目前是 per-user 拉 Meta token，本身就按 user 维度隔离；
+ * V1 "1 user = 1 tenant" 假设下等价于 tenant 隔离。等 Phase 2 接入
+ * meta_connections 后这里要改成按 tenant 拉 token。
  */
 export async function GET(request) {
-  const supabase = await createClient();
-  const { data: { user } } = await supabase.auth.getUser();
-  if (!user) {
+  const ctx = await getTenantContext();
+  if (!ctx) {
     return Response.json({ error: 'Unauthorized' }, { status: 401 });
   }
 
@@ -21,7 +24,7 @@ export async function GET(request) {
   const force = url.searchParams.get('force') === '1';
 
   try {
-    const result = await listWhatsAppAccountsForUser(user.id, { force });
+    const result = await listWhatsAppAccountsForUser(ctx.user.id, { force });
     return Response.json(result);
   } catch (err) {
     console.error('[autopilot/whatsapp-accounts] fetch failed:', err.message);

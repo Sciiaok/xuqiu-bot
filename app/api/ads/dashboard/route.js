@@ -1,8 +1,9 @@
 import { NextResponse } from 'next/server';
 import { ProxyAgent } from 'undici';
 import { createHash } from 'crypto';
-import { demoGuard } from '../../../../lib/demo-mode.js';
-import { createClient } from '../../../../lib/supabase-server.js';
+import supabaseAnon from '../../../../lib/supabase.js';
+import { getTenantContext } from '../../../../lib/tenant-context.js';
+import { resolveMetaContextForTenant } from '../../../../lib/meta-tenant-context.js';
 import { getRedis } from '../../../../lib/redis.js';
 import { config } from '../../../../src/config.js';
 import { formatDateInTimeZone, shiftDateString, localDateToUtcIso } from '../../../../lib/inquiry-dashboard.js';
@@ -331,8 +332,9 @@ function isMetaRateLimitError(error) {
   return /too many calls|rate.limit|rate-limiting|user request limit reached/i.test(String(error?.message || ''));
 }
 
-function getDashboardCacheKey({ userId, adAccountId, range, productLine }) {
+function getDashboardCacheKey({ tenantId, userId, adAccountId, range, productLine }) {
   const raw = JSON.stringify({
+    tenantId,
     userId,
     adAccountId,
     preset: range.preset,
@@ -497,7 +499,7 @@ function chunkArray(items, size) {
   return chunks;
 }
 
-async function fetchConversationRows({ supabase, adIds, fromISO, toISO }) {
+async function fetchConversationRows({ supabase, tenantId, adIds, fromISO, toISO }) {
   if (!adIds.length) return [];
 
   const allRows = [];
@@ -507,6 +509,7 @@ async function fetchConversationRows({ supabase, adIds, fromISO, toISO }) {
       let query = supabase
         .from('conversations')
         .select('id, meta_ad_id, created_at, agent_id, leads(inquiry_quality)')
+        .eq('tenant_id', tenantId)
         .in('meta_ad_id', chunk)
         .order('created_at', { ascending: false })
         .range(from, from + MAX_PAGE_SIZE - 1);
@@ -527,8 +530,9 @@ async function fetchConversationRows({ supabase, adIds, fromISO, toISO }) {
   return allRows;
 }
 
-async function fetchConversationSummaryByAd({ supabase, fromISO, toISO }) {
+async function fetchConversationSummaryByAd({ supabase, tenantId, fromISO, toISO }) {
   const { data, error } = await supabase.rpc('ad_conversation_stats', {
+    p_tenant_id: tenantId,
     from_ts: fromISO,
     to_ts: toISO,
   });
@@ -537,8 +541,11 @@ async function fetchConversationSummaryByAd({ supabase, fromISO, toISO }) {
   return data || [];
 }
 
-async function fetchAgentsMap({ supabase }) {
-  const { data, error } = await supabase.from('agents').select('id, product_line');
+async function fetchAgentsMap({ supabase, tenantId }) {
+  const { data, error } = await supabase
+    .from('agents')
+    .select('id, product_line')
+    .eq('tenant_id', tenantId);
   if (error) throw error;
 
   const map = new Map();
@@ -809,37 +816,31 @@ function toStatus(meta) {
 }
 
 export async function GET(request) {
-  const demoResponse = demoGuard({
-    range: null,
-    summary: null,
-    ads: [],
-    warning: 'Demo mode - ad dashboard unavailable',
-  });
-  if (demoResponse) return demoResponse;
-
   try {
-    const supabase = await createClient();
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user) {
+    const ctx = await getTenantContext();
+    if (!ctx) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
+    const supabase = supabaseAnon;
 
     const { searchParams } = new URL(request.url);
     const range = parseDateRange(searchParams);
     const productLine = parseProductLine(searchParams);
-    const adAccountId = normalizeAdAccountId(config.meta.adAccountId);
-    const accessToken = config.meta.accessToken;
+    const metaCtx = await resolveMetaContextForTenant(ctx.tenantId);
+    const adAccountId = metaCtx.adAccountId ? normalizeAdAccountId(metaCtx.adAccountId) : null;
+    const accessToken = metaCtx.accessToken;
 
     if (!accessToken) {
-      return NextResponse.json({ error: 'META_SYSTEM_TOKEN / META_ACCESS_TOKEN is not configured' }, { status: 500 });
+      return NextResponse.json({ error: '当前租户尚未连接 Meta BM' }, { status: 409 });
     }
 
     if (!adAccountId) {
-      return NextResponse.json({ error: 'META_AD_ACCOUNT_ID is not configured' }, { status: 500 });
+      return NextResponse.json({ error: '当前租户尚未配置 Meta 广告账户' }, { status: 409 });
     }
 
     const cacheKey = getDashboardCacheKey({
-      userId: user.id,
+      tenantId: ctx.tenantId,
+      userId: ctx.user.id,
       adAccountId,
       range,
       productLine,
@@ -850,7 +851,7 @@ export async function GET(request) {
     }
 
     let metaRateLimited = false;
-    const agentsMap = await fetchAgentsMap({ supabase });
+    const agentsMap = await fetchAgentsMap({ supabase, tenantId: ctx.tenantId });
     let metaAds = [];
     try {
       metaAds = await fetchMetaAds({ adAccountId, accessToken });
@@ -890,6 +891,7 @@ export async function GET(request) {
 
     const periodConversationSummary = await fetchConversationSummaryByAd({
       supabase,
+      tenantId: ctx.tenantId,
       fromISO: range.fromISO,
       toISO: range.toISO,
     });
@@ -945,10 +947,12 @@ export async function GET(request) {
     const [lifetimeConversations, periodConversations] = await Promise.all([
       fetchConversationRows({
         supabase,
+        tenantId: ctx.tenantId,
         adIds: candidateIds,
       }),
       fetchConversationRows({
         supabase,
+        tenantId: ctx.tenantId,
         adIds: candidateIds,
         fromISO: range.fromISO,
         toISO: range.toISO,
@@ -1120,12 +1124,13 @@ export async function GET(request) {
       const { searchParams } = new URL(request.url);
       const range = parseDateRange(searchParams);
       const productLine = parseProductLine(searchParams);
-      const adAccountId = normalizeAdAccountId(config.meta.adAccountId);
-      const supabase = await createClient();
-      const { data: { user } } = await supabase.auth.getUser();
-      if (user && isMetaRateLimitError(error)) {
+      const ctx = await getTenantContext();
+      const metaCtx = ctx ? await resolveMetaContextForTenant(ctx.tenantId) : null;
+      const adAccountId = metaCtx?.adAccountId ? normalizeAdAccountId(metaCtx.adAccountId) : null;
+      if (ctx && adAccountId && isMetaRateLimitError(error)) {
         const cacheKey = getDashboardCacheKey({
-          userId: user.id,
+          tenantId: ctx.tenantId,
+          userId: ctx.user.id,
           adAccountId,
           range,
           productLine,

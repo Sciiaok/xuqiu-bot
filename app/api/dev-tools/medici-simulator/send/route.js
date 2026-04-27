@@ -1,6 +1,5 @@
 import { NextResponse } from 'next/server';
-import { createClient } from '../../../../../lib/supabase-server.js';
-import supabase from '../../../../../lib/supabase.js';
+import { getTenantContext } from '../../../../../lib/tenant-context.js';
 import { runMedici } from '../../../../../src/agents/medici/index.js';
 import { getMissingFields } from '../../../../../src/inquiry-quality.js';
 import { getMediciConfig } from '../../../../../src/agents/medici/config.js';
@@ -28,9 +27,8 @@ import { formatReferralContextForPrompt } from '../../../../../lib/referral-cont
  */
 export async function POST(request) {
   try {
-    const authSupabase = await createClient();
-    const { data: { user } } = await authSupabase.auth.getUser();
-    if (!user) {
+    const ctx = await getTenantContext();
+    if (!ctx) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
@@ -50,7 +48,7 @@ export async function POST(request) {
 
     // 1. Resolve the product_line config (assembled system_prompt / schema /
     //    qualification from the product_lines row, cached in-process).
-    const lineConfig = await getMediciConfig(productLine);
+    const lineConfig = await getMediciConfig({ tenantId: ctx.tenantId, id: productLine });
     if (!lineConfig) {
       return NextResponse.json({ error: `Product line not found: ${productLine}` }, { status: 404 });
     }
@@ -59,17 +57,8 @@ export async function POST(request) {
       system_prompt_chars: lineConfig.system_prompt.length,
     });
 
-    // 2. Look up agents.id — loadAgentTools (KB tools) is still keyed on it.
-    //    Read-only query, no writes.
-    const { data: agent } = await supabase
-      .from('agents')
-      .select('id')
-      .eq('product_line', productLine)
-      .maybeSingle();
-    const agentConfig = { ...lineConfig, id: agent?.id || null };
-    log('info', agent?.id
-      ? `Resolved agent_id for tool loading: ${agent.id}`
-      : 'No agent row for this product_line — KB tools will be skipped');
+    // KB 工具按 (tenant_id, product_line_id) 查询，不再需要 agents.id 桥。
+    const agentConfig = lineConfig;
 
     // 3. Synthesise the Meta referral from the picked ad. This is exactly the
     //    shape the real webhook writes to contact.metadata.last_referral.
@@ -180,7 +169,7 @@ export async function POST(request) {
       agent_config: {
         product_line: agentConfig.product_line,
         name: agentConfig.name,
-        id: agentConfig.id,
+        tenant_id: agentConfig.tenant_id,
         system_prompt_chars: agentConfig.system_prompt?.length || 0,
         output_schema_keys: Object.keys(agentConfig.output_schema?.properties || {}),
         lead_fields_count: agentConfig.lead_fields?.length || 0,

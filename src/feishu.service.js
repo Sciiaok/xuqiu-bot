@@ -1,76 +1,71 @@
-import { randomUUID } from 'crypto';
-import { config } from './config.js';
+import { getFeishuWebhookUrl } from '../lib/repositories/notification.repository.js';
 
-const TOKEN_URL = 'https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal';
-const MESSAGE_URL = 'https://open.feishu.cn/open-apis/im/v1/messages?receive_id_type=chat_id';
+/**
+ * 飞书自定义机器人 webhook 推送（V1 唯一通道）。
+ *
+ * 每个 tenant 在自己飞书群里加「自定义机器人」→ 复制 webhook URL → 粘到
+ * /settings/notifications。我们 POST 到该 URL 推消息。
+ *
+ * URL 形如 https://open.feishu.cn/open-apis/bot/v2/hook/{token}
+ * 一个 URL 唯一对应一个群里的一个机器人。
+ */
 
-// In-memory token cache
-let tokenCache = { token: null, expiresAt: 0 };
-
-async function getTenantAccessToken() {
-  // Return cached token if still valid (with 5min buffer)
-  if (tokenCache.token && Date.now() < tokenCache.expiresAt - 5 * 60 * 1000) {
-    return tokenCache.token;
+/**
+ * @param {string} markdownContent
+ * @param {Object} opts
+ * @param {string} opts.tenantId             目标 tenant
+ * @param {boolean} [opts.atAll]             消息末尾追加 @所有人
+ * @returns {Promise<{ok: boolean, skipped?: boolean, reason?: string, error?: string}>}
+ */
+export async function sendFeishuMessage(markdownContent, opts = {}) {
+  const { tenantId, atAll = false } = opts;
+  if (!tenantId) {
+    throw new Error('sendFeishuMessage: tenantId required');
   }
 
-  const response = await fetch(TOKEN_URL, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      app_id: config.feishu.appId,
-      app_secret: config.feishu.appSecret,
-    }),
-  });
-
-  const data = await response.json();
-  if (data.code !== 0) {
-    throw new Error(`Feishu token error: ${data.msg}`);
+  const url = await getFeishuWebhookUrl(tenantId);
+  if (!url) {
+    return { ok: false, skipped: true, reason: 'tenant_not_configured' };
   }
 
-  tokenCache = {
-    token: data.tenant_access_token,
-    expiresAt: Date.now() + data.expire * 1000,
-  };
-
-  return tokenCache.token;
+  return postWebhook(url, markdownContent, { atAll });
 }
 
 /**
- * Send a markdown message to a Feishu group chat
- * @param {string} markdownContent - Markdown text content
- * @param {boolean} atAll - Whether to @mention everyone
- * @param {string} chatId - Override chat_id (optional, defaults to FEISHU_CHAT_ID)
- * @param {string} routeUuid - Optional stable UUID for Feishu deduplication
+ * 直接对一个 webhook URL 推送（不查 DB）。给 /api/settings/notifications/test 用。
  */
-export async function sendFeishuMessage(markdownContent, atAll = false, chatId = config.feishu.chatId, routeUuid = randomUUID()) {
-  const token = await getTenantAccessToken();
+export async function sendFeishuMessageToWebhook(webhookUrl, markdownContent, { atAll = false } = {}) {
+  return postWebhook(webhookUrl, markdownContent, { atAll });
+}
 
+async function postWebhook(url, markdownContent, { atAll }) {
   const content = atAll
-    ? `${markdownContent}\n<at id="all"></at>`
+    ? `${markdownContent}\n<at user_id="all">所有人</at>`
     : markdownContent;
 
   const payload = {
-    receive_id: chatId,
     msg_type: 'interactive',
-    uuid: routeUuid,
-    content: JSON.stringify({
+    card: {
+      config: { wide_screen_mode: true },
       elements: [{ tag: 'markdown', content }],
-    }),
+    },
   };
 
-  const response = await fetch(MESSAGE_URL, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'Authorization': `Bearer ${token}`,
-    },
-    body: JSON.stringify(payload),
-  });
-
-  const data = await response.json();
-  if (data.code !== 0) {
-    throw new Error(`Feishu message error: ${data.msg} (code=${data.code}, uuid=${routeUuid})`);
+  let response;
+  try {
+    response = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+  } catch (err) {
+    return { ok: false, error: `Feishu webhook fetch failed: ${err.message}` };
   }
 
-  return data;
+  const data = await response.json().catch(() => null);
+  if (!response.ok || data?.code !== 0) {
+    const msg = data?.msg || `HTTP ${response.status}`;
+    return { ok: false, error: `Feishu webhook error: ${msg}` };
+  }
+  return { ok: true };
 }

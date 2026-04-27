@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { createClient } from '@/lib/supabase-server';
+import { getTenantContext, FOUNDER_TENANT_ID } from '@/lib/tenant-context';
 import { openrouter, MODELS } from '@/src/llm-client';
 
 // Minimal schema digest given to the model so it generates sensible column
@@ -51,9 +51,11 @@ function stripSqlFences(text) {
 
 export async function POST(request) {
   try {
-    const supabase = await createClient();
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    const ctx = await getTenantContext();
+    if (!ctx) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    if (ctx.tenantId !== FOUNDER_TENANT_ID) {
+      return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+    }
 
     const body = await request.json().catch(() => ({}));
     const prompt = typeof body?.prompt === 'string' ? body.prompt.trim() : '';

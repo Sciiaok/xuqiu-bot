@@ -1,6 +1,5 @@
-import { createClient } from '../../../../../lib/supabase-server.js';
+import { getTenantContext } from '../../../../../lib/tenant-context.js';
 import { getRedis } from '../../../../../lib/redis.js';
-import { demoGuard } from '../../../../../lib/demo-mode.js';
 import { streamSSE } from '../../../../../lib/sse.js';
 import { generateSummaryWithFallback } from '../../../../../lib/ai-summary.js';
 
@@ -34,8 +33,8 @@ function parseDays(value) {
   return Math.min(parsed, 90);
 }
 
-function cacheKey(type, days) {
-  return `ai_report_cache:${type}:${days}`;
+function cacheKey(tenantId, type, days) {
+  return `ai_report_cache:${tenantId}:${type}:${days}`;
 }
 
 function buildDateRange(days) {
@@ -54,12 +53,8 @@ function buildDateRange(days) {
  * 2. If miss, calls LLM, streams response chunks, caches until next China midnight
  */
 export async function GET(request) {
-  const demoResponse = demoGuard({ event: 'done', data: { text: '演示模式' } });
-  if (demoResponse) return demoResponse;
-
-  const authClient = await createClient();
-  const { data: { user } } = await authClient.auth.getUser();
-  if (!user) {
+  const ctx = await getTenantContext();
+  if (!ctx) {
     return Response.json({ error: 'Unauthorized' }, { status: 401 });
   }
 
@@ -71,7 +66,7 @@ export async function GET(request) {
     return Response.json({ error: `Unsupported type: ${type}` }, { status: 400 });
   }
 
-  const key = cacheKey(type, days);
+  const key = cacheKey(ctx.tenantId, type, days);
 
   async function* generateReport() {
     let redis;
@@ -100,7 +95,7 @@ export async function GET(request) {
 
     const { buildReportData } = await import('../route.js');
     const { fromDate, toDate, fromISO, toISO } = buildDateRange(days);
-    const reportData = await buildReportData(type, fromISO, toISO, fromDate, toDate);
+    const reportData = await buildReportData(ctx.tenantId, type, fromISO, toISO, fromDate, toDate);
 
     yield { event: 'status', data: { message: '正在生成报告…' } };
 
