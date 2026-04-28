@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { getTenantContext, FOUNDER_TENANT_ID } from '@/lib/tenant-context';
-import supabase from '@/lib/supabase';
+import { getSupabaseAdmin } from '@/lib/supabase-admin';
 
 // Block obvious mutations before even hitting the DB. The RPC itself is
 // read-only via SET TRANSACTION, this is just a fast user-facing guard so
@@ -28,7 +28,7 @@ export async function POST(request) {
     }
 
     const startedAt = Date.now();
-    const { data, error } = await supabase.rpc('dev_exec_sql', { query });
+    const { data, error } = await getSupabaseAdmin().rpc('dev_exec_sql', { query });
     const ms = Date.now() - startedAt;
 
     if (error) {
