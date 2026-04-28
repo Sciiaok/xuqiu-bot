@@ -3,9 +3,14 @@
 --
 -- 跟前端 UI 上标注的 "10s 超时" 对齐。原函数只挡了写操作（READ ONLY），
 -- 慢查询会一直占着连接 —— 加事务级 statement_timeout 兜底。
+--
+-- 注：CREATE OR REPLACE 不能改返回类型，云端老函数签名跟新版不一致时
+-- 会报 42P13。这里先 DROP 再 CREATE，并重新 GRANT（DROP 会带走权限）。
 -- ============================================================================
 
-CREATE OR REPLACE FUNCTION dev_exec_sql(query text)
+DROP FUNCTION IF EXISTS dev_exec_sql(text);
+
+CREATE FUNCTION dev_exec_sql(query text)
 RETURNS SETOF jsonb
 LANGUAGE plpgsql
 SECURITY DEFINER
@@ -16,5 +21,8 @@ BEGIN
   RETURN QUERY EXECUTE format('SELECT row_to_json(t)::jsonb FROM (%s) t', query);
 END;
 $$;
+
+REVOKE EXECUTE ON FUNCTION dev_exec_sql(text) FROM PUBLIC;
+GRANT  EXECUTE ON FUNCTION dev_exec_sql(text) TO service_role;
 
 NOTIFY pgrst, 'reload schema';
