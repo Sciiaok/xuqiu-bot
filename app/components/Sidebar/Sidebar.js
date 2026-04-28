@@ -29,6 +29,7 @@ const BUSINESS_NAV = [
     items: [
       { href: '/leadhub', label: '询盘私信', icon: 'leadhub' },
       { href: '/product-lines', label: '产品线', icon: 'agents' },
+      { href: '/medici-simulator', label: 'Medici 调试台', icon: 'agents' },
     ],
   },
 ];

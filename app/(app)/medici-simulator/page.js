@@ -1,8 +1,7 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
-import Link from 'next/link';
-import LeadDetail from '../../../components/LeadDetail/LeadDetail';
+import LeadDetail from '../../components/LeadDetail/LeadDetail';
 import s from './page.module.css';
 
 /**
@@ -385,7 +384,7 @@ export default function ChatSimulatorPage() {
     setSendError('');
 
     try {
-      const res = await fetch('/api/dev-tools/medici-simulator/send', {
+      const res = await fetch('/api/medici-simulator/send', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -456,10 +455,6 @@ export default function ChatSimulatorPage() {
 
   return (
     <div className={s.root}>
-      <div className={s.breadcrumb}>
-        <Link href="/dev-tools" className={s.breadcrumbLink}>← 开发者工具</Link>
-      </div>
-
       <div className={s.header}>
         <div className={s.headerLeft}>
           <h1 className={s.title}>Medici 调试台</h1>

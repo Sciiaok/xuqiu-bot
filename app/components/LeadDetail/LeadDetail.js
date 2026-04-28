@@ -18,7 +18,7 @@ import s from './LeadDetail.module.css';
  *
  * Used by:
  *   - /leadhub (线索详情 tab) — real DB leads
- *   - /dev-tools/medici-simulator — Medici's per-turn response leads
+ *   - /medici-simulator — Medici's per-turn response leads
  *
  * Both callers pass the same shape:
  *   leads:      Array<Lead>

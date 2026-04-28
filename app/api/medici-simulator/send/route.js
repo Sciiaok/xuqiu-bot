@@ -1,15 +1,15 @@
 import { NextResponse } from 'next/server';
-import { getTenantContext } from '../../../../../lib/tenant-context.js';
-import { runMedici } from '../../../../../src/agents/medici/index.js';
-import { getMissingFields } from '../../../../../src/inquiry-quality.js';
-import { getMediciConfig } from '../../../../../src/agents/medici/config.js';
-import { formatReferralContextForPrompt } from '../../../../../lib/referral-context.js';
+import { getTenantContext } from '../../../../lib/tenant-context.js';
+import { runMedici } from '../../../../src/agents/medici/index.js';
+import { getMissingFields } from '../../../../src/inquiry-quality.js';
+import { getMediciConfig } from '../../../../src/agents/medici/config.js';
+import { formatReferralContextForPrompt } from '../../../../lib/referral-context.js';
 
 /**
- * POST /api/dev-tools/medici-simulator/send
+ * POST /api/medici-simulator/send
  *
- * One-shot, ephemeral chat turn used by the internal Medici simulator on
- * /dev-tools/medici-simulator. No DB writes, no conversation/contact rows.
+ * One-shot, ephemeral chat turn used by the Medici simulator on
+ * /medici-simulator. No DB writes, no conversation/contact rows.
  * Mirrors the production pipeline as closely as possible so the caller sees
  * the real assembled prompt + real Medici output for a given product line
  * + Meta ad referral.
