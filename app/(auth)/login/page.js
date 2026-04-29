@@ -26,7 +26,9 @@ export default function V5LoginPage() {
 
       if (signInError) throw signInError;
 
-      router.push('/analytics');
+      // 跳到根路径，由 app/(app)/page.js 分发：
+      //   founder → /admin/tenants，普通租户 → /analytics
+      router.push('/');
       router.refresh();
     } catch (err) {
       setError(err.message || '登录失败，请重试');

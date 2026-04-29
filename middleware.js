@@ -90,7 +90,13 @@ export async function middleware(request) {
   if (!user) {
     const url = request.nextUrl.clone();
     url.pathname = '/login';
-    return NextResponse.redirect(url);
+    const redirectResponse = NextResponse.redirect(url);
+    // 保留 supabase-ssr 在 refresh 失败时写入的清 cookie 指令，
+    // 避免下一次请求继续用同一份失效 refresh_token 触发 AuthApiError。
+    supabaseResponse.cookies.getAll().forEach((c) => {
+      redirectResponse.cookies.set(c.name, c.value, c);
+    });
+    return redirectResponse;
   }
 
   return supabaseResponse;
