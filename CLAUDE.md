@@ -1,5 +1,9 @@
 # CLAUDE.md
 
+## Version Control
+
+当你接到新任务，在开始项目改造前，你应该先拉取最新的main版本然后创建新分支。
+
 ## Git & Commits
 
 When asked to commit, just commit immediately. Do NOT enter plan mode, write plan files, or save insights to memory files. Keep git operations simple and direct.
@@ -21,3 +25,5 @@ Understand the project architecture before making backend changes. The app uses 
 ## Database数据库
 
 在你迭代改造项目时，当涉及数据库的迁移或数据库的改造时，切记要做到数据的向前兼容，不要删改旧数据，但可以自由增加新数据、扩展schema、定义新表新接口等等。
+
+如果需要检查/阅读/查询云端数据时，如果项目里已有supabase数据库的api key，你可以直接写SQL去云端找数据。
