@@ -6,7 +6,7 @@
 > - **产品层 / UI 层** 叫「**自动获客 · Autopilot**」——用户在 `/ai-automation` 看到的名字不动。
 > - **工程层** 叫「**Ogilvy**」——`src/agents/ogilvy/`、`runOgilvy()`、内部文档一律用这个名字。取自 David Ogilvy（现代广告教父），他一个人把产品洞察 → 文案 → 视觉 → 媒介购买打通成一条完整手艺；Agent 做的就是同一件事。
 >
-> 文档版本：2026-04（PR 1–4 交付 + 性能/视觉迭代 + 2026-04 模块重命名为 Ogilvy）
+> 文档版本：2026-04（PR 1–4 交付 + 性能/视觉迭代 + 2026-04 重命名为 Ogilvy + 2026-04 末 skill 驱动魔改）
 
 ---
 
@@ -152,7 +152,7 @@ autopilot_messages
 `src/agents/ogilvy/index.js::runOgilvy()` — 一个 `for` 循环，最多 `MAX_ITERATIONS=20` 次：
 
 1. 从 DB 重放对话历史为 OpenAI messages
-2. 构建 system prompt：STATIC 段（挂 `cache_control: ephemeral`）+ DYNAMIC 段（WA 号码列表 + 上传图列表）
+2. 构建 system prompt：**STATIC 段** = `overseas-ad-planning` skill 主文档 + `skill-host-patch.md`（CTW 收口补丁），挂 `cache_control: ephemeral`；**DYNAMIC 段** = WA 号码列表 + 上传图列表。详见 §5.5
 3. **模型路由**：若上一条是 tool_result（合成轮）→ Haiku；否则（对话轮）→ Sonnet
 4. `openrouter.messages.stream({ provider: { order: ['anthropic'], allow_fallbacks: false }, ... })`
 5. 边流边 yield：`delta`（文本）/ `tool_call`（工具触发，名称已知立刻发）/ `plan_partial`（`draft_ad_plan` 的 JSON 每积累 ~200 字就增量 parse 一次发给前端）
@@ -161,22 +161,22 @@ autopilot_messages
 
 ### 5.2 工具清单
 
-Ogilvy 一共 **4 个 tool**，全部定义在 [src/agents/ogilvy/index.js](../src/agents/ogilvy/index.js) 顶部的 `TOOLS` 常量里，
+Ogilvy 一共 **5 个 tool**，全部定义在 [src/agents/ogilvy/index.js](../src/agents/ogilvy/index.js) 顶部的 `TOOLS` 常量里，
 dispatcher 在同一文件的 `executeTool(name, input, ctx)` 里分发。工具在
 同轮可以**并行发起**（`Promise.all`），新工具只需往 `TOOLS` 加一条 schema +
 在 `executeTool` 加一个 case。
 
 | # | 工具 | 职责 | 状态 |
 |---|---|---|---|
-| 1 | `web_search`            | 联网搜索（调研用，默认不用） | 可选 |
-| 2 | `read_webpage`          | 抓取指定 URL 正文（调研用，默认不用） | 可选 |
-| 3 | `generate_ad_creative`  | 生成 1080×1080 广告图 | 关键 |
-| 4 | `draft_ad_plan`         | 产出完整投放方案 JSON | 关键 |
+| 1 | `web_search`            | 联网搜索（skill 阶段二调研） | 关键 |
+| 2 | `read_webpage`          | 抓取指定 URL 正文（配合 web_search） | 可选 |
+| 3 | `read_skill_reference`  | 按需读 skill 的 references/*.md | 关键 |
+| 4 | `generate_ad_creative`  | 生成 1080×1080 广告图 | 关键 |
+| 5 | `draft_ad_plan`         | 阶段六：CTW 蒸馏后的方案落库 | 关键 |
 
 #### 1. `web_search` / `read_webpage` —— 调研辅助
 
-- **什么时候调**：用户明确要求调研（"查一下东南亚这个行业的广告打法"）或 Agent
-  自己判断需要补齐背景信息。**默认不用**——系统 prompt 明确告知这俩是"按需调研"。
+- **什么时候调**：skill 阶段二「海外广告市场分析」明确要求基于真实数据源生成报告，模型在该阶段会主动调用获取最新行业数据；用户也可以在任意阶段明确要求调研。
 - **入参**：`web_search {query}` 或 `read_webpage {url}`。
 - **实现**：走 Anthropic 原生 `web_search` / `web_fetch` 工具，经 OpenRouter 转发。
   实现在 [src/agents/ogilvy/tools.service.js](../src/agents/ogilvy/tools.service.js)。
@@ -185,11 +185,17 @@ dispatcher 在同一文件的 `executeTool(name, input, ctx)` 里分发。工具
 - **注意**：用的是独立的 Sonnet 子调用（Anthropic 侧原生 web 能力），**不计入 Ogilvy
   自身的 tool-use 轮次**。延迟 3–10s。
 
-#### 2. `generate_ad_creative` —— 广告图生成（关键路径）
+#### 2. `read_skill_reference` —— 按需加载 skill references
 
-- **什么时候调**：用户上传了参考产品图之后，**为方案里每一条 ad 分别调一次**。
-  系统 prompt 里强调同一 ad_set 下的多条 ad 必须使用不同的 `headline` / `product_description`
-  组合，让生成的图在视觉和文字上有差异——A/B 测试才有意义。
+- **为什么需要**：skill 主文档约 10K tokens 已常驻 system prompt；4 个 references（data-sources / strategy-template / meta-creative-specs / meta-api-template）合计另有 ~20K tokens，全塞进 prompt 不划算。改成模型按阶段需要时主动拉取，每个 reference 只在用到的轮次进入 history（之后被 cache 覆盖），常驻段省 ~20K。
+- **入参**：`{name: string}`。`name` 不带路径前缀和 `.md` 后缀（dispatcher 会容错剥除）。
+- **可用 name**：`data-sources` / `strategy-template` / `meta-creative-specs` / `meta-api-template`。
+- **建议时机**（host-patch 里告知模型）：阶段二开始读 `data-sources`、阶段三读 `strategy-template`、阶段四读 `meta-creative-specs`、阶段五读 `meta-api-template`。
+- **实现**：dispatcher 直接从 `SKILL.references` Map 取，O(1) 命中。错误时返回 `{error, available: [...]}` 让模型修正。
+
+#### 3. `generate_ad_creative` —— 广告图生成（关键路径）
+
+- **什么时候调**：skill 阶段四「广告素材内容生成」会先输出素材任务清单 + 每素材完整规格的 markdown，紧接着**为清单中每一个素材并行调一次**。skill 的 references/meta-creative-specs.md 第 6 节详细规定了工具调用约定（每素材一次、同轮并行、A/B 变体差异化）。
 - **入参关键**：`reference_image_ids` 是 **1-based 序号**（引用 system prompt 动态段"用户已上传的产品图"
   列表），**不是 URL**。这是为了防止模型幻觉 URL（历史上出现过胡编 Wikimedia 链接）。
 - **dispatcher 反解**：[index.js::executeTool](../src/agents/ogilvy/index.js) 里把序号映射到
@@ -205,18 +211,18 @@ dispatcher 在同一文件的 `executeTool(name, input, ctx)` 里分发。工具
   `draft_ad_plan` 对应 ad 的 `creative.image_url` 字段。
 - **延迟**：单张 20–40s。N 条 ad 时**必须同轮并行发起**——总时间 ≈ 最慢那张。串行等于把 60s 拖成 180s。
 
-#### 3. `draft_ad_plan` —— 产出完整方案（最终产物）
+#### 4. `draft_ad_plan` —— CTW 蒸馏后的方案落库（最终产物）
 
-- **什么时候调**：所有素材到齐 + WhatsApp 号选定后，**一次性**调一次。**一会话仅一份**，
-  再调视为覆盖式更新。
+- **什么时候调**：skill 五阶段全部对话内输出完成、用户在对话里明确确认后，**一次性**调一次。host-patch 把这一步称作"阶段六：CTW 收口"——模型负责把 skill 阶段五产出的通用 Meta 方案蒸馏成单个 CTW 投放计划（单 campaign、objective 锁死 `WHATSAPP_CONVERSATIONS`、丢弃非 Meta-CTW 内容、为每条 ad 派生 welcome_message），然后调本工具提交。**一会话仅一份**，再调视为覆盖式更新。
 - **入参形状**：`{summary, whatsapp: {phone_number_id}, estimated_metrics, campaigns: [...]}`，
   `campaigns.length` 必须严格 = 1（系统约束）。完整 schema 见 [index.js](../src/agents/ogilvy/index.js)
-  里的 `TOOLS[0].input_schema`，也就是后面 §4.2 展示的 `plan_json` 结构。
+  里 `TOOLS` 中的 `draft_ad_plan.input_schema`，也就是后面 §4.2 展示的 `plan_json` 结构。
 - **dispatcher 的校验链**（这是本工具复杂的地方，因为 Anthropic 不严格强制 `required`）：
-  1. **phone_number_id 在可用列表里**——否则 `{error: 'phone_number_id_invalid'}` 同轮让模型重试；
-  2. **campaigns.length === 1**——否则 `{error: 'single_campaign_required'}`，提醒把多市场合并进
+  1. **skill 阶段完成度 sanity check**——会话历史里没出现过成功的 `generate_ad_creative` 调用就拒绝（`{error: 'skill_stages_incomplete'}`），防止模型 shortcut 跳过 skill 五阶段直接交付；
+  2. **phone_number_id 在可用列表里**——否则 `{error: 'phone_number_id_invalid'}` 同轮让模型重试；
+  3. **campaigns.length === 1**——否则 `{error: 'single_campaign_required'}`，提醒把多市场合并进
      同一 campaign 的多个 ad_sets；
-  3. **结构完整性**——`validatePlanShape()` 检查 `daily_budget_cents` 放在 campaign 层（CBO），
+  4. **结构完整性**——`validatePlanShape()` 检查 `daily_budget_cents` 放在 campaign 层（CBO），
      每个 ad_set 有 `targeting.countries + age_min + age_max`，每条 ad 有 `creative + welcome_message`；
      漏字段会在 Meta 阶段炸出费解错误，所以提前拦。
 - **副作用**：把合成的 plan 写进 `autopilot_sessions.plan_json`（整块覆盖），`status` 从
@@ -302,7 +308,51 @@ POST /{ad_id}        { status: "ACTIVE" }
 
 参考一条真实在投的 CTWA 广告（ad `120243642837920034`）完成字段对齐。
 
-### 5.5 WhatsApp 号码网关
+### 5.5 Skill 驱动架构（2026-04 末魔改）
+
+Agent 的 system prompt 不再由 ogilvy 自己写，而是从 `skills/overseas-ad-planning.skill` 加载。skill 是 Anthropic 标准 .skill 包格式（zip），定义了海外广告投放的五阶段 SOP（需求对接 → 市场分析 → 17 章策划案 → 素材生成 → Meta 双文档输出）。CTW 投放约束作为"宿主补丁"追加在 skill 之后，最终蒸馏到 `draft_ad_plan` 提交。
+
+**核心原则**：skill 是可热替换资产，宿主代码改动控制在 SYSTEM_STATIC、TOOLS 数组、dispatcher 三处，其余不动。
+
+#### 文件构成
+
+| 文件 | 作用 |
+|---|---|
+| `skills/overseas-ad-planning.skill` | zip 格式 skill 包，含 `SKILL.md` + `references/*.md`。已 patch 改造：所有"present_files / 落盘"指令删除，改为对话内输出；阶段四生图改为调本系统的 `generate_ad_creative` 而非 OpenRouter |
+| `src/agents/skills-runtime/loader.js` | 通用 skill 加载器：解 zip / 读扩展目录、解析 frontmatter、构建 references 查找表。模块级缓存（按 path+mtime） |
+| `src/agents/skills-runtime/index.js` | 极薄 export，`loadSkill(name)` 唯一对外接口 |
+| `src/agents/ogilvy/skill-host-patch.md` | CTW 收口指令：运行环境约束（无文件系统）、工具白名单、CTW 蒸馏规则、阶段一补充 WA 字段。属于集成层，与 skill 解耦 |
+
+#### System prompt 拼装
+
+```
+[STATIC, cache_control=ephemeral]
+  ├── SKILL.systemPrompt   (= SKILL.md body, 约 10K tokens)
+  └── HOST_PATCH           (skill-host-patch.md, 约 500 tokens)
+
+[DYNAMIC]
+  ├── 当前账户可用 WhatsApp 号码列表
+  └── 用户已上传的产品图序号列表
+
+[references/*.md]
+  └── 不进 prompt，按需通过 read_skill_reference 工具拉取
+```
+
+**对比早期"自研 prompt + 全塞 references"方案**：常驻段从 ~30K 降到 ~10K，未用到的 reference 完全不付费；prompt 内容通过替换 .skill 文件即可热升级。
+
+#### Skill 升级流程
+
+1. 改完 SKILL.md / references 后重新打 zip：`cd <extracted-dir>/.. && zip -rq overseas-ad-planning.skill overseas-ad-planning`
+2. 替换 `skills/overseas-ad-planning.skill` 文件
+3. 重启 next.js 服务（loader 会自动检测 mtime 变化重新加载）
+
+也支持扩展目录形式：`skills/overseas-ad-planning/`（扩展后的目录）。两种格式同时存在时优先 zip。
+
+#### CTW 收口的 sanity check
+
+`draftAdPlan()` 在执行前检查会话历史是否出现过成功的 `generate_ad_creative` 调用，没有则拒绝（`error: 'skill_stages_incomplete'`）。这是为了防止模型在 skill 五阶段未完成时 shortcut 直接交付。
+
+### 5.6 WhatsApp 号码网关
 
 `src/agents/ogilvy/whatsapp-accounts.service.js`：
 1. 经 `getMetaAccountForUser(userId)`（单租返 env，多租可换实现）拿 token + ad_account_id + page_id

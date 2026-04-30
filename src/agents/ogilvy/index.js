@@ -8,7 +8,16 @@
  *
  * One LLM call per turn, one tool-use loop, streaming back to the browser
  * as SSE. New tools register here; the loop structure stays stable.
+ *
+ * 2026-04 魔改：agent prompt 来源切换为 overseas-ad-planning skill
+ * (`skills/overseas-ad-planning.skill`)，五阶段 SOP 由 skill 主导。
+ * Click-to-WhatsApp 收口约束写在 `skill-host-patch.md` 里追加到
+ * skill prompt 之后。skill 可热替换，宿主代码改动只在 SYSTEM_STATIC、
+ * TOOLS 数组、dispatcher 三处。
  */
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { openrouter, MODELS } from '../../llm-client.js';
 import {
   addMessage,
@@ -19,11 +28,25 @@ import {
   updateSession,
   getMessages,
 } from '../../../lib/repositories/autopilot.repository.js';
+import { loadSkill } from '../skills-runtime/index.js';
 import { listWhatsAppAccountsForUser } from './whatsapp-accounts.service.js';
 import { webSearch, readWebpage } from './tools.service.js';
 import { generateAdCreative } from './creative.service.js';
 
 const MAX_ITERATIONS = 20;
+
+// ── Skill bundle + host patch (loaded once, cached at module scope) ─────
+//
+// Top-level await loads the .skill bundle synchronously at first import. The
+// loader memoizes by file path + mtime, so subsequent imports are free.
+// Restart the Next.js server to pick up a swapped skill bundle.
+const SKILL = await loadSkill('overseas-ad-planning');
+// Resolve sibling skill-host-patch.md via import.meta.url so the path holds
+// regardless of process cwd (dev / standalone build / serverless).
+const HOST_PATCH = fs.readFileSync(
+  path.join(path.dirname(fileURLToPath(import.meta.url)), 'skill-host-patch.md'),
+  'utf8',
+);
 
 // ── Tool schemas ────────────────────────────────────────────────────────
 
@@ -155,6 +178,24 @@ const TOOLS = [
     },
   },
   {
+    name: 'read_skill_reference',
+    description:
+      '按需读取 overseas-ad-planning skill 的 references/*.md 详细模板内容。' +
+      'skill 主文档里出现 [详见](references/xxx.md) 这种引用时，调本工具拉取。' +
+      '可用名字：data-sources / strategy-template / meta-creative-specs / meta-api-template。' +
+      'name 不带路径前缀和 .md 后缀。',
+    input_schema: {
+      type: 'object',
+      required: ['name'],
+      properties: {
+        name: {
+          type: 'string',
+          description: 'reference 文件名（不含路径和 .md 后缀），如 "strategy-template"',
+        },
+      },
+    },
+  },
+  {
     name: 'generate_ad_creative',
     description:
       '生成一张 1080×1080 广告图。必须有用户上传的参考图。' +
@@ -183,53 +224,21 @@ const TOOLS = [
 
 // ── System prompt ───────────────────────────────────────────────────────
 //
-// Split into two blobs:
-//   STATIC  — identical across every turn; marked cache_control so Anthropic
-//             caches the first 2k+ input tokens for subsequent turns (5 min TTL).
-//   DYNAMIC — per-session facts (WA numbers, uploaded image list). Can't cache.
+// Composed of three parts:
+//   1. SKILL  — overseas-ad-planning skill body (loaded from .skill bundle).
+//      Defines the 5-stage SOP (needs intake → market analysis → strategy →
+//      creative → Meta launch docs).
+//   2. HOST_PATCH — CTW collar prose. Tells the model: no filesystem, tool
+//      whitelist, distill to single CTW campaign before calling draft_ad_plan,
+//      etc. Lives in skill-host-patch.md.
+//   3. DYNAMIC — per-session facts (WA numbers + uploaded image list). Built
+//      per-turn in buildDynamicSystemPrompt().
 //
-// Tight by design: each bullet earns its place. Earlier versions spent 2500+
-// tokens restating the same rules multiple ways; this one ships at ~900.
+// Static segment (1 + 2) is stable across turns and gets cache_control. Skill
+// body alone is ~10K tokens; references/*.md are NOT included here — the agent
+// pulls them on demand via the read_skill_reference tool.
 
-const SYSTEM_STATIC = `你是"自动获客" Agent，帮用户通过 Meta Click-to-WhatsApp 广告获取 B2B 外贸询盘。
-
-## 系统约束（极少，务必遵守）
-- 广告格式固定为 Click-to-WhatsApp：FB/IG 点击 → 跳转 WA 号 → 开启对话
-- 优化目标固定：CONVERSATIONS + destination_type=WHATSAPP
-- 不生成落地页、不做 Lead Form、不做站内转化
-- **每个会话只允许 1 个 campaign**（dispatcher 会拒绝多 campaign）
-
-## 你的核心职责：制定最优投放方案
-在上面 4 条系统约束之外，**所有方案结构由你自己判断**。你要像一个资深 Meta 广告优化师：
-- **ad_sets 的数量、每组的 targeting / 预算侧重**：你根据目标市场、人群画像、文化语言差异、预算规模自主决定。1 个大市场 1 组可能够，4 个截然不同的市场可能要 4 组，同一市场分受众 A/B 也可以。**没有默认数量**。
-- **每个 ad_set 里 ads 的数量、变体组合**：A/B 测试（不同 headline、不同 hook angle、不同素材风格）是 Meta 广告优化的常识。**不要只出 1 条 ad 就交付**，除非预算极小且市场简单。同一 ad_set 出 2-4 条不同角度的 ads 是常态。但具体几条由你判断：素材/文案同质化时别凑数；创意有差异化空间就多出。
-- **文案 (headline / primary_text / description) 怎么写**：抓痛点、卖点、语言本地化、行业术语、CTA 强度——你自己决定。不要生成模板化的平庸文案。
-- **素材图怎么画**：每条 ad 的 generate_ad_creative 里的 headline / product_description 就是图上要凸显的信息。不同 ad 的图应该**视觉上有明显差异**（构图、配色、场景、文字位置），让 Meta 的算法能学到什么组合对什么受众最优。
-- **welcome_message 怎么写**：每条 ad 的 WA 开场白可以按该 ad 针对的用户画像调整——批发客问 MOQ，零售客问型号偏好，不同市场用当地语言。
-
-你的评判标准：**如果是你自己投放这笔预算，你会怎么切？**——这才是我们要的方案。别在数字上保守。
-
-## 工作流程
-1. 问清核心信息（产品 / 目标国家 / 预算）——用户给够了就立刻推进，不要刻意追问
-2. 没上传产品图 → 让用户上传；没参考图不能调 generate_ad_creative
-3. 可用 WA 号 >1 时列给用户选；=1 直接用；=0 引导去 business.facebook.com 绑定
-4. 在同一轮回复里**并列批量调** generate_ad_creative（计划里有多少条 ad 就调多少次——并行执行，不串行）
-5. 所有素材到齐后调 draft_ad_plan 产出完整方案
-6. 用中文简短介绍方案重点（抓结构和亮点，不要 repeat 每个字段），提醒用户点"启动投放"
-
-## 并行调用（影响用户体感）
-同一轮回复里彼此独立的工具**必须一次全调**，系统并行执行。有多少条 ad 就并列发起多少个 generate_ad_creative 调用——总时间 = 最慢那个。依赖上一步结果的（draft_ad_plan）才允许分轮。
-
-## 工具使用
-- web_search / read_webpage：默认不用，除非用户明确要求调研
-- generate_ad_creative：必填 reference_image_ids（下方列表的序号，**不要传 URL**）
-- draft_ad_plan：一会话一份；覆盖式更新
-
-## welcome_message
-纯文本，第一人称，含产品名 + 一个开放式问题。按目标国家用当地语言或英文。
-
-## 语气
-中文对话，专业直接不啰嗦。产品细节没把握先问用户，不瞎编。`;
+const SYSTEM_STATIC = SKILL.systemPrompt + '\n\n---\n\n' + HOST_PATCH;
 
 /**
  * Collect every image URL the user has uploaded in this session (in order).
@@ -541,6 +550,23 @@ async function executeTool(name, input, ctx) {
       return webSearch(input);
     case 'read_webpage':
       return readWebpage(input);
+    case 'read_skill_reference': {
+      // Lazy-load a skill reference. Keeping references out of the system
+      // prompt saves ~20K tokens per turn; the agent pulls only what it needs
+      // for the current stage. Reference content is returned verbatim — large
+      // (up to ~8K tokens for meta-api-template) but the call is one-shot so
+      // it lands in tool_result history (cached on subsequent turns).
+      const refName = String(input?.name || '').replace(/\.md$/, '').replace(/^references\//, '');
+      const content = SKILL.references.get(refName);
+      if (!content) {
+        return {
+          error: 'reference_not_found',
+          message: `未找到 reference "${refName}"。`,
+          available: [...SKILL.references.keys()],
+        };
+      }
+      return { name: refName, content };
+    }
     case 'generate_ad_creative': {
       // Translate 1-based index references into real Supabase URLs. Keeping
       // URLs out of tool args saves ~200-600 tokens per call (Supabase URLs
@@ -611,6 +637,25 @@ async function executeTool(name, input, ctx) {
  * (added in PR 4).
  */
 async function draftAdPlan(input, { sessionId, waNumbers }) {
+  // Skill-driven flow guard: refuse plan submission if the agent has not yet
+  // produced any ad creative this session. Cheaper than parsing the full
+  // 5-stage skill output for completion markers — if there's no creative,
+  // there's no plan worth committing. Stops the model from shortcutting
+  // straight to draft_ad_plan without running the SOP.
+  const history = await getMessages(sessionId);
+  const hasCreative = history.some(m =>
+    m.role === 'tool' && m.tool_name === 'generate_ad_creative' && !m.tool_result?.error
+  );
+  if (!hasCreative) {
+    return {
+      error: 'skill_stages_incomplete',
+      message:
+        '本会话尚未生成任何广告素材，无法提交方案。请按 skill 五阶段流程执行：' +
+        '完成阶段一到三的对话内输出 → 阶段四调用 generate_ad_creative 为每条 ad 生成素材 → ' +
+        '阶段五输出双文档 → 用户确认后再调 draft_ad_plan 提交。',
+    };
+  }
+
   const chosenId = input?.whatsapp?.phone_number_id;
   const chosen = waNumbers.find(n => n.phone_number_id === chosenId);
   if (!chosen) {
