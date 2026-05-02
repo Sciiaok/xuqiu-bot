@@ -42,5 +42,16 @@ jobs:
           EOF
           chmod 600 ~/.ssh/config
 
+      - name: Write .env.local from secret
+        env:
+          ENV_LOCAL: ${{ secrets.ENV_LOCAL_PROD }}
+        run: |
+          if [ -z "$ENV_LOCAL" ]; then
+            echo "::error::ENV_LOCAL_PROD secret is empty or missing"
+            exit 1
+          fi
+          printf '%s\n' "$ENV_LOCAL" > .env.local
+          chmod 600 .env.local
+
       - name: Deploy
         run: bash scripts/deploy.sh aws-online
