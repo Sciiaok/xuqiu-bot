@@ -1,10 +1,8 @@
 import { createServerClient } from '@supabase/ssr';
 import { NextResponse } from 'next/server';
 import { defaultLocale, locales } from './i18n/config';
-
-// 不能 `import @/src/config` —— src/config.js 顶层用了 `process.pid`
-// 在 Edge Runtime 里不可用，会让 next build 直接断在 src/config.js:60。
-// middleware 跑在 Edge，只读 NEXT_PUBLIC_SUPABASE_URL 一个字段，直接走 process.env 即可。
+import { config as appConfig } from '@/src/config';
+import { FOUNDER_TENANT_ID } from '@/lib/founder-id';
 
 const PROTECTED_PREFIXES = [
   '/analytics',
@@ -15,8 +13,12 @@ const PROTECTED_PREFIXES = [
   '/leadhub',
   '/knowledge-base',
   '/admin',
+  '/dev-tools',
   '/settings',
 ];
+
+// 仅 founder 可访问的路径前缀。普通租户被 redirect 到 /analytics。
+const FOUNDER_ONLY_PREFIXES = ['/admin', '/dev-tools'];
 
 export async function middleware(request) {
   const pathname = request.nextUrl.pathname;
@@ -59,8 +61,8 @@ export async function middleware(request) {
   let supabaseResponse = response;
 
   const supabase = createServerClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL,
-    process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_DEFAULT_KEY,
+    appConfig.supabase.url,
+    appConfig.supabase.publishableKey,
     {
       cookies: {
         getAll() {
@@ -103,6 +105,23 @@ export async function middleware(request) {
     return redirectResponse;
   }
 
+  const isFounderOnlyRoute = FOUNDER_ONLY_PREFIXES.some(
+    (p) => pathname === p || pathname.startsWith(`${p}/`)
+  );
+  if (isFounderOnlyRoute) {
+    const { data: profile } = await supabase
+      .from('users')
+      .select('tenant_id')
+      .eq('id', user.id)
+      .maybeSingle();
+    if (profile?.tenant_id !== FOUNDER_TENANT_ID) {
+      const url = request.nextUrl.clone();
+      url.pathname = '/analytics';
+      url.search = '';
+      return NextResponse.redirect(url);
+    }
+  }
+
   return supabaseResponse;
 }
 
@@ -116,6 +135,7 @@ export const config = {
     '/leadhub/:path*',
     '/knowledge-base/:path*',
     '/admin/:path*',
+    '/dev-tools/:path*',
     '/settings/:path*',
     '/login',
   ],
