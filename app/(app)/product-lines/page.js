@@ -1,49 +1,50 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
-import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import s from './page.module.css';
 import Button from '../../components/Button/Button';
 import {
   listProductLines,
-  createProductLine,
   listWhatsAppAccounts,
+  createProductLineForPhoneNumber,
 } from '../../../lib/api/product-lines.js';
 
-const EMPTY_FORM = { id: '', name: '' };
-const SLUG_RE = /^[a-z][a-z0-9_]{0,39}$/;
-
-function validateSlug(slug) {
-  if (!slug) return '标识不能为空';
-  if (!SLUG_RE.test(slug)) return '仅小写字母、数字、下划线；字母开头；≤40 字符';
-  return '';
-}
-
+/**
+ * /product-lines — WhatsApp 号码列表（每个号码 = 一条产品线）
+ *
+ * 一个 WhatsApp 号码 1:1 对应一条产品线。本页以"号码"为入口列出，每张卡片
+ * 是一个号码：
+ *   · 已配置 → 点击进入 /product-lines/[slug] 编辑名称 / 价值规则 / 字段表 / 知识库
+ *   · 待配置 → 点击触发 lazy create（POST /api/product-lines），后端按
+ *             phone_number_id 生成 slug 和默认 name，然后跳到编辑页
+ *
+ * 用户不会再手填 slug / 决定"是否新建产品线"——号码即入口。
+ */
 export default function ProductLinesPage() {
+  const router = useRouter();
   const [lines, setLines] = useState([]);
-  const [phoneById, setPhoneById] = useState({});
+  const [accounts, setAccounts] = useState({ status: 'loading', numbers: [], all_numbers: [] });
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState('');
-
-  const [creating, setCreating] = useState(false);
-  const [form, setForm] = useState(EMPTY_FORM);
-  const [formError, setFormError] = useState('');
-  const [saving, setSaving] = useState(false);
+  const [openingId, setOpeningId] = useState('');
+  const [openError, setOpenError] = useState('');
 
   async function loadAll() {
     setLoading(true);
     setLoadError('');
     try {
-      const [ls, accounts] = await Promise.all([
+      const [ls, accts] = await Promise.all([
         listProductLines(),
-        listWhatsAppAccounts().catch(() => ({ all_numbers: [] })),
+        listWhatsAppAccounts().catch((err) => ({
+          status: 'error',
+          numbers: [],
+          all_numbers: [],
+          error: err.message,
+        })),
       ]);
-      const phoneMap = {};
-      for (const n of accounts.all_numbers || []) {
-        phoneMap[n.phone_number_id] = n;
-      }
-      setPhoneById(phoneMap);
       setLines(ls);
+      setAccounts(accts);
     } catch (err) {
       setLoadError(err.message);
       setLines([]);
@@ -54,33 +55,33 @@ export default function ProductLinesPage() {
 
   useEffect(() => { loadAll(); }, []);
 
-  const sortedLines = useMemo(
-    () => [...lines].sort((a, b) => (a.is_active === b.is_active ? 0 : a.is_active ? -1 : 1)),
-    [lines],
-  );
+  // Build one card per WA number, joined to its existing product_line (if any).
+  // Numbers are the source of truth — orphan product_lines (no wa_phone_number_id)
+  // intentionally don't appear here.
+  const cards = useMemo(() => {
+    const lineByPhone = {};
+    for (const l of lines) {
+      if (l.wa_phone_number_id) lineByPhone[l.wa_phone_number_id] = l;
+    }
+    return (accounts.all_numbers || []).map((n) => {
+      const line = lineByPhone[n.phone_number_id] || null;
+      return { number: n, line };
+    });
+  }, [lines, accounts.all_numbers]);
 
-  const slugError = form.id ? validateSlug(form.id.trim()) : '';
-  const canSubmit = form.id.trim() && form.name.trim() && !slugError;
-
-  function openCreate() {
-    setForm(EMPTY_FORM);
-    setFormError('');
-    setCreating(true);
-  }
-
-  async function handleCreate(e) {
-    e.preventDefault();
-    if (!canSubmit) { setFormError('请填完整'); return; }
-    setSaving(true);
-    setFormError('');
+  async function openCard({ number, line }) {
+    if (line) {
+      router.push(`/product-lines/${line.id}`);
+      return;
+    }
+    setOpeningId(number.phone_number_id);
+    setOpenError('');
     try {
-      await createProductLine({ id: form.id.trim(), name: form.name.trim() });
-      setCreating(false);
-      await loadAll();
+      const created = await createProductLineForPhoneNumber(number.phone_number_id);
+      router.push(`/product-lines/${created.id}`);
     } catch (err) {
-      setFormError(err.message);
-    } finally {
-      setSaving(false);
+      setOpenError(`创建配置失败：${err.message}`);
+      setOpeningId('');
     }
   }
 
@@ -89,9 +90,8 @@ export default function ProductLinesPage() {
       <div className={s.header}>
         <div className={s.headerLeft}>
           <h1 className={s.title}>产品线</h1>
-          <span className={s.subtitle}>一个产品线绑定一个 WhatsApp 号码 · 号码即路由</span>
+          <span className={s.subtitle}>一个 WhatsApp 号码 = 一条产品线 · 点号码进入配置</span>
         </div>
-        <Button variant="primary" onClick={openCreate}>✦ 新建产品线</Button>
       </div>
 
       {loadError && (
@@ -101,96 +101,70 @@ export default function ProductLinesPage() {
         </div>
       )}
 
+      {openError && (
+        <div className={s.errorBanner}>
+          <span>{openError}</span>
+        </div>
+      )}
+
       {loading && !loadError && (
         <div className={s.loadingWrap}><span>加载中…</span></div>
       )}
 
-      {!loading && !loadError && (
-        <div className={s.cardList}>
-          {sortedLines.map((line) => {
-            const acct = line.wa_phone_number_id ? phoneById[line.wa_phone_number_id] : null;
-            return (
-              <Link
-                key={line.id}
-                href={`/product-lines/${line.id}`}
-                className={`${s.card} ${!line.is_active ? s.cardInactive : ''}`}
-              >
-                <div className={s.cardHeader}>
-                  <div>
-                    <div className={s.cardName}>{line.name}</div>
-                    <div className={s.cardId}>{line.id}</div>
-                  </div>
-                  {line.is_active
-                    ? (line.wa_phone_number_id
-                        ? <span className={s.statusOk}>运行中</span>
-                        : <span className={s.statusWarn}>未绑号码</span>)
-                    : <span className={s.statusOff}>已停用</span>}
-                </div>
-
-                <div className={s.bindingRow}>
-                  <span className={s.bindingLabel}>WA 号码：</span>
-                  {line.wa_phone_number_id ? (
-                    <span className={s.bindingValue}>
-                      {acct
-                        ? `${acct.verified_name || acct.display_number} · ${acct.display_number}`
-                        : line.wa_phone_number_id}
-                    </span>
-                  ) : (
-                    <span className={s.unbound}>未绑定（收到消息将无法路由）</span>
-                  )}
-                </div>
-              </Link>
-            );
-          })}
+      {!loading && !loadError && cards.length === 0 && (
+        <div className={s.emptyState}>
+          <div className={s.emptyTitle}>当前账号下没有 WhatsApp 号码</div>
+          <div className={s.emptyHint}>
+            {accounts.status === 'not_configured'
+              ? '请先到「设置 / Meta 连接」绑定 Meta Business Account。'
+              : accounts.status === 'no_phone'
+                ? '已绑定 Meta，但当前 BM 下没有可用 WhatsApp 号码——请到 business.facebook.com 添加 WABA 号码。'
+                : accounts.error || '尚未发现可用的 WhatsApp Business 号码。'}
+          </div>
         </div>
       )}
 
-      {creating && (
-        <div className={s.modalOverlay}>
-          <div className={s.modal}>
-            <h2 className={s.modalTitle}>新建产品线</h2>
-            <form className={s.form} onSubmit={handleCreate}>
-              <label className={s.formLabel}>
-                唯一标识（slug，创建后不可改）
-                <input
-                  className={`${s.formInput} ${slugError ? s.formInputError : ''}`}
-                  type="text"
-                  value={form.id}
-                  onChange={(e) => setForm((p) => ({ ...p, id: e.target.value }))}
-                  placeholder="例：medical_devices"
-                  autoComplete="off"
-                  spellCheck={false}
-                  required
-                />
-                <span className={slugError ? s.fieldError : s.formHint}>
-                  {slugError || '仅小写字母、数字、下划线；字母开头；≤40 字符'}
-                </span>
-              </label>
+      {!loading && !loadError && cards.length > 0 && (
+        <div className={s.cardList}>
+          {cards.map(({ number, line }) => {
+            const configured = Boolean(line);
+            const opening = openingId === number.phone_number_id;
+            return (
+              <button
+                key={number.phone_number_id}
+                type="button"
+                onClick={() => openCard({ number, line })}
+                className={`${s.card} ${configured ? '' : s.cardPending} ${opening ? s.cardLoading : ''}`}
+                disabled={opening}
+              >
+                <div className={s.cardHeader}>
+                  <div>
+                    <div className={s.cardName}>
+                      {configured ? line.name : (number.verified_name || '未命名')}
+                    </div>
+                    <div className={s.cardId}>{number.display_number}</div>
+                  </div>
+                  {opening
+                    ? <span className={s.statusOff}>打开中…</span>
+                    : configured
+                      ? <span className={s.statusOk}>已配置</span>
+                      : <span className={s.statusWarn}>待配置</span>}
+                </div>
 
-              <label className={s.formLabel}>
-                显示名称
-                <input
-                  className={s.formInput}
-                  type="text"
-                  value={form.name}
-                  onChange={(e) => setForm((p) => ({ ...p, name: e.target.value }))}
-                  placeholder="例：医疗器械"
-                  required
-                />
-              </label>
+                <div className={s.bindingRow}>
+                  <span className={s.bindingLabel}>WA 号码 ID：</span>
+                  <span className={s.bindingValue}>{number.phone_number_id}</span>
+                </div>
 
-              {formError && <div className={s.errorBanner}>{formError}</div>}
-
-              <div className={s.formActions}>
-                <Button type="button" variant="ghost" onClick={() => setCreating(false)} disabled={saving}>
-                  取消
-                </Button>
-                <Button type="submit" variant="primary" disabled={!canSubmit || saving}>
-                  {saving ? '创建中…' : '创建'}
-                </Button>
-              </div>
-            </form>
-          </div>
+                {number.quality_rating && (
+                  <div className={s.bindingRow}>
+                    <span className={s.bindingLabel}>质量等级：</span>
+                    <span className={s.bindingValue}>{number.quality_rating}</span>
+                  </div>
+                )}
+              </button>
+            );
+          })}
         </div>
       )}
     </div>

@@ -1,5 +1,5 @@
 /**
- * Medici — output JSON schema resolution.
+ * Medici — output JSON schema resolution + canonical envelope enums.
  *
  * Every product_line assembles its own output_schema from lead_fields (see
  * ./config.js::assembleOutputSchema). When agentConfig carries a non-empty
@@ -12,31 +12,43 @@
  * need to branch on which schema was used. Only the leads[] item shape differs.
  */
 
+export const INTENT_ENUM = [
+  'personal_consumer',
+  'business_inquiry',
+  'business_cooperation',
+  'other',
+];
+
+export const INQUIRY_QUALITY_ENUM = ['BAD', 'GOOD', 'QUALIFY', 'PROOF'];
+
+export const BUSINESS_VALUE_ENUM = ['LOW', 'AVERAGE', 'HIGH'];
+
+export const ROUTE_ENUM = ['CONTINUE', 'HUMAN_NOW', 'FAQ_END'];
+
+export const ENVELOPE_REQUIRED = [
+  'conversation_intent',
+  'conversation_intent_summary',
+  'inquiry_quality',
+  'business_value',
+  'leads',
+  'route',
+  'next_message',
+  'handoff_summary',
+  'attachments',
+];
+
 export const GENERIC_LEAD_OUTPUT_SCHEMA = {
   type: 'object',
-  required: [
-    'conversation_intent',
-    'conversation_intent_summary',
-    'inquiry_quality',
-    'business_value',
-    'leads',
-    'route',
-    'next_message',
-    'handoff_summary',
-    'attachments',
-  ],
+  required: ENVELOPE_REQUIRED,
   additionalProperties: false,
   properties: {
     conversation_intent: {
       type: 'array',
-      items: {
-        type: 'string',
-        enum: ['personal_consumer', 'business_inquiry', 'business_cooperation', 'other'],
-      },
+      items: { type: 'string', enum: INTENT_ENUM },
     },
     conversation_intent_summary: { type: 'string' },
-    inquiry_quality: { type: 'string', enum: ['BAD', 'GOOD', 'QUALIFY', 'PROOF'] },
-    business_value: { type: 'string', enum: ['LOW', 'AVERAGE', 'HIGH'] },
+    inquiry_quality: { type: 'string', enum: INQUIRY_QUALITY_ENUM },
+    business_value: { type: 'string', enum: BUSINESS_VALUE_ENUM },
     leads: {
       type: 'array',
       description: 'Array of leads extracted from user message(s).',
@@ -74,7 +86,7 @@ export const GENERIC_LEAD_OUTPUT_SCHEMA = {
         },
       },
     },
-    route: { type: 'string', enum: ['CONTINUE', 'HUMAN_NOW', 'FAQ_END'] },
+    route: { type: 'string', enum: ROUTE_ENUM },
     next_message: { type: 'string', description: 'Max 180 chars, WhatsApp-style.' },
     handoff_summary: { type: 'string' },
     attachments: {

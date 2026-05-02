@@ -103,36 +103,6 @@
   margin: 0;
 }
 
-.field {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  font-size: 13px;
-  color: var(--text2);
-}
-
-.fieldLabel {
-  font-size: 12px;
-  color: var(--text3);
-}
-
-.input {
-  padding: 8px 10px;
-  background: var(--bg);
-  border: 1px solid var(--border);
-  border-radius: 4px;
-  color: var(--text);
-  font-family: var(--font-sans);
-  font-size: 13px;
-}
-
-.input:focus,
-.textarea:focus,
-.select:focus {
-  outline: none;
-  border-color: var(--accent);
-}
-
 .textarea {
   padding: 8px 10px;
   background: var(--bg);
@@ -145,31 +115,9 @@
   min-height: 90px;
 }
 
-.jsonTextarea {
-  padding: 8px 10px;
-  background: var(--bg);
-  border: 1px solid var(--border);
-  border-radius: 4px;
-  color: var(--text);
-  font-family: var(--font-mono, monospace);
-  font-size: 12px;
-  resize: vertical;
-  min-height: 220px;
-  white-space: pre;
-}
-
-.jsonTextareaError {
-  border-color: var(--red, #f85149);
-}
-
-.select {
-  padding: 8px 10px;
-  background: var(--bg);
-  border: 1px solid var(--border);
-  border-radius: 4px;
-  color: var(--text);
-  font-family: var(--font-sans);
-  font-size: 13px;
+.textarea:focus {
+  outline: none;
+  border-color: var(--accent);
 }
 
 .errorBanner {
@@ -196,25 +144,6 @@
   gap: 8px;
   padding: 14px 0;
   background: linear-gradient(to top, var(--bg), transparent);
-}
-
-.bindingPreview {
-  font-size: 12px;
-  color: var(--text3);
-  padding-top: 4px;
-}
-
-.bindingPreviewStrong {
-  color: var(--text2);
-  font-family: var(--font-mono, monospace);
-}
-
-.inactiveNotice {
-  padding: 10px 14px;
-  background: color-mix(in srgb, var(--amber, #d29922) 12%, transparent);
-  color: var(--amber, #d29922);
-  border-radius: 6px;
-  font-size: 13px;
 }
 
 .tabBar {

@@ -1,7 +1,10 @@
 import { createServerClient } from '@supabase/ssr';
 import { NextResponse } from 'next/server';
 import { defaultLocale, locales } from './i18n/config';
-import { config as appConfig } from '@/src/config';
+
+// 不能 `import @/src/config` —— src/config.js 顶层用了 `process.pid`
+// 在 Edge Runtime 里不可用，会让 next build 直接断在 src/config.js:60。
+// middleware 跑在 Edge，只读 NEXT_PUBLIC_SUPABASE_URL 一个字段，直接走 process.env 即可。
 
 const PROTECTED_PREFIXES = [
   '/analytics',
@@ -56,7 +59,7 @@ export async function middleware(request) {
   let supabaseResponse = response;
 
   const supabase = createServerClient(
-    appConfig.supabase.url,
+    process.env.NEXT_PUBLIC_SUPABASE_URL,
     process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_DEFAULT_KEY,
     {
       cookies: {

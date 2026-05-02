@@ -2,16 +2,18 @@
  * Medici — config assembly + caching + per-conversation resolution.
  *
  * Turns a product_lines row (edited via /product-lines admin UI) into the
- * `agentConfig` object that runMedici consumes: { system_prompt, output_schema,
- * qualification_config, ... }. Keeps an in-process 60s cache so inbound
- * WhatsApp traffic doesn't hit the DB per message.
+ * `agentConfig` object that runMedici consumes:
+ *   { dynamic_injection, output_schema, qualification_config, ... }.
+ *
+ * 2026-05 重构：system_prompt 由 ai-reception-deal skill bundle + medici-host-patch.md
+ * 静态拼装（在 runMedici 模块加载时一次性完成），product_line 专属内容全部走
+ * `dynamic_injection` 走每轮的 dynamic system block。
  *
  * Three layers, all in one file:
  *   · assemble*     — pure transformation row → agentConfig (no I/O).
  *   · getMediciConfig / invalidateMediciCache — 60s cached fetch by product_line id.
  *   · loadMediciConfig(conversation) — the entry queue-processor calls; resolves
- *     product_line from conversation (or phone_number_id), loads config, and
- *     attaches the legacy agents.id for KB/product tool loading.
+ *     product_line from conversation (or phone_number_id) and loads config.
  */
 
 import {
@@ -20,13 +22,12 @@ import {
   setConversationProductLine,
 } from '../../../lib/repositories/product-line.repository.js';
 import {
-  BASE_PROMPT_TEMPLATE,
   INTENT_ENUM,
   INQUIRY_QUALITY_ENUM,
   BUSINESS_VALUE_ENUM,
   ROUTE_ENUM,
-  BASE_OUTPUT_REQUIRED,
-} from './base-prompt.js';
+  ENVELOPE_REQUIRED,
+} from './output-schema.js';
 
 // ─── Assembly helpers ────────────────────────────────────────────────
 
@@ -36,13 +37,8 @@ function fieldsWithRequirement(leadFields, tier) {
   return leadFields.filter((f) => f.required_for === tier).map((f) => f.key);
 }
 
-function formatRequiredList(keys) {
-  if (keys.length === 0) return '(no specific fields required)';
-  return keys.join(', ');
-}
-
 function formatLeadFieldHints(leadFields) {
-  if (leadFields.length === 0) return '- (no fields configured)';
+  if (leadFields.length === 0) return '(no fields configured)';
   return leadFields
     .slice()
     .sort((a, b) => (a.display_order ?? 0) - (b.display_order ?? 0))
@@ -50,25 +46,27 @@ function formatLeadFieldHints(leadFields) {
     .join('\n');
 }
 
-function renderDomainGlossarySection(glossary) {
-  const text = (glossary || '').trim();
-  if (!text) return '';
-  return `\n═══ DOMAIN GUIDELINES ═══\n\n${text}\n`;
-}
-
-export function assembleSystemPrompt(row) {
+/**
+ * Pack a product_lines row into the dynamic-injection bundle. Consumed by
+ * runMedici's buildDynamicContext to render the per-turn system block — these
+ * are the BUSINESS_VALUE_GUIDANCE / LEAD_FIELDS_HINTS / tier requirements that
+ * the skill body (ai-reception-deal) explicitly delegates to the host.
+ *
+ * 2026-05 IA 重构：UI 仅暴露 4 项可配置（产品线名称 / 价值判定标准 /
+ * 线索字段表 / 知识库），catalog_description / domain_glossary /
+ * message_style_examples / faq_message 这几列从 prompt 注入中下掉
+ * （DB 列保留向前兼容；不再读，避免老口径污染）。
+ */
+export function assembleDynamicInjection(row) {
   const leadFields = Array.isArray(row.lead_fields) ? row.lead_fields : [];
-
-  return BASE_PROMPT_TEMPLATE
-    .replace('{{LINE_NAME}}', row.name || row.id)
-    .replace('{{CATALOG_DESCRIPTION}}', (row.catalog_description || '').trim())
-    .replace('{{DOMAIN_GLOSSARY_SECTION}}', renderDomainGlossarySection(row.domain_glossary))
-    .replace('{{GOOD_FIELDS}}', formatRequiredList(fieldsWithRequirement(leadFields, 'GOOD')))
-    .replace('{{QUALIFY_FIELDS}}', formatRequiredList(fieldsWithRequirement(leadFields, 'QUALIFY')))
-    .replace('{{PROOF_FIELDS}}', formatRequiredList(fieldsWithRequirement(leadFields, 'PROOF')))
-    .replace('{{BUSINESS_VALUE_GUIDANCE}}', (row.business_value_guidance || '').trim())
-    .replace('{{LEAD_FIELDS_HINTS}}', formatLeadFieldHints(leadFields))
-    .replace('{{MESSAGE_STYLE_EXAMPLES}}', (row.message_style_examples || '').trim());
+  return {
+    line_name: row.name || row.id,
+    business_value_guidance: (row.business_value_guidance || '').trim(),
+    lead_fields_hints: formatLeadFieldHints(leadFields),
+    good_fields: fieldsWithRequirement(leadFields, 'GOOD'),
+    qualify_fields: fieldsWithRequirement(leadFields, 'QUALIFY'),
+    proof_fields: fieldsWithRequirement(leadFields, 'PROOF'),
+  };
 }
 
 function leadFieldToJsonSchemaProp(field) {
@@ -111,7 +109,7 @@ export function assembleOutputSchema(row) {
   return {
     type: 'object',
     additionalProperties: false,
-    required: BASE_OUTPUT_REQUIRED,
+    required: ENVELOPE_REQUIRED,
     properties: {
       conversation_intent: {
         type: 'array',
@@ -196,7 +194,7 @@ export function assembleLineConfig(row) {
     product_line: row.id,
     name: row.name,
     tenant_id: row.tenant_id,
-    system_prompt: assembleSystemPrompt(row),
+    dynamic_injection: assembleDynamicInjection(row),
     output_schema: assembleOutputSchema(row),
     qualification_config: assembleQualificationConfig(row),
     lead_fields: Array.isArray(row.lead_fields) ? row.lead_fields : [],
@@ -264,10 +262,6 @@ export function invalidateMediciCache({ tenantId, id } = {}) {
  *      the conversation so future turns skip step 2.
  *   3. No binding → return null. Caller handles the unbound case
  *      (queue-processor: Strategy C placeholder reply).
- *
- * Merges agents.id into the returned config for loadAgentTools — KB tool
- * rows are still keyed on agents.id; the bridge keeps old schema working
- * without a DB migration.
  */
 export async function loadMediciConfig(conversation) {
   if (!conversation) return null;

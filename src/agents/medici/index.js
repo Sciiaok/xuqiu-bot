@@ -7,10 +7,19 @@
  * replies, classifies intent/quality/value, extracts leads, and routes —
  * banking-and-diplomacy in one.
  *
+ * 2026-05 重构：agent prompt 来源切换为 ai-reception-deal skill
+ * (`skills/ai-reception-deal.skill`)，方法论由 skill 主导。LeadEngine 宿主收口
+ * （submit_response envelope、阶段→inquiry_quality/route 映射、转人工与
+ * 风格规则）写在 medici-host-patch.md 里追加到 skill 之后。skill 可热替换，
+ * 宿主代码改动只在 dynamic context 拼装、tools 列表、dispatcher 三处。
+ *
  * Public API: `runMedici({ history, input, context, agentConfig, trace })`.
- * Contract and pipeline diagram live in types.md.
+ * Contract and pipeline diagram live in medici-design.md.
  */
 
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { openrouter, MODELS } from '../../llm-client.js';
 import { createTraceLogger } from '../../../lib/core-trace.js';
 import supabase from '../../../lib/supabase.js';
@@ -18,6 +27,7 @@ import {
   downloadWhatsAppMediaBuffer,
   isClaudeSupportedImageMimeType,
 } from '../../whatsapp-media.service.js';
+import { loadSkill } from '../skills-runtime/index.js';
 import { buildKbTools, executeKbTool } from './kb-tools.js';
 import {
   GENERIC_LEAD_OUTPUT_SCHEMA,
@@ -42,20 +52,23 @@ const STANDARD_DB_FIELDS = new Set([
   'sku_description', 'buyer_type', 'details',
 ]);
 
-// ─── Prompt assembly ─────────────────────────────────────────────────
+// ─── Skill bundle + host patch (loaded once, cached at module scope) ─
+//
+// Top-level await loads the .skill bundle synchronously at first import. The
+// loader memoizes by file path + mtime, so subsequent imports are free.
+// Restart the Next.js server to pick up a swapped skill bundle.
+const SKILL = await loadSkill('ai-reception-deal');
+const HOST_PATCH = fs.readFileSync(
+  path.join(path.dirname(fileURLToPath(import.meta.url)), 'medici-host-patch.md'),
+  'utf8',
+);
 
-/** @throws if agentConfig lacks a non-empty system_prompt. */
-export function resolveSystemPrompt(agentConfig) {
-  const prompt = agentConfig?.system_prompt;
-  if (!prompt || typeof prompt !== 'string' || !prompt.trim()) {
-    throw new Error(
-      'medici: agentConfig.system_prompt is required. ' +
-      'Unbound product_lines must be filtered upstream (Strategy C in queue-processor); ' +
-      'replay scripts must load the per-conversation product_line config before calling.',
-    );
-  }
-  return prompt;
-}
+// Static segment is stable across all conversations and gets cache_control.
+// Skill body + host patch combined ~10K tokens; references/*.md are NOT
+// included here — the agent pulls them on demand via read_skill_reference.
+const SYSTEM_STATIC = SKILL.systemPrompt + '\n\n---\n\n' + HOST_PATCH;
+
+// ─── Prompt assembly ─────────────────────────────────────────────────
 
 export function buildPriorStateLines(priorState) {
   if (!priorState) return [];
@@ -75,6 +88,11 @@ export function buildPriorStateLines(priorState) {
   return lines;
 }
 
+function formatList(keys) {
+  if (!Array.isArray(keys) || keys.length === 0) return '(none configured)';
+  return keys.join(', ');
+}
+
 /**
  * Render the AVAILABLE ASSETS block. Empty list → returns '' so the section
  * doesn't appear at all (avoid teaching the model about a feature it can't use).
@@ -85,7 +103,7 @@ function renderAvailableAssets(assets) {
     const desc = a.description ? a.description.replace(/\s+/g, ' ').trim() : '(no description)';
     return `- asset_id=${a.id}  ${desc}`;
   });
-  return `\n\nAVAILABLE ASSETS (images you may attach to a reply):
+  return `\n## AVAILABLE ASSETS (images you may attach to a reply)
 ${lines.join('\n')}
 
 ATTACHMENT RULES:
@@ -95,32 +113,62 @@ ATTACHMENT RULES:
 - The image arrives as a separate WhatsApp message right after your text reply, so it's fine to write next_message like "Sending you the photo:" and let the image follow.`;
 }
 
-export function buildDynamicContext(contextInfo = {}) {
-  const missingFieldsText =
-    contextInfo.missing_fields?.length > 0
-      ? `Missing fields to collect: ${contextInfo.missing_fields.join(', ')}`
-      : 'No specific fields required';
-  const priorStateLines = buildPriorStateLines(contextInfo.prior_state);
-  const carRecommendation = contextInfo.car_recommendation || '';
-  const adReferral = contextInfo.ad_referral || '';
+/**
+ * Render the per-conversation dynamic system block. This is the entire payload
+ * the skill methodology delegates to the host: per-line rules (catalog,
+ * glossary, business-value guidance, lead fields) + per-turn state (missing
+ * fields, prior classification, ad referral, sendable assets).
+ */
+export function buildDynamicContext({ injection, missing_fields, prior_state, car_recommendation, ad_referral, available_assets } = {}) {
+  const inj = injection || {};
+  const missing = Array.isArray(missing_fields) && missing_fields.length > 0
+    ? missing_fields.join(', ')
+    : '(none)';
+  const priorLines = buildPriorStateLines(prior_state);
+  const priorBlock = priorLines.length > 0
+    ? priorLines.map((l) => `- ${l}`).join('\n')
+    : '- (no prior state — first turn)';
 
-  const adReferralBlock = adReferral
-    ? `\n\nAd the customer clicked to start this conversation:\n${adReferral}`
+  const carRecBlock = car_recommendation ? `\n\n## CAR RECOMMENDATION\n${car_recommendation}` : '';
+  const adBlock = ad_referral
+    ? `\n\n## Ad the customer clicked to start this conversation\n${ad_referral}`
     : '';
-  const assetsBlock = renderAvailableAssets(contextInfo.available_assets);
+  const assetsBlock = renderAvailableAssets(available_assets);
 
-  return `CURRENT CONTEXT:
-- ${missingFieldsText}${priorStateLines.length > 0 ? '\n- ' + priorStateLines.join('\n- ') : ''}${carRecommendation ? '\n- ' + carRecommendation : ''}${adReferralBlock}${assetsBlock}`;
+  return `# DYNAMIC CONTEXT (this conversation)
+
+## PRODUCT LINE: ${inj.line_name || '(unset)'}
+
+## LEAD FIELDS (for this product line)
+
+${inj.lead_fields_hints || '(none configured)'}
+
+Required-field tiers (used to decide inquiry_quality):
+- GOOD basic intent clear — needs: ${formatList(inj.good_fields)}
+- QUALIFY further details complete — needs: ${formatList(inj.qualify_fields)}
+- PROOF customer verified and ready — needs: ${formatList(inj.proof_fields)}
+
+## BUSINESS VALUE GUIDANCE
+
+${inj.business_value_guidance || '(no guidance configured)'}
+
+## CURRENT MISSING FIELDS
+
+${missing}
+
+## PRIOR STATE
+
+${priorBlock}${carRecBlock}${adBlock}${assetsBlock}`;
 }
 
 /**
  * Two blocks:
- *   [0] static per-product-line prompt  (cache_control: ephemeral → cached)
- *   [1] dynamic per-request context      (not cached)
+ *   [0] static skill body + host patch  (cache_control: ephemeral → cached)
+ *   [1] dynamic per-conversation context (not cached)
  */
-export function buildSystemBlocks(systemPrompt, dynamicContext) {
+export function buildSystemBlocks(staticPrompt, dynamicContext) {
   return [
-    { type: 'text', text: systemPrompt, cache_control: { type: 'ephemeral' } },
+    { type: 'text', text: staticPrompt, cache_control: { type: 'ephemeral' } },
     { type: 'text', text: dynamicContext },
   ];
 }
@@ -288,6 +336,29 @@ async function loadAvailableAssets({ tenantId, productLineId }, logger) {
 }
 
 /**
+ * Lazy-load a skill reference. Keeping references out of the static prompt
+ * saves ~10K tokens per turn; the agent pulls only what it needs.
+ */
+const READ_SKILL_REFERENCE_TOOL = {
+  name: 'read_skill_reference',
+  description:
+    '按需读取 ai-reception-deal skill 的 references/*.md 详细规则文档。' +
+    'skill 主文档里出现 [详见](references/xxx.md) 这种引用时调本工具拉取。' +
+    '可用名字：stages-definition / kb-usage-rules / tool-priority-rules / handover-rules / response-style / state-output-schema / test-scenarios / acceptance-cases。' +
+    'name 不带路径前缀和 .md 后缀。',
+  input_schema: {
+    type: 'object',
+    required: ['name'],
+    properties: {
+      name: {
+        type: 'string',
+        description: 'reference 文件名（不含路径和 .md 后缀），如 "stages-definition"',
+      },
+    },
+  },
+};
+
+/**
  * Every turn MUST end with this tool call — plain assistant text is discarded.
  * Callers always see schema-validated JSON (= tool args).
  */
@@ -326,6 +397,9 @@ function callClaude({ systemBlocks, messages, tools, toolChoice }) {
       type: 'function',
       function: { name: t.name, description: t.description || '', parameters: t.input_schema },
     })),
+    // Pin to Anthropic direct — keeps cache_control semantics consistent
+    // (Bedrock strips it).
+    provider: { order: ['anthropic'], allow_fallbacks: false },
   };
   if (toolChoice?.type === 'auto') {
     payload.tool_choice = 'auto';
@@ -371,9 +445,6 @@ export function stripEmptyStringFields(obj) {
  *
  * 把任何非 STANDARD_DB_FIELDS 的字段移进 details JSONB —— 这是 product_line
  * 自定义 lead_fields 落库的兜底。少了这个，custom 字段会让 DB insert 失败。
- *
- * 老的 rfq_items / root-level customer_profile 分支已经下掉（product_lines
- * 重构后 output_schema 都是按 lead_fields 自动拼的，不再产出那种形状）。
  */
 export function normalizeAgentResponse(parsed) {
   // Move non-canonical fields into details JSONB. Also applies a couple of
@@ -452,15 +523,11 @@ function buildConversationContextForKb(history, input) {
  * @param {object}   [opts.context]    { missing_fields, prior_state,
  *                                       car_recommendation, ad_referral }
  * @param {object}   opts.agentConfig  Resolved product_line config.
- *                                     REQUIRED: system_prompt.
- *                                     Optional: output_schema, id.
+ *                                     REQUIRED: dynamic_injection, tenant_id,
+ *                                     product_line. Optional: output_schema.
  * @param {object}   [opts.trace]      { traceId, conversationId, waId }
- * @param {(event: {type:'tool_call'|'tool_result', tool:string, input?:object, result?:string, iteration:number}) => void}
- *               [opts.onToolEvent]    Observability hook — fires before each
- *                                     tool call and after each result. Used
- *                                     by the chat simulator to render a tool
- *                                     timeline; in production leave unset.
- * @returns {Promise<object>}          Parsed structured response — see types.md.
+ * @param {(event) => void} [opts.onToolEvent]  Observability hook.
+ * @returns {Promise<object>}          Parsed structured response — see medici-design.md.
  */
 export async function runMedici({
   history,
@@ -478,33 +545,54 @@ export async function runMedici({
     wa_id: trace.waId,
   });
 
+  if (!agentConfig?.dynamic_injection) {
+    throw new Error(
+      'medici: agentConfig.dynamic_injection is required. ' +
+      'Unbound product_lines must be filtered upstream (Strategy C in queue-processor); ' +
+      'replay scripts must load the per-conversation product_line config before calling.',
+    );
+  }
+
   // 1. messages[] (history + latest, cache_control on trailing history turn).
   const { messages, historyCount, latestContent } = await buildMessages(history, input, logger, metaToken);
 
-  // 2. Resolve system prompt (REQUIRED) + output schema.
-  const systemPrompt = resolveSystemPrompt(agentConfig);
+  // 2. Resolve output schema (custom or generic fallback).
   const outputSchema = resolveOutputSchema(agentConfig);
 
   // 3. Assemble tools + load sendable assets in parallel. Assets are injected
   //    into the dynamic context so the LLM can reference them by id via the
   //    `attachments` envelope field (no extra tool round needed).
-  const tenantId = agentConfig?.tenant_id || null;
-  const productLineId = agentConfig?.product_line || null;
+  const tenantId = agentConfig.tenant_id || null;
+  const productLineId = agentConfig.product_line || null;
   const [agentTools, availableAssets] = await Promise.all([
     loadAgentTools({ tenantId, productLineId }, logger),
     loadAvailableAssets({ tenantId, productLineId }, logger),
   ]);
-  const tools = [...markLastToolForCache(agentTools), buildSubmitResponseTool(outputSchema)];
+  const tools = [
+    ...agentTools,
+    READ_SKILL_REFERENCE_TOOL,
+    buildSubmitResponseTool(outputSchema),
+  ];
+  const toolsWithCache = markLastToolForCache(tools);
 
-  const enrichedContext = { ...context, available_assets: availableAssets };
-  const systemBlocks = buildSystemBlocks(systemPrompt, buildDynamicContext(enrichedContext));
+  const dynamicContext = buildDynamicContext({
+    injection: agentConfig.dynamic_injection,
+    missing_fields: context.missing_fields,
+    prior_state: context.prior_state,
+    car_recommendation: context.car_recommendation,
+    ad_referral: context.ad_referral,
+    available_assets: availableAssets,
+  });
+  const systemBlocks = buildSystemBlocks(SYSTEM_STATIC, dynamicContext);
 
   logger.info('medici.request.started', {
     message_count: messages.length,
     history_count: historyCount,
     latest_input_type: Array.isArray(latestContent) ? 'multimodal' : 'text',
     model: MODELS.SONNET,
-    context_info: buildTraceContextInfo(enrichedContext),
+    skill: SKILL.metadata.name,
+    skill_sha: SKILL.source.sha256,
+    context_info: buildTraceContextInfo(context),
     available_assets_count: availableAssets.length,
   });
   const conversationContext = buildConversationContextForKb(history, input);
@@ -514,7 +602,7 @@ export async function runMedici({
   //    turn ultimately ends with submit_response — if the model won't emit it,
   //    we pin one final forced turn after the loop.
   let parsed = null;
-  let response = await callClaude({ systemBlocks, messages, tools, toolChoice: { type: 'auto' } });
+  let response = await callClaude({ systemBlocks, messages, tools: toolsWithCache, toolChoice: { type: 'auto' } });
   let iterations = 0;
 
   while (
@@ -538,9 +626,7 @@ export async function runMedici({
       const toolInput = safeParseJson(tc.function.arguments);
       onToolEvent?.({ type: 'tool_call', tool: toolName, input: toolInput, iteration: iterations });
       logger.info('medici.tool_use.call', { tool: toolName, iteration: iterations });
-      // All non-submit tools currently go through executeKbTool; unknown
-      // tool names return a structured {error} result (safe fallback).
-      const result = await executeKbTool(toolName, toolInput, {
+      const result = await dispatchTool(toolName, toolInput, {
         tenantId,
         productLineId,
         conversationContext,
@@ -561,7 +647,7 @@ export async function runMedici({
       });
     }
 
-    response = await callClaude({ systemBlocks, messages, tools });
+    response = await callClaude({ systemBlocks, messages, tools: toolsWithCache });
   }
 
   // 5. Force-submit fallback: loop exited without submit_response (hit
@@ -587,7 +673,7 @@ export async function runMedici({
     response = await callClaude({
       systemBlocks,
       messages,
-      tools,
+      tools: toolsWithCache,
       toolChoice: { type: 'tool', name: 'submit_response' },
     });
     const submitTool = (response.choices[0].message.tool_calls || []).find(
@@ -613,6 +699,24 @@ export async function runMedici({
   });
 
   return parsed;
+}
+
+// ─── Tool dispatcher ─────────────────────────────────────────────────
+
+async function dispatchTool(name, input, ctx) {
+  if (name === 'read_skill_reference') {
+    const refName = String(input?.name || '').replace(/\.md$/, '').replace(/^references\//, '');
+    const content = SKILL.references.get(refName);
+    if (!content) {
+      return {
+        error: 'reference_not_found',
+        message: `未找到 reference "${refName}"。`,
+        available: [...SKILL.references.keys()],
+      };
+    }
+    return { name: refName, content };
+  }
+  return executeKbTool(name, input, ctx);
 }
 
 export default runMedici;

@@ -16,17 +16,17 @@ export async function GET() {
 
     const progress = await getProgress(ctx.tenantId) || {};
 
-    // 衍生判断：第 4 步「配置 AI」需要看 product_lines 是否有 catalog_description
-    // 和 lead_fields，跨表查；如果还没第 3 步（建产品线）就直接 false
+    // 衍生判断：第 4 步「配置 AI」要求 product_lines 配齐了价值判定标准 + 线索字段表
+    // （新 IA 下用户能调的两项内容字段）。如果还没第 3 步（建产品线）就直接 false。
     let aiConfigured = false;
     if (progress.first_product_line_at) {
       const { data: lines } = await supabase
         .from('product_lines')
-        .select('id, catalog_description, lead_fields')
+        .select('id, business_value_guidance, lead_fields')
         .eq('tenant_id', ctx.tenantId)
         .eq('is_active', true);
       aiConfigured = (lines || []).some(l =>
-        Boolean((l.catalog_description || '').trim()) &&
+        Boolean((l.business_value_guidance || '').trim()) &&
         Array.isArray(l.lead_fields) && l.lead_fields.length > 0
       );
     }

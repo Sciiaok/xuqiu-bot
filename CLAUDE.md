@@ -55,6 +55,12 @@ The test: Every changed line should trace directly to the user's request.
 
 你不需要写test file，也不需要执行npm test相关测试操作。
 
+当用户说"系统测试"（或类似说法）时，你需要：
+1. 在本地启动 web 服务（`npm run dev`），等待服务就绪
+2. 以真实用户身份在浏览器里操作目标功能（点击 / 输入 / 提交 / 跳转），覆盖 golden path 与关键边界
+3. 同时观察服务端日志、浏览器控制台、网络请求，捕捉报错和回归
+4. 把"测了什么、看到什么、是否符合预期"明确告诉用户，不通过就给出根因；不要只说"已启动"就停下
+
 ## Architecture Guardrails
 
 Understand the project architecture before making backend changes. The app uses Supabase — check existing table relationships before adding columns. Query existing linked data rather than adding redundant columns.

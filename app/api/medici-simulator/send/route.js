@@ -46,15 +46,19 @@ export async function POST(request) {
     const t0 = Date.now();
     const log = (kind, msg, data) => trace.push({ t: Date.now() - t0, kind, msg, ...(data ? { data } : {}) });
 
-    // 1. Resolve the product_line config (assembled system_prompt / schema /
-    //    qualification from the product_lines row, cached in-process).
+    // 1. Resolve the product_line config (assembled dynamic_injection /
+    //    output_schema / qualification from the product_lines row, cached in-process).
+    //    The static system prompt comes from the ai-reception-deal skill bundle
+    //    + medici-host-patch and is loaded once at module import.
     const lineConfig = await getMediciConfig({ tenantId: ctx.tenantId, id: productLine });
     if (!lineConfig) {
       return NextResponse.json({ error: `Product line not found: ${productLine}` }, { status: 404 });
     }
     log('info', `Loaded product_line config: ${lineConfig.product_line} (${lineConfig.name})`, {
       lead_fields_count: lineConfig.lead_fields.length,
-      system_prompt_chars: lineConfig.system_prompt.length,
+      good_fields: lineConfig.dynamic_injection.good_fields,
+      qualify_fields: lineConfig.dynamic_injection.qualify_fields,
+      proof_fields: lineConfig.dynamic_injection.proof_fields,
     });
 
     // KB 工具按 (tenant_id, product_line_id) 查询，不再需要 agents.id 桥。
@@ -150,9 +154,8 @@ export async function POST(request) {
       metadata: inputMetadata,
     };
 
-    // Dump the full runMedici input shape. system_prompt / output_schema are
-    // shown as sizes only to avoid flooding the trace pane with thousands of
-    // tokens of prompt text.
+    // Dump the full runMedici input shape. output_schema shown as keys only
+    // to avoid flooding the trace pane.
     log('info', 'runMedici 入参', {
       history_len: conversationHistory.length,
       input: {
@@ -170,7 +173,7 @@ export async function POST(request) {
         product_line: agentConfig.product_line,
         name: agentConfig.name,
         tenant_id: agentConfig.tenant_id,
-        system_prompt_chars: agentConfig.system_prompt?.length || 0,
+        dynamic_injection_keys: Object.keys(agentConfig.dynamic_injection || {}),
         output_schema_keys: Object.keys(agentConfig.output_schema?.properties || {}),
         lead_fields_count: agentConfig.lead_fields?.length || 0,
       },
