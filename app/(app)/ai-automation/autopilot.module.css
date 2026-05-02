@@ -279,6 +279,33 @@
 .aiMsg p { margin: 0 0 10px; }
 .aiMsg p:last-child { margin-bottom: 0; }
 
+/* ─── Inline ad-creative tile (rendered for generate_ad_creative tool rows) ─── */
+.creativeTile {
+  align-self: flex-start;
+  max-width: 320px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  overflow: hidden;
+  background: var(--bg);
+}
+.creativeTile img {
+  display: block;
+  width: 100%;
+  height: auto;
+  aspect-ratio: 1 / 1;
+  object-fit: cover;
+}
+.creativeTileCaption {
+  padding: 8px 12px;
+  font-size: 12.5px;
+  line-height: 1.4;
+  color: var(--text2);
+  border-top: 1px solid var(--border);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 /* ─── Thinking/tool strip ───────────────────────────────────────── */
 .toolStrip {
   display: flex;

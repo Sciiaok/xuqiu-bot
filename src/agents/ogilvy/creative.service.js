@@ -29,12 +29,17 @@ const SUPPORTED_REF_EXTS = new Set(['.png', '.jpg', '.jpeg', '.webp', '.gif']);
 
 function buildCreativePrompt({ productName, productDescription, headline, targetCountries, language }) {
   const lang = language || 'English';
+  const sceneBrief = (productDescription || '').trim();
   return `Generate a professional advertising image (1080x1080 square, exactly 1080 pixels wide and 1080 pixels tall) for a B2B WhatsApp-conversion ad.
 
-Product: ${productName || 'Product'}
-Description: ${productDescription || ''}
-Target markets: ${(targetCountries || []).join(', ') || 'global'}
-Headline to feature on image: "${headline || 'Chat with us on WhatsApp'}"
+## Scene & composition (FOLLOW EXACTLY — this is the creative brief)
+${sceneBrief || '(no scene brief provided — fall back to a clean studio shot of the product)'}
+
+The text above is the authoritative visual brief for this ad. Render the scene, setting, lighting, framing, and localization elements exactly as described. Do not substitute a generic studio shot if a specific environment (city, landscape, dealership, etc.) is specified. Do not omit named localization elements (license plates, signage, architecture style, people).
+
+## Product
+- Name: ${productName || 'Product'}
+- Target markets: ${(targetCountries || []).join(', ') || 'global'}
 
 ## Product fidelity (critical)
 The reference image(s) show the EXACT product. Preserve:
@@ -44,17 +49,22 @@ The reference image(s) show the EXACT product. Preserve:
 - Design details (grille patterns, wheel design, light signatures, etc.)
 Do NOT invent product features not shown in the reference.
 
-## Composition
-- Product dominates 60-70% of frame
-- Clean, professional, commercial-photography quality
-- Studio-grade lighting, photorealistic
+## Headline overlay (render this text on the image, verbatim)
+"${headline || 'Chat with us on WhatsApp'}"
+- Language: ${lang}; render in ${lang} script only — do NOT translate or paraphrase
+- Clearly legible, large enough to read on a phone screen
+- Place where it doesn't cover the product's key features
+
+## General composition rules (apply within the brief above)
+- Product remains the focal subject — typically 50-70% of frame, but defer to the scene brief if it specifies otherwise
+- Commercial-photography quality, studio-grade lighting, photorealistic
 
 ## Text overlay rules
-- Headline text in ${lang}, clearly legible
 - A WhatsApp-style CTA button or icon at bottom right (green, recognizable)
 - No Chinese/CJK characters unless language is Chinese
 - No phone numbers, no email addresses, no URLs in the image
-- No emojis in text overlay`;
+- No emojis in text overlay
+- The ONLY text on the image is the headline above + the WhatsApp CTA — do not add taglines, sub-headers, or feature callouts unless the scene brief explicitly asks for them`;
 }
 
 // ── OpenRouter image model caller ───────────────────────────────────────
@@ -234,7 +244,15 @@ export async function generateAdCreative({
         sessionId,
         authClient: authClient || supabase,
       });
-      return { url: asset.url, storage_path: asset.storage_path, model: generated.model };
+      // headline + product_name echoed back so the chat transcript can
+      // caption the image without a cross-row lookup against the tool_use args.
+      return {
+        url: asset.url,
+        storage_path: asset.storage_path,
+        model: generated.model,
+        headline: headline || null,
+        product_name: productName || null,
+      };
     } catch (err) {
       console.warn(`[autopilot/creative] ${model} failed: ${err.message}`);
       lastErr = err;

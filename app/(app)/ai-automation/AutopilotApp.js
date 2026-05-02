@@ -751,7 +751,22 @@ function MessageRow({ msg }) {
       </div>
     );
   }
-  // Tool rows (including draft_ad_plan) render nothing in the transcript —
-  // the AdPlanCard lives in the right panel, not in the chat stream.
+  // generate_ad_creative tool results carry the asset URL — surface it in the
+  // transcript so the user sees each generated image alongside the prose
+  // listing creatives. Other tools (draft_ad_plan / web_search / read_*)
+  // stay invisible; their output lives in the right-panel plan card or the
+  // assistant's prose summary.
+  if (msg.role === 'tool' && msg.tool_name === 'generate_ad_creative' && msg.tool_result?.url) {
+    const tr = msg.tool_result;
+    const caption = tr.headline || tr.product_name || '广告素材';
+    return (
+      <div className={s.creativeTile}>
+        <img src={tr.url} alt={caption} loading="lazy" />
+        <div className={s.creativeTileCaption}>{caption}</div>
+      </div>
+    );
+  }
+  // Other tool rows (draft_ad_plan, web_search, read_*) render nothing —
+  // their output lives in the right-side plan card or the assistant's prose.
   return null;
 }

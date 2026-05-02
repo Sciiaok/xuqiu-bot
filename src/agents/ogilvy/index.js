@@ -201,16 +201,37 @@ const TOOLS = [
       '生成一张 1080×1080 广告图。必须有用户上传的参考图。' +
       '为方案里每一条 ad 分别调一次——**不同 ad 的 headline / product_description 要不同**，' +
       '让生成的图在视觉构图、文字重点、场景氛围上有明显差异（A/B 测试才有意义）。' +
+      '⚠️ 关键约束：本工具的输入必须**逐字对应**阶段四「素材清单」里那一条 CR 的字段——' +
+      'headline 用素材清单的 Headline 文案原文，product_description 用素材清单的「图片视觉描述」段原文。' +
+      '不要做卖点摘要、不要简化、不要重新措辞，否则生成出来的图会跟方案里描述的场景/构图/文案不一致。' +
       '返回的 url 写入 draft_ad_plan 对应 ad 的 creative.image_url。',
     input_schema: {
       type: 'object',
-      required: ['product_name', 'headline', 'reference_image_ids'],
+      required: ['product_name', 'headline', 'product_description', 'reference_image_ids'],
       properties: {
-        product_name: { type: 'string' },
-        product_description: { type: 'string', description: '50-200 字卖点/规格' },
-        headline: { type: 'string', description: '广告图主标题' },
+        product_name: { type: 'string', description: '产品名（中英文均可）' },
+        product_description: {
+          type: 'string',
+          description:
+            '**图片视觉脚本**——逐字传入素材清单中该条 CR 的「图片视觉描述」段原文。' +
+            '内容是场景、构图、氛围、本地化元素（车牌/路牌/建筑/人物/光线等）。' +
+            '不是产品卖点摘要、不是规格表、不是营销话术。' +
+            '工具内部会自动注入"商业摄影质量/产品保真/尺寸/文字 overlay"等约束，' +
+            '本字段只负责描述视觉本身，长度 80-300 字。',
+        },
+        headline: {
+          type: 'string',
+          description:
+            '广告图主标题——逐字传入素材清单中该条 CR 的 Headline 文案原文（≤40 字符），' +
+            '工具会渲染到图上。不要替换成产品名或缩短，必须和素材清单/方案 ad.creative.headline 完全一致。',
+        },
         target_countries: { type: 'array', items: { type: 'string' }, description: 'ISO-2 码，例 ["TH","ID"]' },
-        language: { type: 'string', description: '默认 English；按国家调' },
+        language: {
+          type: 'string',
+          description:
+            'Headline 文字层使用的语言。默认 English；按目标市场设置（沙特→Arabic、德国→German、' +
+            '泰国→Thai 等）。必须和素材清单的语言一致。',
+        },
         reference_image_ids: {
           type: 'array',
           items: { type: 'integer', minimum: 1 },
@@ -359,6 +380,11 @@ export async function* runOgilvy(sessionId, userText, attachments = [], userId =
     function: { name: t.name, description: t.description, parameters: t.input_schema },
   }));
 
+  // Accumulator for assistant prose that spans multiple stream calls when the
+  // model hits max_tokens mid-output. Persisted as a single DB row at turn end
+  // so the transcript shows one bubble instead of N continuation fragments.
+  let pendingAssistantText = '';
+
   for (let iter = 0; iter < MAX_ITERATIONS; iter++) {
     let assistantText = '';
     const accToolCalls = {};
@@ -376,7 +402,11 @@ export async function* runOgilvy(sessionId, userText, attachments = [], userId =
     try {
       const stream = openrouter.messages.stream({
         models: [model],
-        max_tokens: 4096,
+        // 16K cap fits a full 17-chapter strategy doc or a stage-5 dual
+        // document in one shot. If the model still hits the cap (genuine
+        // mega-output), the length-continuation path below stitches the
+        // next stream onto pendingAssistantText.
+        max_tokens: 16384,
         messages: buildMessagesWithCache(SYSTEM_STATIC, dynamicPrompt, history),
         tools: openaiTools,
         tool_choice: 'auto',
@@ -444,36 +474,59 @@ export async function* runOgilvy(sessionId, userText, attachments = [], userId =
 
     const toolCalls = Object.values(accToolCalls);
     const hasToolCalls = toolCalls.length > 0;
+    pendingAssistantText += assistantText;
 
-    // Persist the assistant turn. If there are tool calls, each call is its own
-    // row (so getMessagesForLLM can reconstruct them); otherwise a single row.
-    const nextIdx = await getNextMessageIndex(sessionId);
     if (hasToolCalls) {
+      // Flush any accumulated prose (including continuations from prior
+      // length-truncation iterations) onto the first tool_use row, then
+      // attach the rest of the tool_use rows. Each tool call is its own DB
+      // row so getMessagesForLLM can reconstruct the OpenAI message list.
+      const nextIdx = await getNextMessageIndex(sessionId);
+      const flushedText = pendingAssistantText || null;
+      pendingAssistantText = '';
       await addMessages(sessionId, toolCalls.map((tc, i) => ({
         message_index: nextIdx + i,
         role: 'assistant',
-        content: i === 0 ? (assistantText || null) : null,
+        content: i === 0 ? flushedText : null,
         tool_name: tc.function.name,
         tool_use_id: tc.id,
         tool_input: safeParseJSON(tc.function.arguments),
       })));
-      // Also add to in-memory history so the next loop iteration sees it
       history.push({
         role: 'assistant',
-        content: assistantText || null,
+        content: flushedText,
         tool_calls: toolCalls,
       });
-    } else if (assistantText) {
-      await addMessage(sessionId, {
-        message_index: nextIdx,
-        role: 'assistant',
-        content: assistantText,
-      });
-      history.push({ role: 'assistant', content: assistantText });
-    }
+    } else {
+      // No tool calls. Two sub-cases:
+      //   a) finishReason === 'length' — output got cut by the per-stream
+      //      token cap. Push the partial onto history (in-memory only),
+      //      append a synthetic continuation hint, and re-enter the loop.
+      //      We do NOT persist yet so the final transcript stays as one
+      //      assistant bubble.
+      //   b) finishReason in {'stop','end_turn',null} — genuine end. Persist
+      //      the full pendingAssistantText and yield done.
+      if (finishReason === 'length' && assistantText) {
+        history.push({ role: 'assistant', content: assistantText });
+        history.push({
+          role: 'user',
+          content:
+            '上文被 token 上限截断。请直接接着上文最后一个字继续写完整内容，' +
+            '不要重复已写部分，不要做开场白或总结，也不要解释你被截断了。',
+        });
+        continue;
+      }
 
-    // No tools → we're done.
-    if (!hasToolCalls) {
+      const nextIdx = await getNextMessageIndex(sessionId);
+      if (pendingAssistantText) {
+        await addMessage(sessionId, {
+          message_index: nextIdx,
+          role: 'assistant',
+          content: pendingAssistantText,
+        });
+        history.push({ role: 'assistant', content: pendingAssistantText });
+        pendingAssistantText = '';
+      }
       yield { event: 'done', data: { message_index: nextIdx } };
       return;
     }
