@@ -12,6 +12,7 @@ import dotenv from 'dotenv';
 dotenv.config({ path: '.env.local' });
 import { createClient } from '@supabase/supabase-js';
 import { PHONE_COUNTRY_PREFIXES } from '../lib/phone-country-prefixes.js';
+import { config } from '../src/config.js';
 
 // Inline the logic from wa-country.js to avoid @/ alias issues
 const sortedPrefixes = Object.keys(PHONE_COUNTRY_PREFIXES).sort((a, b) => b.length - a.length);
@@ -33,7 +34,7 @@ function getWaCountryLabel(waId) {
 }
 
 const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL,
+  config.supabase.url,
   process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_DEFAULT_KEY,
 );
 

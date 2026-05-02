@@ -5,7 +5,6 @@
  * guard them explicitly.
  */
 const DEFAULTS = {
-  NEXT_PUBLIC_SUPABASE_URL: 'http://localhost:54321',
   NEXT_PUBLIC_SUPABASE_PUBLISHABLE_DEFAULT_KEY: 'test-key',
   OPENROUTER_API_KEY: 'test-key',
 };

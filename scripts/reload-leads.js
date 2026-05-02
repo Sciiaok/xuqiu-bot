@@ -9,9 +9,10 @@ import { createClient } from '@supabase/supabase-js';
 import { runMedici } from '../src/agents/medici/index.js';
 import { getMissingFields } from '../src/inquiry-quality.js';
 import { loadMediciConfig } from '../src/agents/medici/config.js';
+import { config } from '../src/config.js';
 
 const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL,
+  config.supabase.url,
   process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_DEFAULT_KEY
 );
 

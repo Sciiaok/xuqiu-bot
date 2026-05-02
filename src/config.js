@@ -2,14 +2,12 @@
 //
 // This file is the SINGLE SOURCE OF TRUTH for env-derived config.
 // Rule: no other .js file may read `process.env.XXX` directly.
-// The only exception is `lib/supabase-browser.js`, which runs in the
-// client bundle and must read `NEXT_PUBLIC_*` inline (Next.js convention).
 
 export const config = {
   // OpenRouter — used by llm-client for all LLM calls (/chat/completions).
   openrouter: {
     apiKey: process.env.OPENROUTER_API_KEY,
-    baseURL: process.env.OPENROUTER_BASE_URL || 'https://openrouter.ai/api/v1',
+    baseURL: 'https://openrouter.ai/api/v1',
   },
 
   // OpenAI Direct — embeddings + Whisper only.
@@ -20,7 +18,7 @@ export const config = {
   // Supabase — URL + publishable/anon key (safe to include in client bundles)
   // serviceRoleKey 仅 server 端可见 —— 创建 auth 用户、绕 RLS 等管理操作用。
   supabase: {
-    url: process.env.NEXT_PUBLIC_SUPABASE_URL,
+    url: 'https://exevqpqpsvojfowpzize.supabase.co',
     publishableKey: process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_DEFAULT_KEY,
     serviceRoleKey: process.env.SUPABASE_SERVICE_ROLE_KEY,
   },
@@ -87,7 +85,7 @@ export const config = {
 
   // App runtime flags & URLs
   app: {
-    baseUrl: process.env.NEXT_PUBLIC_APP_URL,
+    baseUrl: 'https://www.promeengine.com',
     takeoverAutoExpireDisabled: 'off' === 'off',
   },
 

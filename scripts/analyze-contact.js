@@ -1,9 +1,10 @@
 import { createClient } from "@supabase/supabase-js";
 import dotenv from "dotenv";
 dotenv.config({ path: ".env.local" });
+import { config } from "../src/config.js";
 
 const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL,
+  config.supabase.url,
   process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_DEFAULT_KEY
 );
 

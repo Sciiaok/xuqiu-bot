@@ -13,6 +13,7 @@ import dotenv from 'dotenv';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import { createClient } from '@supabase/supabase-js';
+import { config } from '../src/config.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -20,7 +21,7 @@ const __dirname = dirname(__filename);
 dotenv.config({ path: join(__dirname, '..', '.env.local') });
 
 const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL,
+  config.supabase.url,
   process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_DEFAULT_KEY
 );
 

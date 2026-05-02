@@ -8,16 +8,17 @@
  */
 
 import { createClient } from '@supabase/supabase-js';
-import { config } from 'dotenv';
+import { config as loadDotenv } from 'dotenv';
+import { config } from '../src/config.js';
 
 // Load environment variables from .env.local
-config({ path: '.env.local' });
+loadDotenv({ path: '.env.local' });
 
-const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+const supabaseUrl = config.supabase.url;
 const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_DEFAULT_KEY;
 
-if (!supabaseUrl || !supabaseServiceKey) {
-  console.error('Missing environment variables: NEXT_PUBLIC_SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY');
+if (!supabaseServiceKey) {
+  console.error('Missing environment variable: SUPABASE_SERVICE_ROLE_KEY');
   process.exit(1);
 }
 

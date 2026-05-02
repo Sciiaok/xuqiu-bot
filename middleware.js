@@ -1,6 +1,7 @@
 import { createServerClient } from '@supabase/ssr';
 import { NextResponse } from 'next/server';
 import { defaultLocale, locales } from './i18n/config';
+import { config as appConfig } from '@/src/config';
 
 const PROTECTED_PREFIXES = [
   '/analytics',
@@ -55,7 +56,7 @@ export async function middleware(request) {
   let supabaseResponse = response;
 
   const supabase = createServerClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL,
+    appConfig.supabase.url,
     process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_DEFAULT_KEY,
     {
       cookies: {
