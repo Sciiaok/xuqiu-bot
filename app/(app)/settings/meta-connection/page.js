@@ -584,6 +584,9 @@ function ConnectedView({ state, onRefresh, onDisconnect, refreshing, disconnecti
         </div>
       </div>
 
+      <PageIdSection initialValue={conn.page_id || ''} />
+
+
       <div className={s.section}>
         <h2 className={s.sectionTitle}>WhatsApp 号码（{state.phones.length}）</h2>
         {state.phones.length === 0 ? (
@@ -634,6 +637,77 @@ function ConnectedView({ state, onRefresh, onDisconnect, refreshing, disconnecti
         )}
       </div>
     </>
+  );
+}
+
+function PageIdSection({ initialValue }) {
+  const [value, setValue] = useState(initialValue);
+  const [saving, setSaving] = useState(false);
+  const [msg, setMsg] = useState(null); // { type: 'ok'|'err', text }
+  const [savedValue, setSavedValue] = useState(initialValue);
+
+  const dirty = value.trim() !== savedValue;
+  const empty = !savedValue;
+
+  const save = async () => {
+    setSaving(true);
+    setMsg(null);
+    try {
+      const res = await fetch('/api/meta/page-id', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ page_id: value.trim() || null }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data?.error || '保存失败');
+      setSavedValue(data.page_id || '');
+      setValue(data.page_id || '');
+      setMsg({ type: 'ok', text: data.page_id ? '已保存' : '已清空' });
+    } catch (err) {
+      setMsg({ type: 'err', text: err.message });
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className={s.section}>
+      <h2 className={s.sectionTitle}>Facebook 主页 ID</h2>
+      {empty ? (
+        <div className={s.error} style={{ marginBottom: 10 }}>
+          ⚠️ 未配置主页 ID —— autopilot 启动 Click-to-WhatsApp 投放会失败（Meta 要求广告必须绑定一个 Facebook 主页）。
+        </div>
+      ) : null}
+      <div className={s.muted} style={{ fontSize: 12, marginBottom: 10 }}>
+        进入 <a href="https://business.facebook.com/settings/pages" target="_blank" rel="noreferrer">business.facebook.com/settings/pages</a> →
+        选中要绑定的主页 → 右侧详情面板里的「主页 ID」复制粘贴到这里（一串数字）。
+        该主页必须属于上面这个 BM、且系统用户有权限。
+      </div>
+      <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+        <input
+          type="text"
+          value={value}
+          onChange={(e) => setValue(e.target.value)}
+          placeholder="例如 123456789012345"
+          style={{ flex: '1 1 280px', minWidth: 280, padding: '8px 10px', fontFamily: 'var(--font-mono)' }}
+        />
+        <button
+          type="button"
+          className={s.primaryBtn}
+          onClick={save}
+          disabled={saving || !dirty}
+        >
+          {saving ? '保存中…' : '保存'}
+        </button>
+      </div>
+      {msg && (
+        <div
+          style={{ marginTop: 8, fontSize: 12, color: msg.type === 'ok' ? '#3a8a3f' : '#c44230' }}
+        >
+          {msg.text}
+        </div>
+      )}
+    </div>
   );
 }
 

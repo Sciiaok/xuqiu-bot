@@ -11,12 +11,11 @@
  */
 import supabase from '../../../lib/supabase.js';
 import {
-  getActiveTokenByTenant,
   listAdAccountsByTenant,
   listPhonesByTenant,
   findActiveConnectionByTenant,
 } from '../../../lib/repositories/meta-connection.repository.js';
-import { config } from '../../config.js';
+import { decryptToken } from '../../../lib/meta-token-crypto.js';
 
 async function tenantIdForUser(userId) {
   if (!userId) return null;
@@ -32,16 +31,16 @@ export async function getMetaAccountForUser(userId) {
   const tenantId = await tenantIdForUser(userId);
   if (!tenantId) return null;
 
-  const [token, ads] = await Promise.all([
-    getActiveTokenByTenant(tenantId),
+  const [conn, ads] = await Promise.all([
+    findActiveConnectionByTenant(tenantId),
     listAdAccountsByTenant(tenantId),
   ]);
-  if (!token || ads.length === 0) return null;
+  if (!conn || ads.length === 0) return null;
 
   return {
-    access_token: token,
+    access_token: decryptToken(conn.system_user_token_encrypted),
     ad_account_id: ads[0].ad_account_id,
-    page_id: config.meta?.pageId || null, // page_id 暂未入表
+    page_id: conn.metadata?.page_id || null,
   };
 }
 

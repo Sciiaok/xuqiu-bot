@@ -106,10 +106,13 @@ function buildPageWelcomeMessageJson(text) {
  */
 export async function* stageCampaigns(plan, { userId }) {
   const account = await getMetaAccountForUser(userId);
-  if (!account) throw new Error('Meta account not configured');
+  if (!account) throw new Error('Meta 未连接：请先在「设置 → Meta 连接」完成接入');
   const { access_token, ad_account_id, page_id } = account;
-  if (!access_token || !ad_account_id || !page_id) {
-    throw new Error('META_ACCESS_TOKEN / META_AD_ACCOUNT_ID / META_PAGE_ID required');
+  if (!access_token || !ad_account_id) {
+    throw new Error('Meta 连接缺 token 或广告账户：去「设置 → Meta 连接」重新接入');
+  }
+  if (!page_id) {
+    throw new Error('Facebook Page ID 未配置：去「设置 → Meta 连接 → Facebook 主页」粘贴主页 ID（CTWA 广告必须绑主页）');
   }
 
   const whatsapp = plan.whatsapp || {};
@@ -303,7 +306,7 @@ export async function* stageCampaigns(plan, { userId }) {
  */
 export async function* activateCampaigns({ campaign_ids = [], adset_ids = [], ad_ids = [] }, { userId }) {
   const account = await getMetaAccountForUser(userId);
-  if (!account) throw new Error('Meta account not configured');
+  if (!account) throw new Error('Meta 未连接：请先在「设置 → Meta 连接」完成接入');
   const { access_token } = account;
 
   const results = [];

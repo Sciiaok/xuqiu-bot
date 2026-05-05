@@ -44,6 +44,7 @@ export async function GET() {
         last_health_check_at: conn.last_health_check_at,
         health_check_failed_count: conn.health_check_failed_count,
         scopes: conn.scopes,
+        page_id: conn.metadata?.page_id || null,
       },
       phones: (phones || []).map(p => ({
         phone_number_id: p.phone_number_id,
