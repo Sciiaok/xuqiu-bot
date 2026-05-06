@@ -70,7 +70,7 @@ export async function POST(request) {
         { role: 'system', content: SYSTEM_PROMPT },
         { role: 'user', content: prompt },
       ],
-    });
+    }, { tenantId: ctx.tenantId, callSite: 'dev-tools.ai-sql' });
 
     const text = res?.choices?.[0]?.message?.content || '';
 

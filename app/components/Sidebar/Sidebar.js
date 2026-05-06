@@ -40,6 +40,7 @@ const FOUNDER_NAV = [
     items: [
       { href: '/admin/tenants', label: '租户管理', icon: 'tenants' },
       { href: '/admin/invitations', label: '邀请管理', icon: 'invitations' },
+      { href: '/admin/llm-usage', label: '大模型成本', icon: 'tokens' },
     ],
   },
 ];
@@ -102,6 +103,13 @@ const ICONS = {
       <rect x="9" y="3" width="4" height="10"/>
       <line x1="4" y1="9" x2="4" y2="9.5"/>
       <line x1="11" y1="6" x2="11" y2="6.5"/>
+    </svg>
+  ),
+  tokens: (
+    <svg fill="none" stroke="currentColor" strokeWidth="1.4" viewBox="0 0 15 15">
+      <circle cx="5" cy="5" r="3"/>
+      <circle cx="10" cy="10" r="3"/>
+      <path d="M5 5v0M10 10v0"/>
     </svg>
   ),
   settings: (

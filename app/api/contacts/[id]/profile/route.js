@@ -108,6 +108,8 @@ export async function GET(request, { params }) {
           userPrompt: buildAiSummaryInput(contact, conversations || [], leads, recentMessages),
           maxTokens: 500,
           logTag: 'contacts/profile',
+          tenantId: ctx.tenantId,
+          callSite: 'contacts.profile.summary',
         });
       } catch (aiError) {
         console.error('[contacts/profile] Failed to generate AI summary:', aiError);

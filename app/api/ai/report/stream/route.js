@@ -110,6 +110,8 @@ export async function GET(request) {
         userPrompt,
         maxTokens: 2000,
         logTag: `ai/report/stream:${type}`,
+        tenantId: ctx.tenantId,
+        callSite: `ai-report-stream.${type}`,
       });
     } catch (err) {
       console.error('[ai/report/stream] All models failed:', err.message);

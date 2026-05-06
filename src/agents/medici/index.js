@@ -381,7 +381,7 @@ function markLastToolForCache(tools) {
 
 // ─── LLM transport (OpenRouter → Anthropic) ──────────────────────────
 
-function callClaude({ systemBlocks, messages, tools, toolChoice }) {
+function callClaude({ systemBlocks, messages, tools, toolChoice, tenantId }) {
   // OpenRouter expects a single 'system' message, not Anthropic's block array.
   const systemContent = Array.isArray(systemBlocks)
     ? systemBlocks.map((b) => (typeof b === 'string' ? b : b.text || '')).join('\n\n')
@@ -408,7 +408,7 @@ function callClaude({ systemBlocks, messages, tools, toolChoice }) {
   } else if (toolChoice) {
     payload.tool_choice = toolChoice;
   }
-  return openrouter.messages.create(payload);
+  return openrouter.messages.create(payload, { tenantId, callSite: 'medici.qualify' });
 }
 
 function safeParseJson(s) {
@@ -602,7 +602,7 @@ export async function runMedici({
   //    turn ultimately ends with submit_response — if the model won't emit it,
   //    we pin one final forced turn after the loop.
   let parsed = null;
-  let response = await callClaude({ systemBlocks, messages, tools: toolsWithCache, toolChoice: { type: 'auto' } });
+  let response = await callClaude({ systemBlocks, messages, tools: toolsWithCache, toolChoice: { type: 'auto' }, tenantId });
   let iterations = 0;
 
   while (
@@ -647,7 +647,7 @@ export async function runMedici({
       });
     }
 
-    response = await callClaude({ systemBlocks, messages, tools: toolsWithCache });
+    response = await callClaude({ systemBlocks, messages, tools: toolsWithCache, tenantId });
   }
 
   // 5. Force-submit fallback: loop exited without submit_response (hit
@@ -675,6 +675,7 @@ export async function runMedici({
       messages,
       tools: toolsWithCache,
       toolChoice: { type: 'tool', name: 'submit_response' },
+      tenantId,
     });
     const submitTool = (response.choices[0].message.tool_calls || []).find(
       (tc) => tc.function.name === 'submit_response',

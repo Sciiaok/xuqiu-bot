@@ -15,6 +15,8 @@
  * read LLM API keys from process.env.
  */
 import { config } from './config.js';
+import { calcCostUsd } from './llm-pricing.js';
+import { getSupabaseAdmin } from '../lib/supabase-admin.js';
 
 // ── Model Registry ───────────────────────────────────────────────────
 export const MODELS = {
@@ -62,7 +64,10 @@ function parseSSELine(line) {
 
 // ── Logging ──────────────────────────────────────────────────────────
 
-function logLlmCall({ method, provider, models, responseModel, tools, toolChoice, finishReason, promptTokens, completionTokens, durationMs }) {
+function logLlmCall({ method, provider, models, responseModel, tools, toolChoice, finishReason, promptTokens, completionTokens, durationMs, tenantId, callSite }) {
+  const model = responseModel || models?.[0];
+  const costUsd = calcCostUsd({ model, promptTokens, completionTokens });
+
   console.log(JSON.stringify({
     ts: new Date().toISOString(),
     level: 'info',
@@ -72,14 +77,40 @@ function logLlmCall({ method, provider, models, responseModel, tools, toolChoice
     provider,
     base_url: config.openrouter.baseURL,
     models,
-    response_model: responseModel || models?.[0],
+    response_model: model,
     tools: tools || 0,
     tool_choice: toolChoice || null,
     finish_reason: finishReason || null,
     prompt_tokens: promptTokens || 0,
     completion_tokens: completionTokens || 0,
+    cost_usd: costUsd,
     duration_ms: durationMs,
+    tenant_id: tenantId || null,
+    call_site: callSite || null,
   }));
+
+  // Fire-and-forget 落表，不 await、不抛错 —— 写不进去也不应该影响 LLM 返回。
+  // callSite 缺失时仍记一行，便于发现哪些调用点没埋点。
+  try {
+    getSupabaseAdmin()
+      .from('llm_usage_logs')
+      .insert({
+        tenant_id: tenantId || null,
+        call_site: callSite || 'unknown',
+        provider,
+        model: model || null,
+        prompt_tokens: promptTokens || 0,
+        completion_tokens: completionTokens || 0,
+        cost_usd: costUsd,
+        duration_ms: durationMs ?? null,
+        finish_reason: finishReason || null,
+      })
+      .then(({ error }) => {
+        if (error) console.error('[llm-client] persist usage failed:', error.message);
+      });
+  } catch (err) {
+    console.error('[llm-client] persist usage threw:', err?.message);
+  }
 }
 
 // ══════════════════════════════════════════════════════════════════════
@@ -246,7 +277,9 @@ function createStream(params) {
 
 const openrouter = {
   messages: {
-    async create(params) {
+    // meta = { tenantId, callSite } —— 用于成本统计落表。callSite 是文本枚举
+    // （形如 'medici.qualify' / 'kb.search.embed'），调用方自定。
+    async create(params, meta = {}) {
       if (!config.openrouter.baseURL || !config.openrouter.apiKey) {
         throw new Error('[llm-client] OPENROUTER_API_KEY required');
       }
@@ -258,6 +291,8 @@ const openrouter = {
         models: params.models,
         tools: params.tools?.length || 0,
         toolChoice: typeof params.tool_choice === 'string' ? params.tool_choice : params.tool_choice?.function?.name || null,
+        tenantId: meta.tenantId,
+        callSite: meta.callSite,
       };
 
       const response = await fetchWithTimeout(
@@ -286,7 +321,7 @@ const openrouter = {
       return result;
     },
 
-    stream(params) {
+    stream(params, meta = {}) {
       if (!config.openrouter.baseURL || !config.openrouter.apiKey) {
         throw new Error('[llm-client] OPENROUTER_API_KEY required');
       }
@@ -298,6 +333,8 @@ const openrouter = {
         models: params.models,
         tools: params.tools?.length || 0,
         toolChoice: typeof params.tool_choice === 'string' ? params.tool_choice : params.tool_choice?.function?.name || null,
+        tenantId: meta.tenantId,
+        callSite: meta.callSite,
       };
 
       const streamObj = createStream(params);

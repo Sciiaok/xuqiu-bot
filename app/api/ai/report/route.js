@@ -549,6 +549,8 @@ export async function POST(request) {
       userPrompt,
       maxTokens: 2000,
       logTag: `ai/report:${type}`,
+      tenantId: ctx.tenantId,
+      callSite: `ai-report.${type}`,
     });
 
     return NextResponse.json({

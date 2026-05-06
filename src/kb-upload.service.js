@@ -51,7 +51,7 @@ export async function processDocument(ctx, docId, fileContent, layer, options = 
     await updateDocStatus(docId, 'processing');
 
     // Step 1: Extract knowledge points using LLM
-    const extracted = await extractKnowledgePoints(fileContent, layer, fileType);
+    const extracted = await extractKnowledgePoints(fileContent, layer, fileType, tenantId);
 
     // Step 2: For product/logistics layers, also extract structured data
     if (layer === 'product') {
@@ -94,7 +94,7 @@ export async function processDocument(ctx, docId, fileContent, layer, options = 
 
 // ── Knowledge Point Extraction ───────────────────────────────────────
 
-async function extractKnowledgePoints(content, layer, fileType) {
+async function extractKnowledgePoints(content, layer, fileType, tenantId) {
   const layerLabel = LAYER_LABELS[layer] || layer;
 
   const systemPrompt = `You are a knowledge extraction assistant for a B2B export trading company.
@@ -137,7 +137,7 @@ Output as JSON:
       { role: 'system', content: systemPrompt },
       { role: 'user', content: `File type: ${fileType}\n\nDocument content:\n${truncate(content, 15000)}` },
     ],
-  });
+  }, { tenantId, callSite: 'kb.upload.extract-points' });
 
   const text = response.choices[0].message.content || '{}';
   const finishReason = response.choices[0].finish_reason;
@@ -186,7 +186,7 @@ async function processKnowledgePoint(ctx, docId, layer, point) {
   // Translate to English if not already English
   let englishContent = originalContent;
   if (sourceLang !== 'en') {
-    englishContent = await translateToEnglish(originalContent);
+    englishContent = await translateToEnglish(originalContent, tenantId);
   }
 
   // Generate embeddings for both versions
@@ -247,7 +247,7 @@ If no product data found, output: { "products": [] }`;
       { role: 'system', content: systemPrompt },
       { role: 'user', content: `File type: ${fileType}\n\nContent:\n${truncate(content, 15000)}` },
     ],
-  });
+  }, { tenantId, callSite: 'kb.upload.extract-products' });
 
   const text = response.choices[0].message.content || '{}';
   const finishReason = response.choices[0].finish_reason;
@@ -313,7 +313,7 @@ If no shipping data found, output: { "routes": [] }`;
       { role: 'system', content: systemPrompt },
       { role: 'user', content: `File type: ${fileType}\n\nContent:\n${truncate(content, 10000)}` },
     ],
-  });
+  }, { tenantId, callSite: 'kb.upload.extract-shipping' });
 
   const text = response.choices[0].message.content || '{}';
   const finishReason = response.choices[0].finish_reason;

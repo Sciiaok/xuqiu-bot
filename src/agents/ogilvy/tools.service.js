@@ -52,7 +52,7 @@ function extractUrls(text = '') {
  * Search the web. Returns a compact summary + up to 5 source links that the
  * Agent can then follow up on with read_webpage if needed.
  */
-export async function webSearch({ query }) {
+export async function webSearch({ query }, { tenantId } = {}) {
   if (!query || typeof query !== 'string') {
     return { error: 'query is required' };
   }
@@ -69,7 +69,7 @@ export async function webSearch({ query }) {
           'results 最多 5 条，优先保留官网、产品页、权威资料链接。',
       }],
       tools: [{ type: 'web_search_20250305', name: 'web_search', max_uses: 2 }],
-    });
+    }, { tenantId, callSite: 'ogilvy.web_search' });
 
     const text = getMessageText(response);
     const parsed = tryParseJson(text);
@@ -94,7 +94,7 @@ export async function webSearch({ query }) {
  * Fetch and summarize a specific URL. Use this after web_search finds a
  * promising link (product page, competitor site) that warrants a deeper read.
  */
-export async function readWebpage({ url }) {
+export async function readWebpage({ url }, { tenantId } = {}) {
   if (!url || typeof url !== 'string') {
     return { error: 'url is required' };
   }
@@ -122,7 +122,7 @@ export async function readWebpage({ url }) {
         allowed_domains: [hostname],   // Anthropic requires explicit domain allowlisting
         max_content_tokens: 12000,
       }],
-    });
+    }, { tenantId, callSite: 'ogilvy.read_webpage' });
 
     const text = getMessageText(response);
     const parsed = tryParseJson(text);

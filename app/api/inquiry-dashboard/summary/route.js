@@ -66,7 +66,7 @@ async function writeCache({ tenantId, productLinesKey, periodKey, dateFrom, date
 
 /* ─────────────────────────  LLM  ───────────────────────── */
 
-async function generateSummary(dashboardData, lang) {
+async function generateSummary(dashboardData, lang, tenantId) {
   const dataStr = JSON.stringify(dashboardData, null, 2);
   const truncated = dataStr.length > MAX_DATA_CHARS
     ? dataStr.slice(0, MAX_DATA_CHARS) + '\n...(truncated)'
@@ -82,6 +82,8 @@ async function generateSummary(dashboardData, lang) {
     userPrompt,
     maxTokens: 1500,
     logTag: 'inquiry-summary',
+    tenantId,
+    callSite: 'inquiry-dashboard.summary',
   });
 }
 
@@ -123,7 +125,7 @@ async function* streamSummary(params, { skipCache }) {
 
   let fullText;
   try {
-    fullText = await generateSummary(dashboardData, params.lang);
+    fullText = await generateSummary(dashboardData, params.lang, params.tenantId);
   } catch (err) {
     console.error('[inquiry-summary] All models failed:', err.message);
     yield { event: 'error', data: { message: `${MSG.failed[params.lang] || MSG.failed.zh}: ${err.message}` } };

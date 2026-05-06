@@ -61,7 +61,7 @@ Output as JSON:
         },
         { role: 'user', content: message },
       ],
-    });
+    }, { tenantId: ctx.tenantId, callSite: 'knowledge.teach.extract' });
 
     const text = response.choices[0].message.content || '{}';
     let parsed;
@@ -85,7 +85,7 @@ Output as JSON:
     for (const kp of extracted) {
       const sourceLang = detectLanguage(kp.content);
       const contentEn = kp.content_en || (sourceLang !== 'en'
-        ? await translateToEnglish(kp.content)
+        ? await translateToEnglish(kp.content, ctx.tenantId)
         : kp.content);
 
       const embeddingEn = await generateEmbedding(contentEn);

@@ -413,7 +413,7 @@ export async function* runOgilvy(sessionId, userText, attachments = [], userId =
         // Pin to Anthropic direct — keeps cache_control semantics consistent
         // (Bedrock strips it) and reduces provider-variance latency spikes.
         provider: { order: ['anthropic'], allow_fallbacks: false },
-      });
+      }, { tenantId: session?.tenant_id || null, callSite: 'ogilvy.turn' });
 
       // Track which tool-call indices have already signaled 'tool_call_start'
       // — we emit it the moment the tool name is known, long before args
@@ -600,9 +600,9 @@ async function executeTool(name, input, ctx) {
     case 'draft_ad_plan':
       return draftAdPlan(input, ctx);
     case 'web_search':
-      return webSearch(input);
+      return webSearch(input, { tenantId: ctx.tenantId });
     case 'read_webpage':
-      return readWebpage(input);
+      return readWebpage(input, { tenantId: ctx.tenantId });
     case 'read_skill_reference': {
       // Lazy-load a skill reference. Keeping references out of the system
       // prompt saves ~20K tokens per turn; the agent pulls only what it needs
