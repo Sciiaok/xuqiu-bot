@@ -204,7 +204,9 @@ callClaude(tools, tool_choice: auto)
   │    └─ 否则：Promise.all 并行跑本轮全部 tool_calls
   │         → dispatchTool(name, input, ctx)
   │         · read_skill_reference → SKILL.references.get(name)
-  │         · search_knowledge / calculate_price → executeKbTool(...)
+  │         · 6 个 KB typed tools (lookup_product / quote_price /
+  │           lookup_shipping / lookup_policy / find_asset / check_constraint)
+  │           → executeKbTool(...)（带 gap-capture 包装）
   │         每次触发 onToolEvent({type:'tool_call' / 'tool_result', ...})
   │         结果按调用顺序拼到 messages
   │         再次 callClaude
@@ -221,8 +223,12 @@ callClaude(tools, tool_choice: auto)
 |---|---|---|---|
 | 1 | `submit_response`     | 永远 | 产出最终结构化 JSON（envelope） |
 | 2 | `read_skill_reference`| 永远 | 按需读 skill 的 references/*.md（stages-definition 等 8 份） |
-| 3 | `search_knowledge`    | `kb_knowledge_points` 有该 product_line 的 active 记录 | 知识库混合检索 |
-| 4 | `calculate_price`     | `kb_products` 有该 product_line 的 active 记录 | 精确报价计算 |
+| 3 | `lookup_product`     | KB 有任意活跃数据 | 按 SKU / 型号 / 属性查产品 |
+| 4 | `quote_price`        | 同上 | 精确报价（FOB / CIF / DDP，含边界检查）|
+| 5 | `lookup_shipping`    | 同上 | 目的港运费 / 船期 |
+| 6 | `lookup_policy`      | 同上 | 政策 / 资质 / 公司 / 销售话术；free_text 触发 Q&A snippet |
+| 7 | `find_asset`         | 同上 | 找图（tag 优先 + caption 语义兜底）|
+| 8 | `check_constraint`   | 同上 | 议价 / 让步 / 非标付款边界检查 |
 
 #### `submit_response` —— 强制收尾工具
 
@@ -236,9 +242,13 @@ callClaude(tools, tool_choice: auto)
 - **dispatcher**：`SKILL.references.get(name)`，找不到时返回 `{error: 'reference_not_found', available: [...]}`
 - **为什么按需取**：把 8 份 reference 全塞进 system prompt 会多 ~10K tokens × 每轮，按需取只在该会话用到时才付一次成本（且会进入 tool_result history 缓存）
 
-#### `search_knowledge` / `calculate_price`
+#### 6 个 KB typed tools
 
-实现见 [kb-tools.js](./kb-tools.js)。底层调 [src/kb-search.service.js](../../kb-search.service.js)（`/api/knowledge/*` 共享）。多轮 query 重写靠 runMedici 构造的 `conversationContext`（末尾 8 轮 user/assistant 原文 + 当前 input）。
+注册见 [kb-tools.js](./kb-tools.js)，实现见 [src/kb-tools.service.js](../../kb-tools.service.js)。每个工具返回 typed result：成功带结构化数据，失败有明确语义（`not_found` / `missing_fields` / `needs_human` / `unknown`）—— medici 做 if-else 决策，不评估相似度。
+
+`executeKbTool` 包装层在每次 tool 返回 "no" 结果时回写 `kb_knowledge_gaps`（按 question_signature 聚合，参见 [src/kb-gaps.service.js](../../kb-gaps.service.js)）。
+
+`lookup_policy({free_text})` 会先搜 `kb_qa_snippets`（销售自填的 Q&A），命中阈值 0.75，没命中再走六层向量检索。Q&A snippet 由 QaTab 维护，纠正建议（LearningTab）也会落到这里。
 
 ### 4.5 Prompt Cache 策略
 
@@ -282,18 +292,22 @@ PM 与 RD 的接口契约见 aaa 包随附的 `CONTRACT.md`：
 
 ## 6. 知识库（Knowledge Base）
 
-Medici 的 `search_knowledge` / `calculate_price` 两个工具吃的就是这里的数据。KB 是 **(tenant_id, product_line_id)-scoped**——所有 `kb_*` 表都有这两列，运营通过 `/product-lines/[id]` 的"知识总览 / 上传知识" tab 管理。
+Medici 的 6 个 KB typed tools 吃的就是这里的数据。KB 是 **(tenant_id, product_line_id)-scoped**——所有 `kb_*` 表都有这两列，运营通过 `/product-lines/[id]` 的 6 个 tab 管理（基本配置 / 知识总览 / 上传知识 / 图片资产 / Q&A 直填 / 学习中心）。
 
 ### 6.1 数据模型
 
 | 表 | 存什么 | 写入方 | 读取方 |
 |---|---|---|---|
 | `kb_documents` | 上传的源文件元数据（filename、layer、status、storage_path） | `/api/knowledge/upload` | UploadTab 文档列表 + OverviewTab health |
-| `kb_knowledge_points` | 文档切块后的双语文本 + 两条 embedding（en + 原文） | upload + teach | `search_knowledge` tool + OverviewTab 分层统计 |
-| `kb_products` | Excel 解析出的结构化商品行（sku、model、fob_price_usd 等） | upload Excel 分支 | `calculate_price` tool |
-| `kb_shipping_routes` | Excel 解析出的运费路由 | upload Excel 分支 | `calculate_price` CIF/DDP 分支 |
-| `kb_knowledge_gaps` | 命中率低的检索记录 | `search_knowledge` 检索时回写 | OverviewTab 盲区面板 |
-| `kb_assets` | 可对外发送的图片资产 | `/api/knowledge/assets` + AssetTab | Medici `loadAvailableAssets` → 注入动态上下文 + queue-processor `sendMediciAttachments` |
+| `kb_knowledge_points` | 文档切块后的双语文本 + 两条 embedding；带 `confidence`（verified / extracted_high / extracted_low） | upload + teach | `lookup_policy` 兜底向量检索 + OverviewTab 分层统计 |
+| `kb_products` | 结构化商品行；带 `effective_date / expiry_date / confidence / source_doc_id` | Excel 模板上传 + LLM 抽取 | `lookup_product` / `quote_price` |
+| `kb_shipping_routes` | 结构化运费路由；同样的 validity/confidence 列 | Excel 模板上传 + LLM 抽取 | `lookup_shipping` / `quote_price` CIF/DDP 分支 |
+| `kb_pricing_rules` | 议价 / 折扣 / 付款条款规则 | 当前没 UI 直填，可由 SQL 维护 | `check_constraint` |
+| `kb_qa_snippets` | 销售自填 Q&A（多种问法 + 标准答 + 适用条件） | QaTab | `lookup_policy({free_text})` 命中阈值 0.75 |
+| `kb_assets` | 可对外发送的图片 + 结构化标签（type / view / color / scenario / linked_skus） + caption_embedding | AssetTab | `find_asset` (tag 优先，semantic 兜底) |
+| `kb_pending_review` | 低置信抽取 / 冲突写入隔离队列 | upload pipeline 抽取冲突时入队 | LearningTab 复核子页 |
+| `kb_knowledge_gaps` | medici 答不上的问题，按 question_signature 聚合 | `executeKbTool` 自动回写（gap-capture）| LearningTab 盲区子页 |
+| `kb_corrections` | 销售改写过的 medici 回复 → 建议采纳为 Q&A | `/api/knowledge/corrections` POST | LearningTab 纠正子页 |
 
 **六层分类学**：`company / product / logistics / compliance / sales / competitive`。
 

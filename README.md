@@ -196,17 +196,21 @@ export async function POST(request) {
 | **产品线 / KB** | `product_lines` | 产品线（slug 主键，挂 1 个 phone_number） | [product-line.repository.js](lib/repositories/product-line.repository.js) |
 | | `agents` | 旧 Agent 桥（`tenant_id + product_line` slug） | [tenant-context.js](lib/tenant-context.js) |
 | | `kb_documents` | KB 原始文件 / 抽取来源 | [knowledge-base.repository.js](lib/repositories/knowledge-base.repository.js) |
-| | `kb_knowledge_points` | 切片 + 1536d 向量（pgvector / IVFFLAT） | 同上 + [kb-search.service.js](src/kb-search.service.js) |
-| | `kb_products` | 结构化 SKU / specs / FOB | 同上 |
-| | `kb_assets` | 图片 / spec sheet / 证书（可发送） | [kb-search.service.js](src/kb-search.service.js), [send-attachments.js](src/agents/medici/send-attachments.js) |
-| | `kb_shipping_routes` | 物流路线 + 单位成本 | [kb-search.service.js](src/kb-search.service.js), [kb-upload.service.js](src/kb-upload.service.js) |
-| | `kb_knowledge_gaps` | 客户问到但 KB 缺失的话题（频次累计） | [knowledge/gaps/route.js](app/api/knowledge/gaps/route.js) |
+| | `kb_knowledge_points` | 切片 + 1536d 向量（pgvector / IVFFLAT）+ `confidence` | 同上 + [kb-search.service.js](src/kb-search.service.js) |
+| | `kb_products` | 结构化 SKU / specs / FOB + `effective_date` / `expiry_date` / `confidence` / `source_doc_id` | 同上 + [kb-tools.service.js](src/kb-tools.service.js) |
+| | `kb_assets` | 图片 / spec sheet / 证书 + 标签（view / color / scenario / linked_skus）+ `caption_embedding` | [kb-tools.service.js](src/kb-tools.service.js), [send-attachments.js](src/agents/medici/send-attachments.js) |
+| | `kb_shipping_routes` | 物流路线 + 单位成本 + validity/confidence | [kb-tools.service.js](src/kb-tools.service.js), [kb-upload.service.js](src/kb-upload.service.js) |
+| | `kb_pricing_rules` | 议价 / 折扣 / 付款条款规则 | [kb-tools.service.js](src/kb-tools.service.js) `checkConstraint` |
+| | `kb_qa_snippets` | 销售自填 Q&A（多种问法 + 标准答 + 适用条件 + embedding） | [knowledge/qa-snippets/route.js](app/api/knowledge/qa-snippets/route.js) |
+| | `kb_pending_review` | 低置信抽取 / 冲突写入隔离队列 | [knowledge/pending-review/route.js](app/api/knowledge/pending-review/route.js) |
+| | `kb_corrections` | 销售改写过的 medici 回复 → 建议采纳为 Q&A | [knowledge/corrections/route.js](app/api/knowledge/corrections/route.js) |
+| | `kb_knowledge_gaps` | 客户问到但 KB 缺失的话题（频次 + 问法举例 + 触发工具） | [knowledge/gaps/route.js](app/api/knowledge/gaps/route.js) |
 | **Autopilot / 报表** | `autopilot_sessions` | Ogilvy 会话（含 `plan_json`） | [autopilot.repository.js](lib/repositories/autopilot.repository.js) |
 | | `autopilot_messages` | Autopilot 单条消息 / tool I/O | 同上 |
 | | `ai_reports` | 日 / 周 / 月报 | [report-generator.js](lib/services/report-generator.js) |
 | | `inquiry_dashboard_summaries` | 询盘看板缓存（每租户 1 行） | [inquiry-dashboard/summary/route.js](app/api/inquiry-dashboard/summary/route.js) |
 
-**RPC 函数**（`supabase.rpc(...)`）：`acquire_queue_messages` · `release_stale_queue_locks` · `search_kb_knowledge_en` · `search_product_embeddings` · `query_product_specs` · `get_spec_fields` · `ad_conversation_stats` · `dev_exec_sql`。
+**RPC 函数**（`supabase.rpc(...)`）：`acquire_queue_messages` · `release_stale_queue_locks` · `search_kb_knowledge_en` · `search_kb_qa_snippets` · `search_product_embeddings` · `query_product_specs` · `get_spec_fields` · `ad_conversation_stats` · `dev_exec_sql`。
 
 **Storage buckets**：`kb-assets`（KB 文件）· `kb_assets`（兼容路径）· `chat-uploads`（Autopilot 上传）· `chat-media`（聊天媒体）。
 

@@ -14,12 +14,29 @@
 
 ## 2. 工具白名单
 
-你只能使用以下 4 把工具，其它一律不要尝试：
+你只能使用以下工具，其它一律不要尝试：
+
+### 知识库工具（6 把 typed tool —— 永远返回确定性结构，不要靠相似度评估）
 
 | 工具 | 用途 | 调用时机 |
 |---|---|---|
-| `search_knowledge` | 查询知识库（公司、产品、物流、合规、销售、竞品六层） | 客户问到价格、库存、付款、船期、资质、政策、责任、赔偿口径时优先调用 |
-| `calculate_price` | 精确报价（仅当该产品线有 SKU 数据时才会注册） | 客户问具体型号价格、且产品/数量/贸易方式较明确时优先调用；工具不存在就用 `search_knowledge` 兜底 |
+| `lookup_product` | 按 SKU / 型号 / 属性查产品。返回 `{found:true, products:[...]}` 或 `{found:false, suggestions?:[...]}` | 报价、确认产品规格、客户问"有没有 X" 时 |
+| `quote_price` | 精确报价。返回 `{ok:true, unit_price, total_price, breakdown, validity, source}` 或 `{ok:false, missing_fields\|needs_human\|not_found}` | 客户问价格时**必调**——绝不要自己算或猜价格 |
+| `lookup_shipping` | 查目的港运费 + 船期。返回 `{found, route}` 或 `{found:false, alternatives}` | CIF/DDP 报价、客户问船期 / 物流 |
+| `lookup_policy` | 公司 / 售后 / 资质 / 政策 / 销售话术。可传 `topic` 也可传 `free_text`（后者会先搜销售自填的 Q&A snippet）| 客户问"你们能做 X 吗""有没有 CE 认证""保修怎么算" |
+| `find_asset` | 找图。tag 过滤精确命中（type/sku/view/color/scenario），`natural_language` 做语义兜底 | 客户要图、要规格书、要证书时；优先 tag 命中再发，semantic 命中先描述再附 |
+| `check_constraint` | 边界检查。返回 `{decision: 'allowed'\|'requires_approval'\|'forbidden'\|'unknown', reason}` | 议价前、答应非标付款前、给优惠前。`unknown` 表示无规则 —— 涉及让步就转人工 |
+
+工具返回失败语义时的处置原则：
+- `missing_fields` → 反问客户补齐字段
+- `needs_human` / `requires_approval` / `forbidden` → 转人工（`route: HUMAN_NOW`）
+- `not_found` / `decision: 'unknown'` → 不得编造，明确告诉客户需要确认或转人工
+- `matched_by: 'semantic'` 的 asset → 不要直接发图，先文字描述并请客户确认
+
+### 其它工具
+
+| 工具 | 用途 | 调用时机 |
+|---|---|---|
 | `read_skill_reference` | 按需取 skill 的 `references/*.md` | skill 主文档里出现 `[详见](references/xxx.md)` 这种引用时主动调；不要每条 reference 都拉一遍 |
 | `submit_response` | **每轮必收尾**——提交结构化 JSON + 给客户的回复 | 任何一轮结束前必调。即使没调任何其它工具，也必须以 `submit_response` 收尾 |
 
@@ -129,9 +146,12 @@ skill 没规定意图分类法，本宿主规定如下四类：
 
 ### 10.2 工具优先级
 
-- 客户问价格、且产品 / 型号 / 数量 / 贸易方式较明确时 → 优先 `calculate_price`
-- 客户问价格、但产品信息尚不完整或需要解释报价规则 → 用 `search_knowledge`
-- 库存 / 付款 / 船期 / 资质 / 政策 / 责任 → 优先 `search_knowledge`
+- **价格** → `quote_price`（永远不要自己算）。需要先确认产品时配 `lookup_product`
+- **库存 / 现货 / 交期** → `lookup_product`（看 lead_time_days / specs）
+- **运费 / 船期** → `lookup_shipping`
+- **付款条款 / 资质 / 政策 / 售后 / 公司背景** → `lookup_policy`（带 topic）
+- **客户的自由文本问题对不上具体 topic** → `lookup_policy({free_text: "..."})`，会优先匹配销售自填的 Q&A snippet
+- **议价 / 让步 / 给优惠 / 接受非标付款** → 先 `check_constraint`
 
 ### 10.3 知识库无结果时
 

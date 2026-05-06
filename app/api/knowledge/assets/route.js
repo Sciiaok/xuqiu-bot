@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import supabase from '../../../../lib/supabase.js';
+import { getSupabaseAdmin } from '../../../../lib/supabase-admin.js';
 import { getTenantContext, findAgentInTenant } from '../../../../lib/tenant-context.js';
 
 export const maxDuration = 60;
@@ -31,10 +32,9 @@ export async function GET(request) {
 
     const { data, error } = await supabase
       .from('kb_assets')
-      .select('id, filename, description, mime_type, file_size_bytes, storage_path, created_at, is_sendable')
+      .select('id, filename, description, mime_type, file_size_bytes, storage_path, created_at, is_sendable, view, color, scenario, language, linked_skus, asset_type, expiry_date')
       .eq('tenant_id', ctx.tenantId)
       .eq('product_line_id', agent.product_line)
-      .eq('asset_type', 'product_image')
       .order('created_at', { ascending: false });
     if (error) throw error;
 
@@ -74,6 +74,16 @@ export async function POST(request) {
     const file = formData.get('file');
     const agentId = formData.get('agent_id');
     const description = (formData.get('description') || '').toString().trim();
+    // Optional structured tags (Wave 1A asset tagging)
+    const view = (formData.get('view') || '').toString().trim() || null;
+    const color = (formData.get('color') || '').toString().trim() || null;
+    const scenario = (formData.get('scenario') || '').toString().trim() || null;
+    const language = (formData.get('language') || '').toString().trim() || null;
+    const assetType = (formData.get('asset_type') || 'product_image').toString().trim();
+    const linkedSkusRaw = (formData.get('linked_skus') || '').toString().trim();
+    const linkedSkus = linkedSkusRaw
+      ? linkedSkusRaw.split(',').map(s => s.trim()).filter(Boolean)
+      : null;
 
     if (!file || !agentId) {
       return NextResponse.json({ error: 'file and agent_id are required' }, { status: 400 });
@@ -97,7 +107,8 @@ export async function POST(request) {
 
     const buffer = Buffer.from(await file.arrayBuffer());
     const storagePath = `${agentId}/${Date.now()}_${file.name}`;
-    const { error: uploadErr } = await supabase.storage
+    // kb-assets bucket has no anon-write policy; use service-role.
+    const { error: uploadErr } = await getSupabaseAdmin().storage
       .from(STORAGE_BUCKET)
       .upload(storagePath, buffer, { contentType: file.type, upsert: false });
     if (uploadErr) throw new Error(`storage upload failed: ${uploadErr.message}`);
@@ -108,19 +119,21 @@ export async function POST(request) {
         tenant_id: ctx.tenantId,
         agent_id: agentId,
         product_line_id: agent.product_line,
-        asset_type: 'product_image',
+        asset_type: assetType,
         filename: file.name,
         storage_path: storagePath,
         mime_type: file.type,
         file_size_bytes: file.size,
         description: description || null,
+        view, color, scenario, language,
+        linked_skus: linkedSkus,
         is_sendable: true,
       })
       .select()
       .single();
     if (insertErr) {
       // Roll back the storage upload to avoid orphans.
-      await supabase.storage.from(STORAGE_BUCKET).remove([storagePath]).catch(() => {});
+      await getSupabaseAdmin().storage.from(STORAGE_BUCKET).remove([storagePath]).catch(() => {});
       throw new Error(`insert failed: ${insertErr.message}`);
     }
 
@@ -157,7 +170,7 @@ export async function DELETE(request) {
     }
 
     if (row.storage_path) {
-      await supabase.storage.from(STORAGE_BUCKET).remove([row.storage_path]).catch(() => {});
+      await getSupabaseAdmin().storage.from(STORAGE_BUCKET).remove([row.storage_path]).catch(() => {});
     }
     const { error: delErr } = await supabase.from('kb_assets').delete().eq('id', assetId);
     if (delErr) throw delErr;

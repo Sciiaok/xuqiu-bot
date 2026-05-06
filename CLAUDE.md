@@ -60,6 +60,7 @@ The test: Every changed line should trace directly to the user's request.
 2. 以真实用户身份在浏览器里操作目标功能（点击 / 输入 / 提交 / 跳转），覆盖 golden path 与关键边界
 3. 同时观察服务端日志、浏览器控制台、网络请求，捕捉报错和回归
 4. 把"测了什么、看到什么、是否符合预期"明确告诉用户，不通过就给出根因；不要只说"已启动"就停下
+注意进行系统测试时要求尽可能地做到完整全面的覆盖。
 
 ## Architecture Guardrails
 

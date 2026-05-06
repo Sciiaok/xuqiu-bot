@@ -10,16 +10,12 @@ import {
   getProductLine,
   updateProductLine,
 } from '../../../../lib/api/product-lines.js';
-import OverviewTab from './knowledge-base/OverviewTab.js';
-import UploadTab from './knowledge-base/UploadTab.js';
-import AssetTab from './knowledge-base/AssetTab.js';
+import KnowledgeBaseTab from './knowledge-base/KnowledgeBaseTab.js';
 import LeadFieldsEditor, { normalizeLeadFields } from './LeadFieldsEditor.js';
 
 const TABS = [
-  { key: 'config',   label: '基本配置' },
-  { key: 'overview', label: '知识总览' },
-  { key: 'upload',   label: '上传知识' },
-  { key: 'assets',   label: '图片资产' },
+  { key: 'config',    label: '基本配置' },
+  { key: 'knowledge', label: '知识库' },
 ];
 
 /**
@@ -108,7 +104,7 @@ export default function ProductLineEditPage() {
   if (!line || !form) return null;
 
   const agentId = line.agent_id;
-  const isKbTab = activeTab === 'overview' || activeTab === 'upload' || activeTab === 'assets';
+  const isKbTab = activeTab === 'knowledge';
 
   return (
     <div className={s.root}>
@@ -194,9 +190,7 @@ export default function ProductLineEditPage() {
             </div>
           ) : (
             <div className={kb.tabContent}>
-              {activeTab === 'overview' && <OverviewTab agentId={agentId} />}
-              {activeTab === 'upload' && <UploadTab agentId={agentId} />}
-              {activeTab === 'assets' && <AssetTab agentId={agentId} />}
+              {activeTab === 'knowledge' && <KnowledgeBaseTab agentId={agentId} />}
             </div>
           )}
         </div>

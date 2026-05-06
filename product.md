@@ -172,11 +172,20 @@ Prome Engine 由 6 个互相协作的模块组成。新企业从开通到 AI 跑
 | **sales** | 销售话术与流程 | SOP、异议处理、折扣规则 |
 | **competitive** | 竞品情报 | 竞品价格对比、差异化话术 |
 
-**两种入库方式**：
+**四种入库方式**：
 - **文档上传**：PDF / Word / Excel / CSV / Markdown / 纯文本，系统自动解析 → 切分 → 翻译 → 向量化
+- **结构化导入（Excel 模板）**：价格表 / 运费表直接按列名映射入库，跳过 LLM 抽取，每行入库即 `confidence='verified'`
 - **对话式 Teach**：直接用自然语言告诉 AI「我们 50HP 拖拉机出口肯尼亚 FOB 价 6800 美元」，AI 抽取成结构化知识点
+- **Q&A 直填**：销售脑里的隐性知识——"客户问 X 我们答 Y" 多种问法 + 一段标准答 + 适用条件，medici 在客户问对不上具体 topic 时优先匹配
 
-**资产管理**：可上传产品图片 / 规格 PDF 等可发送资产，标记为 `is_sendable=true` 后 AI 在合适场景会主动发给客户。
+**资产管理**：可上传产品图片 / 规格 PDF / 资质证书等可发送资产。新版资产带结构化标签（type / view / color / scenario / linked_skus）+ caption 语义索引——medici 调 `find_asset` 优先按 tag 精确命中，没 tag 才走语义兜底；只有 tag 命中的图直接发给客户，semantic 命中需先文字描述确认。
+
+**6 个 typed tool**：medici 不直接读 KB 表，而是调 `lookup_product` / `quote_price` / `lookup_shipping` / `lookup_policy` / `find_asset` / `check_constraint`。每个工具返回明确的成功 / 失败结构（`not_found` / `missing_fields` / `needs_human` / `unknown`），杜绝"靠相似度评估"的猜测式答复。
+
+**学习闭环**：
+- **复核队列**：低置信抽取 / 冲突写入隔离队列，未审不入活跃库（人工 approve / reject）
+- **知识盲区**：medici 答不上的问题按 question_signature 自动聚合，告诉运营该补什么
+- **纠正建议**：销售在 LeadHub 改写 medici 回复 → 系统建议作为 Q&A snippet 录入，一键采纳
 
 **KB 体检**：自动统计每层覆盖率，识别"过期文档"和"知识盲区"，提示运营补充。
 

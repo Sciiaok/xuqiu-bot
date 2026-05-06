@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import supabase from '../../../../lib/supabase.js';
+import { getSupabaseAdmin } from '../../../../lib/supabase-admin.js';
 import { getTenantContext, findAgentInTenant } from '../../../../lib/tenant-context.js';
 import { processDocument } from '../../../../src/kb-upload.service.js';
 import { markFirstKbUpload } from '../../../../lib/repositories/onboarding.repository.js';
@@ -80,9 +81,11 @@ export async function POST(request) {
     const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, '_');
     const storagePath = `${agentId}/${layer}/${Date.now()}_${safeName}`;
 
+    // kb-assets bucket is private with no anon-write policy; use service-role
+    // client (tenant ownership already verified above via findAgentInTenant).
     let storageOk = false;
     try {
-      const { error: uploadError } = await supabase.storage
+      const { error: uploadError } = await getSupabaseAdmin().storage
         .from('kb-assets')
         .upload(storagePath, buffer, { contentType: file.type });
       if (!uploadError) storageOk = true;
@@ -137,16 +140,18 @@ export async function POST(request) {
       textContent = buffer.toString('utf-8');
     }
 
-    // Process document (extract knowledge, translate, embed)
-    let result;
+    // Process document (extract knowledge, translate, embed) + extract images
+    // in parallel — images are independent of text extraction.
+    let result, imageResult;
     try {
-      result = await processDocument(
-        { tenantId: ctx.tenantId, agentId, productLineId: agent.product_line },
-        doc.id,
-        textContent,
-        layer,
-        { filename: file.name, fileType },
-      );
+      const docCtx = { tenantId: ctx.tenantId, agentId, productLineId: agent.product_line };
+      const { extractAndStoreImages } = await import('../../../../src/kb-image-extractor.service.js');
+      [result, imageResult] = await Promise.all([
+        processDocument(docCtx, doc.id, textContent, layer, { filename: file.name, fileType }),
+        extractAndStoreImages(docCtx, buffer, doc.id, file.type).catch(e => ({
+          extracted: 0, skipped: 0, errors: [`extraction failed: ${e.message}`],
+        })),
+      ]);
     } catch (err) {
       console.error(`[knowledge/upload] Failed to process ${file.name}:`, err.message);
       return NextResponse.json({
@@ -162,6 +167,7 @@ export async function POST(request) {
       filename: file.name,
       layer,
       ...result,
+      images: imageResult,
     });
   } catch (error) {
     console.error('[knowledge/upload] Error:', error);
