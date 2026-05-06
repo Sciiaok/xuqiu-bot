@@ -171,6 +171,47 @@ export async function POST(request) {
 
 ## 数据模型
 
+### 数据表总览（代码实际引用）
+
+> 仅列出 application code（`app/` `lib/` `src/` `scripts/` `middleware.js`）里 `.from(...)` / `.rpc(...)` 出现过的表。新增表时请同步本表。
+
+| 域 | 表 | 用途 | 关键引用 |
+|---|---|---|---|
+| **账号 / 平台** | `tenants` | 租户主表 | [signup/route.js](app/api/auth/signup/route.js) |
+| | `users` | 业务用户（`id` 关联 `auth.users`） | [tenant-context.js](lib/tenant-context.js) |
+| | `invitations` | 邀请码（founder 颁发，token 一次性） | [signup/route.js](app/api/auth/signup/route.js) |
+| | `audit_log` | 平台关键事件审计 | [audit-log.repository.js](lib/repositories/audit-log.repository.js) |
+| | `onboarding_progress` | 新租户引导里程碑（1:1） | [onboarding.repository.js](lib/repositories/onboarding.repository.js) |
+| | `notification_settings` | 飞书 webhook（AES-256-GCM, 1:1） | [notification.repository.js](lib/repositories/notification.repository.js) |
+| **Meta 接入** | `meta_connections` | BM 级连接 + 加密 system token | [meta-connection.repository.js](lib/repositories/meta-connection.repository.js) |
+| | `meta_phone_numbers` | WABA 下的 WhatsApp 号 | 同上 |
+| | `meta_ad_accounts` | 广告账户（每租户单选 1 个） | [meta/connect/route.js](app/api/meta/connect/route.js) |
+| **业务核心** | `contacts` | WhatsApp 联系人 | [contact.repository.js](lib/repositories/contact.repository.js) |
+| | `conversations` | 对话主表（按 `wa_phone_number_id` 路由产品线） | [conversation.repository.js](lib/repositories/conversation.repository.js) |
+| | `messages` | 单条消息（user / assistant / operator） | [message.repository.js](lib/repositories/message.repository.js) |
+| | `leads` | 资格化询盘（含 `details` 自定义字段） | [lead.repository.js](lib/repositories/lead.repository.js) |
+| | `contact_notes` | 联系人备注 | [contacts/[id]/notes/route.js](app/api/contacts/[id]/notes/route.js) |
+| | `message_queue` | 入站聚合队列（`FOR UPDATE SKIP LOCKED`） | [queue.repository.js](lib/repositories/queue.repository.js) |
+| | `lead_sync_logs` | Lead 推送外部 CRM 的状态/重试 | [sync-log.repository.js](lib/repositories/sync-log.repository.js) |
+| **产品线 / KB** | `product_lines` | 产品线（slug 主键，挂 1 个 phone_number） | [product-line.repository.js](lib/repositories/product-line.repository.js) |
+| | `agents` | 旧 Agent 桥（`tenant_id + product_line` slug） | [tenant-context.js](lib/tenant-context.js) |
+| | `kb_documents` | KB 原始文件 / 抽取来源 | [knowledge-base.repository.js](lib/repositories/knowledge-base.repository.js) |
+| | `kb_knowledge_points` | 切片 + 1536d 向量（pgvector / IVFFLAT） | 同上 + [kb-search.service.js](src/kb-search.service.js) |
+| | `kb_products` | 结构化 SKU / specs / FOB | 同上 |
+| | `kb_assets` | 图片 / spec sheet / 证书（可发送） | [kb-search.service.js](src/kb-search.service.js), [send-attachments.js](src/agents/medici/send-attachments.js) |
+| | `kb_shipping_routes` | 物流路线 + 单位成本 | [kb-search.service.js](src/kb-search.service.js), [kb-upload.service.js](src/kb-upload.service.js) |
+| | `kb_knowledge_gaps` | 客户问到但 KB 缺失的话题（频次累计） | [knowledge/gaps/route.js](app/api/knowledge/gaps/route.js) |
+| **Autopilot / 报表** | `autopilot_sessions` | Ogilvy 会话（含 `plan_json`） | [autopilot.repository.js](lib/repositories/autopilot.repository.js) |
+| | `autopilot_messages` | Autopilot 单条消息 / tool I/O | 同上 |
+| | `ai_reports` | 日 / 周 / 月报 | [report-generator.js](lib/services/report-generator.js) |
+| | `inquiry_dashboard_summaries` | 询盘看板缓存（每租户 1 行） | [inquiry-dashboard/summary/route.js](app/api/inquiry-dashboard/summary/route.js) |
+
+**RPC 函数**（`supabase.rpc(...)`）：`acquire_queue_messages` · `release_stale_queue_locks` · `search_kb_knowledge_en` · `search_product_embeddings` · `query_product_specs` · `get_spec_fields` · `ad_conversation_stats` · `dev_exec_sql`。
+
+**Storage buckets**：`kb-assets`（KB 文件）· `kb_assets`（兼容路径）· `chat-uploads`（Autopilot 上传）· `chat-media`（聊天媒体）。
+
+---
+
 ### 账号 + Meta 连接
 
 ```mermaid
@@ -243,9 +284,11 @@ erDiagram
 ```mermaid
 erDiagram
   contacts ||--o{ conversations : "has"
+  contacts ||--o{ contact_notes : "annotated"
   conversations ||--o{ messages : "contains"
   conversations ||--o{ leads : "produces"
   conversations ||--o{ message_queue : "buffers"
+  leads ||--o{ lead_sync_logs : "external sync"
   product_lines ||--o{ conversations : "routes"
   product_lines ||--|| agents : "1:1 by slug"
   meta_phone_numbers ||--o{ conversations : "matches via wa_phone_number_id"
@@ -302,6 +345,22 @@ erDiagram
     text status "pending|processing|completed"
     timestamptz process_after "聚合窗口"
   }
+  contact_notes {
+    uuid id PK
+    uuid contact_id FK
+    text content
+  }
+  lead_sync_logs {
+    uuid id PK
+    uuid tenant_id FK
+    uuid lead_id FK
+    text status "pending|success|failed"
+    text external_id
+    text external_no
+    int retry_count
+    jsonb request_payload
+    jsonb response_payload
+  }
 ```
 
 ### 知识库 v2
@@ -315,6 +374,7 @@ erDiagram
   kb_documents ||--o{ kb_products : "extracts"
   kb_documents ||--o{ kb_shipping_routes : "extracts"
   product_lines ||--o{ kb_assets : "owns"
+  product_lines ||--o{ kb_knowledge_gaps : "tracks"
 
   kb_documents {
     uuid id PK
@@ -357,6 +417,13 @@ erDiagram
     text destination_port
     numeric cost_per_unit_usd
   }
+  kb_knowledge_gaps {
+    uuid id PK
+    uuid tenant_id FK
+    text product_line_id FK
+    text status "open|resolved"
+    int occurrence_count "客户问到次数"
+  }
 ```
 
 ### Autopilot 与报表
@@ -366,6 +433,7 @@ erDiagram
   tenants ||--o{ autopilot_sessions : "owns"
   autopilot_sessions ||--o{ autopilot_messages : "contains"
   tenants ||--o{ ai_reports : "scheduled"
+  tenants ||--|| inquiry_dashboard_summaries : "1:1 cache"
 
   autopilot_sessions {
     uuid id PK
@@ -388,6 +456,12 @@ erDiagram
     text type "daily|weekly|monthly"
     daterange period
     jsonb content
+  }
+  inquiry_dashboard_summaries {
+    uuid id PK
+    uuid tenant_id FK
+    jsonb summary_data
+    timestamptz updated_at
   }
 ```
 
