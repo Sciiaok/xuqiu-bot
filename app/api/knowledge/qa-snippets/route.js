@@ -2,15 +2,16 @@
  * /api/knowledge/qa-snippets
  *
  * GET    ?agent_id=...&include_inactive=true   → list snippets
- * POST   { agent_id, questions[], answer, applicable_when?, priority? }
  * PUT    { snippet_id, ...patch }
  * DELETE ?snippet_id=...
+ *
+ * Note: there's no POST. New snippets are produced ONLY by the corrections
+ * pipeline (src/kb-corrections.service.js) — manual creation was removed.
  */
 import { NextResponse } from 'next/server';
 import { getTenantContext, findAgentInTenant } from '../../../../lib/tenant-context.js';
 import {
   listQaSnippets,
-  createQaSnippet,
   updateQaSnippet,
   deleteQaSnippet,
 } from '../../../../src/kb-qa-snippets.service.js';
@@ -51,27 +52,6 @@ export async function GET(request) {
   } catch (e) {
     console.error('[knowledge/qa-snippets] GET', e);
     return NextResponse.json({ error: e.message }, { status: 500 });
-  }
-}
-
-export async function POST(request) {
-  try {
-    const body = await request.json();
-    const auth = await authAgentFromBody(body);
-    if (auth.error) return auth.error;
-    const id = await createQaSnippet({
-      tenantId: auth.ctx.tenantId,
-      productLineId: auth.agent.product_line,
-      questions: body.questions,
-      answer: body.answer,
-      applicableWhen: body.applicable_when,
-      priority: body.priority,
-      createdBy: auth.ctx.user?.id || null,
-    });
-    return NextResponse.json({ id, ok: true });
-  } catch (e) {
-    console.error('[knowledge/qa-snippets] POST', e);
-    return NextResponse.json({ error: e.message }, { status: 400 });
   }
 }
 

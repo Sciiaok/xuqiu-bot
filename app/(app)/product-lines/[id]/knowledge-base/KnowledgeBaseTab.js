@@ -5,11 +5,15 @@
  *
  * 内部三段（top segmented control）：
  *   - 总览：健康度 + 各层覆盖 + 知识盲区 chip
- *   - 录入：文件上传 / Excel 模板 / 对话式 / Q&A 直填 / 单独图片上传
+ *   - 录入：文件上传 / 对话式（两步：抽取 → 确认入库）/ 单独图片上传
  *   - 内容：已有文档 / Q&A / 图片资产
  *
  * 文件上传时会自动从 PDF/docx 抽取嵌入图（vision caption + 入库为 kb_assets），
  * 用户基本不需要手动单独上传图片。
+ *
+ * 上传"产品与价格"层 + xlsx 时，走严格模板路径（直接 verified 入库 kb_products，
+ * 跳过 AI 抽取）；"物流与交付"层 + xlsx 同理走 kb_shipping_routes。其他组合走
+ * 通用 AI 抽取路径。
  */
 import { useEffect, useRef, useState } from 'react';
 import s from './page.module.css';
@@ -22,18 +26,39 @@ import {
   uploadDocument,
   deleteDocument,
   getDocumentDownloadUrl,
-  teach,
+  teachExtract,
+  teachCommit,
   resolveConflict,
   importTemplate,
+  templateDownloadUrl,
   listAssets,
   uploadAsset,
   deleteAsset,
   listQaSnippets,
-  createQaSnippet,
   updateQaSnippet,
   deleteQaSnippet,
 } from '../../../../../lib/api/knowledge.js';
 import { LAYERS, LAYER_LABELS } from './constants.js';
+
+// Layers that have a strict structured-template path. xlsx files uploaded
+// under one of these layers are routed to /api/knowledge/import-template
+// instead of the generic AI extraction pipeline.
+const STRUCTURED_TEMPLATES = {
+  product: {
+    kind: 'products',
+    label: '产品价格表',
+    requiredCols: ['sku', 'fob_price_usd'],
+    cols: 'sku, model, product_name, category, fob_price_usd, moq, lead_time_days, effective_date, expiry_date, specs.*',
+  },
+  logistics: {
+    kind: 'shipping_routes',
+    label: '运费 / 路线表',
+    requiredCols: ['destination_port', 'cost_per_unit_usd'],
+    cols: 'origin_port, destination_port, destination_country, shipping_method, cost_per_unit_usd, transit_days, effective_date, expiry_date, notes',
+  },
+};
+
+const isXlsx = (name = '') => /\.xlsx?$/i.test(name);
 
 const MAX_FILE_SIZE_BYTES = 50 * 1024 * 1024;
 const SECTIONS = [
@@ -215,9 +240,7 @@ function InputSection({ agentId, onChanged }) {
   return (
     <>
       <FileUploadCard agentId={agentId} onChanged={onChanged} />
-      <ExcelTemplateCard agentId={agentId} onChanged={onChanged} />
       <TeachCard agentId={agentId} onChanged={onChanged} />
-      <QaCreateCard agentId={agentId} onChanged={onChanged} />
       <SingleImageCard agentId={agentId} onChanged={onChanged} />
     </>
   );
@@ -227,15 +250,15 @@ function FileUploadCard({ agentId, onChanged }) {
   const [layer, setLayer] = useState('product');
   const [uploading, setUploading] = useState(false);
   const [results, setResults] = useState([]);
-  const [conflicts, setConflicts] = useState([]);
   const [dragOver, setDragOver] = useState(false);
   const fileInputRef = useRef(null);
+
+  const tpl = STRUCTURED_TEMPLATES[layer]; // present only for product / logistics
 
   async function handleFiles(files) {
     if (!files?.length) return;
     setUploading(true);
     setResults([]);
-    setConflicts([]);
     const out = [];
     for (const f of files) {
       if (f.size > MAX_FILE_SIZE_BYTES) {
@@ -243,9 +266,22 @@ function FileUploadCard({ agentId, onChanged }) {
         continue;
       }
       try {
-        const data = await uploadDocument(agentId, f, layer);
-        if (data.conflicts?.length) setConflicts(prev => [...prev, ...data.conflicts]);
-        out.push({ name: f.name, ok: !data.error, data });
+        if (tpl && isXlsx(f.name)) {
+          // Strict structured-template path. Inserted as `verified` directly,
+          // skipping AI extraction and the review queue.
+          const data = await importTemplate(agentId, f, tpl.kind);
+          const ok = !data.error && data.inserted > 0;
+          const errMsg = data.error
+            ? data.error
+            : (data.inserted === 0 && data.total_rows > 0
+                ? `0/${data.total_rows} 行通过校验`
+                : null);
+          out.push({ name: f.name, ok, mode: 'template', data, error: errMsg });
+        } else {
+          // Generic AI extraction path → review queue.
+          const data = await uploadDocument(agentId, f, layer);
+          out.push({ name: f.name, ok: !data.error, mode: 'ai', data });
+        }
       } catch (e) {
         out.push({ name: f.name, ok: false, error: e.message });
       }
@@ -267,6 +303,32 @@ function FileUploadCard({ agentId, onChanged }) {
           {LAYERS.map(l => <option key={l} value={l}>{LAYER_LABELS[l]}</option>)}
         </select>
       </div>
+
+      {tpl && (
+        <div style={{
+          marginTop: 10, padding: '10px 12px',
+          border: '1px solid var(--border)', borderRadius: 6,
+          background: 'var(--bg2)', fontSize: 12, lineHeight: 1.6,
+        }}>
+          <div style={{ color: 'var(--text2)', marginBottom: 6 }}>
+            <b>{tpl.label}</b> 上传 .xlsx 时会按列名直接 verified 入库（跳过 AI 抽取）。
+            其他格式（PDF/Word/CSV/TXT）走 AI 抽取 → 复核队列。
+          </div>
+          <div style={{ color: 'var(--text3)', fontFamily: 'var(--font-mono)', fontSize: 11, marginBottom: 6 }}>
+            列：{tpl.cols}
+            <br/>必填：{tpl.requiredCols.join(', ')}
+          </div>
+          <a
+            href={templateDownloadUrl(tpl.kind)}
+            download
+            style={{ color: 'var(--accent)', fontSize: 12 }}
+            onClick={e => e.stopPropagation()}
+          >
+            ↓ 下载空白模板（含示例行）
+          </a>
+        </div>
+      )}
+
       <div
         className={`${s.dropzone} ${dragOver ? s.dropzoneActive : ''}`}
         onDrop={e => { e.preventDefault(); setDragOver(false); handleFiles(e.dataTransfer.files); }}
@@ -294,13 +356,30 @@ function FileUploadCard({ agentId, onChanged }) {
             <div key={i} className={s.uploadFileName}>
               <span className={r.ok ? s.uploadStatusDone : s.uploadStatusError}>{r.ok ? '✓' : '✗'}</span>
               {r.name}
-              {r.ok && r.data?.knowledge_points != null && (
+              {r.mode === 'template' && r.data && (
                 <span style={{ color: 'var(--text3)', marginLeft: 4 }}>
-                  · {r.data.knowledge_points} 知识点
+                  · 模板路径：已 verified 入库 {r.data.inserted ?? 0}/{r.data.total_rows ?? 0} 行
+                </span>
+              )}
+              {r.mode === 'ai' && r.ok && r.data?.knowledge_points != null && (
+                <span style={{ color: 'var(--text3)', marginLeft: 4 }}>
+                  · AI 抽取 {r.data.knowledge_points} 知识点
                   {r.data.images?.extracted > 0 && ` · ${r.data.images.extracted} 张图`}
                 </span>
               )}
-              {(r.data?.error || r.error) && <span style={{ color: 'var(--red)', marginLeft: 4, fontSize: 11 }}>{r.data?.error || r.error}</span>}
+              {(r.data?.error || r.error) && (
+                <div style={{ color: 'var(--red)', marginLeft: 18, fontSize: 11, marginTop: 2 }}>
+                  {r.data?.error || r.error}
+                </div>
+              )}
+              {r.mode === 'template' && r.data?.errors?.length > 0 && (
+                <div style={{ color: 'var(--red)', marginLeft: 18, fontSize: 11, marginTop: 2 }}>
+                  {r.data.errors.slice(0, 5).map((er, j) => (
+                    <div key={j}>· 第 {er.row ?? '?'} 行：{er.error}</div>
+                  ))}
+                  {r.data.errors.length > 5 && <div>… 等 {r.data.errors.length - 5} 条</div>}
+                </div>
+              )}
             </div>
           ))}
         </div>
@@ -309,145 +388,140 @@ function FileUploadCard({ agentId, onChanged }) {
   );
 }
 
-function ExcelTemplateCard({ agentId, onChanged }) {
-  const [kind, setKind] = useState('products');
-  const [file, setFile] = useState(null);
-  const [busy, setBusy] = useState(false);
-  const [result, setResult] = useState(null);
-  const inputRef = useRef(null);
-
-  return (
-    <div className={s.uploadCard}>
-      <div className={s.uploadCardTitle}>结构化导入（Excel 模板）</div>
-      <div className={s.uploadCardDesc}>
-        价格表 / 运费表按列名直接入库为 <code>verified</code>，跳过 AI 抽取。
-        <br/>• <b>products</b>：sku, model, product_name, category, fob_price_usd, moq, lead_time_days, effective_date, expiry_date, [specs.*]
-        <br/>• <b>shipping_routes</b>：origin_port, destination_port, destination_country, shipping_method, cost_per_unit_usd, transit_days, effective_date, expiry_date, notes
-      </div>
-      <div className={s.formRow}>
-        <span className={s.formLabel}>模板：</span>
-        <select className={s.formSelect} value={kind} onChange={e => setKind(e.target.value)}>
-          <option value="products">产品价格表</option>
-          <option value="shipping_routes">运费 / 路线表</option>
-        </select>
-      </div>
-      <div className={s.formRow} style={{ marginTop: 8 }}>
-        <input ref={inputRef} type="file" accept=".xlsx,.xls" onChange={e => setFile(e.target.files?.[0] || null)} />
-      </div>
-      <div className={s.teachActions} style={{ marginTop: 8 }}>
-        <Button variant="primary" size="sm" disabled={busy || !file} onClick={async () => {
-          setBusy(true); setResult(null);
-          try { setResult(await importTemplate(agentId, file, kind)); setFile(null); if (inputRef.current) inputRef.current.value = ''; }
-          catch (e) { setResult({ error: e.message }); }
-          finally { setBusy(false); onChanged?.(); }
-        }}>
-          {busy ? '导入中…' : '导入'}
-        </Button>
-      </div>
-      {result && (
-        <div style={{ fontSize: 12, fontFamily: 'var(--font-mono)', marginTop: 8 }}>
-          {result.error ? <span style={{ color: 'var(--red)' }}>{result.error}</span> : (
-            <>
-              <div style={{ color: 'var(--green)' }}>已入库 {result.inserted}/{result.total_rows} 行</div>
-              {result.errors?.length > 0 && (
-                <div style={{ color: 'var(--red)', marginTop: 4 }}>
-                  {result.errors.length} 行失败：
-                  {result.errors.slice(0, 5).map((e, i) => <div key={i}>· 第 {e.row} 行：{e.error}</div>)}
-                  {result.errors.length > 5 && <div>… 等 {result.errors.length - 5} 条</div>}
-                </div>
-              )}
-            </>
-          )}
-        </div>
-      )}
-    </div>
-  );
-}
-
+// 对话式录入：两步制 — 先抽取展示，用户确认后才入库。
 function TeachCard({ agentId, onChanged }) {
   const [text, setText] = useState('');
-  const [busy, setBusy] = useState(false);
-  const [result, setResult] = useState(null);
-
-  return (
-    <div className={s.uploadCard}>
-      <div className={s.uploadCardTitle}>对话式录入</div>
-      <div className={s.uploadCardDesc}>用自然语言告诉 AI，自动拆成知识点入库</div>
-      <textarea
-        className={s.teachTextarea}
-        placeholder="例如：我们的 A100 拖拉机 FOB 价 12500 美元，MOQ 5 台，交货期 45 天…"
-        value={text}
-        onChange={e => setText(e.target.value)}
-      />
-      <div className={s.teachActions}>
-        <Button variant="primary" size="sm" disabled={busy || !text.trim()} onClick={async () => {
-          setBusy(true); setResult(null);
-          try { const data = await teach(agentId, text); setResult(data); if (!data.error) setText(''); }
-          catch (e) { setResult({ error: e.message }); }
-          finally { setBusy(false); onChanged?.(); }
-        }}>
-          {busy ? '提取中…' : '提交知识'}
-        </Button>
-      </div>
-      {result && !result.error && (
-        <div style={{ fontSize: 12, color: 'var(--green)' }}>已入库 {result.inserted_count || 0} 个知识点</div>
-      )}
-      {result?.error && <div style={{ fontSize: 12, color: 'var(--red)' }}>{result.error}</div>}
-    </div>
-  );
-}
-
-function QaCreateCard({ agentId, onChanged }) {
-  const [questions, setQuestions] = useState('');
-  const [answer, setAnswer] = useState('');
-  const [priority, setPriority] = useState(7);
-  const [destinationCountry, setDestinationCountry] = useState('');
+  const [stage, setStage] = useState('input'); // 'input' | 'preview' | 'done'
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
+  const [items, setItems] = useState([]);     // editable preview list
+  const [reply, setReply] = useState('');     // LLM's friendly summary
+  const [inserted, setInserted] = useState(0);
 
-  async function save() {
-    const qs = questions.split('\n').map(q => q.trim()).filter(Boolean);
-    if (qs.length === 0 || !answer.trim()) { setError('问题和答案都不能为空'); return; }
+  function reset() {
+    setStage('input'); setItems([]); setReply(''); setInserted(0); setError('');
+  }
+
+  async function onExtract() {
     setBusy(true); setError('');
     try {
-      await createQaSnippet(agentId, {
-        questions: qs,
-        answer: answer.trim(),
-        priority: Number(priority) || 5,
-        applicableWhen: destinationCountry ? { destination_country: destinationCountry.trim() } : {},
-      });
-      setQuestions(''); setAnswer(''); setPriority(7); setDestinationCountry('');
+      const data = await teachExtract(agentId, text);
+      const list = (data.extracted_knowledge || []).map((it, i) => ({
+        _id: `${Date.now()}-${i}`,
+        keep: true,
+        content: it.content || '',
+        layer: it.layer || 'company',
+        metadata: it.metadata || {},
+      }));
+      setItems(list);
+      setReply(data.reply || '');
+      setStage(list.length > 0 ? 'preview' : 'input');
+      if (list.length === 0) setError('未抽取到知识点，请换个说法再试');
+    } catch (e) { setError(e.message); }
+    finally { setBusy(false); }
+  }
+
+  async function onCommit() {
+    const kept = items.filter(it => it.keep && it.content.trim());
+    if (kept.length === 0) { setError('至少保留一条知识点'); return; }
+    setBusy(true); setError('');
+    try {
+      const data = await teachCommit(agentId, kept.map(it => ({
+        content: it.content.trim(),
+        layer: it.layer,
+        metadata: it.metadata,
+      })));
+      setInserted(data.inserted_count || 0);
+      setStage('done');
+      setText('');
       onChanged?.();
-    } catch (e) {
-      setError(e.message);
-    } finally {
-      setBusy(false);
-    }
+    } catch (e) { setError(e.message); }
+    finally { setBusy(false); }
   }
 
   return (
     <div className={s.uploadCard}>
-      <div className={s.uploadCardTitle}>Q&A 直填</div>
-      <div className={s.uploadCardDesc}>客户问 X 我们答 Y。多种问法每行一种，medici 优先用这里的回答。</div>
-      <div className={s.formRow} style={{ marginTop: 12 }}><span className={s.formLabel}>客户问法（每行一种）：</span></div>
-      <textarea className={s.teachTextarea} style={{ minHeight: 80 }}
-        placeholder={'do you accept LC?\nis LC ok?\n你们能接 LC 吗'}
-        value={questions} onChange={e => setQuestions(e.target.value)} />
-      <div className={s.formRow} style={{ marginTop: 8 }}><span className={s.formLabel}>标准答复：</span></div>
-      <textarea className={s.teachTextarea} style={{ minHeight: 60 }}
-        placeholder="例如：是的，标准接受 LC at sight，订单金额 5 万美金以上即可。"
-        value={answer} onChange={e => setAnswer(e.target.value)} />
-      <div className={s.formRow} style={{ marginTop: 8, gap: 6 }}>
-        <span className={s.formLabel}>优先级 1-10：</span>
-        <input className={s.formSelect} style={{ width: 60 }} type="number" min={1} max={10}
-          value={priority} onChange={e => setPriority(e.target.value)} />
-        <input className={s.formSelect} placeholder="仅适用国家（可选）"
-          value={destinationCountry} onChange={e => setDestinationCountry(e.target.value)} />
+      <div className={s.uploadCardTitle}>对话式录入</div>
+      <div className={s.uploadCardDesc}>
+        用自然语言告诉 AI，会先拆成知识点 <b>给你过目</b>，确认无误后才入库。
       </div>
-      <div className={s.teachActions} style={{ marginTop: 8 }}>
-        <Button variant="primary" size="sm" disabled={busy} onClick={save}>{busy ? '保存中…' : '保存 Q&A'}</Button>
-        {error && <span style={{ color: 'var(--red)', fontSize: 12 }}>{error}</span>}
-      </div>
+
+      {stage === 'input' && (
+        <>
+          <textarea
+            className={s.teachTextarea}
+            placeholder="例如：我们的 A100 拖拉机 FOB 价 12500 美元，MOQ 5 台，交货期 45 天…"
+            value={text}
+            onChange={e => setText(e.target.value)}
+          />
+          <div className={s.teachActions}>
+            <Button variant="primary" size="sm" disabled={busy || !text.trim()} onClick={onExtract}>
+              {busy ? '抽取中…' : '抽取知识点'}
+            </Button>
+            {error && <span style={{ color: 'var(--red)', fontSize: 12 }}>{error}</span>}
+          </div>
+        </>
+      )}
+
+      {stage === 'preview' && (
+        <>
+          {reply && (
+            <div style={{ fontSize: 12, color: 'var(--text2)', marginTop: 8, padding: 8, background: 'var(--bg2)', borderRadius: 4 }}>
+              {reply}
+            </div>
+          )}
+          <div style={{ fontSize: 12, color: 'var(--text2)', marginTop: 10, marginBottom: 6 }}>
+            AI 拆出 <b>{items.length}</b> 条知识点。可勾选取消、可直接编辑文字、可改分层。
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+            {items.map((it, idx) => (
+              <div key={it._id} style={{
+                display: 'flex', gap: 8, alignItems: 'flex-start',
+                padding: 8, border: '1px solid var(--border)', borderRadius: 4,
+                background: it.keep ? 'transparent' : 'var(--bg2)',
+                opacity: it.keep ? 1 : 0.55,
+              }}>
+                <input type="checkbox" checked={it.keep}
+                  onChange={e => setItems(prev => prev.map((x, i) => i === idx ? { ...x, keep: e.target.checked } : x))}
+                  style={{ marginTop: 4 }} />
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <textarea
+                    className={s.teachTextarea}
+                    style={{ minHeight: 44, fontSize: 13 }}
+                    value={it.content}
+                    onChange={e => setItems(prev => prev.map((x, i) => i === idx ? { ...x, content: e.target.value } : x))}
+                  />
+                  <div className={s.formRow} style={{ marginTop: 4, gap: 6 }}>
+                    <span className={s.formLabel} style={{ fontSize: 11 }}>分层：</span>
+                    <select className={s.formSelect} style={{ fontSize: 11 }} value={it.layer}
+                      onChange={e => setItems(prev => prev.map((x, i) => i === idx ? { ...x, layer: e.target.value } : x))}>
+                      {LAYERS.map(l => <option key={l} value={l}>{LAYER_LABELS[l]}</option>)}
+                    </select>
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+          <div className={s.teachActions} style={{ marginTop: 10 }}>
+            <Button variant="primary" size="sm" disabled={busy} onClick={onCommit}>
+              {busy ? '入库中…' : `确认入库（${items.filter(it => it.keep).length} 条）`}
+            </Button>
+            <Button variant="ghost" size="sm" disabled={busy} onClick={reset}>取消</Button>
+            {error && <span style={{ color: 'var(--red)', fontSize: 12 }}>{error}</span>}
+          </div>
+        </>
+      )}
+
+      {stage === 'done' && (
+        <>
+          <div style={{ fontSize: 12, color: 'var(--green)', marginTop: 8 }}>
+            ✓ 已入库 {inserted} 条知识点
+          </div>
+          <div className={s.teachActions} style={{ marginTop: 8 }}>
+            <Button variant="primary" size="sm" onClick={reset}>继续录入</Button>
+          </div>
+        </>
+      )}
     </div>
   );
 }
