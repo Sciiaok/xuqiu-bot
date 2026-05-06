@@ -33,6 +33,7 @@
 | 缓存 / SSE | ioredis | 5.x |
 | 通知 | 飞书自定义机器人 webhook（per-tenant） | — |
 | 进程 | PM2（app + 3 cron） | — |
+| Agent prompt | Anthropic `.skill` bundle（zip）+ 宿主 host-patch | skills-runtime/loader 模块级缓存 |
 
 ---
 
@@ -99,6 +100,8 @@ flowchart TB
 - 跨租户隔离两层：业务代码主动 `.eq('tenant_id', ctx.tenantId)` + RLS `tenant_id = (SELECT tenant_id FROM users WHERE id = auth.uid())`。
 - `meta_connections.system_user_token_encrypted` / `notification_settings.feishu_webhook_url_encrypted` 全部 AES-256-GCM 落 bytea，密钥来自 `META_TOKEN_ENCRYPTION_KEY`。
 - KB 检索按 `(tenant_id, product_line_id)` 索引，Medici 工具不依赖 agent UUID 桥。
+- 两个 Agent 的方法论 prompt 都从 `skills/*.skill`（zip 格式）热加载：Medici = `ai-reception-deal`、Ogilvy = `overseas-ad-planning`；工程收口写在各自的 `*-host-patch.md` 里追加在 skill 之后。换 prompt 不改代码，替换 `.skill` 文件 + 重启即可。
+- 每次 LLM 调用都带 `{ tenantId, callSite }` 元信息透传给 [llm-client.js](src/llm-client.js)，fire-and-forget 写一行 `llm_usage_logs`，founder 在 `/admin/llm-usage` 看按租户 / callSite / 模型聚合的 token 用量与成本。
 
 ---
 
@@ -108,12 +111,12 @@ flowchart TB
 LeadEngine/
 ├─ app/
 │  ├─ (app)/                    已登录页面
-│  │  ├─ admin/                   founder-only：邀请 / 租户管理
+│  │  ├─ admin/                   founder-only：邀请 / 租户管理 / LLM 用量与成本
 │  │  ├─ ai-automation/           Autopilot 对话 UI
 │  │  ├─ analytics/ reports/      数据看板 / 报表
 │  │  ├─ campaign-studio/         投放数据
 │  │  ├─ leadhub/                 询盘工作台
-│  │  ├─ product-lines/[id]/      产品线 CRUD + 知识库 tab
+│  │  ├─ product-lines/[id]/      产品线 CRUD + 知识库 tab（总览 / 录入 / 内容 三段）
 │  │  ├─ settings/{meta-connection,notifications}
 │  │  └─ dev-tools/               founder-only：SQL / Medici 模拟器
 │  ├─ (auth)/{login,signup}/    公开
@@ -137,8 +140,11 @@ LeadEngine/
 │  ├─ feishu.service.js           per-tenant webhook 通知
 │  ├─ whatsapp.service.js         WA Cloud API（5 分钟 token 缓存）
 │  ├─ whisper.service.js          OpenAI Whisper 音频转写
-│  └─ llm-client.js               OpenRouter / Anthropic 统一封装
-├─ scripts/                     PM2 入口 + 一次性数据脚本
+│  └─ llm-client.js               OpenRouter / Anthropic 统一封装（fire-and-forget 写 llm_usage_logs）
+├─ skills/                      可热替换 .skill 包（zip）
+│  ├─ ai-reception-deal.skill     Medici 方法论：AI 接待谈单 SOP + 8 份 references
+│  └─ overseas-ad-planning.skill  Ogilvy 方法论：海外广告投放五阶段 SOP + 4 份 references
+├─ scripts/                     生产脚本（3 个 cron + deploy.sh）
 └─ ecosystem.config.cjs         PM2 4 进程
 ```
 
@@ -209,6 +215,7 @@ export async function POST(request) {
 | | `autopilot_messages` | Autopilot 单条消息 / tool I/O | 同上 |
 | | `ai_reports` | 日 / 周 / 月报 | [report-generator.js](lib/services/report-generator.js) |
 | | `inquiry_dashboard_summaries` | 询盘看板缓存（每租户 1 行） | [inquiry-dashboard/summary/route.js](app/api/inquiry-dashboard/summary/route.js) |
+| **平台运维** | `llm_usage_logs` | 每次 LLM 调用一行（tokens + 计价 + tenant + callSite + 模型）；fire-and-forget 落表 | [llm-client.js](src/llm-client.js) 写入 · [admin/llm-usage/route.js](app/api/admin/llm-usage/route.js) 聚合 |
 
 **RPC 函数**（`supabase.rpc(...)`）：`acquire_queue_messages` · `release_stale_queue_locks` · `search_kb_knowledge_en` · `search_kb_qa_snippets` · `search_product_embeddings` · `query_product_specs` · `get_spec_fields` · `ad_conversation_stats` · `dev_exec_sql`。
 

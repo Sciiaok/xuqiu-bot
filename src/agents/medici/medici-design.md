@@ -2,7 +2,7 @@
 
 `src/agents/medici/` — WhatsApp 询盘的接待官。每条客户消息进来，它同时完成**回复客户**、**分类意图**、**评估商机**、**抽取线索**、**决定路由**这五件事。
 
-> 文档版本：2026-05（迁移到 skill runtime 形态：方法论由 `ai-reception-deal` skill bundle 主导，宿主收口写在 `medici-host-patch.md`，对齐 Ogilvy 模式）
+> 文档版本：2026-05-06（迁移到 skill runtime 形态：方法论由 `ai-reception-deal` skill bundle 主导，宿主收口写在 `medici-host-patch.md`，对齐 Ogilvy 模式；2026-05-06 知识库录入区简化为 3 卡 + 全链路 LLM 用量埋点）
 
 ---
 
@@ -292,22 +292,28 @@ PM 与 RD 的接口契约见 aaa 包随附的 `CONTRACT.md`：
 
 ## 6. 知识库（Knowledge Base）
 
-Medici 的 6 个 KB typed tools 吃的就是这里的数据。KB 是 **(tenant_id, product_line_id)-scoped**——所有 `kb_*` 表都有这两列，运营通过 `/product-lines/[id]` 的 6 个 tab 管理（基本配置 / 知识总览 / 上传知识 / 图片资产 / Q&A 直填 / 学习中心）。
+Medici 的 6 个 KB typed tools 吃的就是这里的数据。KB 是 **(tenant_id, product_line_id)-scoped**——所有 `kb_*` 表都有这两列。运营在 `/product-lines/[id]` 的「知识库」tab 里维护，单文件 [KnowledgeBaseTab.js](../../../app/(app)/product-lines/[id]/knowledge-base/KnowledgeBaseTab.js) 顶部用 segmented control 切三段：
+
+- **总览** — 健康度 + 各层覆盖度 + 知识盲区 chip + 复核队列待处理数
+- **录入** — 3 张卡：文件上传（PDF/docx + xlsx 模板自动分流）/ 对话式（两步：抽取 → 确认入库）/ 单独图片上传
+- **内容** — 已有文档 / Q&A / 图片资产三张列表
+
+2026-05-06 把"录入"从 5 卡瘦到 3 卡：删了独立的 Q&A 直填卡（改在"内容 → Q&A"里直接编辑）和独立的 Excel 模板卡（合并进文件上传：在「产品与价格」/「物流与交付」层上传 xlsx 自动走严格模板路径直入 `kb_products` / `kb_shipping_routes`，verified 入库不过 AI 抽取）。对话式录入拆成 `/api/knowledge/teach`（LLM 抽取，不落库）+ `/api/knowledge/teach/commit`（用户确认后落库），让运营在按下入库前能看到要写哪些条目。
 
 ### 6.1 数据模型
 
 | 表 | 存什么 | 写入方 | 读取方 |
 |---|---|---|---|
-| `kb_documents` | 上传的源文件元数据（filename、layer、status、storage_path） | `/api/knowledge/upload` | UploadTab 文档列表 + OverviewTab health |
-| `kb_knowledge_points` | 文档切块后的双语文本 + 两条 embedding；带 `confidence`（verified / extracted_high / extracted_low） | upload + teach | `lookup_policy` 兜底向量检索 + OverviewTab 分层统计 |
-| `kb_products` | 结构化商品行；带 `effective_date / expiry_date / confidence / source_doc_id` | Excel 模板上传 + LLM 抽取 | `lookup_product` / `quote_price` |
-| `kb_shipping_routes` | 结构化运费路由；同样的 validity/confidence 列 | Excel 模板上传 + LLM 抽取 | `lookup_shipping` / `quote_price` CIF/DDP 分支 |
+| `kb_documents` | 上传的源文件元数据（filename、layer、status、storage_path） | `/api/knowledge/upload` | 总览 health + 内容 → 已有文档 |
+| `kb_knowledge_points` | 文档切块后的双语文本 + 两条 embedding；带 `confidence`（verified / extracted_high / extracted_low） | upload + teach/commit | `lookup_policy` 兜底向量检索 + 总览分层统计 |
+| `kb_products` | 结构化商品行；带 `effective_date / expiry_date / confidence / source_doc_id` | xlsx 模板（严格） + LLM 抽取 | `lookup_product` / `quote_price` |
+| `kb_shipping_routes` | 结构化运费路由；同样的 validity/confidence 列 | xlsx 模板（严格） + LLM 抽取 | `lookup_shipping` / `quote_price` CIF/DDP 分支 |
 | `kb_pricing_rules` | 议价 / 折扣 / 付款条款规则 | 当前没 UI 直填，可由 SQL 维护 | `check_constraint` |
-| `kb_qa_snippets` | 销售自填 Q&A（多种问法 + 标准答 + 适用条件） | QaTab | `lookup_policy({free_text})` 命中阈值 0.75 |
-| `kb_assets` | 可对外发送的图片 + 结构化标签（type / view / color / scenario / linked_skus） + caption_embedding | AssetTab | `find_asset` (tag 优先，semantic 兜底) |
-| `kb_pending_review` | 低置信抽取 / 冲突写入隔离队列 | upload pipeline 抽取冲突时入队 | LearningTab 复核子页 |
-| `kb_knowledge_gaps` | medici 答不上的问题，按 question_signature 聚合 | `executeKbTool` 自动回写（gap-capture）| LearningTab 盲区子页 |
-| `kb_corrections` | 销售改写过的 medici 回复 → 建议采纳为 Q&A | `/api/knowledge/corrections` POST | LearningTab 纠正子页 |
+| `kb_qa_snippets` | 销售自填 Q&A（多种问法 + 标准答 + 适用条件） | 内容 → Q&A 列表内联编辑 | `lookup_policy({free_text})` 命中阈值 0.75 |
+| `kb_assets` | 可对外发送的图片 + 结构化标签（type / view / color / scenario / linked_skus） + caption_embedding | 录入 → 单独图片上传 + 文件上传时从 PDF/docx 自动抽取嵌入图（vision caption） | `find_asset` (tag 优先，semantic 兜底) |
+| `kb_pending_review` | 低置信抽取 / 冲突写入隔离队列 | upload pipeline 抽取冲突时入队 | 总览复核入口 + `/api/knowledge/pending-review` |
+| `kb_knowledge_gaps` | medici 答不上的问题，按 question_signature 聚合 | `executeKbTool` 自动回写（gap-capture）| 总览盲区 chip + `/api/knowledge/gaps` |
+| `kb_corrections` | 销售改写过的 medici 回复 → 建议采纳为 Q&A | `/api/knowledge/corrections` POST | 总览纠正入口 |
 
 **六层分类学**：`company / product / logistics / compliance / sales / competitive`。
 
@@ -319,7 +325,7 @@ Medici 的 6 个 KB typed tools 吃的就是这里的数据。KB 是 **(tenant_i
 
 Medici 在客户主动要图时回传知识库里的图片，例如"能看下实物吗？" / "再来一张图"。
 
-- **入库**：AssetTab → `POST /api/knowledge/assets`
+- **入库**：录入 → 单独图片上传 → `POST /api/knowledge/assets`；文档上传管线也会自动从 PDF/docx 抽取嵌入图（vision caption + 入库为 kb_assets），运营基本不用单独传
 - **注入**：`runMedici` 启动时与 `loadAgentTools` 并行调 `loadAvailableAssets`，把 `[{id, description, mime_type}]` 写进 `dynamicContext` 的 AVAILABLE ASSETS 块
 - **发送**：Medici 在 `attachments[]` 给出 `{asset_id, caption?}` → queue-processor 文本回复发完后调 [send-attachments.js](./send-attachments.js)
 
@@ -369,6 +375,8 @@ dev-tools 里的 **Medici 调试台** (`/medici-simulator`) 直接调 `runMedici
 | output tokens | ≤ 4096 (`MAX_TOKENS`) |
 | 缓存命中率 | 静态段稳定状态下 > 80%（Sonnet 缓存价格 = input 的 10%） |
 | 模型 | `claude-sonnet-4-6`（固定，`callClaude` 里） |
+
+`callClaude` 透传 `{ tenantId, callSite: 'medici.qualify' }` 给 [llm-client.js](../../llm-client.js)，每次调用 fire-and-forget 落 `llm_usage_logs` 一行（input / output / cache hit tokens + 计价）。Founder 在 `/admin/llm-usage` 看按租户 / callSite / 模型聚合的成本（今日 / 7天 / 30天）。
 
 成本优化点都收敛在 `index.js` 的 LLM transport 段：换 Haiku、分拆合成轮、调低 `MAX_TOKENS`。
 
