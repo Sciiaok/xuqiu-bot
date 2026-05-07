@@ -89,8 +89,8 @@ export default function ProductLinesPage() {
     <div className={s.root}>
       <div className={s.header}>
         <div className={s.headerLeft}>
-          <h1 className={s.title}>产品线</h1>
-          <span className={s.subtitle}>一个 WhatsApp 号码 = 一条产品线 · 点号码进入配置</span>
+          <h1 className={s.title}>Medici</h1>
+          <span className={s.subtitle}>一个 WhatsApp 号码 = 一个 Medici 客服 · 点号码进入配置</span>
         </div>
       </div>
 

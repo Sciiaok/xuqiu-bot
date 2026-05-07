@@ -4,7 +4,7 @@ import { useCallback, useRef, useState } from 'react';
 import { consumeSSE } from '../../../../lib/consume-sse';
 
 /**
- * Wrap the Autopilot SSE endpoint. Owns the in-flight assistant delta text,
+ * Wrap the Ogilvy SSE endpoint. Owns the in-flight assistant delta text,
  * the running tool progress ({ per-tool counts }), and a single AbortController
  * so a new send cancels any still-streaming prior send.
  *
@@ -41,7 +41,7 @@ export function useMessageStream({ onUserSaved, onAssistantFinal, onToolResult, 
     };
 
     try {
-      const res = await fetch(`/api/autopilot/conversations/${sessionId}/messages`, {
+      const res = await fetch(`/api/ogilvy/conversations/${sessionId}/messages`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ message, attachments }),

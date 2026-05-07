@@ -3,7 +3,7 @@ import {
   getSession,
   getMessages,
   deleteSession,
-} from '../../../../../lib/repositories/autopilot.repository.js';
+} from '../../../../../lib/repositories/ogilvy.repository.js';
 
 async function loadSessionInTenant(sessionId, tenantId) {
   const session = await getSession(sessionId);
@@ -12,7 +12,7 @@ async function loadSessionInTenant(sessionId, tenantId) {
 }
 
 /**
- * GET /api/autopilot/conversations/[id]
+ * GET /api/ogilvy/conversations/[id]
  *
  * Return session metadata + the full message history. Used on page load to
  * restore a conversation.
@@ -44,13 +44,13 @@ export async function GET(_request, { params }) {
       })),
     });
   } catch (err) {
-    console.error('[autopilot/conversations/[id] GET]', err.message);
+    console.error('[ogilvy/conversations/[id] GET]', err.message);
     return Response.json({ error: err.message }, { status: 500 });
   }
 }
 
 /**
- * DELETE /api/autopilot/conversations/[id]
+ * DELETE /api/ogilvy/conversations/[id]
  *
  * Hard delete — matches the old Campaign Studio behaviour. Messages cascade
  * via the FK constraint.
@@ -68,7 +68,7 @@ export async function DELETE(_request, { params }) {
     await deleteSession(id);
     return Response.json({ ok: true });
   } catch (err) {
-    console.error('[autopilot/conversations/[id] DELETE]', err.message);
+    console.error('[ogilvy/conversations/[id] DELETE]', err.message);
     return Response.json({ error: err.message }, { status: 500 });
   }
 }

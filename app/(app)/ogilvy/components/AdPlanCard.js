@@ -2,11 +2,11 @@
 
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import s from '../autopilot.module.css';
+import s from '../ogilvy.module.css';
 import AdCreativePreview from './AdCreativePreview';
 
 /**
- * AdPlanCard — the central artifact of /ai-automation.
+ * AdPlanCard — the central artifact of /ogilvy.
  *
  * Single white card with internal hairline dividers (no nested boxes). Sections:
  *   HEAD   — format badge + plan summary

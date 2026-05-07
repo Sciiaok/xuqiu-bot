@@ -501,7 +501,7 @@ async function healthCheck() {
 | `/product-lines` | 加 tenant_id 过滤；新建产品线时号码下拉只列本租户的 phones |
 | `/product-lines/[id]` | 同上 |
 | `/leadhub` | 加 tenant_id 过滤 |
-| `/ai-automation` 等所有 dashboard | 加 tenant_id 过滤 |
+| `/ogilvy` 等所有 dashboard | 加 tenant_id 过滤 |
 
 ### 5.3 全局变化
 
@@ -762,8 +762,8 @@ invitation signup 流程；任何 auth 用户的 profile 在 signup 时同步建
 - product_lines / agents —— 创建路由从 `getTenantContext` 拿
 - kb_documents / kb_knowledge_points / kb_products / kb_shipping_routes / kb_assets ——
   upload 路由从 `getTenantContext` 拿，processDocument 服务函数显式接收
-- aigc_assets —— autopilot 工具从 session 行 tenant_id 拿
-- ai_reports / inquiry_dashboard_summaries / autopilot_sessions / autopilot_messages ——
+- aigc_assets —— Ogilvy 工具从 session 行 tenant_id 拿
+- ai_reports / inquiry_dashboard_summaries / autopilot_sessions / autopilot_messages（表名沿用旧名）——
   各自 repository 强制 require tenantId
 - lead_sync_logs —— createSyncLog 强制 require
 
@@ -881,7 +881,7 @@ META_TOKEN_ENCRYPTION_KEY=...      # 64 字符 hex；生成：
 **完成后**：`meta_connections` / `meta_phone_numbers` / `meta_ad_accounts` 入库；该
 WABA 在 Meta 侧已订阅平台 App → 入站消息流向我们 webhook。
 
-**不接 BM 的后果**：webhook 收到的入站消息被 200 跳过；ads / autopilot / leadhub 大多数
+**不接 BM 的后果**：webhook 收到的入站消息被 200 跳过；ads / Ogilvy / leadhub 大多数
 功能返 409 / `not_configured`。强制每个 tenant 完成接入。
 
 ### 12.4 通知设置（可选但推荐）

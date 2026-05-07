@@ -2,14 +2,14 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
-import s from './autopilot.module.css';
+import s from './ogilvy.module.css';
 import Markdown from '../../components/Markdown/Markdown';
 import WhatsAppGateCard from './components/WhatsAppGateCard';
 import AdPlanCard from './components/AdPlanCard';
 import { useMessageStream } from './hooks/useMessageStream';
 
 // ── Module-level session cache ────────────────────────────────────────────
-// Survives unmount/remount (e.g. user navigates away and back to /ai-automation)
+// Survives unmount/remount (e.g. user navigates away and back to /ogilvy)
 // so the sidebar list renders instantly from the last-known state instead of
 // showing the loading skeleton + waiting on a DB round-trip every time.
 // Cache is per-tab, in-memory only (no localStorage) — fine for this UX since
@@ -27,7 +27,7 @@ function isSessionsCacheFresh() {
 }
 
 /**
- * AutopilotApp — the whole /ai-automation page.
+ * OgilvyApp — the whole /ogilvy page.
  *
  * Layout: [left sidebar of conversations] [main chat stream + composer]
  *
@@ -40,7 +40,7 @@ function isSessionsCacheFresh() {
  * Message ordering in the view comes directly from DB (message_index).
  * Streaming delta + tool strips appear after the last persisted message.
  */
-export default function AutopilotApp() {
+export default function OgilvyApp() {
   const searchParams = useSearchParams();
 
   // ── Data state ───────────────────────────────────────────────
@@ -94,8 +94,8 @@ export default function AutopilotApp() {
     (async () => {
       try {
         const [gateRes, sessRes] = await Promise.all([
-          fetch('/api/autopilot/whatsapp-accounts').then(r => r.json()),
-          fetch('/api/autopilot/conversations').then(r => r.json()),
+          fetch('/api/ogilvy/whatsapp-accounts').then(r => r.json()),
+          fetch('/api/ogilvy/conversations').then(r => r.json()),
         ]);
         if (cancelled) return;
         setGate(gateRes);
@@ -109,7 +109,7 @@ export default function AutopilotApp() {
         }
       } catch (err) {
         if (cancelled) return;
-        console.error('[AutopilotApp] initial load failed:', err);
+        console.error('[OgilvyApp] initial load failed:', err);
         if (!cached) setGate({ status: 'token_error', error: err.message });
       } finally {
         if (!cancelled) setLoadingSessions(false);
@@ -122,7 +122,7 @@ export default function AutopilotApp() {
     setGate(null);
     // ?force=1 bypasses the server-side 60s cache so the user gets fresh data
     // immediately after binding a new number on Meta.
-    const r = await fetch('/api/autopilot/whatsapp-accounts?force=1').then(r => r.json());
+    const r = await fetch('/api/ogilvy/whatsapp-accounts?force=1').then(r => r.json());
     setGate(r);
     writeSessionsCache({ gate: r });
   }, []);
@@ -134,12 +134,12 @@ export default function AutopilotApp() {
     (async () => {
       setLoadingMessages(true);
       try {
-        const r = await fetch(`/api/autopilot/conversations/${selectedId}`).then(r => r.json());
+        const r = await fetch(`/api/ogilvy/conversations/${selectedId}`).then(r => r.json());
         if (cancel) return;
         setMessages(r.messages || []);
         setPlan(r.session?.plan_json || null);
       } catch (err) {
-        if (!cancel) console.error('[AutopilotApp] load messages failed:', err);
+        if (!cancel) console.error('[OgilvyApp] load messages failed:', err);
       } finally {
         if (!cancel) setLoadingMessages(false);
       }
@@ -160,7 +160,7 @@ export default function AutopilotApp() {
       // plan_json and drop the partial stream.
       if (data.tool === 'draft_ad_plan' && data.result?.ok) {
         setStreamingPlan(null);
-        const r = await fetch(`/api/autopilot/conversations/${selectedId}`).then(r => r.json());
+        const r = await fetch(`/api/ogilvy/conversations/${selectedId}`).then(r => r.json());
         setPlan(r.session?.plan_json || null);
       }
     },
@@ -175,7 +175,7 @@ export default function AutopilotApp() {
 
   const refreshSelected = useCallback(async () => {
     if (!selectedId) return;
-    const r = await fetch(`/api/autopilot/conversations/${selectedId}`).then(r => r.json());
+    const r = await fetch(`/api/ogilvy/conversations/${selectedId}`).then(r => r.json());
     setMessages(r.messages || []);
     setPlan(r.session?.plan_json || null);
   }, [selectedId]);
@@ -185,7 +185,7 @@ export default function AutopilotApp() {
   // Kept as a pure helper so both the "新项目" button and the first-message
   // auto-create path in handleSend can share the same error handling.
   const createConversation = useCallback(async () => {
-    const r = await fetch('/api/autopilot/conversations', { method: 'POST' });
+    const r = await fetch('/api/ogilvy/conversations', { method: 'POST' });
     if (!r.ok) {
       const body = await r.json().catch(() => ({}));
       throw new Error(body.error || `创建对话失败（HTTP ${r.status}）`);
@@ -215,7 +215,7 @@ export default function AutopilotApp() {
   async function handleDelete(sessionId, e) {
     e.stopPropagation();
     if (!window.confirm('确认删除这个对话？')) return;
-    await fetch(`/api/autopilot/conversations/${sessionId}`, { method: 'DELETE' });
+    await fetch(`/api/ogilvy/conversations/${sessionId}`, { method: 'DELETE' });
     setSessions(prev => {
       const next = prev.filter(x => x.id !== sessionId);
       writeSessionsCache({ sessions: next });
@@ -240,7 +240,7 @@ export default function AutopilotApp() {
       const fd = new FormData();
       fd.append('file', file);
       if (sessionIdForPath) fd.append('session_id', sessionIdForPath);
-      const res = await fetch('/api/autopilot/upload', { method: 'POST', body: fd });
+      const res = await fetch('/api/ogilvy/upload', { method: 'POST', body: fd });
       if (!res.ok) {
         const body = await res.json().catch(() => ({}));
         throw new Error(body.error || `上传失败 (HTTP ${res.status})`);
@@ -327,7 +327,7 @@ export default function AutopilotApp() {
     if (!selectedId || !plan) return;
     setLaunchProgress({ phase: 'starting', detail: '连接 Meta…' });
     try {
-      const res = await fetch(`/api/autopilot/conversations/${selectedId}/launch`, { method: 'POST' });
+      const res = await fetch(`/api/ogilvy/conversations/${selectedId}/launch`, { method: 'POST' });
       if (!res.ok) {
         const body = await res.json().catch(() => ({}));
         throw new Error(body.error || `HTTP ${res.status}`);

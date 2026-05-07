@@ -347,7 +347,7 @@ export default function LeadHubPage() {
   const [previewAdId, setPreviewAdId] = useState(null);
 
   // Keep metaAdIds in sync with the URL (e.g. when navigating from
-  // campaign-studio with one ad, or ai-automation with a whole campaign).
+  // campaign-studio with one ad, or /ogilvy with a whole campaign).
   useEffect(() => {
     setMetaAdIds(searchParams?.getAll('metaAdId') || []);
   }, [searchParams]);

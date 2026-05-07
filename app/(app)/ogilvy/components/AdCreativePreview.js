@@ -1,6 +1,6 @@
 'use client';
 
-import s from '../autopilot.module.css';
+import s from '../ogilvy.module.css';
 
 /**
  * AdCreativePreview — local Facebook-style mockup of a single Click-to-WhatsApp

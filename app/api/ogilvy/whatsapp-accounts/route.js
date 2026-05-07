@@ -2,7 +2,7 @@ import { getTenantContext } from '../../../../lib/tenant-context.js';
 import { listWhatsAppAccountsForUser } from '../../../../src/agents/ogilvy/whatsapp-accounts.service.js';
 
 /**
- * GET /api/autopilot/whatsapp-accounts
+ * GET /api/ogilvy/whatsapp-accounts
  *
  * Returns the list of Click-to-WhatsApp-eligible phone numbers for the
  * currently authenticated user, plus a gate status the UI uses to decide
@@ -27,7 +27,7 @@ export async function GET(request) {
     const result = await listWhatsAppAccountsForUser(ctx.user.id, { force });
     return Response.json(result);
   } catch (err) {
-    console.error('[autopilot/whatsapp-accounts] fetch failed:', err.message);
+    console.error('[ogilvy/whatsapp-accounts] fetch failed:', err.message);
     return Response.json(
       { status: 'token_error', numbers: [], all_numbers: [], error: err.message },
       { status: 500 },

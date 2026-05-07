@@ -1,5 +1,5 @@
 /**
- * Autopilot creative service — single-image ad creative generation.
+ * Ogilvy creative service — single-image ad creative generation.
  *
  * Self-contained: all OpenRouter image-gen + Supabase persistence lives here.
  *
@@ -159,10 +159,10 @@ async function saveAssetToStorage({ imageBuffer, prompt, model, productInfo, use
   const { data: urlData } = supabase.storage.from(STORAGE_BUCKET).getPublicUrl(storagePath);
 
   // NOTE: aigc_assets.conversation_id FKs to the WhatsApp `conversations`
-  // table (predates autopilot). Autopilot session IDs don't live there, so we
+  // table (predates Ogilvy). Ogilvy session IDs don't live there, so we
   // leave it null — the linkage lives on session.plan_json instead. We still
   // persist the row so the asset shows up in /aigc-library / audit trails.
-  // `autopilot_session_id` is included via metadata for future migration.
+  // `autopilot_session_id` (legacy field name) is included via metadata for future migration.
   const { data: row, error: dbError } = await supabase
     .from('aigc_assets')
     .insert({
@@ -254,7 +254,7 @@ export async function generateAdCreative({
         product_name: productName || null,
       };
     } catch (err) {
-      console.warn(`[autopilot/creative] ${model} failed: ${err.message}`);
+      console.warn(`[ogilvy/creative] ${model} failed: ${err.message}`);
       lastErr = err;
     }
   }

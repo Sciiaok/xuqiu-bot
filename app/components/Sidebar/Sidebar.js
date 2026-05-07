@@ -20,16 +20,15 @@ const BUSINESS_NAV = [
   {
     section: '自动化营销',
     items: [
-      { href: '/ai-automation', label: 'Autopilot', icon: 'campaignAutomation' },
-      { href: '/campaign-studio', label: '投放数据', icon: 'campaign' },
+      { href: '/ogilvy', label: 'Ogilvy', icon: 'campaignAutomation' },
+      { href: '/campaign-studio', label: '广告数据', icon: 'campaign' },
     ],
   },
   {
     section: '智能外贸员',
     items: [
+      { href: '/product-lines', label: 'Medici', icon: 'agents' },
       { href: '/leadhub', label: '询盘私信', icon: 'leadhub' },
-      { href: '/product-lines', label: '产品线', icon: 'agents' },
-      { href: '/medici-simulator', label: 'Medici 调试台', icon: 'agents' },
     ],
   },
 ];

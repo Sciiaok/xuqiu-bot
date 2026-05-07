@@ -4,7 +4,7 @@
 
 每个租户接入自己的 Meta Business Manager，平台跑两个 Claude Agent：
 - **Medici** — 入站 WhatsApp 自动应答 + 资格化询盘
-- **Ogilvy / Autopilot** — 对话式生成 Click-to-WhatsApp 广告，一键投放到 Meta
+- **Ogilvy** — 对话式生成 Click-to-WhatsApp 广告，一键投放到 Meta
 
 ---
 
@@ -61,7 +61,7 @@ flowchart TB
       META_CONN[meta-connection<br/>repo + AES-256-GCM]
       QUEUE[queue-processor]
       MEDICI[Agent · Medici]
-      OGILVY[Agent · Ogilvy/Autopilot]
+      OGILVY[Agent · Ogilvy]
       KB[kb-search]
       FEISHU[feishu.service]
     end
@@ -112,13 +112,13 @@ LeadEngine/
 ├─ app/
 │  ├─ (app)/                    已登录页面
 │  │  ├─ admin/                   founder-only：邀请 / 租户管理 / LLM 用量与成本
-│  │  ├─ ai-automation/           Autopilot 对话 UI
+│  │  ├─ ogilvy/                  Ogilvy 对话 UI（前身 /ai-automation）
 │  │  ├─ analytics/ reports/      数据看板 / 报表
 │  │  ├─ campaign-studio/         投放数据
 │  │  ├─ leadhub/                 询盘工作台
-│  │  ├─ product-lines/[id]/      产品线 CRUD + 知识库 tab（总览 / 录入 / 内容 三段）
+│  │  ├─ product-lines/[id]/      Medici 配置 CRUD（基本配置 / 知识库 / Medici 调试台 三 tab）
 │  │  ├─ settings/{meta-connection,notifications}
-│  │  └─ dev-tools/               founder-only：SQL / Medici 模拟器
+│  │  └─ dev-tools/               founder-only：SQL 控制台
 │  ├─ (auth)/{login,signup}/    公开
 │  ├─ api/**/route.js           REST API（每条都 getTenantContext）
 │  └─ components/               共享 UI
@@ -134,7 +134,7 @@ LeadEngine/
 ├─ src/                         领域服务
 │  ├─ config.js                   ★ 唯一读 process.env 的入口
 │  ├─ agents/medici/              入站 Agent（runMedici / kb-tools / config）
-│  ├─ agents/ogilvy/              Autopilot Agent
+│  ├─ agents/ogilvy/              Ogilvy Agent（出站广告投手）
 │  ├─ kb-search.service.js        searchKnowledge（vector / structured / hybrid）
 │  ├─ kb-upload.service.js        文件解析 → 向量入库
 │  ├─ feishu.service.js           per-tenant webhook 通知
@@ -211,15 +211,15 @@ export async function POST(request) {
 | | `kb_pending_review` | 低置信抽取 / 冲突写入隔离队列 | [knowledge/pending-review/route.js](app/api/knowledge/pending-review/route.js) |
 | | `kb_corrections` | 销售改写过的 medici 回复 → 建议采纳为 Q&A | [knowledge/corrections/route.js](app/api/knowledge/corrections/route.js) |
 | | `kb_knowledge_gaps` | 客户问到但 KB 缺失的话题（频次 + 问法举例 + 触发工具） | [knowledge/gaps/route.js](app/api/knowledge/gaps/route.js) |
-| **Autopilot / 报表** | `autopilot_sessions` | Ogilvy 会话（含 `plan_json`） | [autopilot.repository.js](lib/repositories/autopilot.repository.js) |
-| | `autopilot_messages` | Autopilot 单条消息 / tool I/O | 同上 |
+| **Ogilvy / 报表** | `autopilot_sessions` | Ogilvy 会话（含 `plan_json`，表名沿用旧 autopilot 前缀以保持向前兼容） | [ogilvy.repository.js](lib/repositories/ogilvy.repository.js) |
+| | `autopilot_messages` | Ogilvy 单条消息 / tool I/O（表名同上） | 同上 |
 | | `ai_reports` | 日 / 周 / 月报 | [report-generator.js](lib/services/report-generator.js) |
 | | `inquiry_dashboard_summaries` | 询盘看板缓存（每租户 1 行） | [inquiry-dashboard/summary/route.js](app/api/inquiry-dashboard/summary/route.js) |
 | **平台运维** | `llm_usage_logs` | 每次 LLM 调用一行（tokens + 计价 + tenant + callSite + 模型）；fire-and-forget 落表 | [llm-client.js](src/llm-client.js) 写入 · [admin/llm-usage/route.js](app/api/admin/llm-usage/route.js) 聚合 |
 
 **RPC 函数**（`supabase.rpc(...)`）：`acquire_queue_messages` · `release_stale_queue_locks` · `search_kb_knowledge_en` · `search_kb_qa_snippets` · `search_product_embeddings` · `query_product_specs` · `get_spec_fields` · `ad_conversation_stats` · `dev_exec_sql`。
 
-**Storage buckets**：`kb-assets`（KB 文件）· `kb_assets`（兼容路径）· `chat-uploads`（Autopilot 上传）· `chat-media`（聊天媒体）。
+**Storage buckets**：`kb-assets`（KB 文件）· `kb_assets`（兼容路径）· `chat-uploads`（Ogilvy 上传）· `chat-media`（聊天媒体）。
 
 ---
 
@@ -437,7 +437,9 @@ erDiagram
   }
 ```
 
-### Autopilot 与报表
+### Ogilvy 与报表
+
+> 表名沿用旧 `autopilot_*` 前缀以保持向前兼容；UI / 代码层已统一改名为 Ogilvy。
 
 ```mermaid
 erDiagram
@@ -561,14 +563,14 @@ sequenceDiagram
   C-->>UI: {connection, counts, logs[]}
 ```
 
-### Flow 3 · Autopilot
+### Flow 3 · Ogilvy
 
 ```mermaid
 sequenceDiagram
   autonumber
   participant U as 租户用户
-  participant UI as /ai-automation
-  participant API as /api/autopilot/conversations/[id]/messages
+  participant UI as /ogilvy
+  participant API as /api/ogilvy/conversations/[id]/messages
   participant O as Ogilvy Agent (Claude)
   participant SSE
   participant Meta as Meta Ads MCP
@@ -632,11 +634,11 @@ npm run deploy   # rsync + 远端 npm ci + build + pm2 reload
 
 | 场景 | 怎么测 |
 |---|---|
-| 入站 WhatsApp | 真号给绑定的 phone_number_id 发消息；或在 `/dev-tools/medici-simulator` 选定 product_line 后发消息看 trace |
+| 入站 WhatsApp | 真号给绑定的 phone_number_id 发消息；或在 `/product-lines/[id]` 的 「Medici 调试台」tab 里选广告后发消息看 trace |
 | Meta 连接 | `/settings/meta-connection` 粘 token + BM ID，preview 步骤的 logs 面板可见每步 Graph API 调用 |
 | 飞书通知 | `/settings/notifications` 配自定义机器人 webhook → 点测试 |
 | 邀请注册 | founder 在 `/admin/invitations` 生成链接 → 隐身窗口走 signup |
-| KB 检索 | `/dev-tools/medici-simulator` trace 里能看到 `search_knowledge` tool_call + tool_result |
+| KB 检索 | 「Medici 调试台」tab 的 trace 里能看到 `search_knowledge` tool_call + tool_result |
 
 ### PM2（4 进程）
 

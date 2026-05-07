@@ -1,11 +1,11 @@
 /**
- * Autopilot web tools — web_search + read_webpage.
+ * Ogilvy web tools — web_search + read_webpage.
  *
  * Uses Anthropic's native web_search / web_fetch tools via OpenRouter. Kept
  * deliberately small: each function returns a plain JSON-serializable object
  * that can go directly into tool_result.
  *
- * Simplified for the single-agent autopilot loop (no brief_id, no phase tracking).
+ * Simplified for the single-agent Ogilvy loop (no brief_id, no phase tracking).
  */
 import { openrouter, MODELS } from '../../llm-client.js';
 

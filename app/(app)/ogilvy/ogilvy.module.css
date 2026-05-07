@@ -257,7 +257,7 @@
   /* Hard caps so even if a child rule fails, the bubble can't blow up. */
   max-width: 100%;
 }
-/* Direct class on the <img> (see AutopilotApp.js) — avoids any CSS-Modules
+/* Direct class on the <img> (see OgilvyApp.js) — avoids any CSS-Modules
    compound-selector ambiguity across bundlers. */
 .userAttachImg {
   width: 120px;

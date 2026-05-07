@@ -1,5 +1,5 @@
 /**
- * Ogilvy — the ad-buyer agent behind /ai-automation ("Autopilot" in the UI).
+ * Ogilvy — the ad-buyer agent behind /ogilvy.
  *
  * Named after David Ogilvy, who united product insight, copy, art direction,
  * and media buying into a single craft. This agent does the same: takes the
@@ -27,7 +27,7 @@ import {
   getSession,
   updateSession,
   getMessages,
-} from '../../../lib/repositories/autopilot.repository.js';
+} from '../../../lib/repositories/ogilvy.repository.js';
 import { loadSkill } from '../skills-runtime/index.js';
 import { listWhatsAppAccountsForUser } from './whatsapp-accounts.service.js';
 import { webSearch, readWebpage } from './tools.service.js';
@@ -341,7 +341,7 @@ function buildMessagesWithCache(staticPrompt, dynamicPrompt, history) {
  * Run one chat turn: take a user message, stream back Agent reasoning + tool
  * calls + final response. Yields SSE events shaped as { event, data }.
  *
- * @param {string} sessionId - autopilot session UUID
+ * @param {string} sessionId - Ogilvy session UUID (autopilot_sessions row id)
  * @param {string} userText - new user message (may be empty if attachments-only)
  * @param {Array}  attachments - [{url, content_type, filename}]
  * @param {string} userId - for multi-tenant WA lookup
@@ -467,7 +467,7 @@ export async function* runOgilvy(sessionId, userText, attachments = [], userId =
         }
       }
     } catch (err) {
-      console.error('[autopilot] LLM stream error:', err.message);
+      console.error('[ogilvy] LLM stream error:', err.message);
       yield { event: 'error', data: { message: `模型调用失败：${err.message}` } };
       return;
     }

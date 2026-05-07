@@ -12,10 +12,12 @@ import {
 } from '../../../../lib/api/product-lines.js';
 import KnowledgeBaseTab from './knowledge-base/KnowledgeBaseTab.js';
 import LeadFieldsEditor, { normalizeLeadFields } from './LeadFieldsEditor.js';
+import MediciSimulatorTab from './medici-simulator/MediciSimulatorTab.js';
 
 const TABS = [
-  { key: 'config',    label: '基本配置' },
-  { key: 'knowledge', label: '知识库' },
+  { key: 'config',     label: '基本配置' },
+  { key: 'knowledge',  label: '知识库' },
+  { key: 'simulator',  label: 'Medici 调试台' },
 ];
 
 /**
@@ -109,7 +111,7 @@ export default function ProductLineEditPage() {
   return (
     <div className={s.root}>
       <div className={s.breadcrumb}>
-        <Link href="/product-lines" className={s.breadcrumbLink}>← 产品线</Link>
+        <Link href="/product-lines" className={s.breadcrumbLink}>← Medici</Link>
       </div>
 
       <div className={s.header}>
@@ -194,6 +196,10 @@ export default function ProductLineEditPage() {
             </div>
           )}
         </div>
+      )}
+
+      {activeTab === 'simulator' && (
+        <MediciSimulatorTab productLineSlug={line.id} />
       )}
     </div>
   );

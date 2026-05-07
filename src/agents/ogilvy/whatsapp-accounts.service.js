@@ -90,7 +90,7 @@ function normalize(phone) {
  */
 
 // ── Process-local cache ─────────────────────────────────────────────────
-// 改成查 DB 后单次查询 ~10ms，理论上 cache 也可以删。先留着压低 autopilot
+// 改成查 DB 后单次查询 ~10ms，理论上 cache 也可以删。先留着压低 Ogilvy
 // 高频调用 DB 的次数（每次 Agent 工具调用都会进来一次）。
 const CACHE_TTL_MS = 60_000;        // 60s for OK results
 const NEGATIVE_TTL_MS = 10_000;     // 10s for errors (so recovery is quick)
@@ -169,7 +169,7 @@ export async function listWhatsAppAccountsForUser(userId, { force = false } = {}
 export function prewarmWhatsAppAccountsForUser(userId) {
   if (getCached(userId)) return;
   listWhatsAppAccountsForUser(userId).catch(err => {
-    console.warn('[autopilot/whatsapp-accounts] prewarm failed:', err.message);
+    console.warn('[ogilvy/whatsapp-accounts] prewarm failed:', err.message);
   });
 }
 

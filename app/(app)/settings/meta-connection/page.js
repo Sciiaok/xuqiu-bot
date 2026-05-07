@@ -675,7 +675,7 @@ function PageIdSection({ initialValue }) {
       <h2 className={s.sectionTitle}>Facebook 主页 ID</h2>
       {empty ? (
         <div className={s.error} style={{ marginBottom: 10 }}>
-          ⚠️ 未配置主页 ID —— autopilot 启动 Click-to-WhatsApp 投放会失败（Meta 要求广告必须绑定一个 Facebook 主页）。
+          ⚠️ 未配置主页 ID —— Ogilvy 启动 Click-to-WhatsApp 投放会失败（Meta 要求广告必须绑定一个 Facebook 主页）。
         </div>
       ) : null}
       <div className={s.muted} style={{ fontSize: 12, marginBottom: 10 }}>

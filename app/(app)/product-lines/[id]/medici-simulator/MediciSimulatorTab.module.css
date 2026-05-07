@@ -1,11 +1,18 @@
+/* Embedded simulator tab. Lives inside /product-lines/[id]; padding and
+   max-width are owned by the parent route, so this layout only handles the
+   internal split + composer + trace visuals. */
+
 .root {
   display: flex;
   flex-direction: column;
   gap: 14px;
-  padding: 24px;
-  height: 100%;
-  max-width: 1400px;
-  min-height: 0;
+  /* The tab needs a vertical viewport so the chat & trace panes can scroll
+     internally instead of letting the page grow forever. The parent route
+     uses padding 24px (top+bottom = 48px), and the breadcrumb/header/tabBar
+     above it eats roughly 140px. */
+  height: calc(100vh - 220px);
+  min-height: 520px;
+  min-width: 0;
 }
 
 .header {
@@ -13,41 +20,15 @@
   align-items: center;
   justify-content: space-between;
   gap: 16px;
-}
-
-.headerLeft {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
-
-.title {
-  font-family: var(--font-display);
-  font-size: 21px;
-  font-weight: 700;
-  color: var(--text);
-  margin: 0;
-  line-height: 1.2;
+  flex-wrap: wrap;
 }
 
 .subtitle {
   font-size: 12px;
   color: var(--text3);
+  flex: 1;
+  min-width: 200px;
 }
-
-.breadcrumb {
-  font-size: 12px;
-  color: var(--text3);
-}
-
-.breadcrumbLink {
-  color: var(--text3);
-  text-decoration: none;
-}
-
-.breadcrumbLink:hover { color: var(--accent); }
-
-/* ─── Top controls (inline with header) ─────────────────── */
 
 .headerRight {
   display: flex;
@@ -71,20 +52,6 @@
 
 .select:focus { outline: none; border-color: var(--accent); }
 
-.pill {
-  font-size: 11px;
-  padding: 2px 8px;
-  border-radius: 10px;
-  background: color-mix(in srgb, var(--accent, #3b82f6) 18%, transparent);
-  color: var(--accent, #3b82f6);
-  font-family: var(--font-mono, monospace);
-}
-
-.pillWarn {
-  background: color-mix(in srgb, var(--amber, #d29922) 18%, transparent);
-  color: var(--amber, #d29922);
-}
-
 .resetBtn {
   padding: 5px 10px;
   border: 1px solid var(--border);
@@ -104,7 +71,6 @@
 
 /* ─── Split layout ──────────────────────────────────────── */
 
-/* Two columns: narrower left (logs + leads stacked), wider right (chat). */
 .split {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(320px, 420px);
@@ -120,8 +86,6 @@
   min-height: 0;
 }
 
-/* The log pane takes the flex share; if leads pane appears, it gets a bounded
-   share below it. Both scroll internally. */
 .tracePane {
   flex: 1;
   min-height: 0;
@@ -228,6 +192,8 @@
   justify-content: center;
   color: var(--text3);
   font-size: 13px;
+  padding: 0 24px;
+  text-align: center;
 }
 
 .composer {
@@ -389,14 +355,6 @@
   min-width: 0;
   overflow-wrap: anywhere;
   word-break: break-word;
-}
-
-.traceData {
-  color: var(--text3);
-  padding-left: 4px;
-  white-space: pre-wrap;
-  word-break: break-word;
-  font-size: 11px;
 }
 
 .traceEmpty {

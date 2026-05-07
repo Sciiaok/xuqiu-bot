@@ -37,7 +37,7 @@ function fmtErr(err) {
 }
 
 /**
- * 判断一个 WhatsApp 号码是否对租户实际可用（与 autopilot 的 isUsable 同标准）：
+ * 判断一个 WhatsApp 号码是否对租户实际可用（与 Ogilvy 的 isUsable 同标准）：
  *   - 没认证业务名 → 不能发消息（Meta 拒）
  *   - "Test Number" → Meta 测试号码，不能投生产用
  *   - 质量评级 RED → Meta 已限流/封禁，发不出去

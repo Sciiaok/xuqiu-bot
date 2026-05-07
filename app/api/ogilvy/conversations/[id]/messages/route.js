@@ -1,10 +1,10 @@
 import { getTenantContext } from '../../../../../../lib/tenant-context.js';
-import { getSession } from '../../../../../../lib/repositories/autopilot.repository.js';
+import { getSession } from '../../../../../../lib/repositories/ogilvy.repository.js';
 import { runOgilvy } from '../../../../../../src/agents/ogilvy/index.js';
 import { streamSSE } from '../../../../../../lib/sse.js';
 
 /**
- * POST /api/autopilot/conversations/[id]/messages
+ * POST /api/ogilvy/conversations/[id]/messages
  *
  * Send a user message and stream back the Agent's response as SSE. The
  * response lives for the duration of the Agent run (up to MAX_ITERATIONS

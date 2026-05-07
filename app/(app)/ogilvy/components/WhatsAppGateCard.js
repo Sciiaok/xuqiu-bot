@@ -1,6 +1,6 @@
 'use client';
 
-import s from '../autopilot.module.css';
+import s from '../ogilvy.module.css';
 
 // Per-status copy + help link. Each row tells the user exactly why the chat
 // is blocked and what action to take on the Meta side.

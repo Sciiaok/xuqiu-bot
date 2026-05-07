@@ -20,7 +20,7 @@ import Markdown from '../../components/Markdown/Markdown';
 
 // ─── Tab definitions ──────────────────────────────────────────────
 // The legacy `ai` tab (campaign orchestrator chat) was replaced by the
-// standalone /ai-automation route in PR 4. Campaign Studio is now strictly
+// standalone /ogilvy route in PR 4. Campaign Studio is now strictly
 // data/analytics — list + attribution.
 const MAIN_TABS = [
   { key: 'list', label: '📊 广告列表' },

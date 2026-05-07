@@ -2,12 +2,12 @@ import { getTenantContext } from '../../../../../../lib/tenant-context.js';
 import {
   getSession,
   updateSession,
-} from '../../../../../../lib/repositories/autopilot.repository.js';
+} from '../../../../../../lib/repositories/ogilvy.repository.js';
 import { stageCampaigns, activateCampaigns } from '../../../../../../src/agents/ogilvy/meta-launch.service.js';
 import { streamSSE } from '../../../../../../lib/sse.js';
 
 /**
- * POST /api/autopilot/conversations/[id]/launch
+ * POST /api/ogilvy/conversations/[id]/launch
  *
  * Launches the session's current plan_json. Two phases, streamed as SSE:
  *   1. stage — create campaign / adset / creative / ad in PAUSED status on Meta

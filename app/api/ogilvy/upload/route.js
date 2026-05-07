@@ -1,9 +1,9 @@
 import supabase from '../../../../lib/supabase.js';
 import { getTenantContext } from '../../../../lib/tenant-context.js';
-import { getSession } from '../../../../lib/repositories/autopilot.repository.js';
+import { getSession } from '../../../../lib/repositories/ogilvy.repository.js';
 
 /**
- * POST /api/autopilot/upload
+ * POST /api/ogilvy/upload
  *
  * Accept multipart file upload, store to Supabase chat-uploads bucket.
  * Used by the Composer paperclip to let users attach product photos to a
@@ -61,7 +61,7 @@ export async function POST(request) {
     }
 
     if (uploadError) {
-      console.error('[autopilot/upload] storage error:', uploadError);
+      console.error('[ogilvy/upload] storage error:', uploadError);
       return Response.json({ error: `Upload failed: ${uploadError.message}` }, { status: 500 });
     }
 
@@ -77,7 +77,7 @@ export async function POST(request) {
       size: file.size,
     });
   } catch (err) {
-    console.error('[autopilot/upload] error:', err);
+    console.error('[ogilvy/upload] error:', err);
     return Response.json({ error: err.message || 'Upload failed' }, { status: 500 });
   }
 }

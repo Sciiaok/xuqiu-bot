@@ -199,7 +199,7 @@ Prome Engine 由 6 个互相协作的模块组成。新企业从开通到 AI 跑
 
 ### 5.6 自动跑起来（接入完成后日常使用）
 
-#### a) Ogilvy · AI 投手（`/ai-automation`）
+#### a) Ogilvy · AI 投手（`/ogilvy`）
 
 ChatGPT 风格的对话界面：
 
