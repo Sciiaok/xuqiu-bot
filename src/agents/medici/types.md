@@ -97,7 +97,7 @@ type RunMediciResult = {
 - Every turn ends with exactly one `submit_response` tool call (even when no
   KB tools ran). Plain assistant text is never returned to the user.
 - The static system prompt comes from the `ai-reception-deal` skill bundle +
-  `medici-host-patch.md`, loaded once at module import. Per-line content lives
+  `skill-host-patch.md`, loaded once at module import. Per-line content lives
   in `agentConfig.dynamic_injection` and is rendered into the dynamic system
   block per turn.
 - `agentConfig.dynamic_injection` is REQUIRED. Missing it means the caller
@@ -109,7 +109,7 @@ type RunMediciResult = {
 | You want to...                          | Edit file          |
 | --------------------------------------- | ------------------ |
 | Tweak the methodology / SOP             | `skills/ai-reception-deal.skill` (PM-owned skill bundle) |
-| Tweak the host collar (envelope, tools, routing rules) | `medici-host-patch.md` |
+| Tweak the host collar (envelope, tools, routing rules) | `skill-host-patch.md` |
 | Tweak the per-product-line content      | product_lines DB (via /product-lines UI) |
 | Add a new per-turn context field        | `index.js` (Prompt assembly section, `buildDynamicContext`) |
 | Add an image / media modality           | `index.js` (Messages section, `buildClaudeContent`) |

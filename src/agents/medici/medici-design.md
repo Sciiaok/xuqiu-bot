@@ -2,7 +2,7 @@
 
 `src/agents/medici/` — WhatsApp 询盘的接待官。每条客户消息进来，它同时完成**回复客户**、**分类意图**、**评估商机**、**抽取线索**、**决定路由**这五件事。
 
-> 文档版本：2026-05-06（迁移到 skill runtime 形态：方法论由 `ai-reception-deal` skill bundle 主导，宿主收口写在 `medici-host-patch.md`，对齐 Ogilvy 模式；2026-05-06 知识库录入区简化为 3 卡 + 全链路 LLM 用量埋点）
+> 文档版本：2026-05-06（迁移到 skill runtime 形态：方法论由 `ai-reception-deal` skill bundle 主导，宿主收口写在 `skill-host-patch.md`，对齐 Ogilvy 模式；2026-05-06 知识库录入区简化为 3 卡 + 全链路 LLM 用量埋点）
 
 ---
 
@@ -78,7 +78,7 @@ Medici = 第 7 步。**前 1-6 为它准备输入，后 8-11 消化它的输出*
 
 > 注：`ai-reception-deal` skill 的 `state-output-schema` reference 写的是 skill
 > 自己的 `current_stage` / `known_fields` 那套字段——**这些是 skill 用来表达
-> 方法论的，不是宿主的提交 schema**。`medici-host-patch.md §3-4` 明确告诉模型
+> 方法论的，不是宿主的提交 schema**。`skill-host-patch.md §2-3` 明确告诉模型
 > 真正提交的 envelope，并给出了 skill 阶段 → `inquiry_quality` / `route` 的映射表。
 
 ### 不变量
@@ -103,7 +103,7 @@ src/agents/medici/
 │                              · Post-process           (normalizeAgentResponse / stripEmptyStringFields)
 │                              · Orchestrator           (runMedici)
 │                              · Tool dispatcher        (dispatchTool — 路由到 read_skill_reference / KB 工具)
-├── medici-host-patch.md    ★ 宿主收口 prose。skill 是通用方法论，本补丁把它校准到 LeadEngine：
+├── skill-host-patch.md    ★ 宿主收口 prose。skill 是通用方法论，本补丁把它校准到 LeadEngine：
 │                              envelope 形状、阶段→quality/route 映射、工具白名单、转人工底线
 ├── config.js               product_line 行 → agentConfig 装配 + 60s 缓存：
 │                              · assembleDynamicInjection         (row → 动态注入字段包)
@@ -130,7 +130,7 @@ skills/
 模仿 [Ogilvy](../ogilvy/ogilvy-design.md) 的做法。拆成 sidecar 只在以下情况：
 
 - **方法论 prose**（`skills/ai-reception-deal.skill`）—— PM 维护的业务规则包，不进代码 review；可热替换
-- **宿主收口 prose**（`medici-host-patch.md`）—— RD 维护，把 skill 校准到 LeadEngine 的 envelope / 工具 / 路由
+- **宿主收口 prose**（`skill-host-patch.md`）—— RD 维护，把 skill 校准到 LeadEngine 的 envelope / 工具 / 路由
 - **纯数据常量**（`output-schema.js`）—— 塞进 index.js 会压垮阅读体验
 - **配置装配层**（`config.js`）—— DB 行 → agentConfig 的纯转换 + 缓存，被 queue-processor 和 /product-lines 后台 UI 共同消费
 - **独立工具服务**（`kb-tools.js` / `send-attachments.js`）—— 外部数据层接入
@@ -140,7 +140,7 @@ skills/
 ```
 SYSTEM_STATIC = SKILL.systemPrompt      ← skills/ai-reception-deal.skill bundle
               + '\n---\n'
-              + HOST_PATCH               ← medici-host-patch.md
+              + HOST_PATCH               ← skill-host-patch.md
    ↑ cache_control: ephemeral，所有 product_line 共享同一份缓存
 
 SYSTEM_DYNAMIC = buildDynamicContext({
@@ -338,7 +338,7 @@ Medici 在客户主动要图时回传知识库里的图片，例如"能看下实
 | 场景 | 改哪里 |
 |---|---|
 | 通用接待方法论（阶段定义 / 转人工规则 / KB 使用规则） | `skills/ai-reception-deal.skill` 内的 SKILL.md / references/*.md（PM owned） |
-| 宿主收口（envelope 字段、阶段映射、工具白名单） | `medici-host-patch.md` |
+| 宿主收口（envelope 字段、阶段映射、工具白名单） | `skill-host-patch.md` |
 | 提示词文案（某产品线的目录 / 业务价值口径 / 字段说明） | `/product-lines/[id]` 后台 UI |
 | 通用 lead schema 加字段 | `output-schema.js::GENERIC_LEAD_OUTPUT_SCHEMA` |
 | 某产品线独有字段 | `/product-lines/[id]` → `lead_fields` JSON |
@@ -386,7 +386,7 @@ dev-tools 里的 **Medici 调试台** (`/medici-simulator`) 直接调 `runMedici
 
 - **改产品话术**（某产品线）→ 运营在 `/product-lines/[id]` UI 改，60s 内生效，不需要 RD
 - **改方法论**（阶段定义 / 转人工规则）→ PM 改 `skills/ai-reception-deal.skill` 内的 SKILL.md / references，重新打 zip → 重启服务
-- **改宿主收口**（envelope / 工具白名单 / 阶段映射）→ RD 改 `medici-host-patch.md` → 重启服务
+- **改宿主收口**（envelope / 工具白名单 / 阶段映射）→ RD 改 `skill-host-patch.md` → 重启服务
 - **加字段 / 改分类逻辑** → RD 改 `lead_fields` schema 或 `index.js` 的 Prompt assembly 段
 - **加工具** → RD 写新方法到 `kb-tools.js`，`index.js` 的 `dispatchTool` 自动带上
 - **换模型 / 改架构** → 全在 `index.js`，分段注释找到对应段

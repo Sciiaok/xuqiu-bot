@@ -49,7 +49,7 @@ export async function POST(request) {
     // 1. Resolve the product_line config (assembled dynamic_injection /
     //    output_schema / qualification from the product_lines row, cached in-process).
     //    The static system prompt comes from the ai-reception-deal skill bundle
-    //    + medici-host-patch and is loaded once at module import.
+    //    + skill-host-patch and is loaded once at module import.
     const lineConfig = await getMediciConfig({ tenantId: ctx.tenantId, id: productLine });
     if (!lineConfig) {
       return NextResponse.json({ error: `Product line not found: ${productLine}` }, { status: 404 });

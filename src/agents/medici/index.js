@@ -10,7 +10,7 @@
  * 2026-05 重构：agent prompt 来源切换为 ai-reception-deal skill
  * (`skills/ai-reception-deal.skill`)，方法论由 skill 主导。LeadEngine 宿主收口
  * （submit_response envelope、阶段→inquiry_quality/route 映射、转人工与
- * 风格规则）写在 medici-host-patch.md 里追加到 skill 之后。skill 可热替换，
+ * 风格规则）写在 skill-host-patch.md 里追加到 skill 之后。skill 可热替换，
  * 宿主代码改动只在 dynamic context 拼装、tools 列表、dispatcher 三处。
  *
  * Public API: `runMedici({ history, input, context, agentConfig, trace })`.
@@ -59,7 +59,7 @@ const STANDARD_DB_FIELDS = new Set([
 // Restart the Next.js server to pick up a swapped skill bundle.
 const SKILL = await loadSkill('ai-reception-deal');
 const HOST_PATCH = fs.readFileSync(
-  path.join(path.dirname(fileURLToPath(import.meta.url)), 'medici-host-patch.md'),
+  path.join(path.dirname(fileURLToPath(import.meta.url)), 'skill-host-patch.md'),
   'utf8',
 );
 
@@ -478,42 +478,6 @@ function buildTraceContextInfo(contextInfo = {}) {
 }
 
 /**
- * Flatten a history entry / user input to plain text. Used for the KB query
- * rewrite context — multimodal turns contribute their text parts only.
- */
-function extractPlainText(value) {
-  if (typeof value === 'string') return value;
-  if (value?.content) return extractPlainText(value.content);
-  if (Array.isArray(value)) {
-    return value
-      .map((item) => (typeof item === 'string' ? item : item?.text || ''))
-      .filter(Boolean)
-      .join('\n');
-  }
-  return '';
-}
-
-/**
- * Build the conversation context forwarded to search_knowledge for multi-turn
- * query rewriting. Only user/assistant turns (LLM-internal tool traffic is
- * excluded), plain text only, tail-capped to keep the rewrite prompt cheap.
- */
-function buildConversationContextForKb(history, input) {
-  const turns = [];
-  for (const m of Array.isArray(history) ? history : []) {
-    if (m.role !== 'user' && m.role !== 'assistant') continue;
-    const text = extractPlainText(m.content);
-    if (text) turns.push({ role: m.role, content: text });
-  }
-  // Fold the latest user input into the context so "price?" resolves against
-  // both prior turns AND the current question when Claude rewrites a follow-up
-  // tool query.
-  const latest = extractPlainText(input);
-  if (latest) turns.push({ role: 'user', content: latest });
-  return turns.slice(-8);
-}
-
-/**
  * Run one turn of the Medici conversation agent.
  *
  * @param {object}   opts
@@ -595,7 +559,6 @@ export async function runMedici({
     context_info: buildTraceContextInfo(context),
     available_assets_count: availableAssets.length,
   });
-  const conversationContext = buildConversationContextForKb(history, input);
 
   // 4. Tool-use loop. Same-round tool_calls run in parallel (Ogilvy pattern);
   //    submit_response among them short-circuits as the final answer. Every
@@ -629,7 +592,6 @@ export async function runMedici({
       const result = await dispatchTool(toolName, toolInput, {
         tenantId,
         productLineId,
-        conversationContext,
       });
       onToolEvent?.({ type: 'tool_result', tool: toolName, result, iteration: iterations });
       return { tc, result };

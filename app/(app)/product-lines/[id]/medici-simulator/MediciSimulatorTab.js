@@ -424,8 +424,6 @@ function toAdOption(ad) {
   };
 }
 
-const KB_TOOLS = new Set(['search_knowledge', 'calculate_price']);
-
 const boxStyle = {
   margin: '6px 0 0 0',
   padding: '8px 10px',
@@ -437,32 +435,19 @@ const boxStyle = {
 };
 
 /**
- * Collapsible trace detail block. KB tool calls/results render purpose-built
- * views (input params, rewritten query, intent, snippets with score/layer/
- * source); other entries fall back to pretty JSON.
+ * Collapsible trace detail block. Renders tool input/result as pretty JSON —
+ * the 6 typed KB tools (lookup_product / quote_price / lookup_shipping /
+ * lookup_policy / find_asset / check_constraint) all return determinate
+ * structures readable as-is.
  */
 function TraceData({ data }) {
-  const kbCallTool = data?.tool && KB_TOOLS.has(data.tool) && data.input && !('result' in data)
-    ? data.tool : null;
-  const kbResultTool = data?.tool && KB_TOOLS.has(data.tool) && 'result' in data
-    ? data.tool : null;
-
   const summary = (() => {
-    if (kbCallTool) {
+    if (data?.tool && data.input && !('result' in data)) {
       const keys = Object.keys(data.input || {});
-      return `${kbCallTool} · input: ${keys.join(', ') || '(none)'}（点击展开）`;
+      return `${data.tool} · input: ${keys.join(', ') || '(none)'}（点击展开）`;
     }
-    if (kbResultTool === 'search_knowledge') {
-      const r = data.result || {};
-      const hits = Array.isArray(r.results) ? r.results.length : 0;
-      const structured = Array.isArray(r.structured_results) ? r.structured_results.length : 0;
-      return `search_knowledge · ${hits} 命中 · ${structured} 结构化 · ${data.result_bytes || 0}B（点击展开）`;
-    }
-    if (kbResultTool === 'calculate_price') {
-      const r = data.result || {};
-      if (r.error) return `calculate_price · error: ${r.error}（点击展开）`;
-      const price = r.total_price_usd ?? r.unit_price_usd;
-      return `calculate_price · ${r.trade_term || 'FOB'} · $${price ?? '?'}（点击展开）`;
+    if (data?.tool && 'result' in data) {
+      return `${data.tool} · ${data.result_bytes || 0}B（点击展开）`;
     }
     if (data?.result_bytes != null) return `payload · ${data.result_bytes} bytes（点击展开）`;
     if (data?.input) return `input: ${Object.keys(data.input).join(', ')}（点击展开）`;
@@ -475,185 +460,13 @@ function TraceData({ data }) {
       <summary style={{ cursor: 'pointer', fontSize: 11, color: 'var(--text3)' }}>
         {summary}
       </summary>
-      {kbCallTool && <KbCallView tool={kbCallTool} input={data.input} />}
-      {kbResultTool === 'search_knowledge' && <SearchKnowledgeResultView result={data.result} />}
-      {kbResultTool === 'calculate_price' && <CalculatePriceResultView result={data.result} />}
-      {!kbCallTool && !kbResultTool && (
-        <pre style={{
-          ...boxStyle,
-          whiteSpace: 'pre-wrap',
-          wordBreak: 'break-word',
-          maxHeight: 320,
-          overflow: 'auto',
-        }}>{JSON.stringify(data, null, 2)}</pre>
-      )}
+      <pre style={{
+        ...boxStyle,
+        whiteSpace: 'pre-wrap',
+        wordBreak: 'break-word',
+        maxHeight: 320,
+        overflow: 'auto',
+      }}>{JSON.stringify(data, null, 2)}</pre>
     </details>
-  );
-}
-
-function KvRow({ label, value }) {
-  if (value === undefined || value === null || value === '') return null;
-  return (
-    <div style={{ marginBottom: 4 }}>
-      <span style={{ color: 'var(--text3)' }}>{label}：</span>
-      <span style={{ color: 'var(--text2)', wordBreak: 'break-word' }}>
-        {typeof value === 'object' ? JSON.stringify(value) : String(value)}
-      </span>
-    </div>
-  );
-}
-
-function KbCallView({ tool, input }) {
-  if (tool === 'search_knowledge') {
-    return (
-      <div style={boxStyle}>
-        <div style={{ color: 'var(--text3)', marginBottom: 4 }}>
-          <strong>search_knowledge 调用输入</strong>
-        </div>
-        <KvRow label="query" value={input.query} />
-        <KvRow label="layers" value={Array.isArray(input.layers) && input.layers.length ? input.layers.join(', ') : '(全部层)'} />
-        <KvRow label="top_k" value={input.top_k ?? 5} />
-      </div>
-    );
-  }
-  if (tool === 'calculate_price') {
-    return (
-      <div style={boxStyle}>
-        <div style={{ color: 'var(--text3)', marginBottom: 4 }}>
-          <strong>calculate_price 调用输入</strong>
-        </div>
-        <KvRow label="sku" value={input.sku} />
-        <KvRow label="quantity" value={input.quantity ?? 1} />
-        <KvRow label="trade_term" value={input.trade_term || 'FOB'} />
-        <KvRow label="destination_port" value={input.destination_port || '(未提供)'} />
-      </div>
-    );
-  }
-  return null;
-}
-
-function SearchKnowledgeResultView({ result = {} }) {
-  const hits = Array.isArray(result.results) ? result.results : [];
-  const structured = Array.isArray(result.structured_results) ? result.structured_results : [];
-  return (
-    <div style={boxStyle}>
-      <div style={{ color: 'var(--text3)', marginBottom: 6 }}>
-        <strong>search_knowledge 结果</strong>
-      </div>
-      <KvRow label="改写查询" value={result.rewritten_query || '(与原查询一致)'} />
-      <KvRow label="search_mode" value={result.search_mode} />
-      <KvRow label="意图分析" value={result.intent_analysis} />
-
-      <div style={{ margin: '6px 0 4px 0' }}>
-        <strong>命中片段（{hits.length}）</strong>
-      </div>
-      {hits.length === 0 && (
-        <em style={{ color: 'var(--text3)' }}>无命中（空知识库或 RPC 失败）</em>
-      )}
-      {hits.map((h, i) => (
-        <div
-          key={i}
-          style={{
-            padding: '8px 0',
-            borderTop: i === 0 ? 'none' : '1px dashed var(--border)',
-          }}
-        >
-          <div style={{ color: 'var(--text3)', marginBottom: 4, fontFamily: 'var(--font-mono)' }}>
-            #{i + 1}
-            {typeof h.final_score === 'number' ? ` · score=${h.final_score.toFixed(3)}` : ''}
-            {typeof h.relevance_score === 'number' ? ` · sim=${h.relevance_score.toFixed(3)}` : ''}
-            {h.layer ? ` · layer=${h.layer}` : ''}
-            {h.authority_level ? ` · authority=${h.authority_level}` : ''}
-          </div>
-          {h.source && (
-            <div style={{ color: 'var(--text3)', marginBottom: 4 }}>
-              来源：<span style={{ color: 'var(--text2)' }}>{h.source}</span>
-            </div>
-          )}
-          <div style={{
-            whiteSpace: 'pre-wrap',
-            wordBreak: 'break-word',
-            color: 'var(--text)',
-            padding: '6px 8px',
-            background: 'var(--bg2)',
-            borderRadius: 3,
-          }}>
-            {h.content || h.content_original || '(empty)'}
-          </div>
-          {h.content_original && h.content && h.content_original !== h.content && (
-            <details style={{ marginTop: 4 }}>
-              <summary style={{ cursor: 'pointer', fontSize: 11, color: 'var(--text3)' }}>
-                原文（非英文）
-              </summary>
-              <div style={{
-                marginTop: 4,
-                whiteSpace: 'pre-wrap',
-                wordBreak: 'break-word',
-                padding: '6px 8px',
-                background: 'var(--bg2)',
-                borderRadius: 3,
-              }}>{h.content_original}</div>
-            </details>
-          )}
-          {h.metadata && Object.keys(h.metadata).length > 0 && (
-            <details style={{ marginTop: 4 }}>
-              <summary style={{ cursor: 'pointer', fontSize: 11, color: 'var(--text3)' }}>
-                metadata
-              </summary>
-              <pre style={{ margin: '4px 0 0 0', whiteSpace: 'pre-wrap' }}>
-                {JSON.stringify(h.metadata, null, 2)}
-              </pre>
-            </details>
-          )}
-        </div>
-      ))}
-
-      {structured.length > 0 && (
-        <div style={{ marginTop: 10 }}>
-          <strong>结构化结果（{structured.length}）</strong>
-          <pre style={{ margin: '4px 0 0 0', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
-            {JSON.stringify(structured, null, 2)}
-          </pre>
-        </div>
-      )}
-    </div>
-  );
-}
-
-function CalculatePriceResultView({ result = {} }) {
-  if (result.error) {
-    return (
-      <div style={boxStyle}>
-        <strong>calculate_price 失败：</strong>
-        <span style={{ color: 'var(--red, #f85149)' }}>{result.error}</span>
-        {result.message && <div style={{ marginTop: 4 }}>{result.message}</div>}
-      </div>
-    );
-  }
-  return (
-    <div style={boxStyle}>
-      <div style={{ color: 'var(--text3)', marginBottom: 6 }}>
-        <strong>calculate_price 结果</strong>
-      </div>
-      {result.product && (
-        <>
-          <KvRow label="SKU" value={result.product.sku} />
-          <KvRow label="model" value={result.product.model} />
-        </>
-      )}
-      <KvRow label="quantity" value={result.quantity} />
-      <KvRow label="trade_term" value={result.trade_term} />
-      <KvRow label="unit_price_usd" value={result.unit_price_usd} />
-      <KvRow label="total_price_usd" value={result.total_price_usd} />
-      <KvRow label="destination_port" value={result.destination_port} />
-      <details style={{ marginTop: 6 }}>
-        <summary style={{ cursor: 'pointer', fontSize: 11, color: 'var(--text3)' }}>
-          完整明细
-        </summary>
-        <pre style={{ margin: '4px 0 0 0', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
-          {JSON.stringify(result, null, 2)}
-        </pre>
-      </details>
-    </div>
   );
 }

@@ -5,7 +5,7 @@
  * `agentConfig` object that runMedici consumes:
  *   { dynamic_injection, output_schema, qualification_config, ... }.
  *
- * 2026-05 重构：system_prompt 由 ai-reception-deal skill bundle + medici-host-patch.md
+ * 2026-05 重构：system_prompt 由 ai-reception-deal skill bundle + skill-host-patch.md
  * 静态拼装（在 runMedici 模块加载时一次性完成），product_line 专属内容全部走
  * `dynamic_injection` 走每轮的 dynamic system block。
  *
