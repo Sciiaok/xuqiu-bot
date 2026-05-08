@@ -20,7 +20,7 @@ const PROTECTED_PREFIXES = [
 // 仅 founder 可访问的路径前缀。普通租户被 redirect 到 /analytics。
 const FOUNDER_ONLY_PREFIXES = ['/admin', '/dev-tools'];
 
-export async function middleware(request) {
+export async function proxy(request) {
   const pathname = request.nextUrl.pathname;
 
   if (process.env.PLAYWRIGHT_TEST === '1') {

@@ -54,7 +54,7 @@ export const config = {
 
   // Message Queue (aggregation for rapid messages)
   // 注：进程级唯一的 queue instanceId 不在这里 —— `process.pid` 是 Node-only，
-  // 写在 config.js 顶层会让 Edge Runtime（middleware）import 时直接 build fail。
+  // 写在 config.js 顶层会让 Edge Runtime（proxy.js）import 时直接 build fail。
   // 由唯一消费方 lib/repositories/queue.repository.js 自己读 process.pid。
   queue: {
     aggregationWindowMs: 2000,

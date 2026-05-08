@@ -179,7 +179,7 @@ export async function POST(request) {
 
 ### 数据表总览（代码实际引用）
 
-> 仅列出 application code（`app/` `lib/` `src/` `scripts/` `middleware.js`）里 `.from(...)` / `.rpc(...)` 出现过的表。新增表时请同步本表。
+> 仅列出 application code（`app/` `lib/` `src/` `scripts/` `proxy.js`）里 `.from(...)` / `.rpc(...)` 出现过的表。新增表时请同步本表。
 
 | 域 | 表 | 用途 | 关键引用 |
 |---|---|---|---|
