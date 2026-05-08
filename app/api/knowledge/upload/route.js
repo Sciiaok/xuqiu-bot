@@ -16,7 +16,7 @@ const ALLOWED_TYPES = {
   'text/plain': 'txt',
 };
 
-const VALID_LAYERS = ['company', 'product', 'logistics', 'compliance', 'sales', 'competitive'];
+const VALID_LAYERS = ['company', 'product', 'logistics', 'sales'];
 
 const MAX_FILE_SIZE_BYTES = 50 * 1024 * 1024; // 50 MB
 

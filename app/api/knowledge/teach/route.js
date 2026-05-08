@@ -44,7 +44,7 @@ Output as JSON:
     {
       "content": "the knowledge point in original language",
       "content_en": "English translation of the knowledge point",
-      "layer": "company | product | logistics | compliance | sales | competitive",
+      "layer": "company | product | logistics | sales",
       "metadata": {
         "topic": "brief keyword",
         "sku": "if applicable",

@@ -46,12 +46,10 @@ function generateRecommendations(layers, outdatedDocs) {
   for (const [layer, data] of Object.entries(layers)) {
     if (data.status === 'error') {
       const actions = {
-        company: '上传公司简介、付款条款、售后政策文档',
-        product: '上传产品目录 Excel（含 SKU、型号、价格、MOQ）',
-        logistics: '上传运费表（各港口运费 + 交期）',
-        compliance: '上传各国进口认证要求、关税税率表',
-        sales: '上传销售 SOP、异议处理话术、折扣规则',
-        competitive: '上传竞品价格对比表、差异化话术',
+        company: '上传公司简介、资质证书、付款条款、售后政策文档',
+        product: '上传产品目录或价格表（任意格式：Excel / PDF / Word / 自然语言均可）',
+        logistics: '上传运费表 / 路线表 / 贸易规则等物流交付资料',
+        sales: '上传销售 SOP、异议处理话术、折扣规则、贸易规则',
       };
       recs.push({
         priority: 'high',

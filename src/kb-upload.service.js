@@ -20,10 +20,8 @@ const CHUNK_OVERLAP = 100;
 const LAYER_LABELS = {
   company: 'Company Foundation',
   product: 'Products & Pricing',
-  logistics: 'Logistics & Shipping',
-  compliance: 'Compliance & Certification',
+  logistics: 'Logistics & Delivery',
   sales: 'Sales Playbook',
-  competitive: 'Competitive Intelligence',
 };
 
 // ── Main Upload Flow ─────────────────────────────────────────────────
@@ -53,25 +51,30 @@ export async function processDocument(ctx, docId, fileContent, layer, options = 
     // Step 1: Extract knowledge points using LLM
     const extracted = await extractKnowledgePoints(fileContent, layer, fileType, tenantId);
 
-    // Step 2: For product/logistics layers, also extract structured data
-    if (layer === 'product') {
-      await extractStructuredProducts(ctx, docId, fileContent, fileType);
-    }
-    if (layer === 'logistics') {
-      await extractStructuredShipping(ctx, docId, fileContent, fileType);
-    }
+    // Step 2 + Step 3 跑成并行：
+    //   - 结构化抽取（产品 / 物流层）一次 LLM 调用，独立写 kb_products / kb_shipping_routes
+    //   - 知识点逐条 translate + embed + insert，并发 8 路（每条 1-2 个 LLM 调用）
+    // 并发上限 8 来自 OpenRouter / OpenAI 的稳定性 vs 速度的平衡点。
+    const KP_CONCURRENCY = 8;
+    const points = extracted.knowledge_points || [];
 
-    // Step 3: Process each knowledge point (translate + embed + store)
-    let storedCount = 0;
-    const conflicts = [];
-    for (const point of extracted.knowledge_points) {
+    const structuredTask =
+      layer === 'product' ? extractStructuredProducts(ctx, docId, fileContent, fileType) :
+      layer === 'logistics' ? extractStructuredShipping(ctx, docId, fileContent, fileType) :
+      Promise.resolve();
+
+    const kpTask = mapWithConcurrency(points, async (point) => {
       const pointId = await processKnowledgePoint(ctx, docId, layer, point);
-      storedCount++;
-
-      // Step 3b: Conflict detection — check if this point conflicts with existing knowledge
       const conflict = await detectConflict({ tenantId, productLineId }, docId, layer, point, pointId);
-      if (conflict) conflicts.push(conflict);
-    }
+      return { ok: true, conflict };
+    }, KP_CONCURRENCY).catch(err => {
+      logger.error('kb.upload.kp_batch_failed', { docId, error: err.message });
+      throw err;
+    });
+
+    const [, kpResults] = await Promise.all([structuredTask, kpTask]);
+    const storedCount = kpResults.length;
+    const conflicts = kpResults.map(r => r?.conflict).filter(Boolean);
 
     // Step 4: Update document status
     await supabase
@@ -156,8 +159,9 @@ Output as JSON:
 }
 
 /**
- * Extract JSON from an LLM response. Tolerates markdown code fences,
- * including truncated responses where the closing ``` is missing.
+ * Extract JSON from an LLM response. Tolerates markdown code fences (including
+ * truncated responses where the closing ``` is missing), pre/post chatter,
+ * Python-style single quotes, and trailing commas.
  */
 function parseJsonFromLlm(text) {
   let payload = text.trim();
@@ -170,10 +174,46 @@ function parseJsonFromLlm(text) {
   payload = payload.trim();
   try {
     return JSON.parse(payload);
-  } catch (err) {
-    // Fallback: repair common LLM JSON issues (unescaped quotes/newlines, trailing commas, truncation)
-    return JSON.parse(jsonrepair(payload));
+  } catch (_) {
+    /* fall through */
   }
+  try {
+    return JSON.parse(jsonrepair(payload));
+  } catch (_) {
+    /* fall through */
+  }
+  // Last-ditch: extract the first balanced {...} or [...] block and try repair.
+  const sliced = sliceFirstJsonBlock(payload);
+  if (sliced) {
+    try {
+      return JSON.parse(jsonrepair(sliced));
+    } catch (err) {
+      throw err;
+    }
+  }
+  throw new Error('parseJsonFromLlm: no JSON block found');
+}
+
+function sliceFirstJsonBlock(s) {
+  for (const open of ['{', '[']) {
+    const close = open === '{' ? '}' : ']';
+    const start = s.indexOf(open);
+    if (start === -1) continue;
+    let depth = 0, inStr = false, esc = false;
+    for (let i = start; i < s.length; i++) {
+      const ch = s[i];
+      if (esc) { esc = false; continue; }
+      if (ch === '\\') { esc = true; continue; }
+      if (ch === '"' || ch === "'") { inStr = !inStr; continue; }
+      if (inStr) continue;
+      if (ch === open) depth++;
+      else if (ch === close) {
+        depth--;
+        if (depth === 0) return s.slice(start, i + 1);
+      }
+    }
+  }
+  return null;
 }
 
 // ── Process Single Knowledge Point ───────────────────────────────────
@@ -222,27 +262,45 @@ async function processKnowledgePoint(ctx, docId, layer, point) {
 
 async function extractStructuredProducts(ctx, docId, content, fileType) {
   const { tenantId, agentId, productLineId } = ctx;
-  const systemPrompt = `Extract structured product data from this document. Output as JSON array.
-Each product should have:
+  const systemPrompt = `Extract structured product data from this document. Be permissive: the
+source can be an Excel sheet with arbitrary columns, a price-list PDF, a Word
+catalog, a markdown table, or even free-form text describing models. Column /
+field names may be Chinese, English, or mixed. There is NO required field.
+
+For each product/model/SKU you can identify, output one row. If a field is not
+present, use null — do not fabricate. Put any other useful attribute (color,
+horsepower, dimensions, fuel type, drive layout, certifications, warranty,
+discount tiers, etc.) into "specs" as key→value.
+
+Schema (every field optional except produce a row only when you actually see
+something product-shaped):
 {
   "sku": "string or null",
-  "product_name": "string",
-  "product_name_en": "English name",
+  "product_name": "string or null",
+  "product_name_en": "English name or null",
   "model": "string or null",
-  "category": "string (e.g. tractor, harvester, parts)",
-  "specs": { "key": "value" pairs for technical specifications },
-  "fob_price_usd": number or null,
+  "category": "string or null (e.g. tractor, harvester, parts, sedan, EV truck)",
+  "specs": { "key": "value" pairs — anything that isn't a top-level column },
+  "fob_price_usd": number or null (convert other currencies to USD if rate is in the doc; otherwise leave null and put the original price/currency in specs.original_price),
   "moq": number or null,
-  "lead_time_days": "string or null",
+  "lead_time_days": "string or null (free text OK, e.g. '45 days' / '4-6 weeks')",
   "source_row": number or null
 }
 
-Output: { "products": [...] }
-If no product data found, output: { "products": [] }`;
+Rules:
+- Never reject a row just because SKU or price is missing — store what you have.
+- If the document describes multiple variants of the same model, emit one row per variant.
+- If the document is not about products at all, return { "products": [] }.
 
+Output STRICT JSON only — double quotes around all keys and string values, no
+single quotes, no trailing commas, no comments, no Python-style dicts. Wrap
+the whole thing in a single object: { "products": [...] }`;
+
+  // 放宽 schema 后 LLM 倾向输出更多结构化行（每个变体一行 + 任意 specs），
+  // 16k tokens 在长价目表上会被截断 → 提到 32k 兜底；jsonrepair 还会处理零星语法问题。
   const response = await openrouter.messages.create({
     models: [MODELS.SONNET],
-    max_tokens: 16000,
+    max_tokens: 32000,
     messages: [
       { role: 'system', content: systemPrompt },
       { role: 'user', content: `File type: ${fileType}\n\nContent:\n${truncate(content, 15000)}` },
@@ -291,27 +349,40 @@ If no product data found, output: { "products": [] }`;
 
 async function extractStructuredShipping(ctx, docId, content, fileType) {
   const { tenantId, agentId, productLineId } = ctx;
-  const systemPrompt = `Extract structured shipping route data from this document. Output as JSON array.
-Each route should have:
+  const systemPrompt = `Extract structured shipping / logistics / delivery route data from this
+document. Be permissive: the source can be an Excel rate card, a freight
+forwarder quote PDF, a Word document, an Incoterms guide, or free-form text
+describing routes. Column / field names may be Chinese, English, or mixed.
+
+For each route or rate you can identify, output one row. There is NO required
+field — if the document only gives a destination country (no port), still emit a
+row with destination_country set. If it gives a flat rate without a destination,
+put the rate's scope in "notes". Never reject a row for missing fields.
+
+Schema (every field optional):
 {
-  "origin_port": "string",
-  "destination_port": "string",
-  "destination_country": "string",
-  "shipping_method": "sea_bulk | sea_container | rail | air",
-  "cost_per_unit_usd": number or null,
-  "transit_days": "string (e.g. '25-30')",
-  "notes": "string or null"
+  "origin_port": "string or null",
+  "destination_port": "string or null",
+  "destination_country": "string or null",
+  "shipping_method": "string or null (free text OK: sea_bulk, sea_container, RoRo, rail, air, multimodal, ...)",
+  "cost_per_unit_usd": number or null (convert other currencies to USD if rate is in the doc; otherwise leave null and put the original cost/currency in notes),
+  "transit_days": "string or null (free text OK, e.g. '25-30 days')",
+  "notes": "string or null (anything else: validity window, surcharges, vessel constraints, customs caveats)"
 }
 
-Output: { "routes": [...] }
-If no shipping data found, output: { "routes": [] }`;
+Rules:
+- If a row is per-container or per-CBM rather than per-unit, set cost_per_unit_usd to null and describe in notes.
+- If the document is purely commercial terms (Incoterms / payment / trade rules) and not actually a shipping rate sheet, return { "routes": [] } — those will be captured by the knowledge-points pipeline instead.
+
+Output STRICT JSON only — double quotes, no single quotes, no trailing commas,
+no comments, no Python-style dicts. Wrap as { "routes": [...] }`;
 
   const response = await openrouter.messages.create({
     models: [MODELS.SONNET],
-    max_tokens: 4000,
+    max_tokens: 16000,
     messages: [
       { role: 'system', content: systemPrompt },
-      { role: 'user', content: `File type: ${fileType}\n\nContent:\n${truncate(content, 10000)}` },
+      { role: 'user', content: `File type: ${fileType}\n\nContent:\n${truncate(content, 15000)}` },
     ],
   }, { tenantId, callSite: 'kb.upload.extract-shipping' });
 
@@ -483,4 +554,19 @@ async function updateDocStatus(docId, status, errorMessage = null) {
 function truncate(text, maxChars) {
   if (text.length <= maxChars) return text;
   return text.slice(0, maxChars) + '\n\n[... content truncated ...]';
+}
+
+// Cap concurrency over an array — like Promise.all but with worker-pool throttling.
+async function mapWithConcurrency(items, fn, concurrency) {
+  const results = new Array(items.length);
+  let next = 0;
+  async function worker() {
+    while (true) {
+      const i = next++;
+      if (i >= items.length) return;
+      results[i] = await fn(items[i], i);
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(concurrency, items.length) }, worker));
+  return results;
 }

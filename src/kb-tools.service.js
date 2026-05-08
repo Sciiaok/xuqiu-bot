@@ -266,14 +266,16 @@ export async function lookupShipping({
 
 // ── 4. lookupPolicy (also folds in QA snippet search) ────────────────
 
+// Topic → layer hint for vector search. After the four-layer consolidation,
+// 资质 / 认证 类话题归入 company（公司基础信息），竞品话题归入 sales（话术）。
 const TOPIC_TO_LAYERS = {
   payment_terms: ['product', 'sales'],
   warranty: ['company', 'sales'],
   after_sales: ['company', 'sales'],
-  export_qualification: ['compliance'],
-  certification: ['compliance'],
+  export_qualification: ['company'],
+  certification: ['company'],
   company_background: ['company'],
-  competitive: ['competitive'],
+  competitive: ['sales'],
 };
 
 /**

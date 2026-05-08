@@ -97,7 +97,7 @@ const TOOL_DEFS = {
   lookup_policy: {
     name: 'lookup_policy',
     description:
-      'Look up policy / company / sales / compliance info. Pass `topic` for known categories (payment_terms, warranty, after_sales, export_qualification, certification, company_background, competitive) and/or `free_text` for the customer\'s exact question (also searches sales-curated Q&A snippets first). Returns {found, answer_text, citations}.',
+      'Look up policy / company / sales info. Pass `topic` for known categories (payment_terms, warranty, after_sales, export_qualification, certification, company_background, competitive) and/or `free_text` for the customer\'s exact question (also searches sales-curated Q&A snippets first). Returns {found, answer_text, citations}.',
     input_schema: {
       type: 'object',
       properties: {

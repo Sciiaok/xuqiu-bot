@@ -11,9 +11,9 @@
  * 文件上传时会自动从 PDF/docx 抽取嵌入图（vision caption + 入库为 kb_assets），
  * 用户基本不需要手动单独上传图片。
  *
- * 上传"产品与价格"层 + xlsx 时，走严格模板路径（直接 verified 入库 kb_products，
- * 跳过 AI 抽取）；"物流与交付"层 + xlsx 同理走 kb_shipping_routes。其他组合走
- * 通用 AI 抽取路径。
+ * 四层分类：公司基础信息 / 产品与价格 / 物流与交付 / 销售话术与流程。
+ * 所有上传统一走 AI 抽取管线 —— 不再要求严格列名 / 必填字段，让 LLM 兼容多样
+ * 输入（中英混排、缺列、free-form 文本均可）。
  */
 import { useEffect, useRef, useState } from 'react';
 import s from './page.module.css';
@@ -29,8 +29,6 @@ import {
   teachExtract,
   teachCommit,
   resolveConflict,
-  importTemplate,
-  templateDownloadUrl,
   listAssets,
   uploadAsset,
   deleteAsset,
@@ -39,26 +37,6 @@ import {
   deleteQaSnippet,
 } from '../../../../../lib/api/knowledge.js';
 import { LAYERS, LAYER_LABELS } from './constants.js';
-
-// Layers that have a strict structured-template path. xlsx files uploaded
-// under one of these layers are routed to /api/knowledge/import-template
-// instead of the generic AI extraction pipeline.
-const STRUCTURED_TEMPLATES = {
-  product: {
-    kind: 'products',
-    label: '产品价格表',
-    requiredCols: ['sku', 'fob_price_usd'],
-    cols: 'sku, model, product_name, category, fob_price_usd, moq, lead_time_days, effective_date, expiry_date, specs.*',
-  },
-  logistics: {
-    kind: 'shipping_routes',
-    label: '运费 / 路线表',
-    requiredCols: ['destination_port', 'cost_per_unit_usd'],
-    cols: 'origin_port, destination_port, destination_country, shipping_method, cost_per_unit_usd, transit_days, effective_date, expiry_date, notes',
-  },
-};
-
-const isXlsx = (name = '') => /\.xlsx?$/i.test(name);
 
 const MAX_FILE_SIZE_BYTES = 50 * 1024 * 1024;
 const SECTIONS = [
@@ -253,8 +231,6 @@ function FileUploadCard({ agentId, onChanged }) {
   const [dragOver, setDragOver] = useState(false);
   const fileInputRef = useRef(null);
 
-  const tpl = STRUCTURED_TEMPLATES[layer]; // present only for product / logistics
-
   async function handleFiles(files) {
     if (!files?.length) return;
     setUploading(true);
@@ -266,22 +242,8 @@ function FileUploadCard({ agentId, onChanged }) {
         continue;
       }
       try {
-        if (tpl && isXlsx(f.name)) {
-          // Strict structured-template path. Inserted as `verified` directly,
-          // skipping AI extraction and the review queue.
-          const data = await importTemplate(agentId, f, tpl.kind);
-          const ok = !data.error && data.inserted > 0;
-          const errMsg = data.error
-            ? data.error
-            : (data.inserted === 0 && data.total_rows > 0
-                ? `0/${data.total_rows} 行通过校验`
-                : null);
-          out.push({ name: f.name, ok, mode: 'template', data, error: errMsg });
-        } else {
-          // Generic AI extraction path → review queue.
-          const data = await uploadDocument(agentId, f, layer);
-          out.push({ name: f.name, ok: !data.error, mode: 'ai', data });
-        }
+        const data = await uploadDocument(agentId, f, layer);
+        out.push({ name: f.name, ok: !data.error, data });
       } catch (e) {
         out.push({ name: f.name, ok: false, error: e.message });
       }
@@ -295,7 +257,7 @@ function FileUploadCard({ agentId, onChanged }) {
     <div className={s.uploadCard}>
       <div className={s.uploadCardTitle}>文档上传</div>
       <div className={s.uploadCardDesc}>
-        支持 PDF / Word / Excel / CSV / Markdown / TXT。<b>PDF 和 Word 里嵌入的图片会被自动抽出来、AI 自动写描述、入库为可发送资产</b>——一般情况下你不需要再单独上传图片。
+        支持 PDF / Word / Excel / CSV / Markdown / TXT。<b>不要求固定模板</b>——直接传你手头有的文件，AI 会自己读懂里面的产品 / 价格 / 路线 / 政策，缺列、字段名中英混排、free-form 文本都行。<b>PDF 和 Word 里嵌入的图片会被自动抽出来、AI 自动写描述、入库为可发送资产</b>，一般情况下你不需要再单独上传图片。
       </div>
       <div className={s.formRow}>
         <span className={s.formLabel}>知识层：</span>
@@ -303,31 +265,6 @@ function FileUploadCard({ agentId, onChanged }) {
           {LAYERS.map(l => <option key={l} value={l}>{LAYER_LABELS[l]}</option>)}
         </select>
       </div>
-
-      {tpl && (
-        <div style={{
-          marginTop: 10, padding: '10px 12px',
-          border: '1px solid var(--border)', borderRadius: 6,
-          background: 'var(--bg2)', fontSize: 12, lineHeight: 1.6,
-        }}>
-          <div style={{ color: 'var(--text2)', marginBottom: 6 }}>
-            <b>{tpl.label}</b> 上传 .xlsx 时会按列名直接 verified 入库（跳过 AI 抽取）。
-            其他格式（PDF/Word/CSV/TXT）走 AI 抽取 → 复核队列。
-          </div>
-          <div style={{ color: 'var(--text3)', fontFamily: 'var(--font-mono)', fontSize: 11, marginBottom: 6 }}>
-            列：{tpl.cols}
-            <br/>必填：{tpl.requiredCols.join(', ')}
-          </div>
-          <a
-            href={templateDownloadUrl(tpl.kind)}
-            download
-            style={{ color: 'var(--accent)', fontSize: 12 }}
-            onClick={e => e.stopPropagation()}
-          >
-            ↓ 下载空白模板（含示例行）
-          </a>
-        </div>
-      )}
 
       <div
         className={`${s.dropzone} ${dragOver ? s.dropzoneActive : ''}`}
@@ -356,12 +293,7 @@ function FileUploadCard({ agentId, onChanged }) {
             <div key={i} className={s.uploadFileName}>
               <span className={r.ok ? s.uploadStatusDone : s.uploadStatusError}>{r.ok ? '✓' : '✗'}</span>
               {r.name}
-              {r.mode === 'template' && r.data && (
-                <span style={{ color: 'var(--text3)', marginLeft: 4 }}>
-                  · 模板路径：已 verified 入库 {r.data.inserted ?? 0}/{r.data.total_rows ?? 0} 行
-                </span>
-              )}
-              {r.mode === 'ai' && r.ok && r.data?.knowledge_points != null && (
+              {r.ok && r.data?.knowledge_points != null && (
                 <span style={{ color: 'var(--text3)', marginLeft: 4 }}>
                   · AI 抽取 {r.data.knowledge_points} 知识点
                   {r.data.images?.extracted > 0 && ` · ${r.data.images.extracted} 张图`}
@@ -370,14 +302,6 @@ function FileUploadCard({ agentId, onChanged }) {
               {(r.data?.error || r.error) && (
                 <div style={{ color: 'var(--red)', marginLeft: 18, fontSize: 11, marginTop: 2 }}>
                   {r.data?.error || r.error}
-                </div>
-              )}
-              {r.mode === 'template' && r.data?.errors?.length > 0 && (
-                <div style={{ color: 'var(--red)', marginLeft: 18, fontSize: 11, marginTop: 2 }}>
-                  {r.data.errors.slice(0, 5).map((er, j) => (
-                    <div key={j}>· 第 {er.row ?? '?'} 行：{er.error}</div>
-                  ))}
-                  {r.data.errors.length > 5 && <div>… 等 {r.data.errors.length - 5} 条</div>}
                 </div>
               )}
             </div>

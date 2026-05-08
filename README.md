@@ -392,7 +392,7 @@ erDiagram
     uuid tenant_id FK
     text product_line_id FK
     text filename
-    text layer "company|product|logistics|compliance|sales|competitive"
+    text layer "company|product|logistics|sales"
     text source_type "file|chat_extract|manual"
     text status "pending|ready|error"
   }

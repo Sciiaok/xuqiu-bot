@@ -246,7 +246,7 @@ Rules:
 - "structured": specific numeric comparisons (price < X, power > Y) → SQL filters
 - "hybrid": combination (e.g. "cheapest tractor under 100HP") → SQL filter + vector rank
 - For filters, use: {"field": {"$lte": value}} or {"field": "exact_value"} or {"specs.field_name": {"$gte": value}}
-- Infer layers from topic: price/specs → product, shipping → logistics, certification → compliance, etc.`,
+- Infer layers from topic: price/specs/SKU → product, shipping/freight/transit → logistics, certification/qualification/company background → company, sales scripts/objection handling → sales.`,
       },
       { role: 'user', content: query },
     ],

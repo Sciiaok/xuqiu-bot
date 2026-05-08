@@ -3,7 +3,7 @@ import { generateEmbedding, translateToEnglish, detectLanguage } from '../../../
 import supabase from '../../../../../lib/supabase.js';
 import { getTenantContext, findAgentInTenant } from '../../../../../lib/tenant-context.js';
 
-const VALID_LAYERS = new Set(['company', 'product', 'logistics', 'compliance', 'sales', 'competitive']);
+const VALID_LAYERS = new Set(['company', 'product', 'logistics', 'sales']);
 
 /**
  * POST /api/knowledge/teach/commit

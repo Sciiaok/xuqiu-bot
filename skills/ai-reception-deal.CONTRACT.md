@@ -190,7 +190,7 @@ lookup_policy({
                                    // company_background / competitive）
   subtopic?:            string,
   free_text?:           string,    // 客户原话——会**优先**搜销售自填的 Q&A snippet
-                                   // （命中阈值 0.75），未命中再走六层向量检索
+                                   // （命中阈值 0.75），未命中再走四层向量检索
   destination_country?: string,    // 国别筛选
 })
 → { found: boolean, answer_text?: string, citations?: [...] }
