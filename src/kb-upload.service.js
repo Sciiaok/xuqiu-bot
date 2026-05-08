@@ -36,19 +36,22 @@ const LAYER_LABELS = {
  * @param {string} docId - kb_documents.id（already created by the API route）
  * @param {string} fileContent
  * @param {string} layer
- * @param {Object} options - { filename, fileType }
+ * @param {Object} options - { filename, fileType, onProgress }
+ *   onProgress({stage, ...}) 用来推 SSE 进度事件，stage ∈
+ *   'extracting' | 'embedding' | 'structured'。可省。
  */
 export async function processDocument(ctx, docId, fileContent, layer, options = {}) {
   const { tenantId, agentId, productLineId } = ctx || {};
   if (!tenantId || !agentId || !productLineId) {
     throw new Error('processDocument: tenantId, agentId, productLineId required');
   }
-  const { filename = '', fileType = 'txt' } = options;
+  const { filename = '', fileType = 'txt', onProgress = () => {} } = options;
 
   try {
     await updateDocStatus(docId, 'processing');
 
     // Step 1: Extract knowledge points using LLM
+    onProgress({ stage: 'extracting' });
     const extracted = await extractKnowledgePoints(fileContent, layer, fileType, tenantId);
 
     // Step 2 + Step 3 跑成并行：
@@ -57,15 +60,26 @@ export async function processDocument(ctx, docId, fileContent, layer, options = 
     // 并发上限 8 来自 OpenRouter / OpenAI 的稳定性 vs 速度的平衡点。
     const KP_CONCURRENCY = 8;
     const points = extracted.knowledge_points || [];
+    onProgress({ stage: 'embedding', done: 0, total: points.length });
 
     const structuredTask =
-      layer === 'product' ? extractStructuredProducts(ctx, docId, fileContent, fileType) :
-      layer === 'logistics' ? extractStructuredShipping(ctx, docId, fileContent, fileType) :
-      Promise.resolve();
+      layer === 'product'
+        ? extractStructuredProducts(ctx, docId, fileContent, fileType)
+            .then(n => onProgress({ stage: 'structured', kind: 'product', count: n ?? 0 }))
+        : layer === 'logistics'
+        ? extractStructuredShipping(ctx, docId, fileContent, fileType)
+            .then(n => onProgress({ stage: 'structured', kind: 'logistics', count: n ?? 0 }))
+        : Promise.resolve();
 
+    let kpDone = 0;
     const kpTask = mapWithConcurrency(points, async (point) => {
       const pointId = await processKnowledgePoint(ctx, docId, layer, point);
       const conflict = await detectConflict({ tenantId, productLineId }, docId, layer, point, pointId);
+      kpDone++;
+      // emit on every 5th point or on the final one — avoid event spam for big docs
+      if (kpDone % 5 === 0 || kpDone === points.length) {
+        onProgress({ stage: 'embedding', done: kpDone, total: points.length });
+      }
       return { ok: true, conflict };
     }, KP_CONCURRENCY).catch(err => {
       logger.error('kb.upload.kp_batch_failed', { docId, error: err.message });
@@ -90,8 +104,27 @@ export async function processDocument(ctx, docId, fileContent, layer, options = 
     return { knowledge_points: storedCount, conflicts };
   } catch (error) {
     logger.error('kb.upload.failed', { docId, error: error.message });
+    // Wipe any partial rows we wrote before throwing — leaving them would
+    // pollute KB search results with half-extracted content.
+    await cleanupPartialDoc(docId).catch(e =>
+      logger.error('kb.upload.cleanup_failed', { docId, error: e.message })
+    );
     await updateDocStatus(docId, 'error', error.message);
     throw error;
+  }
+}
+
+/**
+ * Delete partial rows written for a doc that ended in `error`. The doc row
+ * itself stays (status='error') so the user can see what happened.
+ *
+ * kb_assets 用 source_doc_id ON DELETE SET NULL —— 不在这里清理，留给独立的
+ * 资产维护流程，免得删错没问题但留下的图。
+ */
+export async function cleanupPartialDoc(docId) {
+  for (const table of ['kb_knowledge_points', 'kb_products', 'kb_shipping_routes']) {
+    const { error } = await supabase.from(table).delete().eq('doc_id', docId);
+    if (error) throw new Error(`cleanup ${table}: ${error.message}`);
   }
 }
 
@@ -321,7 +354,7 @@ the whole thing in a single object: { "products": [...] }`;
     return;
   }
 
-  if (!parsed.products?.length) return;
+  if (!parsed.products?.length) return 0;
 
   const rows = parsed.products.map(p => ({
     tenant_id: tenantId,
@@ -341,8 +374,12 @@ the whole thing in a single object: { "products": [...] }`;
   }));
 
   const { error } = await supabase.from('kb_products').insert(rows);
-  if (error) logger.error('kb.products.insert_failed', { error: error.message });
-  else logger.info('kb.products.extracted', { count: rows.length, docId });
+  if (error) {
+    logger.error('kb.products.insert_failed', { error: error.message });
+    return 0;
+  }
+  logger.info('kb.products.extracted', { count: rows.length, docId });
+  return rows.length;
 }
 
 // ── Structured Shipping Extraction ───────────────────────────────────
@@ -400,7 +437,7 @@ no comments, no Python-style dicts. Wrap as { "routes": [...] }`;
     return;
   }
 
-  if (!parsed.routes?.length) return;
+  if (!parsed.routes?.length) return 0;
 
   const rows = parsed.routes.map(r => ({
     tenant_id: tenantId,
@@ -417,8 +454,12 @@ no comments, no Python-style dicts. Wrap as { "routes": [...] }`;
   }));
 
   const { error } = await supabase.from('kb_shipping_routes').insert(rows);
-  if (error) logger.error('kb.shipping.insert_failed', { error: error.message });
-  else logger.info('kb.shipping.extracted', { count: rows.length, docId });
+  if (error) {
+    logger.error('kb.shipping.insert_failed', { error: error.message });
+    return 0;
+  }
+  logger.info('kb.shipping.extracted', { count: rows.length, docId });
+  return rows.length;
 }
 
 // ── Conflict Detection ───────────────────────────────────────────────

@@ -1,11 +1,18 @@
+import crypto from 'node:crypto';
 import { NextResponse } from 'next/server';
 import supabase from '../../../../lib/supabase.js';
 import { getSupabaseAdmin } from '../../../../lib/supabase-admin.js';
 import { getTenantContext, findAgentInTenant } from '../../../../lib/tenant-context.js';
 import { processDocument } from '../../../../src/kb-upload.service.js';
 import { markFirstKbUpload } from '../../../../lib/repositories/onboarding.repository.js';
+import { emit as emitProgress } from '../../../../lib/kb-upload-bus.js';
 
-export const maxDuration = 120;
+// Async pipeline: this handler returns in <2s with a doc_id. The actual LLM
+// extraction runs as a fire-and-forget background promise and emits progress
+// events to the in-memory bus, which /api/knowledge/upload/stream forwards to
+// the browser via SSE. PM2 fork-mode keeps the process alive until the bg
+// promise finishes; on process restart the cron-recover script picks up
+// orphaned `processing` docs.
 
 const ALLOWED_TYPES = {
   'application/pdf': 'pdf_text',
@@ -17,20 +24,18 @@ const ALLOWED_TYPES = {
 };
 
 const VALID_LAYERS = ['company', 'product', 'logistics', 'sales'];
-
 const MAX_FILE_SIZE_BYTES = 50 * 1024 * 1024; // 50 MB
 
 export async function POST(request) {
   try {
     const ctx = await getTenantContext();
-    if (!ctx) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    }
+    if (!ctx) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 
     const formData = await request.formData();
     const file = formData.get('file');
     const agentId = formData.get('agent_id');
     const layer = formData.get('layer');
+    const description = formData.get('description') || null;
 
     if (!file || !agentId || !layer) {
       return NextResponse.json(
@@ -38,22 +43,18 @@ export async function POST(request) {
         { status: 400 }
       );
     }
-
     if (!VALID_LAYERS.includes(layer)) {
       return NextResponse.json(
         { error: `Invalid layer. Must be one of: ${VALID_LAYERS.join(', ')}` },
         { status: 400 }
       );
     }
-
     if (file.size > MAX_FILE_SIZE_BYTES) {
       return NextResponse.json(
         { error: `文件超过上限 50 MB（当前 ${(file.size / 1024 / 1024).toFixed(1)} MB），请压缩或拆分后再上传。` },
         { status: 413 }
       );
     }
-
-    // Validate file type
     const fileType = ALLOWED_TYPES[file.type];
     if (!fileType) {
       return NextResponse.json(
@@ -62,40 +63,52 @@ export async function POST(request) {
       );
     }
 
-    // Get agent info — also enforces tenant ownership.
     if (!(await findAgentInTenant({ tenantId: ctx.tenantId, agentId }))) {
       return NextResponse.json({ error: 'Agent not found' }, { status: 404 });
     }
     const { data: agent, error: agentError } = await supabase
-      .from('agents')
-      .select('id, product_line')
-      .eq('id', agentId)
-      .single();
-
+      .from('agents').select('id, product_line').eq('id', agentId).single();
     if (agentError || !agent) {
       return NextResponse.json({ error: 'Agent not found' }, { status: 404 });
     }
 
-    // Upload file to Supabase Storage (optional — skip if bucket not available)
     const buffer = Buffer.from(await file.arrayBuffer());
+    const contentSha256 = crypto.createHash('sha256').update(buffer).digest('hex');
+
+    // Idempotency: same agent + same content + still in flight or already
+    // succeeded → return the existing row instead of starting a duplicate.
+    // status='error' is intentionally NOT deduped — re-upload is a retry.
+    const { data: existing } = await supabase
+      .from('kb_documents')
+      .select('id, status, layer, filename, knowledge_points_count')
+      .eq('agent_id', agentId)
+      .eq('content_sha256', contentSha256)
+      .in('status', ['processing', 'ready'])
+      .maybeSingle();
+    if (existing) {
+      return NextResponse.json({
+        document_id: existing.id,
+        status: existing.status,
+        dedup: true,
+        filename: existing.filename,
+        layer: existing.layer,
+        knowledge_points: existing.knowledge_points_count || 0,
+      });
+    }
+
+    // Storage upload (best-effort, private bucket via service role)
     const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, '_');
     const storagePath = `${agentId}/${layer}/${Date.now()}_${safeName}`;
-
-    // kb-assets bucket is private with no anon-write policy; use service-role
-    // client (tenant ownership already verified above via findAgentInTenant).
     let storageOk = false;
     try {
       const { error: uploadError } = await getSupabaseAdmin().storage
-        .from('kb-assets')
-        .upload(storagePath, buffer, { contentType: file.type });
+        .from('kb-assets').upload(storagePath, buffer, { contentType: file.type });
       if (!uploadError) storageOk = true;
       else console.warn(`[knowledge/upload] Storage upload skipped: ${uploadError.message}`);
     } catch (storageErr) {
       console.warn(`[knowledge/upload] Storage upload skipped: ${storageErr.message}`);
     }
 
-    // Create document record
-    const description = formData.get('description') || null;
     const { data: doc, error: docError } = await supabase
       .from('kb_documents')
       .insert({
@@ -108,26 +121,78 @@ export async function POST(request) {
         layer,
         source_type: 'file',
         description,
-        status: 'pending',
+        status: 'processing',
+        content_sha256: contentSha256,
       })
       .select('id')
       .single();
 
     if (docError) {
+      // 23505 = unique_violation — race with a concurrent upload of same content.
+      // Re-query and return the winner so the client can attach to its stream.
+      if (docError.code === '23505') {
+        const { data: winner } = await supabase
+          .from('kb_documents')
+          .select('id, status, layer, filename, knowledge_points_count')
+          .eq('agent_id', agentId)
+          .eq('content_sha256', contentSha256)
+          .maybeSingle();
+        if (winner) {
+          return NextResponse.json({
+            document_id: winner.id,
+            status: winner.status,
+            dedup: true,
+            filename: winner.filename,
+            layer: winner.layer,
+            knowledge_points: winner.knowledge_points_count || 0,
+          });
+        }
+      }
       return NextResponse.json(
         { error: `DB insert failed: ${docError.message}` },
         { status: 500 }
       );
     }
+
     await markFirstKbUpload(ctx.tenantId);
 
-    // Extract text content from file
-    // For now, handle text-based formats directly; PDF/Excel need additional parsing
+    // Fire-and-forget. The catch is purely a safety net — runBackground
+    // already emits 'error' to the bus and updates doc.status on its own.
+    runBackground({
+      tenantCtx: ctx,
+      doc,
+      agent,
+      filename: file.name,
+      mimeType: file.type,
+      fileType,
+      buffer,
+      layer,
+    }).catch(err => {
+      console.error('[knowledge/upload] runBackground crashed:', err);
+    });
+
+    return NextResponse.json({
+      document_id: doc.id,
+      status: 'processing',
+      dedup: false,
+      filename: file.name,
+      layer,
+    });
+  } catch (error) {
+    console.error('[knowledge/upload] Error:', error);
+    return NextResponse.json({ error: error.message }, { status: 500 });
+  }
+}
+
+async function runBackground({ tenantCtx, doc, agent, filename, mimeType, fileType, buffer, layer }) {
+  const docId = doc.id;
+  emitProgress(docId, 'progress', { stage: 'parsing' });
+
+  try {
     let textContent;
     if (fileType === 'txt' || fileType === 'markdown' || fileType === 'csv') {
       textContent = buffer.toString('utf-8');
     } else if (fileType === 'xlsx_text') {
-      // Use xlsx library to extract text
       const { extractExcelText } = await import('../../../../src/kb-file-parsers.js');
       textContent = await extractExcelText(buffer);
     } else if (fileType === 'pdf_text') {
@@ -140,37 +205,32 @@ export async function POST(request) {
       textContent = buffer.toString('utf-8');
     }
 
-    // Process document (extract knowledge, translate, embed) + extract images
-    // in parallel — images are independent of text extraction.
-    let result, imageResult;
-    try {
-      const docCtx = { tenantId: ctx.tenantId, agentId, productLineId: agent.product_line };
-      const { extractAndStoreImages } = await import('../../../../src/kb-image-extractor.service.js');
-      [result, imageResult] = await Promise.all([
-        processDocument(docCtx, doc.id, textContent, layer, { filename: file.name, fileType }),
-        extractAndStoreImages(docCtx, buffer, doc.id, file.type).catch(e => ({
-          extracted: 0, skipped: 0, errors: [`extraction failed: ${e.message}`],
-        })),
-      ]);
-    } catch (err) {
-      console.error(`[knowledge/upload] Failed to process ${file.name}:`, err.message);
-      return NextResponse.json({
-        document_id: doc.id,
-        status: 'error',
-        error: err.message,
-      });
-    }
+    const docCtx = {
+      tenantId: tenantCtx.tenantId,
+      agentId: agent.id,
+      productLineId: agent.product_line,
+    };
+    const onProgress = (data) => emitProgress(docId, 'progress', data);
 
-    return NextResponse.json({
-      document_id: doc.id,
-      status: 'ready',
-      filename: file.name,
-      layer,
-      ...result,
+    const { extractAndStoreImages } = await import('../../../../src/kb-image-extractor.service.js');
+    const [result, imageResult] = await Promise.all([
+      processDocument(docCtx, docId, textContent, layer, { filename, fileType, onProgress }),
+      extractAndStoreImages(docCtx, buffer, docId, mimeType)
+        .then(r => {
+          onProgress({ stage: 'images', extracted: r?.extracted || 0 });
+          return r;
+        })
+        .catch(e => ({ extracted: 0, skipped: 0, errors: [`extraction failed: ${e.message}`] })),
+    ]);
+
+    emitProgress(docId, 'done', {
+      knowledge_points: result.knowledge_points || 0,
+      conflicts: result.conflicts || [],
       images: imageResult,
     });
-  } catch (error) {
-    console.error('[knowledge/upload] Error:', error);
-    return NextResponse.json({ error: error.message }, { status: 500 });
+  } catch (err) {
+    // processDocument's own catch already cleaned up partial rows + set
+    // status='error'. Just surface the error to any SSE subscriber.
+    emitProgress(docId, 'error', { message: err.message });
   }
 }

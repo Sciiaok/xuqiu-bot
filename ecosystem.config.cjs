@@ -83,5 +83,23 @@ module.exports = {
       merge_logs: true,
       log_date_format: 'YYYY-MM-DD HH:mm:ss',
     },
+    {
+      name: 'kb-recover-cron',
+      script: 'scripts/cron-recover-stale-kb-docs.js',
+      cwd: __dirname,
+      node_args: '--experimental-modules',
+      env: {
+        NODE_ENV: 'production',
+        API_BASE_URL: 'http://localhost:3002',
+      },
+      instances: 1,
+      autorestart: true,
+      watch: false,
+      max_memory_restart: '128M',
+      out_file: 'logs/kb-recover-cron-out.log',
+      error_file: 'logs/kb-recover-cron-error.log',
+      merge_logs: true,
+      log_date_format: 'YYYY-MM-DD HH:mm:ss',
+    },
   ],
 };

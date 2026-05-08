@@ -24,6 +24,7 @@ import {
   updateGap,
   listDocuments,
   uploadDocument,
+  subscribeUploadProgress,
   deleteDocument,
   getDocumentDownloadUrl,
   teachExtract,
@@ -256,31 +257,79 @@ function InputSection({ agentId, onChanged }) {
 
 function FileUploadCard({ agentId, onChanged }) {
   const [layer, setLayer] = useState('product');
-  const [uploading, setUploading] = useState(false);
-  const [results, setResults] = useState([]);
+  // items: { key, name, state, stage?, total?, done?, kpCount?, imgCount?, error?, dedup? }
+  // state ∈ 'uploading' | 'processing' | 'ready' | 'error'
+  const [items, setItems] = useState([]);
   const [dragOver, setDragOver] = useState(false);
   const fileInputRef = useRef(null);
+  const subsRef = useRef(new Map()); // key → close fn
+
+  // Cleanup all SSE subscriptions on unmount
+  useEffect(() => {
+    return () => {
+      for (const close of subsRef.current.values()) close();
+      subsRef.current.clear();
+    };
+  }, []);
+
+  function patchItem(key, patch) {
+    setItems(prev => prev.map(it => it.key === key ? { ...it, ...patch } : it));
+  }
+
+  function attachStream(key, docId) {
+    const close = subscribeUploadProgress(docId, {
+      onProgress: (data) => patchItem(key, { stage: data.stage, total: data.total, done: data.done }),
+      onDone: (data) => {
+        patchItem(key, {
+          state: 'ready',
+          kpCount: data.knowledge_points || 0,
+          imgCount: data.images?.extracted || 0,
+        });
+        subsRef.current.delete(key);
+        onChanged?.();
+      },
+      onError: (data) => {
+        patchItem(key, { state: 'error', error: data?.message || '处理失败' });
+        subsRef.current.delete(key);
+        onChanged?.();
+      },
+    });
+    subsRef.current.set(key, close);
+  }
 
   async function handleFiles(files) {
     if (!files?.length) return;
-    setUploading(true);
-    setResults([]);
-    const out = [];
-    for (const f of files) {
-      if (f.size > MAX_FILE_SIZE_BYTES) {
-        out.push({ name: f.name, ok: false, error: `超过 50 MB` });
-        continue;
+    const next = Array.from(files).map(f => ({
+      key: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}-${f.name}`,
+      name: f.name,
+      file: f,
+      state: 'uploading',
+    }));
+    setItems(prev => [...next, ...prev]);
+
+    // Fire all uploads in parallel — server returns each in <2s.
+    next.forEach(async (it) => {
+      if (it.file.size > MAX_FILE_SIZE_BYTES) {
+        patchItem(it.key, { state: 'error', error: '超过 50 MB' });
+        return;
       }
       try {
-        const data = await uploadDocument(agentId, f, layer);
-        out.push({ name: f.name, ok: !data.error, data });
+        const data = await uploadDocument(agentId, it.file, layer);
+        if (data.dedup && data.status === 'ready') {
+          patchItem(it.key, {
+            state: 'ready',
+            dedup: true,
+            kpCount: data.knowledge_points || 0,
+          });
+          onChanged?.();
+          return;
+        }
+        patchItem(it.key, { state: 'processing', dedup: !!data.dedup, stage: 'parsing' });
+        attachStream(it.key, data.document_id);
       } catch (e) {
-        out.push({ name: f.name, ok: false, error: e.message });
+        patchItem(it.key, { state: 'error', error: e.message });
       }
-    }
-    setResults(out);
-    setUploading(false);
-    onChanged?.();
+    });
   }
 
   return (
@@ -306,7 +355,7 @@ function FileUploadCard({ agentId, onChanged }) {
       >
         <div className={s.dropzoneIcon}>+</div>
         <div className={s.dropzoneText}>拖拽文件到此处或点击选择</div>
-        <div className={s.dropzoneHint}>.xlsx .pdf .docx .csv .txt · 单文件最大 50 MB</div>
+        <div className={s.dropzoneHint}>.xlsx .pdf .docx .csv .txt · 单文件最大 50 MB · 上传后台处理，可继续上传其他文件</div>
       </div>
       <input
         ref={fileInputRef}
@@ -316,26 +365,61 @@ function FileUploadCard({ agentId, onChanged }) {
         style={{ display: 'none' }}
         onChange={e => handleFiles(e.target.files)}
       />
-      {uploading && <div className={s.uploadProgress}><div className={s.uploadFileName}><span className={s.spinner} /> 处理中（含 PDF 抽图）…</div></div>}
-      {results.length > 0 && (
+      {items.length > 0 && (
         <div className={s.uploadProgress}>
-          {results.map((r, i) => (
-            <div key={i} className={s.uploadFileName}>
-              <span className={r.ok ? s.uploadStatusDone : s.uploadStatusError}>{r.ok ? '✓' : '✗'}</span>
-              {r.name}
-              {r.ok && r.data?.knowledge_points != null && (
-                <span style={{ color: 'var(--text3)', marginLeft: 4 }}>
-                  · AI 抽取 {r.data.knowledge_points} 知识点
-                  {r.data.images?.extracted > 0 && ` · ${r.data.images.extracted} 张图`}
-                </span>
-              )}
-              {(r.data?.error || r.error) && (
-                <div style={{ color: 'var(--red)', marginLeft: 18, fontSize: 11, marginTop: 2 }}>
-                  {r.data?.error || r.error}
-                </div>
-              )}
-            </div>
-          ))}
+          {items.map(it => <UploadItemRow key={it.key} item={it} />)}
+        </div>
+      )}
+    </div>
+  );
+}
+
+const STAGE_LABEL = {
+  parsing:    '解析文件',
+  extracting: 'AI 抽取知识点',
+  embedding:  '向量化',
+  structured: '结构化提取',
+  images:     '抽取图片',
+};
+
+function UploadItemRow({ item }) {
+  const inFlight = item.state === 'uploading' || item.state === 'processing';
+  const icon = item.state === 'ready' ? '✓'
+            : item.state === 'error' ? '✗'
+            : null;
+  const iconCls = item.state === 'ready' ? s.uploadStatusDone
+                : item.state === 'error' ? s.uploadStatusError
+                : '';
+
+  let stageText = '';
+  if (item.state === 'uploading') {
+    stageText = '上传中…';
+  } else if (item.state === 'processing') {
+    const base = STAGE_LABEL[item.stage] || '处理中';
+    if (item.stage === 'embedding' && item.total > 0) {
+      stageText = `${base} ${item.done || 0}/${item.total}`;
+    } else {
+      stageText = `${base}…`;
+    }
+  } else if (item.state === 'ready') {
+    const parts = [];
+    if (item.dedup) parts.push('已有相同文件，复用');
+    else if (item.kpCount != null) parts.push(`AI 抽取 ${item.kpCount} 知识点`);
+    if (item.imgCount > 0) parts.push(`${item.imgCount} 张图`);
+    stageText = parts.join(' · ');
+  }
+
+  return (
+    <div className={s.uploadFileName}>
+      {inFlight && <span className={s.spinner} />}
+      {icon && <span className={iconCls}>{icon}</span>}
+      <span>{item.name}</span>
+      {stageText && (
+        <span style={{ color: 'var(--text3)', marginLeft: 4 }}>· {stageText}</span>
+      )}
+      {item.error && (
+        <div style={{ color: 'var(--red)', marginLeft: 18, fontSize: 11, marginTop: 2 }}>
+          {item.error}
         </div>
       )}
     </div>
