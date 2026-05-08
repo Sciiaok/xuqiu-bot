@@ -159,20 +159,39 @@
 .metricRed::after { background: var(--red); }
 .metricPurple::after { background: var(--purple); }
 
-/* ── Layer Cards ──────────────────────────────────────── */
+/* ── Section title ────────────────────────────────────── */
 .sectionTitle {
-  font-size: 14px;
+  font-size: 13px;
   font-weight: 600;
   color: var(--text);
-  margin-bottom: 12px;
+  margin: 0 0 10px;
   font-family: var(--font-sans);
+  letter-spacing: -0.005em;
+  display: flex;
+  align-items: center;
+  gap: 6px;
 }
 
+.sectionGroup {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-bottom: 22px;
+}
+
+.sectionGroup:last-child { margin-bottom: 0; }
+
+.sectionMutedNote {
+  font-size: 11.5px;
+  color: var(--text3);
+  font-weight: 400;
+}
+
+/* ── Layer Cards ──────────────────────────────────────── */
 .layerGrid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
-  gap: 12px;
-  margin-bottom: 24px;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 10px;
 }
 
 .layerCard {
@@ -181,6 +200,12 @@
   border-radius: var(--rl);
   padding: 14px 16px;
   box-shadow: var(--shadow);
+  transition: border-color .15s, transform .15s;
+}
+
+.layerCard:hover {
+  border-color: var(--border2);
+  transform: translateY(-1px);
 }
 
 .layerHead {
@@ -193,7 +218,7 @@
 
 .layerName {
   font-size: 13px;
-  font-weight: 500;
+  font-weight: 600;
   color: var(--text);
   font-family: var(--font-sans);
 }
@@ -202,9 +227,10 @@
   font-size: 10px;
   font-weight: 600;
   font-family: var(--font-mono);
-  padding: 2px 7px;
-  border-radius: 4px;
+  padding: 2px 8px;
+  border-radius: 999px;
   text-transform: uppercase;
+  letter-spacing: 0.04em;
 }
 
 .layerGood { background: var(--green-dim); color: var(--green); }
@@ -212,17 +238,17 @@
 .layerError { background: var(--red-dim); color: var(--red); }
 
 .layerBar {
-  height: 4px;
+  height: 5px;
   background: var(--bg4);
-  border-radius: 2px;
+  border-radius: 999px;
   overflow: hidden;
-  margin-bottom: 8px;
+  margin-bottom: 10px;
 }
 
 .layerBarFill {
   height: 100%;
-  border-radius: 2px;
-  transition: width 0.5s ease;
+  border-radius: 999px;
+  transition: width .5s ease;
 }
 
 .layerBarGood { background: var(--green); }
@@ -236,6 +262,10 @@
   font-size: 11px;
   color: var(--text3);
   font-family: var(--font-mono);
+}
+
+.layerMetaStat {
+  color: var(--text2);
 }
 
 /* ── Recommendations ──────────────────────────────────── */
@@ -296,12 +326,45 @@
 
 .gapItem {
   display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 8px 12px;
+  flex-direction: column;
+  gap: 6px;
+  padding: 12px 14px;
   background: var(--bg2);
   border: 1px solid var(--border);
-  border-radius: var(--r);
+  border-left: 3px solid var(--amber);
+  border-radius: 8px;
+  transition: border-color .15s, background .15s;
+}
+
+.gapItem:hover {
+  background: var(--bg3);
+}
+
+.gapItemHead {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 10px;
+}
+
+.gapQueryText {
+  flex: 1;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+  line-height: 1.4;
+}
+
+.gapItemActions {
+  display: flex;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.gapItemMeta {
+  font-size: 11px;
+  color: var(--text3);
+  font-family: var(--font-mono);
 }
 
 .gapQuery {
@@ -355,7 +418,66 @@
 .uploadSection {
   display: flex;
   flex-direction: column;
-  gap: 20px;
+  gap: 18px;
+}
+
+/* Segmented control — used as the section selector at the top of the tab. */
+.segmented {
+  display: inline-flex;
+  align-items: center;
+  padding: 3px;
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  gap: 2px;
+  align-self: flex-start;
+}
+
+.segmentedItem {
+  padding: 6px 14px;
+  background: transparent;
+  border: 0;
+  border-radius: 7px;
+  font-family: var(--font-sans);
+  font-size: 12.5px;
+  font-weight: 500;
+  color: var(--text2);
+  cursor: pointer;
+  transition: background .15s, color .15s, box-shadow .15s;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.segmentedItem:hover:not(.segmentedItemActive) {
+  color: var(--text);
+  background: var(--bg3);
+}
+
+.segmentedItemActive {
+  background: var(--bg);
+  color: var(--accent);
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.06);
+}
+
+.segmentedBadge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 6px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 600;
+  border-radius: 999px;
+  background: var(--bg4);
+  color: var(--text3);
+}
+
+.segmentedItemActive .segmentedBadge {
+  background: var(--accent-dim);
+  color: var(--accent);
 }
 
 .uploadRow {
@@ -367,9 +489,14 @@
 .uploadCard {
   background: var(--bg2);
   border: 1px solid var(--border);
-  border-radius: var(--rl);
-  padding: 18px 20px;
+  border-radius: var(--rxl);
+  padding: 20px 22px;
   box-shadow: var(--shadow);
+  transition: border-color .15s, box-shadow .15s;
+}
+
+.uploadCard:hover {
+  border-color: var(--border2);
 }
 
 .uploadCardTitle {
@@ -378,22 +505,41 @@
   color: var(--text);
   margin-bottom: 4px;
   font-family: var(--font-sans);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.uploadCardTitle::before {
+  content: '';
+  width: 3px;
+  height: 13px;
+  border-radius: 2px;
+  background: var(--accent);
 }
 
 .uploadCardDesc {
-  font-size: 12px;
+  font-size: 12.5px;
   color: var(--text3);
   margin-bottom: 14px;
+  margin-top: 0;
+  line-height: 1.55;
   font-family: var(--font-sans);
 }
 
+.uploadCardDesc b {
+  color: var(--text2);
+  font-weight: 600;
+}
+
 .dropzone {
-  border: 2px dashed var(--border2);
-  border-radius: var(--r);
-  padding: 28px 16px;
+  border: 1.5px dashed var(--border2);
+  border-radius: 10px;
+  padding: 36px 20px;
   text-align: center;
   cursor: pointer;
-  transition: border-color 0.15s, background 0.15s;
+  background: var(--bg);
+  transition: border-color .15s, background .15s, transform .15s;
 }
 
 .dropzone:hover {
@@ -403,24 +549,43 @@
 
 .dropzoneActive {
   border-color: var(--accent);
+  border-style: solid;
   background: var(--accent-dim);
+  transform: scale(1.005);
 }
 
 .dropzoneIcon {
-  font-size: 28px;
-  margin-bottom: 8px;
-  opacity: 0.5;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  margin-bottom: 10px;
+  border-radius: 50%;
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  color: var(--text3);
+  font-size: 22px;
+  font-weight: 300;
+  line-height: 1;
+}
+
+.dropzone:hover .dropzoneIcon,
+.dropzoneActive .dropzoneIcon {
+  border-color: var(--accent);
+  color: var(--accent);
 }
 
 .dropzoneText {
-  font-size: 12px;
+  font-size: 13px;
   color: var(--text2);
   font-family: var(--font-sans);
   margin-bottom: 4px;
+  font-weight: 500;
 }
 
 .dropzoneHint {
-  font-size: 10px;
+  font-size: 11px;
   color: var(--text3);
   font-family: var(--font-mono);
 }
@@ -487,11 +652,17 @@
 .docItem {
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 8px 12px;
-  background: var(--bg);
+  gap: 12px;
+  padding: 10px 14px;
+  background: var(--bg2);
   border: 1px solid var(--border);
-  border-radius: var(--r);
+  border-radius: 8px;
+  transition: border-color .15s, background .15s;
+}
+
+.docItem:hover {
+  border-color: var(--border2);
+  background: var(--bg3);
 }
 
 .docName {
@@ -534,18 +705,26 @@
 /* ── Asset grid (sendable images) ─────────────────────── */
 .assetGrid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
   gap: 12px;
 }
 
 .assetCard {
   position: relative;
-  background: var(--bg);
+  background: var(--bg2);
   border: 1px solid var(--border);
-  border-radius: var(--r);
+  border-radius: 10px;
   overflow: hidden;
   display: flex;
   flex-direction: column;
+  box-shadow: var(--shadow);
+  transition: transform .15s, border-color .15s, box-shadow .15s;
+}
+
+.assetCard:hover {
+  transform: translateY(-1px);
+  border-color: var(--border2);
+  box-shadow: var(--shadow-lg);
 }
 
 .assetThumb {
@@ -598,16 +777,34 @@
 }
 
 .docDeleteBtn {
-  padding: 3px 6px;
+  padding: 4px 10px;
   background: transparent;
-  border: 1px solid transparent;
-  border-radius: 4px;
-  font-size: 10px;
-  color: var(--text3);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-size: 11px;
+  font-family: var(--font-sans);
+  color: var(--text2);
   cursor: pointer;
+  transition: color .15s, border-color .15s, background .15s, opacity .15s;
 }
 
-.docDeleteBtn:hover { color: var(--red); border-color: var(--red); background: var(--red-dim); }
+.docDeleteBtn:hover:not(:disabled) {
+  color: var(--text);
+  border-color: var(--text3);
+  background: var(--bg2);
+}
+
+.docDeleteBtn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+  background: var(--bg);
+}
+
+.docDeleteBtnDanger:hover:not(:disabled) {
+  color: var(--red);
+  border-color: var(--red);
+  background: var(--red-dim);
+}
 
 /* Teach section */
 .teachBox {
@@ -912,11 +1109,14 @@
 
 /* ── Common ───────────────────────────────────────────── */
 .emptyState {
-  padding: 40px 16px;
+  padding: 36px 18px;
   text-align: center;
   color: var(--text3);
   font-size: 13px;
   font-family: var(--font-sans);
+  background: var(--bg2);
+  border: 1px dashed var(--border2);
+  border-radius: 10px;
 }
 
 .spinner {

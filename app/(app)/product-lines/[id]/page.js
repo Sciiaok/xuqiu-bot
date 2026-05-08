@@ -101,17 +101,23 @@ export default function ProductLineEditPage() {
     }
   }
 
-  if (loading) return <div className={s.root}>加载中…</div>;
+  if (loading) return (
+    <div className={s.root}>
+      <div className={s.loadingWrap}><span className={s.spinner} /> 加载中…</div>
+    </div>
+  );
   if (loadError) return <div className={s.root}><div className={s.errorBanner}>加载失败：{loadError}</div></div>;
   if (!line || !form) return null;
 
   const agentId = line.agent_id;
   const isKbTab = activeTab === 'knowledge';
 
+  const phoneBound = !!line.wa_phone_number_id;
+
   return (
     <div className={s.root}>
       <div className={s.breadcrumb}>
-        <Link href="/product-lines" className={s.breadcrumbLink}>← Medici</Link>
+        <Link href="/product-lines" className={s.breadcrumbLink}>← 返回 Medici 列表</Link>
       </div>
 
       <div className={s.header}>
@@ -123,7 +129,16 @@ export default function ProductLineEditPage() {
             placeholder="产品线名称"
             title="点击编辑产品线名称"
           />
-          <span className={s.lineId}>WA 号码 ID：{line.wa_phone_number_id || '(未绑定)'}</span>
+          <div className={s.headerMeta}>
+            <span className={`${s.metaChip} ${phoneBound ? '' : s.metaChipMuted}`}>
+              <span className={s.metaChipDot} />
+              {phoneBound ? `WA · ${line.wa_phone_number_id}` : '未绑定 WhatsApp 号码'}
+            </span>
+            <span className={s.metaChip}>
+              <span className={s.metaChipDot} style={{ background: 'var(--text3)' }} />
+              产品线 ID · {line.id}
+            </span>
+          </div>
         </div>
         {activeTab === 'config' && (
           <div className={s.headerActions}>
@@ -148,15 +163,17 @@ export default function ProductLineEditPage() {
 
       {activeTab === 'config' && (
         <>
-          {savedAt > 0 && <div className={s.okBanner}>已保存 · 运行时最多 60 秒内生效</div>}
+          {savedAt > 0 && <div className={s.okBanner}>✓ 已保存 · 运行时最多 60 秒内生效</div>}
           {saveError && <div className={s.errorBanner}>{saveError}</div>}
 
           <div className={s.section}>
-            <h3 className={s.sectionTitle}>价值判定标准</h3>
-            <p className={s.sectionHint}>
-              本线判定 LOW / AVERAGE / HIGH 的依据（数量、客户类型、采购历史等）。AI 评估
-              business_value 时会按这里的口径打分。
-            </p>
+            <div className={s.sectionHead}>
+              <h3 className={s.sectionTitle}>价值判定标准</h3>
+              <p className={s.sectionHint}>
+                本线判定 LOW / AVERAGE / HIGH 的依据（数量、客户类型、采购历史等）。AI 评估
+                business_value 时会按这里的口径打分。
+              </p>
+            </div>
             <textarea
               className={s.textarea}
               rows={6}
@@ -167,10 +184,14 @@ export default function ProductLineEditPage() {
           </div>
 
           <div className={s.section}>
-            <h3 className={s.sectionTitle}>线索字段表</h3>
-            <p className={s.sectionHint}>
-              告诉 AI 在跟客户聊的时候要尝试问出哪些信息。每条会进入 AI 的输出，并影响线索的评级。高质线索应该包含足够信息让销售能直接跟进；低质线索则可能只包含客户的基本联系方式，或根本没有有效信息。请根据实际情况调整字段列表，删除不必要的字段，添加重要但目前缺失的字段。
-            </p>
+            <div className={s.sectionHead}>
+              <h3 className={s.sectionTitle}>线索字段表</h3>
+              <p className={s.sectionHint}>
+                告诉 AI 在跟客户聊的时候要尝试问出哪些信息。每条会进入 AI 的输出，并影响线索的评级。
+                高质线索应该包含足够信息让销售能直接跟进；低质线索则可能只包含客户的基本联系方式，或根本没有有效信息。
+                请根据实际情况调整字段列表，删除不必要的字段，添加重要但目前缺失的字段。
+              </p>
+            </div>
             <LeadFieldsEditor value={leadFields} onChange={handleLeadFieldsChange} />
           </div>
 

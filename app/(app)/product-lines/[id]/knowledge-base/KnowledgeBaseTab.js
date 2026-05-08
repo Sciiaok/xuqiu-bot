@@ -80,23 +80,32 @@ export default function KnowledgeBaseTab({ agentId }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [agentId]);
 
+  const contentCount = documents.length + qaSnippets.length + assets.length;
+  const sectionCounts = {
+    overview: gaps.length,
+    content: contentCount,
+  };
+
   return (
     <div className={s.uploadSection}>
-      {/* Section selector */}
-      <div className={s.formRow} style={{ gap: 6 }}>
-        {SECTIONS.map(sec => (
-          <Button
-            key={sec.key}
-            variant={section === sec.key ? 'primary' : 'ghost'}
-            size="sm"
-            onClick={() => setSection(sec.key)}
-          >
-            {sec.label}
-            {sec.key === 'overview' && gaps.length > 0 && ` · ${gaps.length} 盲区`}
-            {sec.key === 'content' && (documents.length + qaSnippets.length + assets.length) > 0
-              && ` · ${documents.length + qaSnippets.length + assets.length}`}
-          </Button>
-        ))}
+      <div className={s.segmented} role="tablist" aria-label="知识库小节">
+        {SECTIONS.map(sec => {
+          const active = section === sec.key;
+          const badge = sectionCounts[sec.key];
+          return (
+            <button
+              key={sec.key}
+              type="button"
+              role="tab"
+              aria-selected={active}
+              className={`${s.segmentedItem} ${active ? s.segmentedItemActive : ''}`}
+              onClick={() => setSection(sec.key)}
+            >
+              {sec.label}
+              {badge > 0 && <span className={s.segmentedBadge}>{badge}</span>}
+            </button>
+          );
+        })}
       </div>
 
       {loadError && <div className={s.emptyState}>加载失败：{loadError}</div>}
@@ -130,54 +139,72 @@ export default function KnowledgeBaseTab({ agentId }) {
 function OverviewSection({ health, gaps, onResolveGap }) {
   const statusClass = (st) => st === 'good' ? s.layerGood : st === 'warn' ? s.layerWarn : s.layerError;
   const barClass = (st) => st === 'good' ? s.layerBarGood : st === 'warn' ? s.layerBarWarn : s.layerBarError;
+  const statusLabel = (st) => st === 'good' ? 'Healthy' : st === 'warn' ? 'Sparse' : 'Empty';
 
   return (
     <>
       <div className={s.metricsRow}>
-        <div className={s.metricCard}>
-          <div className={s.metricValue}>{health.overall_coverage}%</div>
+        <div className={`${s.metricCard} ${s.metricGreen}`}>
           <div className={s.metricLabel}>整体覆盖</div>
+          <div className={s.metricValue}>{health.overall_coverage}%</div>
         </div>
         <div className={s.metricCard}>
-          <div className={s.metricValue}>{health.total_documents}</div>
           <div className={s.metricLabel}>文档数</div>
+          <div className={s.metricValue}>{health.total_documents}</div>
         </div>
         <div className={s.metricCard}>
-          <div className={s.metricValue}>{health.total_knowledge_points}</div>
           <div className={s.metricLabel}>知识点</div>
+          <div className={s.metricValue}>{health.total_knowledge_points}</div>
         </div>
-        <div className={s.metricCard}>
-          <div className={s.metricValue}>{health.total_products}</div>
+        <div className={`${s.metricCard} ${s.metricPurple}`}>
           <div className={s.metricLabel}>产品</div>
+          <div className={s.metricValue}>{health.total_products}</div>
         </div>
       </div>
 
-      <div>
+      <div className={s.sectionGroup}>
         <div className={s.sectionTitle}>各层覆盖</div>
-        {LAYERS.map((l) => {
-          const layer = health.layers[l] || { label: LAYER_LABELS[l], coverage: 0, docs: 0, points: 0, status: 'error' };
-          return (
-            <div key={l} className={`${s.layerRow} ${statusClass(layer.status)}`}>
-              <div className={s.layerName}>{layer.label}</div>
-              <div className={s.layerBar}>
-                <div className={`${s.layerBarFill} ${barClass(layer.status)}`} style={{ width: `${layer.coverage}%` }} />
+        <div className={s.layerGrid}>
+          {LAYERS.map((l) => {
+            const layer = health.layers[l] || { label: LAYER_LABELS[l], coverage: 0, docs: 0, points: 0, status: 'error' };
+            return (
+              <div key={l} className={s.layerCard}>
+                <div className={s.layerHead}>
+                  <span className={s.layerName}>{layer.label}</span>
+                  <span className={`${s.layerStatus} ${statusClass(layer.status)}`}>
+                    {statusLabel(layer.status)}
+                  </span>
+                </div>
+                <div className={s.layerBar}>
+                  <div
+                    className={`${s.layerBarFill} ${barClass(layer.status)}`}
+                    style={{ width: `${Math.max(layer.coverage, 4)}%` }}
+                  />
+                </div>
+                <div className={s.layerMeta}>
+                  <span className={s.layerMetaStat}>{layer.coverage}%</span>
+                  <span>·</span>
+                  <span>{layer.docs} 文档</span>
+                  <span>·</span>
+                  <span>{layer.points} 知识点</span>
+                </div>
               </div>
-              <div className={s.layerStats}>
-                {layer.coverage}% · {layer.docs} 份文档 / {layer.points} 知识点
-              </div>
-            </div>
-          );
-        })}
+            );
+          })}
+        </div>
       </div>
 
       {health.outdated_docs?.length > 0 && (
-        <div>
-          <div className={s.sectionTitle}>过期文档（30 天未更新）</div>
+        <div className={s.sectionGroup}>
+          <div className={s.sectionTitle}>
+            过期文档
+            <span className={s.sectionMutedNote}>30 天未更新</span>
+          </div>
           <div className={s.docList}>
             {health.outdated_docs.map(d => (
               <div key={d.doc_id} className={s.docItem}>
                 <span className={s.docName}>{d.filename}</span>
-                <span className={s.docMeta}>{LAYER_LABELS[d.layer] || d.layer}</span>
+                <span className={s.docLayer}>{LAYER_LABELS[d.layer] || d.layer}</span>
                 <span className={s.docMeta}>{d.days_since_update} 天</span>
               </div>
             ))}
@@ -185,22 +212,25 @@ function OverviewSection({ health, gaps, onResolveGap }) {
         </div>
       )}
 
-      <div>
-        <div className={s.sectionTitle}>知识盲区（medici 答不上的问题，按频次聚合）</div>
+      <div className={s.sectionGroup}>
+        <div className={s.sectionTitle}>
+          知识盲区
+          <span className={s.sectionMutedNote}>Medici 答不上的问题，按频次聚合</span>
+        </div>
         {gaps.length === 0 ? (
           <div className={s.emptyState}>暂无盲区</div>
         ) : (
-          <div className={s.docList}>
+          <div className={s.gapList}>
             {gaps.slice(0, 20).map(g => (
-              <div key={g.id} className={s.docItem} style={{ flexDirection: 'column', alignItems: 'flex-start', gap: 4 }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', width: '100%' }}>
-                  <div style={{ fontWeight: 600 }}>{g.query}</div>
-                  <div style={{ display: 'flex', gap: 6 }}>
+              <div key={g.id} className={s.gapItem}>
+                <div className={s.gapItemHead}>
+                  <div className={s.gapQueryText}>{g.query}</div>
+                  <div className={s.gapItemActions}>
                     <button className={s.docDeleteBtn} onClick={() => onResolveGap(g.id, 'resolved')}>已补</button>
                     <button className={s.docDeleteBtn} onClick={() => onResolveGap(g.id, 'ignored')}>忽略</button>
                   </div>
                 </div>
-                <div style={{ fontSize: 11, color: 'var(--text3)' }}>
+                <div className={s.gapItemMeta}>
                   {g.gap_type} · 命中 {g.occurrence_count} 次{g.tool_name && ` · ${g.tool_name}`}{g.layer && ` · ${g.layer}`}
                 </div>
               </div>
@@ -530,23 +560,44 @@ function DocList({ documents, onChanged }) {
   if (documents.length === 0) return <div className={s.emptyState}>暂无文档</div>;
   return (
     <div className={s.docList}>
-      {documents.map(doc => (
-        <div key={doc.id} className={s.docItem}>
-          <span className={s.docName}>{doc.filename}</span>
-          <span className={s.docMeta}>{fmtSize(doc.file_size)}</span>
-          <span className={s.docMeta}>{fmtTime(doc.created_at)}</span>
-          <span className={s.docLayer}>{LAYER_LABELS[doc.layer] || doc.layer}</span>
-          <span className={s.docPoints}>{doc.status}</span>
-          <button className={s.docDeleteBtn} disabled={!doc.storage_path}
-            onClick={async () => {
-              const url = await getDocumentDownloadUrl(doc.id).catch(() => null);
-              if (url) window.open(url, '_blank');
-            }}>预览</button>
-          <button className={s.docDeleteBtn} onClick={async () => {
-            await deleteDocument(doc.id); onChanged?.();
-          }}>删除</button>
-        </div>
-      ))}
+      {documents.map(doc => {
+        const canPreview = !!doc.storage_path;
+        return (
+          <div key={doc.id} className={s.docItem}>
+            <span className={s.docName}>{doc.filename}</span>
+            <span className={s.docMeta}>{fmtSize(doc.file_size)}</span>
+            <span className={s.docMeta}>{fmtTime(doc.created_at)}</span>
+            <span className={s.docLayer}>{LAYER_LABELS[doc.layer] || doc.layer}</span>
+            <span className={s.docPoints}>{doc.status}</span>
+            <button
+              className={s.docDeleteBtn}
+              disabled={!canPreview}
+              title={canPreview ? '在新标签页打开原文件' : '原文件未保存到 Storage（早期脚本导入或 Storage 暂时不可用），无法预览'}
+              onClick={async () => {
+                try {
+                  const url = await getDocumentDownloadUrl(doc.id);
+                  if (url) window.open(url, '_blank');
+                } catch (err) {
+                  window.alert(`预览失败：${err.message}`);
+                }
+              }}
+            >预览</button>
+            <button
+              className={`${s.docDeleteBtn} ${s.docDeleteBtnDanger}`}
+              title="删除文档及其抽取出的所有知识点 / 产品 / 路线（不可逆）"
+              onClick={async () => {
+                if (!window.confirm(`删除「${doc.filename}」？\n\n该文档抽取出来的知识点、结构化产品行、运输路线都会一并清理，且不可恢复。`)) return;
+                try {
+                  await deleteDocument(doc.id);
+                  onChanged?.();
+                } catch (err) {
+                  window.alert(`删除失败：${err.message}`);
+                }
+              }}
+            >删除</button>
+          </div>
+        );
+      })}
     </div>
   );
 }

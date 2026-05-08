@@ -5,13 +5,9 @@
 .root {
   display: flex;
   flex-direction: column;
-  gap: 14px;
-  /* The tab needs a vertical viewport so the chat & trace panes can scroll
-     internally instead of letting the page grow forever. The parent route
-     uses padding 24px (top+bottom = 48px), and the breadcrumb/header/tabBar
-     above it eats roughly 140px. */
-  height: calc(100vh - 220px);
-  min-height: 520px;
+  gap: 16px;
+  height: calc(100vh - 230px);
+  min-height: 540px;
   min-width: 0;
 }
 
@@ -21,13 +17,19 @@
   justify-content: space-between;
   gap: 16px;
   flex-wrap: wrap;
+  padding: 14px 16px;
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  border-radius: var(--rl);
+  box-shadow: var(--shadow);
 }
 
 .subtitle {
-  font-size: 12px;
+  font-size: 12.5px;
   color: var(--text3);
   flex: 1;
   min-width: 200px;
+  line-height: 1.5;
 }
 
 .headerRight {
@@ -39,42 +41,48 @@
 }
 
 .select {
-  padding: 5px 8px;
+  padding: 6px 10px;
   background: var(--bg);
   border: 1px solid var(--border);
-  border-radius: 4px;
+  border-radius: 6px;
   color: var(--text);
   font-family: var(--font-sans);
-  font-size: 12px;
+  font-size: 12.5px;
   min-width: 220px;
   max-width: 320px;
+  transition: border-color .15s, box-shadow .15s;
 }
 
-.select:focus { outline: none; border-color: var(--accent); }
+.select:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-dim); }
 
 .resetBtn {
-  padding: 5px 10px;
+  padding: 6px 12px;
   border: 1px solid var(--border);
   background: transparent;
-  border-radius: 4px;
-  font-size: 12px;
+  border-radius: 6px;
+  font-size: 12.5px;
   color: var(--text2);
   cursor: pointer;
+  transition: color .15s, border-color .15s, background .15s;
 }
 
 .resetBtn:disabled {
-  opacity: 0.5;
+  opacity: 0.4;
   cursor: not-allowed;
 }
 
-.resetBtn:hover { border-color: var(--accent); color: var(--accent); }
+.resetBtn:hover:not(:disabled) {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: var(--accent-dim);
+}
 
 /* ─── Split layout ──────────────────────────────────────── */
 
 .split {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(320px, 420px);
-  gap: 14px;
+  grid-template-columns: minmax(0, 1fr) minmax(340px, 440px);
+  gap: 16px;
   flex: 1;
   min-height: 0;
 }
@@ -82,7 +90,7 @@
 .leftCol {
   display: flex;
   flex-direction: column;
-  gap: 14px;
+  gap: 16px;
   min-height: 0;
 }
 
@@ -120,10 +128,11 @@
   border: 1px solid var(--border);
   border-radius: var(--rl);
   overflow: hidden;
+  box-shadow: var(--shadow);
 }
 
 .paneHeader {
-  padding: 10px 14px;
+  padding: 11px 14px;
   border-bottom: 1px solid var(--border);
   font-size: 12px;
   color: var(--text3);
@@ -131,12 +140,24 @@
   align-items: center;
   justify-content: space-between;
   gap: 8px;
+  background: var(--bg2);
 }
 
 .paneTitle {
-  font-size: 13px;
-  color: var(--text2);
+  font-size: 12.5px;
+  color: var(--text);
   font-weight: 600;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.paneTitle::before {
+  content: '';
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent);
 }
 
 .leadsPane {
@@ -151,33 +172,36 @@
 .chatList {
   flex: 1;
   overflow-y: auto;
-  padding: 14px;
+  padding: 16px;
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 10px;
+  background: var(--bg);
 }
 
 .msg {
   max-width: 78%;
-  padding: 8px 12px;
-  border-radius: 10px;
+  padding: 9px 13px;
+  border-radius: 12px;
   font-size: 13px;
-  line-height: 1.5;
+  line-height: 1.55;
   white-space: pre-wrap;
   word-break: break-word;
 }
 
 .msgUser {
   align-self: flex-end;
-  background: var(--accent, #3b82f6);
+  background: var(--accent, #2563eb);
   color: white;
+  border-bottom-right-radius: 4px;
 }
 
 .msgAssistant {
   align-self: flex-start;
-  background: var(--bg);
+  background: var(--bg2);
   color: var(--text);
   border: 1px solid var(--border);
+  border-bottom-left-radius: 4px;
 }
 
 .msgEmpty {
@@ -199,37 +223,44 @@
 .composer {
   display: flex;
   gap: 8px;
-  padding: 10px 12px;
+  padding: 12px;
   border-top: 1px solid var(--border);
-  background: var(--bg);
+  background: var(--bg2);
 }
 
 .composerInput {
   flex: 1;
-  padding: 8px 10px;
+  padding: 9px 12px;
   background: var(--bg);
   border: 1px solid var(--border);
-  border-radius: 4px;
+  border-radius: 8px;
   color: var(--text);
   font-family: var(--font-sans);
   font-size: 13px;
   resize: none;
-  min-height: 36px;
+  min-height: 38px;
   max-height: 120px;
+  transition: border-color .15s, box-shadow .15s;
 }
 
-.composerInput:focus { outline: none; border-color: var(--accent); }
+.composerInput:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-dim); }
 
 .sendBtn {
-  padding: 8px 16px;
-  background: var(--accent, #3b82f6);
+  padding: 8px 18px;
+  background: var(--accent, #2563eb);
   color: white;
   border: 0;
-  border-radius: 4px;
+  border-radius: 8px;
   font-size: 13px;
+  font-weight: 500;
   font-family: var(--font-sans);
   cursor: pointer;
   white-space: nowrap;
+  transition: background .15s;
+}
+
+.sendBtn:hover:not(:disabled) {
+  background: var(--accent-hover, #1d4ed8);
 }
 
 .sendBtn:disabled {
@@ -238,20 +269,22 @@
 }
 
 .attachBtn {
-  padding: 0 10px;
-  background: transparent;
+  padding: 0 12px;
+  background: var(--bg);
   color: var(--text2);
   border: 1px solid var(--border);
-  border-radius: 4px;
+  border-radius: 8px;
   font-size: 16px;
   cursor: pointer;
   white-space: nowrap;
-  min-height: 36px;
+  min-height: 38px;
+  transition: color .15s, background .15s, border-color .15s;
 }
 
 .attachBtn:hover:not(:disabled) {
-  background: var(--bg2);
+  background: var(--bg3);
   color: var(--text);
+  border-color: var(--text3);
 }
 
 .attachBtn:disabled {
@@ -262,27 +295,28 @@
 .msgImage {
   max-width: 240px;
   max-height: 240px;
-  border-radius: 4px;
+  border-radius: 6px;
   display: block;
   margin-bottom: 6px;
+  border: 1px solid var(--border);
 }
 
 .pendingImage {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 8px 12px;
+  gap: 10px;
+  padding: 10px 14px;
   border-top: 1px solid var(--border);
-  background: var(--bg2);
-  font-size: 12px;
+  background: var(--bg3);
+  font-size: 12.5px;
   color: var(--text2);
 }
 
 .pendingImageThumb {
-  width: 36px;
-  height: 36px;
+  width: 40px;
+  height: 40px;
   object-fit: cover;
-  border-radius: 3px;
+  border-radius: 4px;
   border: 1px solid var(--border);
 }
 
@@ -295,13 +329,14 @@
 }
 
 .pendingImageRemove {
-  padding: 3px 8px;
+  padding: 4px 10px;
   background: transparent;
   color: var(--text2);
   border: 1px solid var(--border);
-  border-radius: 3px;
+  border-radius: 5px;
   font-size: 12px;
   cursor: pointer;
+  transition: color .15s, border-color .15s;
 }
 
 .pendingImageRemove:hover:not(:disabled) {
@@ -319,36 +354,39 @@
 .traceList {
   flex: 1;
   overflow-y: auto;
-  padding: 10px 12px;
+  padding: 12px 14px;
   font-family: var(--font-mono, monospace);
   font-size: 11.5px;
-  line-height: 1.55;
+  line-height: 1.6;
   background: var(--bg);
 }
 
 .traceTurn {
-  margin-bottom: 14px;
-  padding-bottom: 10px;
+  margin-bottom: 16px;
+  padding-bottom: 12px;
   border-bottom: 1px dashed var(--border);
 }
 
-.traceTurn:last-child { border-bottom: 0; }
+.traceTurn:last-child { border-bottom: 0; margin-bottom: 0; }
 
 .traceTurnHead {
   font-size: 11px;
   color: var(--text3);
-  margin-bottom: 4px;
+  margin-bottom: 6px;
+  font-weight: 500;
 }
 
 .traceLine {
   display: grid;
-  grid-template-columns: 48px 1fr;
-  gap: 8px;
+  grid-template-columns: 52px 1fr;
+  gap: 10px;
   color: var(--text2);
+  padding: 1px 0;
 }
 
 .traceT {
   color: var(--text3);
+  opacity: 0.7;
 }
 
 .traceBody {
@@ -360,6 +398,8 @@
 .traceEmpty {
   color: var(--text3);
   font-style: italic;
+  padding: 16px;
+  text-align: center;
 }
 
 .traceErr {
@@ -375,12 +415,14 @@
 }
 
 .banner {
-  padding: 10px 14px;
-  border-radius: 6px;
+  padding: 11px 14px;
+  border-radius: 8px;
   font-size: 13px;
+  border: 1px solid transparent;
 }
 
 .bannerErr {
-  background: color-mix(in srgb, var(--red, #f85149) 12%, transparent);
-  color: var(--red, #f85149);
+  background: var(--red-dim);
+  color: var(--red, #d93025);
+  border-color: color-mix(in srgb, var(--red, #d93025) 22%, transparent);
 }
