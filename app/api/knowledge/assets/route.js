@@ -43,7 +43,7 @@ export async function GET(request) {
     // click-to-preview without auth headers.
     const assets = await Promise.all(
       (data || []).map(async (row) => {
-        const { data: signed } = await supabase.storage
+        const { data: signed } = await getSupabaseAdmin().storage
           .from(STORAGE_BUCKET)
           .createSignedUrl(row.storage_path, 3600);
         return { ...row, preview_url: signed?.signedUrl || '' };

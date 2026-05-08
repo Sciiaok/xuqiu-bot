@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import supabase from '../../../../../lib/supabase.js';
+import { getSupabaseAdmin } from '../../../../../lib/supabase-admin.js';
 import { getTenantContext, findAgentInTenant } from '../../../../../lib/tenant-context.js';
 import { getDocumentById } from '../../../../../lib/repositories/knowledge-base.repository.js';
 
@@ -30,7 +30,10 @@ export async function GET(request) {
       return NextResponse.json({ error: 'No file stored for this document' }, { status: 404 });
     }
 
-    const { data, error } = await supabase.storage
+    // 私有 bucket（kb-assets）的 RLS 只放给 authenticated。这条路由跑在服务端，
+    // 必须用 service role 才能签 URL；用 anon client 会被 RLS 挡掉，supabase
+    // 把 403 伪装成 "Object not found" 回来。
+    const { data, error } = await getSupabaseAdmin().storage
       .from('kb-assets')
       .createSignedUrl(doc.storage_path, 3600, { download: doc.filename });
 

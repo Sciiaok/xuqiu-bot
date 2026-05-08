@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
-import supabase from '../../../../../lib/supabase.js';
-import { cleanupPartialDoc } from '../../../../../src/kb-upload.service.js';
-import { config } from '../../../../../src/config.js';
+import supabase from '../../../../lib/supabase.js';
+import { cleanupPartialDoc } from '../../../../src/kb-upload.service.js';
+import { config } from '../../../../src/config.js';
 
 /**
  * GET /api/cron/recover-stale-kb-docs
