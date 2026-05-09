@@ -147,19 +147,19 @@ Prome Engine 由 6 个互相协作的模块组成。新企业从开通到 AI 跑
 
 ### 5.3 产品线（`/product-lines`）
 
-**产品线是 Prome Engine 的核心抽象**：每条产品线对应一个独立的销售场景，绑定一个 WhatsApp 号码、一套 system prompt、一份 lead 字段定义、一个独立知识库。
+**产品线是 Prome Engine 的核心抽象**：每条产品线 = 一个 WhatsApp 号码 = 一份独立的 lead 字段定义 + 一个独立知识库。WhatsApp 号码即入口——`/product-lines` 列表用号码卡片选择目标产品线进入。
 
-| 配置项 | 说明 |
+进入 `/product-lines/[id]` 后是三个 tab：
+
+| Tab | 内容 |
 |---|---|
-| 名称 + 描述 | 例如「重型卡车出口」 |
-| 绑定的 WhatsApp 号 | 来自 §5.2 已绑定的号码池，每个号只能绑一条产品线 |
-| Lead 字段定义 | 自定义这条业务线想抽取的字段（除标准字段外）。例如 `载重吨位`、`变速箱型号` |
-| 资格化规则 | 哪些字段齐全算 QUALIFY、哪些算 PROOF；什么场景必须转人工 |
-| 系统 Prompt 增量 | 这条产品线特有的话术、禁忌、报价口径 |
+| **基本配置** | 产品线名称、价值判定标准（什么客户算高价值）、Lead 字段表（除标准字段外想抽取的自定义字段，例如 `载重吨位`、`变速箱型号`） |
+| **知识库** | §5.4 单独展开 |
+| **Medici 调试台** | 销售可在不影响真实客户的情况下，模拟客户消息试探 AI 回复——广告下拉锁定为当前产品线下的广告，让模拟环境与真实链路一致 |
 
 一个企业可以有多条产品线（例如同时做「重型卡车」和「卡车配件」两条线），每条独立运行，互不串扰。
 
-### 5.4 知识库（`/product-lines/[id]/knowledge-base`）
+### 5.4 知识库（`/product-lines/[id]` → 知识库 tab）
 
 按产品线挂载，4 层分类：
 
@@ -172,12 +172,14 @@ Prome Engine 由 6 个互相协作的模块组成。新企业从开通到 AI 跑
 
 旧的「合规与认证」并入 `company`，「竞品情报」并入 `sales`。
 
-**录入方式（不要求固定模板）**：
-- **文档上传**：PDF / Word / Excel / CSV / Markdown / 纯文本——任意列名 / 任意结构 / 中英混排都行。系统自动解析 → 翻译 → 向量化；产品 / 物流层会再跑一遍结构化抽取，把能识别到的 SKU / 价格 / 运费路线落到 `kb_products` / `kb_shipping_routes`，缺字段不会拒收
-- **对话式 Teach**：直接用自然语言告诉 AI「我们 50HP 拖拉机出口肯尼亚 FOB 价 6800 美元」，AI 抽取成结构化知识点
-- **Q&A 直填**：销售脑里的隐性知识——"客户问 X 我们答 Y" 多种问法 + 一段标准答 + 适用条件，medici 在客户问对不上具体 topic 时优先匹配
+知识库 tab 内分三段：**总览**（健康度 + 各层覆盖 + 知识盲区 chip）/ **录入** / **内容**（已有文档 / Q&A / 图片资产）。
 
-**资产管理**：可上传产品图片 / 规格 PDF / 资质证书等可发送资产。新版资产带结构化标签（type / view / color / scenario / linked_skus）+ caption 语义索引——medici 调 `find_asset` 优先按 tag 精确命中，没 tag 才走语义兜底；只有 tag 命中的图直接发给客户，semantic 命中需先文字描述确认。
+**录入方式（不要求固定模板）**：
+- **文档上传**（异步管线）：PDF / Word / Excel / CSV / Markdown / 纯文本——任意列名 / 任意结构 / 中英混排都行。前端选择文件后立即返回 `doc_id`，后台 fire-and-forget 跑解析 → 翻译 → 向量化，前端通过 SSE 实时看到每个阶段进度；产品 / 物流层会再跑一遍结构化抽取，把能识别到的 SKU / 价格 / 运费路线落到 `kb_products` / `kb_shipping_routes`，缺字段不会拒收。同一文件重传幂等，失败自动清理脏数据，cron 兜底恢复孤儿任务。选择产品 / 物流层时另显示字段规范 + 空白模板下载（走严格列名校验路径，不再单独成卡片）
+- **对话式 Teach（两步预览）**：直接用自然语言告诉 AI「我们 50HP 拖拉机出口肯尼亚 FOB 价 6800 美元」——第一步只抽取展示，用户可编辑 / 取消勾选 / 改分层，第二步确认后才生成 embedding 写入活跃库
+- **Q&A 不再手填**：销售脑里的隐性知识由学习闭环（见下文「纠正建议」）自动从对话中沉淀，不再需要人工录入卡片
+
+**资产管理**：可上传产品图片 / 规格 PDF / 资质证书等可发送资产。新版资产带结构化标签（type / view / color / scenario / linked_skus）+ caption 语义索引——medici 调 `find_asset` 优先按 tag 精确命中，没 tag 才走语义兜底；只有 tag 命中的图直接发给客户，semantic 命中需先文字描述确认。文档上传时也会自动从 PDF / docx 中抽出嵌入图、跑 vision caption 后入库为 `kb_assets`，销售基本不需要单独再上传图片。
 
 **6 个 typed tool**：medici 不直接读 KB 表，而是调 `lookup_product` / `quote_price` / `lookup_shipping` / `lookup_policy` / `find_asset` / `check_constraint`。每个工具返回明确的成功 / 失败结构（`not_found` / `missing_fields` / `needs_human` / `unknown`），杜绝"靠相似度评估"的猜测式答复。
 
@@ -205,7 +207,8 @@ ChatGPT 风格的对话界面：
 ```
 你 ：我想给重型卡车在尼日利亚做一波广告，预算 200 USD/天
 AI ：好的，先理解几个前提...（追问目标受众、卖点、素材偏好）
-AI ：[生成完整 plan_json：受众定向 + 多套素材文案 + 投放结构]
+AI ：[按 overseas-ad-planning v1.1 SOP 走 5 阶段：调研 → 策略 → 受众 → 素材 → 投放结构]
+AI ：[输出完整 10 章策划案 + plan_json，每阶段独立可重跑]
 你 ：把第二个素材的标题改成"质保 3 年"
 AI ：[更新 plan，重新预览]
 你 ：好，发布
@@ -216,6 +219,7 @@ AI ：[一键 stage & launch 到 Meta，返回 campaign_id]
 - 上传 PDF / 网址作为素材参考
 - AI 自动调 Meta Graph API 检索 ad account / page / WhatsApp 号
 - 全程 SSE 流式回复，每步工具调用过程可见
+- skill 包驱动（`overseas-ad-planning.skill`），输出契约固定为 10 章 + CTW 收口，可单独跳到任一阶段重跑而不必从头来过
 
 #### b) Medici · AI 外贸员（自动后台运行，无需 UI 操作）
 
@@ -255,6 +259,14 @@ AI ：[一键 stage & launch 到 Meta，返回 campaign_id]
 - 内容包括关键指标变化、线索质量分布、值得关注趋势、AI 行动建议
 - 可点 SSE 流式查看 AI 现场重新生成
 
+#### e) 平台运营（founder-only · `/admin/*`）
+
+仅 Prome Engine 团队可见：
+
+- `/admin/invitations`：生成租户邀请链接
+- `/admin/tenants`：所有租户清单 + Meta 绑定状态
+- `/admin/llm-usage`：全平台 LLM 调用 token 用量与成本统计——按租户 / 调用部位（medici / ogilvy / kb-search / kb-upload / ai-summary / report-generator / dev-tools.ai-sql / knowledge.teach 等 13 处全链路埋点）/ 模型三个维度聚合，今日 / 7天 / 30天 切换。每次 LLM 调用 fire-and-forget 写 `llm_usage_logs`，写表失败不影响主流程
+
 ---
 
 ## 6. RoadMap
@@ -263,4 +275,4 @@ AI ：[一键 stage & launch 到 Meta，返回 campaign_id]
 
 ---
 
-**文档版本**：2026-04 · 最后修订：multi-tenant + Ogilvy + KB v2 落地之后
+**文档版本**：2026-05 · 最后修订：KB 异步上传 + 录入区瘦身 + Ogilvy skill v1.1 + LLM 成本看板
