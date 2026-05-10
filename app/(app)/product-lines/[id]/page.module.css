@@ -24,7 +24,9 @@
   gap: 4px;
   padding: 3px 8px 3px 4px;
   margin: 0 -4px;
-  color: var(--text3);
+  /* 旧版用 var(--text3) 在浅灰背景上几乎隐形 —— 提一档到 text2 让"返回"
+   * 入口看得清，但仍保持次级层级，不和主标题打架。 */
+  color: var(--text2);
   text-decoration: none;
   border-radius: 6px;
   transition: color .15s, background .15s;

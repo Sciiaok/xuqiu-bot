@@ -138,14 +138,16 @@ export default function KnowledgeBaseTab({ agentId }) {
 // ── 总览 section ────────────────────────────────────────────────────
 
 function OverviewSection({ health, gaps, onResolveGap }) {
-  const statusClass = (st) => st === 'good' ? s.layerGood : st === 'warn' ? s.layerWarn : s.layerError;
-  const barClass = (st) => st === 'good' ? s.layerBarGood : st === 'warn' ? s.layerBarWarn : s.layerBarError;
-  const statusLabel = (st) => st === 'good' ? 'Healthy' : st === 'warn' ? 'Sparse' : 'Empty';
+  // status='error' 在后端语义里不是"出错"而是"还没建（覆盖率 0）"，所以前端
+  // 不用红色 alert 风格 —— 改成中性灰 chip + "未建" 文案，避免误导用户以为坏了。
+  const statusClass = (st) => st === 'good' ? s.layerGood : st === 'warn' ? s.layerWarn : s.layerEmpty;
+  const barClass = (st) => st === 'good' ? s.layerBarGood : st === 'warn' ? s.layerBarWarn : s.layerBarEmpty;
+  const statusLabel = (st) => st === 'good' ? '健康' : st === 'warn' ? '稀疏' : '未建';
 
   return (
     <>
       <div className={s.metricsRow}>
-        <div className={`${s.metricCard} ${s.metricGreen}`}>
+        <div className={s.metricCard}>
           <div className={s.metricLabel}>整体覆盖</div>
           <div className={s.metricValue}>{health.overall_coverage}%</div>
         </div>
@@ -157,7 +159,7 @@ function OverviewSection({ health, gaps, onResolveGap }) {
           <div className={s.metricLabel}>知识点</div>
           <div className={s.metricValue}>{health.total_knowledge_points}</div>
         </div>
-        <div className={`${s.metricCard} ${s.metricPurple}`}>
+        <div className={s.metricCard}>
           <div className={s.metricLabel}>产品</div>
           <div className={s.metricValue}>{health.total_products}</div>
         </div>
@@ -219,7 +221,20 @@ function OverviewSection({ health, gaps, onResolveGap }) {
           <span className={s.sectionMutedNote}>Medici 答不上的问题，按频次聚合</span>
         </div>
         {gaps.length === 0 ? (
-          <div className={s.emptyState}>暂无盲区</div>
+          <div className={s.gapsEmpty}>
+            {/* 自绘极简定向 radar/sweep 图标 —— 用 currentColor 跟主题，避免空状态像
+             * "ShadCN 默认空 div"。两段式文案：第一行结论，第二行解释机制。 */}
+            <svg className={s.gapsEmptyIcon} viewBox="0 0 32 32" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <circle cx="16" cy="16" r="11" opacity="0.35" />
+              <circle cx="16" cy="16" r="7" opacity="0.55" />
+              <circle cx="16" cy="16" r="2.4" fill="currentColor" stroke="none" />
+              <path d="M16 16 L25 9.5" opacity="0.85" />
+            </svg>
+            <div className={s.gapsEmptyText}>
+              <div className={s.gapsEmptyTitle}>暂无盲区</div>
+              <div className={s.gapsEmptyHint}>Medici 还没遇到答不上的问题，盲区会在 AI 实际跑客户对话时自动聚合到这里。</div>
+            </div>
+          </div>
         ) : (
           <div className={s.gapList}>
             {gaps.slice(0, 20).map(g => (
@@ -634,7 +649,17 @@ function ContentSection({ documents, qaSnippets, assets, agentId, onChanged }) {
 }
 
 function DocList({ documents, onChanged }) {
-  const fmtSize = b => b == null ? '—' : (b / 1024 < 10 ? (b / 1024).toFixed(1) : Math.round(b / 1024)) + ' KB';
+  // 旧实现统一用 KB（29462 KB 这种数字读起来没意义）。改成自动跳 KB/MB/GB，
+  // 小数位也跟着量级走 —— 28.8 MB 比 29462 KB 直观一个量级。
+  const fmtSize = b => {
+    if (b == null) return '—';
+    if (b < 1024) return `${b} B`;
+    const kb = b / 1024;
+    if (kb < 1024) return kb < 10 ? `${kb.toFixed(1)} KB` : `${Math.round(kb)} KB`;
+    const mb = kb / 1024;
+    if (mb < 1024) return mb < 10 ? `${mb.toFixed(1)} MB` : `${Math.round(mb)} MB`;
+    return `${(mb / 1024).toFixed(1)} GB`;
+  };
   const fmtTime = iso => {
     if (!iso) return '—';
     const d = new Date(iso); const p = n => String(n).padStart(2, '0');
@@ -652,7 +677,7 @@ function DocList({ documents, onChanged }) {
             <span className={s.docMeta}>{fmtSize(doc.file_size)}</span>
             <span className={s.docMeta}>{fmtTime(doc.created_at)}</span>
             <span className={s.docLayer}>{LAYER_LABELS[doc.layer] || doc.layer}</span>
-            <span className={s.docPoints}>{doc.status}</span>
+            <DocStatusChip status={doc.status} />
             <button
               className={s.docDeleteBtn}
               disabled={!canPreview}
@@ -737,6 +762,36 @@ function QaList({ items, agentId, onChanged }) {
   );
 }
 
+// 文档处理状态 chip —— 旧版直接渲染英文 raw 字符串 'ready/processing/error'，
+// 中英混排且无颜色信号；这里对齐其它中文 UI，状态点 + 中文标签。
+function DocStatusChip({ status }) {
+  const label = status === 'ready' ? '已就绪'
+    : status === 'processing' ? '处理中'
+    : status === 'error' ? '失败'
+    : status || '—';
+  const cls = status === 'ready' ? s.docStatusReady
+    : status === 'processing' ? s.docStatusProcessing
+    : status === 'error' ? s.docStatusError
+    : s.docStatusUnknown;
+  return (
+    <span className={`${s.docStatus} ${cls}`}>
+      <span className={s.docStatusDot} />
+      {label}
+    </span>
+  );
+}
+
+// 与 DocList.fmtSize 同款逻辑，AssetList 单独再 import 一遍麻烦，独立一个小工具函数。
+function fmtAssetSize(b) {
+  if (b == null) return '—';
+  if (b < 1024) return `${b} B`;
+  const kb = b / 1024;
+  if (kb < 1024) return kb < 10 ? `${kb.toFixed(1)} KB` : `${Math.round(kb)} KB`;
+  const mb = kb / 1024;
+  if (mb < 1024) return mb < 10 ? `${mb.toFixed(1)} MB` : `${Math.round(mb)} MB`;
+  return `${(mb / 1024).toFixed(1)} GB`;
+}
+
 function AssetList({ assets, onChanged }) {
   if (assets.length === 0) return <div className={s.emptyState}>暂无图片资产</div>;
   return (
@@ -762,7 +817,7 @@ function AssetList({ assets, onChanged }) {
                 ].filter(Boolean).join(' · ')}
               </div>
             )}
-            <div className={s.assetSize}>{a.mime_type} · {a.file_size_bytes ? Math.round(a.file_size_bytes / 1024) + ' KB' : '—'}</div>
+            <div className={s.assetSize}>{a.mime_type} · {fmtAssetSize(a.file_size_bytes)}</div>
           </div>
           <button className={s.docDeleteBtn} onClick={async () => {
             if (!window.confirm('删除这张图片？')) return;

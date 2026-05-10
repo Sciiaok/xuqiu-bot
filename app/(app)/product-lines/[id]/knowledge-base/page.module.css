@@ -121,19 +121,25 @@
   background: var(--bg2);
   border: 1px solid var(--border);
   border-radius: var(--rl);
-  padding: 14px 16px;
+  padding: 14px 16px 14px 19px;
   position: relative;
   overflow: hidden;
   box-shadow: var(--shadow);
 }
 
-.metricCard::after {
+/* 统一左竖线 accent —— 与 product-lines/[id] page.module.css 的 .sectionTitle::before
+ * 用同款 3px 蓝色短竖条，让总览卡 / 各层覆盖卡 / section 卡视觉同源，
+ * 替掉旧的 "顶部 2px 多色彩虹条"（那种四色顶条是 ShadCN/MUI 标配，几乎是 AI dashboard 的招牌脸）。 */
+.metricCard::before {
   content: '';
   position: absolute;
-  top: 0; left: 0; right: 0;
-  height: 2px;
+  top: 14px;
+  bottom: 14px;
+  left: 8px;
+  width: 3px;
+  border-radius: 2px;
   background: var(--accent);
-  opacity: 0.5;
+  opacity: 0.85;
 }
 
 .metricLabel {
@@ -153,11 +159,6 @@
   line-height: 1;
   color: var(--text);
 }
-
-.metricGreen::after { background: var(--green); }
-.metricAmber::after { background: var(--amber); }
-.metricRed::after { background: var(--red); }
-.metricPurple::after { background: var(--purple); }
 
 /* ── Section title ────────────────────────────────────── */
 .sectionTitle {
@@ -235,6 +236,10 @@
 
 .layerGood { background: var(--green-dim); color: var(--green); }
 .layerWarn { background: var(--amber-dim); color: var(--amber); }
+/* 之前 status='error' 在 Empty 层渲染成红色 alert chip，但语义上 0% 覆盖
+ * 是"还没录入"不是"出错"，所以这里给一套中性灰，让眼睛知道"留意但不慌"。 */
+.layerEmpty { background: var(--bg4); color: var(--text2); }
+/* 旧 .layerError 留作真实错误的留位 —— 真正报错时切回来用即可。 */
 .layerError { background: var(--red-dim); color: var(--red); }
 
 .layerBar {
@@ -253,6 +258,9 @@
 
 .layerBarGood { background: var(--green); }
 .layerBarWarn { background: var(--amber); }
+/* "未建"层进度条用中性灰 —— 仍然用 4% 最小宽度让 chip 视觉锚点存在，
+ * 但不再用红色让用户以为出错。 */
+.layerBarEmpty { background: var(--border3); }
 .layerBarError { background: var(--red); }
 
 .layerMeta {
@@ -694,6 +702,44 @@
   flex-shrink: 0;
 }
 
+/* 文档状态 chip —— 替代旧的直接渲染英文 status 字符串，
+ * 用一个 6px 状态点 + 中文标签，和顶栏 metaChip 同款语言。 */
+.docStatus {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 10.5px;
+  font-family: var(--font-sans);
+  flex-shrink: 0;
+  padding: 2px 8px 2px 7px;
+  border-radius: 999px;
+  background: var(--bg3);
+  border: 1px solid var(--border);
+  color: var(--text2);
+  letter-spacing: 0;
+}
+
+.docStatusDot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--text3);
+  flex-shrink: 0;
+}
+
+.docStatusReady { color: var(--green); background: var(--green-dim); border-color: color-mix(in srgb, var(--green) 18%, transparent); }
+.docStatusReady .docStatusDot { background: var(--green); }
+.docStatusProcessing { color: var(--amber); background: var(--amber-dim); border-color: color-mix(in srgb, var(--amber) 18%, transparent); }
+.docStatusProcessing .docStatusDot { background: var(--amber); animation: dotPulse 1.4s ease-in-out infinite; }
+.docStatusError { color: var(--red); background: var(--red-dim); border-color: color-mix(in srgb, var(--red) 18%, transparent); }
+.docStatusError .docStatusDot { background: var(--red); }
+.docStatusUnknown { color: var(--text3); }
+
+@keyframes dotPulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
+}
+
 .docMeta {
   font-size: 10px;
   color: var(--text3);
@@ -1117,6 +1163,48 @@
   background: var(--bg2);
   border: 1px dashed var(--border2);
   border-radius: 10px;
+}
+
+/* 知识盲区专属空态 —— 普通 emptyState 是单行虚线框，太通用。
+ * 这里给一个图标 + 标题 + 解释的版式，让"无盲区"看起来像系统在主动报告，
+ * 而不是组件库默认的"暂无数据"。 */
+.gapsEmpty {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 22px 22px;
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  border-radius: var(--rl);
+  box-shadow: var(--shadow);
+}
+
+.gapsEmptyIcon {
+  width: 38px;
+  height: 38px;
+  flex-shrink: 0;
+  color: var(--accent);
+  opacity: 0.85;
+}
+
+.gapsEmptyText {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.gapsEmptyTitle {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+  font-family: var(--font-sans);
+}
+
+.gapsEmptyHint {
+  font-size: 12px;
+  color: var(--text3);
+  line-height: 1.55;
 }
 
 .spinner {

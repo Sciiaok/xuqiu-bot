@@ -140,13 +140,8 @@ export default function ProductLineEditPage() {
             </span>
           </div>
         </div>
-        {activeTab === 'config' && (
-          <div className={s.headerActions}>
-            <Button variant="primary" onClick={handleSave} disabled={saving || !leadFieldsValid}>
-              {saving ? '保存中…' : '保存'}
-            </Button>
-          </div>
-        )}
+        {/* 顶部"保存"删了 —— 基本配置最下方有 sticky saveBar（滚到哪都跟着），
+         * 顶 + 底两个主按钮等于在视觉上重复主动作；保留底部一个就够。 */}
       </div>
 
       <div className={s.tabBar}>
