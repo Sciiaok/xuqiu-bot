@@ -425,17 +425,30 @@ export default function OgilvyApp() {
       {/* ─── Sidebar ─── */}
       <aside className={s.sidebar}>
         <div className={s.sidebarHead}>
-          <span></span>
+          <span className={s.sidebarHeadLabel}>项目</span>
+          {sessions.length > 0 && (
+            <span className={s.sidebarHeadCount}>{sessions.length}</span>
+          )}
         </div>
         <button className={s.newBtn} onClick={handleNewConversation} disabled={creating || gateBlocked}>
-          <span>＋</span>
+          <svg className={s.newBtnIcon} width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true">
+            <path d="M7 2v10M2 7h10" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+          </svg>
           <span>新项目</span>
         </button>
         <div className={s.sessionList}>
           {loadingSessions ? (
-            <div className={s.sidebarEmpty}>加载中…</div>
+            <SessionSkeletonList />
           ) : sessions.length === 0 ? (
-            <div className={s.sidebarEmpty}>还没有对话</div>
+            <div className={s.sidebarEmpty}>
+              <div className={s.sidebarEmptyMark} aria-hidden="true">
+                <svg width="22" height="22" viewBox="0 0 24 24" fill="none">
+                  <path d="M4 6h16M4 12h10M4 18h7" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+                </svg>
+              </div>
+              <div className={s.sidebarEmptyTitle}>还没有项目</div>
+              <div className={s.sidebarEmptyHint}>从右侧开始第一段对话</div>
+            </div>
           ) : (
             sessions.map(sess => (
               <SessionCard
@@ -575,7 +588,8 @@ export default function OgilvyApp() {
                   )}
                 </div>
                 <div className={s.composerFoot}>
-                  所有广告会被配置为 Click-to-WhatsApp 格式，优化最大化 WhatsApp 对话数
+                  <span className={s.composerFootDot} aria-hidden="true" />
+                  Click-to-WhatsApp 投放 · 优化最大化 WhatsApp 对话数
                 </div>
               </div>
             </div>
@@ -600,16 +614,72 @@ export default function OgilvyApp() {
               streaming={!!streamingPlan}
             />
           ) : (
-            <div className={s.planPanelEmpty}>
-              <div className={s.planPanelIcon}>✦</div>
-              <div className={s.planPanelTitle}>广告方案</div>
-              <div className={s.planPanelHint}>
-                聊天里给出足够信息后，AI 会在这里生成完整的广告投放方案。
-              </div>
-            </div>
+            <PlanBlueprint />
           )}
         </aside>
       )}
+    </div>
+  );
+}
+
+/**
+ * Empty-state for the right plan column. Sketches the *shape* of the upcoming
+ * plan card with faint placeholders (kicker → title → stats → ads → CTA), so
+ * the user reads the panel as "waiting to be filled" rather than "broken".
+ *
+ * Pure presentation — no props, no interaction.
+ */
+function PlanBlueprint() {
+  return (
+    <div className={s.blueprint} aria-hidden="true">
+      <div className={s.blueprintBadge}>广告方案</div>
+
+      <article className={s.blueprintCard}>
+        <header className={s.blueprintHead}>
+          <span className={s.blueprintKind}>📱 Click-to-WhatsApp</span>
+          <div className={s.blueprintTitleBar} />
+        </header>
+
+        <section className={s.blueprintSection}>
+          <div className={s.blueprintStatRow}>
+            <div className={s.blueprintStat}>
+              <span className={s.blueprintStatLabel}>日预算</span>
+              <span className={s.blueprintStatVal} />
+            </div>
+            <div className={s.blueprintStat}>
+              <span className={s.blueprintStatLabel}>预估对话</span>
+              <span className={s.blueprintStatVal} />
+            </div>
+          </div>
+        </section>
+
+        <section className={s.blueprintSection}>
+          <span className={s.blueprintSectionLabel}>询盘落地</span>
+          <div className={s.blueprintWa}>
+            <span className={s.blueprintWaIcon}>💬</span>
+            <span className={s.blueprintWaLine} />
+          </div>
+        </section>
+
+        <section className={s.blueprintSection}>
+          <span className={s.blueprintSectionLabel}>广告组 · 创意</span>
+          <div className={s.blueprintAds}>
+            <span className={s.blueprintThumb} />
+            <span className={s.blueprintThumb} />
+            <span className={s.blueprintThumb} />
+          </div>
+        </section>
+
+        <footer className={s.blueprintFoot}>
+          <span className={s.blueprintStatusDot} />
+          <span className={s.blueprintStatusLine} />
+          <span className={s.blueprintCta}>✦ 启动投放</span>
+        </footer>
+      </article>
+
+      <div className={s.blueprintHint}>
+        聊天里给出产品、市场和预算，AI 会在这里生成完整方案
+      </div>
     </div>
   );
 }
@@ -724,19 +794,92 @@ function stageDetailLabel(evt) {
 }
 
 function EmptyState({ onPick }) {
-  const chips = [
-    '帮我推广一款 300W 家用太阳能板到泰国和印尼',
-    '为我的 4x4 越野车配件（柬埔寨市场）做投放',
-    '我是做外贸的 LED 灯具，想投非洲',
+  // Prompt seeds split by intent so users see the breadth of what they can ask
+  // for, not just three lookalike "I sell X to Y" templates.
+  const chipGroups = [
+    {
+      label: '产品推广',
+      items: [
+        '帮我推广一款 300W 家用太阳能板到泰国和印尼',
+        '为我的 4x4 越野车配件（柬埔寨市场）做投放',
+      ],
+    },
+    {
+      label: '行业 / 市场',
+      items: [
+        '我是做外贸的 LED 灯具，想投非洲',
+        '工程机械配件，目标中东 B2B 客户',
+      ],
+    },
   ];
+
+  const steps = [
+    { n: '01', label: '对话', hint: '告诉我产品、市场、预算' },
+    { n: '02', label: '方案', hint: 'AI 草拟广告组与素材' },
+    { n: '03', label: '上线', hint: '一键投放到 Meta' },
+  ];
+
   return (
     <div className={s.empty}>
+      <div className={s.emptyHero} aria-hidden="true">
+        <span className={s.emptyOrb} />
+        <span className={s.emptyOrbHalo} />
+      </div>
+      <span className={s.emptyKicker}>AUTOPILOT</span>
       <h1 className={s.emptyTitle}>今天推广哪款产品？</h1>
-      <div className={s.emptyChips}>
-        {chips.map(c => (
-          <button key={c} className={s.emptyChip} onClick={() => onPick(c)}>{c}</button>
+      <p className={s.emptySubtitle}>
+        描述产品、目标市场或预算，AI 会生成完整的 Click-to-WhatsApp 投放方案。
+      </p>
+
+      <div className={s.emptyChipGroups}>
+        {chipGroups.map(group => (
+          <div key={group.label} className={s.emptyChipCol}>
+            <div className={s.emptyChipColLabel}>{group.label}</div>
+            <div className={s.emptyChipColItems}>
+              {group.items.map(c => (
+                <button key={c} className={s.emptyChip} onClick={() => onPick(c)}>
+                  <span className={s.emptyChipText}>{c}</span>
+                  <span className={s.emptyChipArrow} aria-hidden="true">→</span>
+                </button>
+              ))}
+            </div>
+          </div>
         ))}
       </div>
+
+      <div className={s.emptySteps} aria-hidden="true">
+        {steps.map((st, i) => (
+          <div key={st.n} className={s.emptyStep}>
+            <span className={s.emptyStepNum}>{st.n}</span>
+            <div className={s.emptyStepBody}>
+              <div className={s.emptyStepLabel}>{st.label}</div>
+              <div className={s.emptyStepHint}>{st.hint}</div>
+            </div>
+            {i < steps.length - 1 && <span className={s.emptyStepArrow}>→</span>}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Skeleton placeholder for the session sidebar during cold load. Mirrors the
+ * shape of real SessionCard rows (dot + title line + meta line) so the layout
+ * doesn't visibly shift when data lands.
+ */
+function SessionSkeletonList() {
+  return (
+    <div className={s.sessionSkeletonList} aria-hidden="true">
+      {[68, 82, 60, 74].map((w, i) => (
+        <div key={i} className={s.sessionSkeleton}>
+          <div className={s.sessionSkeletonTop}>
+            <span className={s.sessionSkeletonDot} />
+            <span className={s.sessionSkeletonTitle} style={{ width: `${w}%` }} />
+          </div>
+          <span className={s.sessionSkeletonMeta} style={{ width: `${w - 18}%` }} />
+        </div>
+      ))}
     </div>
   );
 }

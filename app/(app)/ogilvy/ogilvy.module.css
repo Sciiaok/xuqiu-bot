@@ -36,21 +36,35 @@
   height: 100%;
 }
 .sidebarHead {
-  padding: 16px 12px 8px;
+  padding: 18px 14px 10px;
   display: flex;
   align-items: center;
   justify-content: space-between;
-  font-size: 12px;
+  gap: 6px;
+}
+.sidebarHeadLabel {
+  font-size: 11px;
   font-weight: 600;
-  color: var(--text2);
-  letter-spacing: 0.04em;
+  color: var(--text3);
+  letter-spacing: 0.08em;
   text-transform: uppercase;
 }
+.sidebarHeadCount {
+  font-family: var(--font-dm-mono), monospace;
+  font-size: 11px;
+  color: var(--text3);
+  background: var(--bg3);
+  padding: 1px 7px;
+  border-radius: 999px;
+  min-width: 20px;
+  text-align: center;
+}
+
 .newBtn {
   width: calc(100% - 20px);
-  margin: 0 10px 8px;
+  margin: 0 10px 10px;
   padding: 10px 12px;
-  background: var(--bg2);
+  background: linear-gradient(180deg, var(--bg2) 0%, var(--bg2) 100%);
   border: 1px solid var(--border);
   border-radius: 10px;
   color: var(--text);
@@ -59,11 +73,20 @@
   cursor: pointer;
   display: flex;
   align-items: center;
+  justify-content: center;
   gap: 8px;
-  transition: background 0.12s;
+  position: relative;
+  box-shadow: 0 1px 0 rgba(15, 23, 42, 0.02);
+  transition: background 0.12s, border-color 0.12s, box-shadow 0.12s, transform 0.12s;
 }
-.newBtn:hover { background: var(--bg3); }
-.newBtn:disabled { opacity: 0.5; cursor: wait; }
+.newBtn:hover {
+  background: var(--bg3);
+  border-color: var(--border2);
+  box-shadow: 0 1px 0 rgba(15, 23, 42, 0.02), 0 0 0 3px var(--accent-dim);
+}
+.newBtn:active { transform: translateY(0.5px); }
+.newBtn:disabled { opacity: 0.5; cursor: wait; box-shadow: none; }
+.newBtnIcon { color: var(--accent); flex-shrink: 0; }
 
 .sessionList {
   flex: 1;
@@ -80,19 +103,21 @@
  */
 .sessionCard {
   position: relative;
-  padding: 8px 10px;
-  border-radius: 8px;
+  padding: 9px 12px;
+  border-radius: 10px;
   cursor: pointer;
   display: flex;
   flex-direction: column;
-  gap: 2px;
-  transition: background 0.1s;
+  gap: 3px;
+  border: 1px solid transparent;
+  transition: background 0.12s, border-color 0.12s;
 }
 .sessionCard:hover { background: var(--bg3); }
 .sessionCardActive {
   background: var(--accent-dim) !important;
+  border-color: rgba(37, 99, 235, 0.18) !important;
 }
-.sessionCardActive .sessionCardTitle { color: var(--accent); font-weight: 500; }
+.sessionCardActive .sessionCardTitle { color: var(--accent); font-weight: 600; }
 
 .sessionCardTop {
   display: flex;
@@ -173,7 +198,80 @@
 .sessionCard:hover .sessionCardDel { display: flex; }
 .sessionCardDel:hover { background: var(--bg5); color: var(--red); }
 
-.sidebarEmpty { padding: 16px; color: var(--text3); font-size: 12px; text-align: center; }
+.sidebarEmpty {
+  margin: 18px 12px;
+  padding: 22px 14px;
+  border: 1px dashed var(--border2);
+  border-radius: 12px;
+  color: var(--text3);
+  text-align: center;
+  background: var(--bg2);
+}
+.sidebarEmptyMark {
+  width: 36px;
+  height: 36px;
+  margin: 0 auto 10px;
+  border-radius: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--accent-dim);
+  color: var(--accent);
+}
+.sidebarEmptyTitle { font-size: 13px; font-weight: 600; color: var(--text2); margin-bottom: 2px; }
+.sidebarEmptyHint  { font-size: 11.5px; color: var(--text3); line-height: 1.5; }
+
+/* ── Sidebar skeleton (cold load) ────────────────────────────── */
+.sessionSkeletonList {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 6px 2px 0;
+}
+.sessionSkeleton {
+  padding: 8px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.sessionSkeletonTop {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.sessionSkeletonDot {
+  width: 7px; height: 7px;
+  border-radius: 50%;
+  background: var(--bg4);
+  flex-shrink: 0;
+  animation: ogilvyShimmer 1.6s ease-in-out infinite;
+}
+.sessionSkeletonTitle {
+  height: 10px;
+  border-radius: 5px;
+  background: linear-gradient(90deg, var(--bg4) 0%, var(--bg5) 50%, var(--bg4) 100%);
+  background-size: 200% 100%;
+  animation: ogilvyShimmer 1.6s ease-in-out infinite;
+}
+.sessionSkeletonMeta {
+  height: 8px;
+  margin-left: 15px;
+  border-radius: 4px;
+  background: linear-gradient(90deg, var(--bg4) 0%, var(--bg5) 50%, var(--bg4) 100%);
+  background-size: 200% 100%;
+  animation: ogilvyShimmer 1.6s ease-in-out infinite;
+  opacity: 0.7;
+}
+@keyframes ogilvyShimmer {
+  0%   { background-position: 200% 0; opacity: 0.85; }
+  50%  { opacity: 0.5; }
+  100% { background-position: -200% 0; opacity: 0.85; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .sessionSkeletonDot,
+  .sessionSkeletonTitle,
+  .sessionSkeletonMeta { animation: none; }
+}
 
 /* ─── Main chat area ────────────────────────────────────────────── */
 .main {
@@ -210,37 +308,237 @@
   padding: 8px 0;
 }
 
-/* ─── Empty state ───────────────────────────────────────────────── */
+/* ─── Empty state ─────────────────────────────────────────────────
+ *
+ * Reads top-to-bottom as: hero → kicker → title → subtitle → prompt
+ * starters (two columns by intent) → workflow stepper. The whole block is
+ * vertically centred in the chat area and capped at ~700px so it feels
+ * composed rather than spread thin.
+ */
 .empty {
   margin: auto;
   text-align: center;
-  padding: 60px 24px;
-  max-width: 620px;
+  padding: 56px 24px 60px;
+  max-width: 720px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 18px;
+}
+
+/* Hero — concentric "orb" with two concentric haloes, signalling generative
+ * AI without leaning on a literal sparkle emoji. CSS only; no asset cost.
+ *
+ * Layered shadows + radial gradient give the orb a glassy 3D feel — the
+ * top-left highlight reads as a light source, the deeper outer ring as
+ * brand-accent glow. */
+.emptyHero {
+  position: relative;
+  width: 84px;
+  height: 84px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-bottom: 6px;
+}
+.emptyOrb {
+  position: relative;
+  z-index: 2;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background:
+    radial-gradient(circle at 32% 30%, rgba(255, 255, 255, 0.95) 0%, rgba(255, 255, 255, 0) 28%),
+    radial-gradient(circle at 50% 50%, #60a5fa 0%, var(--accent) 45%, #1d4ed8 100%);
+  box-shadow:
+    inset 0 1px 1px rgba(255, 255, 255, 0.4),
+    0 0 0 1px rgba(37, 99, 235, 0.28),
+    0 6px 18px rgba(37, 99, 235, 0.40),
+    0 1px 2px rgba(15, 23, 42, 0.14);
+  animation: emptyOrbPulse 3.6s ease-in-out infinite;
+}
+.emptyOrbHalo {
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  background:
+    radial-gradient(circle, rgba(37, 99, 235, 0.16) 0%, rgba(37, 99, 235, 0.06) 40%, transparent 70%);
+  animation: emptyOrbHalo 3.6s ease-in-out infinite;
+}
+/* Subtle scan-line ring around the orb — sells the "generative" idea. */
+.emptyHero::after {
+  content: '';
+  position: absolute;
+  width: 46px;
+  height: 46px;
+  border-radius: 50%;
+  border: 1px dashed rgba(37, 99, 235, 0.3);
+  animation: emptyOrbRing 12s linear infinite;
+}
+@keyframes emptyOrbPulse {
+  0%, 100% { transform: scale(1);    box-shadow: inset 0 1px 1px rgba(255, 255, 255, 0.4), 0 0 0 1px rgba(37, 99, 235, 0.28), 0 6px 18px rgba(37, 99, 235, 0.40), 0 1px 2px rgba(15, 23, 42, 0.14); }
+  50%      { transform: scale(1.08); box-shadow: inset 0 1px 1px rgba(255, 255, 255, 0.45), 0 0 0 1px rgba(37, 99, 235, 0.34), 0 8px 26px rgba(37, 99, 235, 0.50), 0 1px 2px rgba(15, 23, 42, 0.14); }
+}
+@keyframes emptyOrbHalo {
+  0%, 100% { transform: scale(1);    opacity: 0.7; }
+  50%      { transform: scale(1.35); opacity: 0.25; }
+}
+@keyframes emptyOrbRing {
+  to { transform: rotate(360deg); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .emptyOrb, .emptyOrbHalo { animation: none; }
+  .emptyHero::after { animation: none; }
+}
+
+.emptyKicker {
+  font-family: var(--font-dm-mono), monospace;
+  font-size: 10.5px;
+  letter-spacing: 0.34em;
+  color: var(--accent);
+  font-weight: 600;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+.emptyKicker::before,
+.emptyKicker::after {
+  content: '';
+  width: 18px;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, var(--accent), transparent);
 }
 .emptyTitle {
-  font-size: 28px;
+  font-size: 32px;
   font-weight: 600;
-  margin: 0 0 24px;
+  margin: 0;
   color: var(--text);
   font-family: var(--font-syne), inherit;
+  letter-spacing: -0.012em;
+  line-height: 1.12;
 }
-.emptyChips {
+.emptySubtitle {
+  margin: 0;
+  font-size: 14px;
+  color: var(--text2);
+  line-height: 1.65;
+  max-width: 500px;
+}
+
+/* Prompt starter chips, grouped into two intent columns. */
+.emptyChipGroups {
+  width: 100%;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 14px;
+  margin-top: 10px;
+}
+@media (max-width: 720px) {
+  .emptyChipGroups { grid-template-columns: 1fr; }
+}
+.emptyChipCol {
+  text-align: left;
   display: flex;
-  flex-wrap: wrap;
+  flex-direction: column;
   gap: 8px;
-  justify-content: center;
+}
+.emptyChipColLabel {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text3);
+  padding-left: 2px;
+}
+.emptyChipColItems {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
 }
 .emptyChip {
-  padding: 10px 16px;
-  background: var(--bg);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 11px 14px;
+  background: var(--bg2);
   border: 1px solid var(--border);
-  border-radius: 999px;
+  border-radius: 12px;
   font-size: 13px;
   color: var(--text);
   cursor: pointer;
-  transition: background 0.1s;
+  text-align: left;
+  width: 100%;
+  font-family: inherit;
+  line-height: 1.45;
+  transition: background 0.12s, border-color 0.12s, transform 0.12s, box-shadow 0.12s;
 }
-.emptyChip:hover { background: var(--bg3); }
+.emptyChip:hover {
+  background: var(--bg3);
+  border-color: var(--border2);
+  transform: translateY(-1px);
+  box-shadow: 0 2px 8px rgba(37, 99, 235, 0.06);
+}
+.emptyChip:hover .emptyChipArrow { color: var(--accent); transform: translateX(2px); }
+.emptyChipText {
+  flex: 1;
+  min-width: 0;
+}
+.emptyChipArrow {
+  flex-shrink: 0;
+  color: var(--text3);
+  font-size: 13px;
+  font-family: var(--font-dm-mono), monospace;
+  transition: color 0.12s, transform 0.15s;
+}
+
+/* "How it works" stepper — 01 → 02 → 03 cards. Stacked layout (number on top,
+ * label below) avoids cramped wrapping in narrow three-up columns. */
+.emptySteps {
+  width: 100%;
+  margin-top: 14px;
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  gap: 10px;
+  padding-top: 18px;
+  border-top: 1px dashed var(--border2);
+}
+.emptyStep {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  text-align: left;
+  padding: 8px 10px;
+  border-radius: 10px;
+  background: var(--bg2);
+  border: 1px solid var(--border);
+}
+.emptyStepNum {
+  font-family: var(--font-dm-mono), monospace;
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--accent);
+  padding: 2px 6px;
+  background: var(--accent-dim);
+  border-radius: 4px;
+  letter-spacing: 0.06em;
+}
+.emptyStepBody { min-width: 0; width: 100%; }
+.emptyStepLabel {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+  line-height: 1.2;
+}
+.emptyStepHint {
+  font-size: 11px;
+  color: var(--text3);
+  margin-top: 3px;
+  line-height: 1.45;
+}
+/* Arrow renders absolutely inside the gap between cards. */
+.emptyStepArrow { display: none; }
 
 /* ─── Message bubbles ───────────────────────────────────────────── */
 .userMsg {
@@ -351,7 +649,11 @@
   border: 1px solid var(--border);
   border-radius: 22px;
   padding: 6px 6px 6px 8px;
-  transition: border-color 0.15s;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+.composerBox:focus-within {
+  border-color: var(--border2);
+  box-shadow: 0 0 0 4px var(--accent-dim);
 }
 .composerIconBtn {
   width: 34px; height: 34px;
@@ -414,9 +716,6 @@
   justify-content: center;
 }
 .attachRemove:hover { background: rgba(0,0,0,0.8); }
-.composerBox:focus-within {
-  border-color: var(--border3);
-}
 .composerTextarea {
   flex: 1;
   resize: none;
@@ -447,10 +746,22 @@
 .composerBtn:disabled { opacity: 0.3; cursor: not-allowed; }
 
 .composerFoot {
-  margin-top: 8px;
+  margin-top: 10px;
   font-size: 11px;
   color: var(--text3);
   text-align: center;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  letter-spacing: 0.01em;
+}
+.composerFootDot {
+  width: 5px; height: 5px;
+  border-radius: 50%;
+  background: var(--green);
+  box-shadow: 0 0 0 3px var(--green-dim);
+  flex-shrink: 0;
 }
 
 /* ─── WhatsApp Gate Card ───────────────────────────────────────── */
@@ -510,33 +821,201 @@
   display: flex;
   flex-direction: column;
 }
-.planPanelEmpty {
-  margin: auto;
-  text-align: center;
-  padding: 40px 12px;
-  max-width: 260px;
+/* ─── Right plan panel header band ──────────────────────────────
+ * The plan panel needs visual anchor at top (matches sidebar header
+ * pattern). We don't always have a heading — but the blueprint's
+ * own kicker doubles as that. */
+
+/* ─── Plan panel blueprint (phantom preview) ──────────────────────
+ *
+ * Pre-plan empty state. We show the *shape* of the upcoming plan card —
+ * kicker, title, stats, WA destination, ads, status footer — with all
+ * content replaced by neutral bars and tiles. The point: when the AI
+ * starts producing a plan, the user has already visually registered
+ * "what fills in where", so the eventual content reveal feels like the
+ * blanks getting populated rather than a brand-new surface arriving.
+ *
+ * Everything below is decorative; aria-hidden on the wrapper keeps it
+ * out of the a11y tree. The real plan-card hint sits beneath.
+ */
+.blueprint {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding-top: 4px;
 }
-.planPanelIcon {
-  width: 48px; height: 48px;
-  margin: 0 auto 14px;
-  border-radius: 12px;
-  background: var(--bg3);
+.blueprintBadge {
+  font-family: var(--font-dm-mono), monospace;
+  font-size: 10.5px;
+  letter-spacing: 0.18em;
+  color: var(--text3);
+  text-transform: uppercase;
+  text-align: center;
+  font-weight: 600;
+}
+
+.blueprintCard {
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  overflow: hidden;
+  position: relative;
+  opacity: 0.92;
+}
+/* Diagonal blueprint grid in the background — readable as "scaffolding"
+ * without being a distracting pattern. */
+.blueprintCard::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background-image:
+    linear-gradient(var(--border) 1px, transparent 1px),
+    linear-gradient(90deg, var(--border) 1px, transparent 1px);
+  background-size: 28px 28px;
+  background-position: 0 0;
+  opacity: 0.35;
+  pointer-events: none;
+}
+.blueprintCard > * { position: relative; }
+
+.blueprintHead {
+  padding: 16px 18px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.blueprintKind {
+  font-size: 10.5px;
   color: var(--accent);
+  letter-spacing: 0.1em;
+  font-weight: 600;
+  text-transform: uppercase;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  align-self: flex-start;
+  padding: 3px 8px;
+  background: var(--accent-dim);
+  border-radius: 999px;
+}
+.blueprintTitleBar {
+  height: 12px;
+  border-radius: 4px;
+  background: var(--bg3);
+  width: 78%;
+}
+
+.blueprintSection {
+  padding: 12px 18px;
+  border-top: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.blueprintSectionLabel {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text3);
+}
+
+.blueprintStatRow {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+}
+.blueprintStat {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.blueprintStatLabel {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text3);
+}
+.blueprintStatVal {
+  height: 16px;
+  width: 58%;
+  background: var(--bg3);
+  border-radius: 5px;
+}
+
+.blueprintWa {
   display: flex;
   align-items: center;
-  justify-content: center;
-  font-size: 22px;
+  gap: 10px;
 }
-.planPanelTitle {
-  font-size: 15px;
-  font-weight: 600;
-  color: var(--text);
-  margin-bottom: 6px;
+.blueprintWaIcon {
+  width: 30px; height: 30px;
+  border-radius: 8px;
+  background: var(--green-dim);
+  color: var(--green);
+  display: flex; align-items: center; justify-content: center;
+  font-size: 14px;
+  opacity: 0.7;
 }
-.planPanelHint {
-  font-size: 13px;
+.blueprintWaLine {
+  flex: 1;
+  height: 14px;
+  border-radius: 5px;
+  background: var(--bg3);
+  max-width: 180px;
+}
+
+.blueprintAds {
+  display: flex;
+  gap: 10px;
+  padding-top: 2px;
+}
+.blueprintThumb {
+  width: 52px; height: 52px;
+  border-radius: 8px;
+  background: var(--bg3);
+  border: 1px dashed var(--border2);
+  flex-shrink: 0;
+}
+
+.blueprintFoot {
+  padding: 12px 18px;
+  border-top: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.blueprintStatusDot {
+  width: 8px; height: 8px;
+  border-radius: 50%;
+  background: var(--border2);
+  flex-shrink: 0;
+}
+.blueprintStatusLine {
+  flex: 1;
+  height: 10px;
+  border-radius: 4px;
+  background: var(--bg3);
+  max-width: 90px;
+}
+.blueprintCta {
+  font-size: 12px;
+  font-weight: 500;
   color: var(--text3);
-  line-height: 1.55;
+  padding: 7px 12px;
+  border-radius: 8px;
+  background: var(--bg3);
+  border: 1px dashed var(--border2);
+  white-space: nowrap;
+}
+
+.blueprintHint {
+  font-size: 12.5px;
+  color: var(--text3);
+  text-align: center;
+  line-height: 1.6;
+  padding: 0 8px;
 }
 
 /*
@@ -565,26 +1044,34 @@
 
 /* ── Head ── */
 .planHead {
-  padding: 14px 18px 12px;
+  padding: 16px 18px 14px;
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 6px;
 }
 .planKind {
-  font-size: 11px;
-  color: var(--text3);
+  font-size: 10.5px;
+  color: var(--accent);
   text-transform: uppercase;
-  letter-spacing: 0.06em;
+  letter-spacing: 0.1em;
   font-weight: 600;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  align-self: flex-start;
+  padding: 3px 8px;
+  background: var(--accent-dim);
+  border-radius: 999px;
 }
 .planTitle {
   margin: 0;
-  font-size: 15px;
+  font-size: 15.5px;
   font-weight: 600;
   color: var(--text);
   line-height: 1.4;
   /* No line-clamp — the panel's own overflow-y: auto handles a long summary. */
   word-wrap: break-word;
+  letter-spacing: -0.005em;
 }
 
 /* ── Generic section block (divider + padding) ── */

@@ -21,8 +21,8 @@ import AttributionTab from './AttributionTab';
 // standalone /ogilvy route in PR 4. Campaign Studio is now strictly
 // data/analytics — list + attribution.
 const MAIN_TABS = [
-  { key: 'list', label: '📊 广告列表' },
-  { key: 'attribution', label: '🎯 深度归因分析' },
+  { key: 'list', label: '广告列表' },
+  { key: 'attribution', label: '深度归因分析' },
 ];
 
 const TIME_FILTER_ITEMS = [
@@ -192,38 +192,49 @@ export function CampaignStudioScreen({
     ? subtitle.replace(/近 \{days\} 天/, '自定义范围')
     : subtitle.replace('{days}', String(daysFilter));
 
+  // The header gets a small live "状态" dot. We treat anything past 0 spend OR
+  // any active ad as "live data" — the rest as a quieter neutral state.
+  const isLive = (totals?.spend ?? 0) > 0 || (totals?.activeAds ?? 0) > 0;
+
   return (
     <div className={`${s.root} ${workspaceMode ? s.rootWorkspace : ''}`}>
-      {/* Page header */}
+      {/* Page header — title + status pill on the left, filter row on the right */}
       <div className={`${s.header} ${workspaceMode ? s.headerWorkspace : ''}`}>
         <div className={s.headerLeft}>
-          <h1 className={s.title}>{title}</h1>
+          <div className={s.headerTitleRow}>
+            <h1 className={s.title}>{title}</h1>
+            {showMetrics && (
+              <span className={`${s.headerStatus} ${isLive ? s.headerStatusLive : s.headerStatusIdle}`}>
+                <span className={s.headerStatusDot} aria-hidden="true" />
+                {loadingAds ? '同步中' : isLive ? '实时数据' : '暂无投放'}
+              </span>
+            )}
+          </div>
           <span className={s.subtitle}>{campaignSubtitle}</span>
         </div>
+        {showMetrics && (
+          <div className={s.filterRow}>
+            <PillBar items={TIME_FILTER_ITEMS} active={timeFilter} onChange={setTimeFilter} variant="tr" />
+            {timeFilter === 'custom' && (
+              <>
+                <input
+                  type="date"
+                  className={s.dateInput}
+                  value={customFrom}
+                  onChange={(e) => setCustomFrom(e.target.value)}
+                />
+                <span className={s.filterRowSep} aria-hidden="true">→</span>
+                <input
+                  type="date"
+                  className={s.dateInput}
+                  value={customTo}
+                  onChange={(e) => setCustomTo(e.target.value)}
+                />
+              </>
+            )}
+          </div>
+        )}
       </div>
-
-      {showMetrics && (
-        <div className={s.filterRow}>
-          <PillBar items={TIME_FILTER_ITEMS} active={timeFilter} onChange={setTimeFilter} variant="tr" />
-          {timeFilter === 'custom' && (
-            <>
-              <input
-                type="date"
-                className={s.dateInput}
-                value={customFrom}
-                onChange={(e) => setCustomFrom(e.target.value)}
-              />
-              <span style={{ color: 'var(--text3)', fontSize: 12 }}>~</span>
-              <input
-                type="date"
-                className={s.dateInput}
-                value={customTo}
-                onChange={(e) => setCustomTo(e.target.value)}
-              />
-            </>
-          )}
-        </div>
-      )}
 
       {/* Metric strip */}
       {showMetrics && (

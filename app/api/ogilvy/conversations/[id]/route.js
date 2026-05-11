@@ -52,8 +52,13 @@ export async function GET(_request, { params }) {
 /**
  * DELETE /api/ogilvy/conversations/[id]
  *
- * Hard delete — matches the old Campaign Studio behaviour. Messages cascade
- * via the FK constraint.
+ * Soft delete — sets autopilot_sessions.deleted_at to now(). The row and its
+ * messages stay in the database; subsequent reads filter on
+ * deleted_at IS NULL so the user sees the same "gone" UX as before.
+ *
+ * Changed from a hard DELETE on 2026-05-12 after an accidental bulk delete
+ * cascaded into autopilot_messages and wiped a user's full chat history with
+ * no recovery path. See supabase/migrations/2026-05-12-autopilot-soft-delete.sql.
  */
 export async function DELETE(_request, { params }) {
   const ctx = await getTenantContext();
