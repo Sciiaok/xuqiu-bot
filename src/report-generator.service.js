@@ -8,9 +8,9 @@
  * 4. Saving structured content to ai_reports table
  */
 
-import supabase from '../supabase.js';
-import { openrouter, MODELS } from '../../src/llm-client.js';
-import { buildReportData } from '../../app/api/ai/report/route.js';
+import supabase from '../lib/supabase.js';
+import { openrouter, MODELS } from './llm-client.js';
+import { buildReportData } from '../app/api/ai/report/route.js';
 
 // ── Date helpers (China time = UTC+8) ────────────────────────────────
 

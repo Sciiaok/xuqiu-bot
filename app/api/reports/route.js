@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import supabase from '@/lib/supabase';
 import { getTenantContext } from '@/lib/tenant-context';
-import { generateReport } from '@/lib/services/report-generator';
+import { generateReport } from '@/src/report-generator.service';
 
 /**
  * GET /api/reports — List reports with optional filters

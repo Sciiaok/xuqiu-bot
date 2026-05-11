@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import supabase from '@/lib/supabase';
 import { getTenantContext } from '@/lib/tenant-context';
-import { retryReport } from '@/lib/services/report-generator';
+import { retryReport } from '@/src/report-generator.service';
 
 async function loadReportInTenant(reportId, tenantId) {
   const { data, error } = await supabase

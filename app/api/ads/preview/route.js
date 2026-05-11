@@ -1,12 +1,11 @@
 import { NextResponse } from 'next/server';
-import { ProxyAgent } from 'undici';
 import { getTenantContext } from '../../../../lib/tenant-context.js';
 import { resolveMetaTokenForTenant } from '../../../../lib/meta-tenant-context.js';
-import { config } from '../../../../src/config.js';
-
-const META_API_VERSION = 'v21.0';
-const META_API_TIMEOUT_MS = config.meta.apiTimeoutMs;
-const META_PROXY_AGENT = config.proxy.httpsUrl ? new ProxyAgent(config.proxy.httpsUrl) : null;
+import {
+  META_API_TIMEOUT_MS,
+  META_API_VERSION,
+  META_PROXY_AGENT,
+} from '../../../../src/meta-ads.service.js';
 
 // Only allow known Meta ad preview formats — prevents passing arbitrary values
 // to the Graph API. MOBILE_FEED_STANDARD is the default Click-to-WhatsApp feed

@@ -5,7 +5,7 @@ import {
   retryReport,
   reportExists,
   computePeriod,
-} from '@/lib/services/report-generator';
+} from '@/src/report-generator.service';
 import { config } from '@/src/config';
 
 const MAX_AUTO_RETRIES = 3;

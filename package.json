@@ -8,7 +8,6 @@
     "build": "next build",
     "start": "next start -p 3002",
     "lint": "next lint",
-    "test:webhook-tdd": "node --experimental-loader ./tests/unit/loaders/next-server-loader.mjs --experimental-test-module-mocks --test tests/unit/webhook-image-ingest.test.js tests/unit/claude-multimodal-input.test.js tests/unit/conversation-context-shared-followup.test.js tests/unit/queue-processor-batch-metadata.test.js tests/unit/agent-router-clarification.test.js tests/unit/inquiry-quality-config.test.js",
     "deploy": "sh ./scripts/deploy.sh",
     "cron:start": "pm2 start ecosystem.config.cjs --only lead-sync-cron",
     "cron:stop": "pm2 stop lead-sync-cron",
@@ -16,13 +15,12 @@
     "queue:start": "pm2 start ecosystem.config.cjs --only queue-cron",
     "queue:stop": "pm2 stop queue-cron",
     "queue:logs": "pm2 logs queue-cron",
-    "test": "vitest run",
-    "index": "node scripts/build-index.mjs"
+    "index": "node scripts/build-index.mjs",
+    "prepare": "husky"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.74.0",
     "@larksuiteoapi/node-sdk": "^1.59.0",
-    "@modelcontextprotocol/sdk": "^1.26.0",
     "@opendataloader/pdf": "^2.0.2",
     "@supabase/ssr": "^0.5.2",
     "@supabase/supabase-js": "^2.45.4",
@@ -30,36 +28,29 @@
     "ioredis": "^5.10.1",
     "jsonrepair": "^3.14.0",
     "mammoth": "^1.12.0",
-    "mcp-handler": "^1.1.0",
     "next": "^16.1.6",
     "next-intl": "^4.8.3",
     "openai": "^6.21.0",
-    "p-limit": "^7.3.0",
     "pdf-parse": "^2.4.5",
     "react": "^18",
     "react-dom": "^18",
     "react-markdown": "^10.1.0",
     "recharts": "^3.8.0",
     "remark-gfm": "^4.0.1",
+    "undici": "^6.25.0",
     "unpdf": "^1.4.0",
     "xlsx": "^0.18.5",
     "zod": "^3.25.76"
   },
   "devDependencies": {
-    "@playwright/test": "^1.58.2",
     "@tailwindcss/postcss": "^4.0.14",
-    "@testing-library/dom": "^10.4.1",
-    "@testing-library/jest-dom": "^6.9.1",
-    "@testing-library/react": "^16.3.2",
     "@types/react": "19.2.14",
-    "@vitejs/plugin-react": "^6.0.1",
     "autoprefixer": "^10.4.21",
     "eslint": "^8",
     "eslint-config-next": "^16.1.6",
-    "jsdom": "^29.0.0",
+    "husky": "^9.1.7",
     "postcss": "^8.5.3",
     "tailwindcss": "^4.0.14",
-    "typescript": "6.0.2",
-    "vitest": "^4.1.0"
+    "typescript": "6.0.2"
   }
 }

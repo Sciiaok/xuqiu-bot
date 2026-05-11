@@ -204,6 +204,12 @@
   gap: 20px;
 }
 
+/* ─── Loading skeleton (chat) ──────────────────────────────────── */
+.chatSkeleton {
+  width: 100%;
+  padding: 8px 0;
+}
+
 /* ─── Empty state ───────────────────────────────────────────────── */
 .empty {
   margin: auto;

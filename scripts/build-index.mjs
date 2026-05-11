@@ -23,6 +23,21 @@ await fs.mkdir(OUT_DIR, { recursive: true });
 
 await Promise.all([buildSchema(), buildRoutes()]);
 
+// Writes `content` to `file` only if the meaningful body differs from what's
+// already on disk. The `Generated:` timestamp line is excluded from the diff
+// so the file stays clean when nothing real changed.
+async function writeIfChanged(file, content, label) {
+  const normalize = (s) => s.replace(/^Generated: .*$/m, '');
+  let prev = null;
+  try { prev = await fs.readFile(file, 'utf8'); } catch (e) { if (e.code !== 'ENOENT') throw e; }
+  if (prev !== null && normalize(prev) === normalize(content)) {
+    console.log(`[${label}] up to date — skipping write`);
+    return;
+  }
+  await fs.writeFile(file, content);
+  console.log(`[${label}] wrote ${path.basename(file)}`);
+}
+
 async function buildSchema() {
   const url = 'https://exevqpqpsvojfowpzize.supabase.co';
   const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
@@ -137,8 +152,11 @@ async function buildSchema() {
     }
   }
 
-  await fs.writeFile(path.join(OUT_DIR, 'schema.md'), lines.join('\n'));
-  console.log(`[schema] wrote schema.md — ${tableNames.length} tables`);
+  await writeIfChanged(
+    path.join(OUT_DIR, 'schema.md'),
+    lines.join('\n'),
+    `schema (${tableNames.length} tables)`,
+  );
 }
 
 async function rpc(sb, query) {
@@ -203,8 +221,11 @@ async function buildRoutes() {
   }
   lines.push('');
 
-  await fs.writeFile(path.join(OUT_DIR, 'routes.md'), lines.join('\n'));
-  console.log(`[routes] wrote routes.md — ${apiRoutes.length} API + ${pageRoutes.length} pages`);
+  await writeIfChanged(
+    path.join(OUT_DIR, 'routes.md'),
+    lines.join('\n'),
+    `routes (${apiRoutes.length} API + ${pageRoutes.length} pages)`,
+  );
 }
 
 async function collectApiRoutes(apiDir) {

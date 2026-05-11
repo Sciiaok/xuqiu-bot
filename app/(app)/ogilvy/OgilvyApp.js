@@ -6,6 +6,7 @@ import s from './ogilvy.module.css';
 import Markdown from '../../components/Markdown/Markdown';
 import WhatsAppGateCard from './components/WhatsAppGateCard';
 import AdPlanCard from './components/AdPlanCard';
+import Skeleton, { SkeletonStack } from '../../components/Skeleton/Skeleton';
 import { useMessageStream } from './hooks/useMessageStream';
 
 // ── Module-level session cache ────────────────────────────────────────────
@@ -446,7 +447,13 @@ export default function OgilvyApp() {
           <>
             <div className={s.chatScroll} ref={scrollRef}>
               <div className={s.chatInner}>
-                {loadingMessages ? null : messages.length === 0 && !streamingText ? (
+                {loadingMessages ? (
+                  <SkeletonStack className={s.chatSkeleton}>
+                    <Skeleton variant="card" height={64} width="68%" />
+                    <Skeleton variant="card" height={92} width="80%" style={{ alignSelf: 'flex-end' }} />
+                    <Skeleton variant="card" height={48} width="55%" />
+                  </SkeletonStack>
+                ) : messages.length === 0 && !streamingText ? (
                   <EmptyState onPick={setInputVal} />
                 ) : (
                   <>

@@ -1,0 +1,55 @@
+.base {
+  display: block;
+  background: linear-gradient(
+    90deg,
+    var(--bg4) 0%,
+    var(--bg5) 50%,
+    var(--bg4) 100%
+  );
+  background-size: 200% 100%;
+  border-radius: 6px;
+  animation: skeleton-shimmer 1.6s ease-in-out infinite;
+}
+
+@keyframes skeleton-shimmer {
+  0% { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .base {
+    animation: none;
+    background: var(--bg4);
+  }
+}
+
+/* Text line preset — uses 1em height so it scales with surrounding type. */
+.line {
+  height: 1em;
+  border-radius: 4px;
+}
+
+/* KPI card shaped placeholder. */
+.kpi {
+  height: 92px;
+  border-radius: var(--rl);
+}
+
+/* Generic card placeholder. */
+.card {
+  border-radius: var(--rl);
+}
+
+/* Stack helper — vertical column with consistent gap. */
+.stack {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+/* Row helper — horizontal flex with equal-width children. */
+.row {
+  display: flex;
+  gap: 14px;
+}
+.row > * { flex: 1; }

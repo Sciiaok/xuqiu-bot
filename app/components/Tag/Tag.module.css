@@ -15,7 +15,8 @@
 .bad { background: var(--red-dim); color: var(--red); border: 1px solid rgba(196,66,48,0.15); }
 .high { background: var(--green-dim); color: var(--green); }
 .low { background: var(--bg4); color: var(--text3); border: 1px solid var(--border); }
-.avg { background: var(--amber-dim); color: var(--amber); }
+.avg,
+.average { background: var(--amber-dim); color: var(--amber); }
 .human { background: var(--red-dim); color: var(--red); }
 .new { background: var(--purple-dim); color: var(--purple); }
 

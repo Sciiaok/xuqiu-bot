@@ -139,7 +139,8 @@ async function processOneImage(ctx, img, idx) {
   if (insErr) {
     // Roll back the storage upload to avoid orphans (use admin client — same
     // role that wrote the object, so it can also delete it).
-    await admin.storage.from(STORAGE_BUCKET).remove([storagePath]).catch(() => {});
+    await admin.storage.from(STORAGE_BUCKET).remove([storagePath])
+      .catch((cleanupErr) => console.warn('[kb-image-extractor] rollback storage remove failed:', cleanupErr?.message));
     throw new Error(`insert kb_assets: ${insErr.message}`);
   }
 }

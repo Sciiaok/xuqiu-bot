@@ -133,7 +133,8 @@ export async function POST(request) {
       .single();
     if (insertErr) {
       // Roll back the storage upload to avoid orphans.
-      await getSupabaseAdmin().storage.from(STORAGE_BUCKET).remove([storagePath]).catch(() => {});
+      await getSupabaseAdmin().storage.from(STORAGE_BUCKET).remove([storagePath])
+        .catch((cleanupErr) => console.warn('[knowledge/assets] rollback storage remove failed:', cleanupErr?.message));
       throw new Error(`insert failed: ${insertErr.message}`);
     }
 
@@ -170,7 +171,8 @@ export async function DELETE(request) {
     }
 
     if (row.storage_path) {
-      await getSupabaseAdmin().storage.from(STORAGE_BUCKET).remove([row.storage_path]).catch(() => {});
+      await getSupabaseAdmin().storage.from(STORAGE_BUCKET).remove([row.storage_path])
+        .catch((cleanupErr) => console.warn('[knowledge/assets] storage remove failed:', cleanupErr?.message));
     }
     const { error: delErr } = await supabase.from('kb_assets').delete().eq('id', assetId);
     if (delErr) throw delErr;

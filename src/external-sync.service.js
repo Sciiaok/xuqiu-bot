@@ -1,4 +1,4 @@
-// lib/services/external-sync.js
+// src/external-sync.service.js
 
 const REVO_SCM_API = 'http://47.111.1.165/api/external/inquiries/batch';
 

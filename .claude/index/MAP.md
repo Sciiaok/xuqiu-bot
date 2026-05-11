@@ -32,7 +32,7 @@ Goal: when Claude Code picks up a task touching feature X, read this file first 
 
 ## Repo conventions worth knowing
 
-- **`src/` vs `lib/`**: `src/` = domain services (KB, WhatsApp, LLM, routing). `lib/` = infra plumbing (Supabase clients, repositories, queue, SSE, tenant context). Repositories live in `lib/repositories/`; services in either `src/*.service.js` or `lib/services/`. New domain logic → prefer `src/`.
+- **`src/` vs `lib/`**: `src/` = domain services (KB, WhatsApp, LLM, routing, report generation, external sync). `lib/` = infra plumbing (Supabase clients, repositories, queue, SSE, tenant context). Repositories live in `lib/repositories/`; all services live at `src/*.service.js`.
 - **Config**: only `src/config.js` reads `process.env.*`. Everything else imports from `config`.
 - **Tenant scoping**: every query that touches user data must go through `getTenantContext()` (`lib/tenant-context.js`). RLS is enforced; service-role usage is rare and lives in `lib/supabase-admin.js`.
 - **Single-user product**: founder-only access in places. See `FOUNDER_TENANT_ID` in `lib/tenant-context.js`. Do not add team/multi-seat scaffolding.
@@ -145,6 +145,6 @@ Goal: when Claude Code picks up a task touching feature X, read this file first 
 
 ## Known duplication / "why are there two of these"
 
-- **`src/*.service.js` + `lib/services/`**: both hold services. Domain stuff tends to be in `src/`, infra-shaped stuff in `lib/services/`. No hard rule. If unsure, mirror neighbors.
+- ~~`src/*.service.js` + `lib/services/`~~: collapsed — all services now at `src/*.service.js`. The old split was incidental, not principled.
 - **`orchestrator_*` tables**: shared by Campaign Studio + Ogilvy. Don't assume one feature owns them.
 - **`product_doc_operations` / `product_documents` / `product_specs`** (older) vs **`kb_*`** (newer): legacy product-doc tables predate the 4-layer KB redesign (see `2026-05-08-kb-collapse-to-four-layers.sql`). Reads should target `kb_*` going forward; legacy tables still exist for backward compat.

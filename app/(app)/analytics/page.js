@@ -14,7 +14,7 @@ import DataTable from '../../components/DataTable/DataTable';
 import TabBar from '../../components/TabBar/TabBar';
 import Tag from '../../components/Tag/Tag';
 import Markdown from '../../components/Markdown/Markdown';
-import { unknown } from 'zod/v4';
+import Skeleton, { SkeletonRow } from '../../components/Skeleton/Skeleton';
 import { resolveDateRange } from '../../../lib/inquiry-dashboard.js';
 
 // ──────────── Constants ────────────
@@ -334,9 +334,15 @@ export default function AnalyticsPage() {
 
       {/* ── Loading ── */}
       {loading && (
-        <div className={s.loadingWrap}>
-          <div className={s.spinner} />
-          加载中…
+        <div className={s.skeletonWrap}>
+          <SkeletonRow>
+            <Skeleton variant="kpi" />
+            <Skeleton variant="kpi" />
+            <Skeleton variant="kpi" />
+            <Skeleton variant="kpi" />
+            <Skeleton variant="kpi" />
+          </SkeletonRow>
+          <Skeleton variant="card" height={320} />
         </div>
       )}
 

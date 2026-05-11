@@ -1,0 +1,17 @@
+#!/usr/bin/env sh
+# Auto-refresh .claude/index/ when staged files could affect routes or schema.
+# Triggers on: new/changed API route files, page files, or DB migrations.
+# Stays silent for unrelated commits.
+
+staged=$(git diff --cached --name-only --diff-filter=ACMRD)
+
+echo "$staged" | grep -qE '^(app/api/.+/route\.(js|ts)|app/\(app\)/.+/page\.(js|jsx|ts|tsx)|supabase/migrations/.+\.sql)$' || exit 0
+
+echo "[pre-commit] route/page/migration changes detected — refreshing .claude/index/"
+if ! npm run --silent index; then
+  echo "[pre-commit] npm run index failed. Commit aborted. Fix the error or skip with: git commit --no-verify"
+  exit 1
+fi
+
+# Stage any changes the rebuild produced. No-op if files are unchanged.
+git add .claude/index/routes.md .claude/index/schema.md 2>/dev/null || true

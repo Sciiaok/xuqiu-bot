@@ -1,12 +1,7 @@
 import { NextResponse } from 'next/server';
-import { ProxyAgent } from 'undici';
 import { getTenantContext } from '../../../../lib/tenant-context.js';
 import { resolveMetaContextForTenant } from '../../../../lib/meta-tenant-context.js';
-import { config } from '../../../../src/config.js';
-
-const META_API_VERSION = 'v21.0';
-const META_API_TIMEOUT_MS = config.meta.apiTimeoutMs;
-const META_PROXY_AGENT = config.proxy.httpsUrl ? new ProxyAgent(config.proxy.httpsUrl) : null;
+import { fetchAllPages, META_API_VERSION } from '../../../../src/meta-ads.service.js';
 
 function normalizeAdAccountId(raw) {
   if (!raw) return '';
@@ -24,27 +19,6 @@ function buildAdsByCampaignUrl({ adAccountId, accessToken, campaignIds }) {
     ]),
   });
   return `https://graph.facebook.com/${META_API_VERSION}/act_${adAccountId}/ads?${params.toString()}`;
-}
-
-async function fetchAllPages(url) {
-  const rows = [];
-  let nextUrl = url;
-  while (nextUrl) {
-    const response = await fetch(nextUrl, {
-      method: 'GET',
-      cache: 'no-store',
-      headers: { Accept: 'application/json' },
-      signal: AbortSignal.timeout(META_API_TIMEOUT_MS),
-      dispatcher: META_PROXY_AGENT || undefined,
-    });
-    const data = await response.json();
-    if (!response.ok || data?.error) {
-      throw new Error(data?.error?.message || `Meta API request failed with status ${response.status}`);
-    }
-    rows.push(...(data.data || []));
-    nextUrl = data.paging?.next || null;
-  }
-  return rows;
 }
 
 export async function GET(request) {

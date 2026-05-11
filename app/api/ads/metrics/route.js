@@ -1,16 +1,16 @@
 import { NextResponse } from 'next/server';
-import { ProxyAgent } from 'undici';
 import { getTenantContext } from '../../../../lib/tenant-context.js';
 import { resolveMetaContextForTenant } from '../../../../lib/meta-tenant-context.js';
-import { config } from '../../../../src/config.js';
 import { getRedis } from '../../../../lib/redis.js';
 import { formatDateInTimeZone, shiftDateString } from '../../../../lib/inquiry-dashboard.js';
+import {
+  META_API_TIMEOUT_MS,
+  META_API_VERSION,
+  META_PROXY_AGENT,
+} from '../../../../src/meta-ads.service.js';
 
-const META_API_VERSION = 'v21.0';
-const META_API_TIMEOUT_MS = config.meta.apiTimeoutMs;
 const CACHE_TTL_SECONDS = 10 * 60; // 10 minutes
 const MESSAGING_CONVERSATION_ACTION = 'onsite_conversion.messaging_conversation_started';
-const META_PROXY_AGENT = config.proxy.httpsUrl ? new ProxyAgent(config.proxy.httpsUrl) : null;
 
 function createEmptyTotals() {
   return {

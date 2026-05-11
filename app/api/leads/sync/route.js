@@ -4,7 +4,7 @@ import supabase from '@/lib/supabase';
 import { getTenantContext } from '@/lib/tenant-context';
 import { getLeadsNeedingSync, getLeadById } from '@/lib/repositories/lead.repository';
 import { createSyncLog, updateSyncLog, hasSuccessfulSync } from '@/lib/repositories/sync-log.repository';
-import { syncLeadsToExternal, processSyncResults, expandLeadForSync } from '@/lib/services/external-sync';
+import { syncLeadsToExternal, processSyncResults, expandLeadForSync } from '@/src/external-sync.service';
 import { config } from '@/src/config';
 
 export async function POST(request) {

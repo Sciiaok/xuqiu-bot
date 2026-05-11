@@ -9,7 +9,7 @@ import {
   getRetryableFailedLog,
   incrementRetryCount,
 } from '@/lib/repositories/sync-log.repository';
-import { syncLeadsToExternal, processSyncResults, expandLeadForSync } from '@/lib/services/external-sync';
+import { syncLeadsToExternal, processSyncResults, expandLeadForSync } from '@/src/external-sync.service';
 import { config } from '@/src/config';
 
 async function listActiveTenantIds() {

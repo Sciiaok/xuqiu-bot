@@ -8,6 +8,8 @@ import MetricCard from '../../components/MetricCard/MetricCard';
 import PillBar from '../../components/PillBar/PillBar';
 import Button from '../../components/Button/Button';
 import Tag from '../../components/Tag/Tag';
+import Skeleton, { SkeletonStack } from '../../components/Skeleton/Skeleton';
+import EmptyState from '../../components/EmptyState/EmptyState';
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
@@ -305,9 +307,18 @@ export default function ReportsPage() {
       {/* Report list */}
       <div className={s.reportList}>
         {loading && reports.length === 0 ? (
-          <div className={s.emptyState}>加载中...</div>
+          <SkeletonStack>
+            <Skeleton variant="card" height={110} />
+            <Skeleton variant="card" height={110} />
+            <Skeleton variant="card" height={110} />
+            <Skeleton variant="card" height={110} />
+          </SkeletonStack>
         ) : reports.length === 0 ? (
-          <div className={s.emptyState}>暂无报告</div>
+          <EmptyState
+            icon="📰"
+            title="还没有报告"
+            body="当前筛选条件下没有报告。AI 会按日/周/月自动生成，也可以手动触发生成。"
+          />
         ) : (
           reports.map(report => (
             <ReportCard

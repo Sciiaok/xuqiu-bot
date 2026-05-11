@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import s from './page.module.css';
 import Button from '../../components/Button/Button';
+import Skeleton from '../../components/Skeleton/Skeleton';
 import {
   listProductLines,
   listWhatsAppAccounts,
@@ -108,7 +109,10 @@ export default function ProductLinesPage() {
       )}
 
       {loading && !loadError && (
-        <div className={s.loadingWrap}><span>加载中…</span></div>
+        <div className={s.cardList}>
+          <Skeleton variant="card" height={120} />
+          <Skeleton variant="card" height={120} />
+        </div>
       )}
 
       {!loading && !loadError && cards.length === 0 && (

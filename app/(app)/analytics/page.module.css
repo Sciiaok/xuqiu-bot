@@ -69,24 +69,11 @@
 }
 
 /* ── Loading / Error ─────────────────────────────────── */
-.loadingWrap {
+.skeletonWrap {
   display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 48px 0;
-  gap: 10px;
-  color: var(--text3);
-  font-family: var(--font-sans);
-  font-size: 13px;
-}
-
-.spinner {
-  width: 18px;
-  height: 18px;
-  border: 2px solid var(--border);
-  border-top-color: var(--accent);
-  border-radius: 50%;
-  animation: spin 0.7s linear infinite;
+  flex-direction: column;
+  gap: 18px;
+  margin-top: 4px;
 }
 
 .errorWrap {
