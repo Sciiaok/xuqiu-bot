@@ -1,5 +1,18 @@
 # CLAUDE.md
 
+## Codebase Index — read first
+
+非琐碎任务开工前先扫一眼 `.claude/index/`：
+
+- **`.claude/index/MAP.md`** — feature → 文件/服务/表的导航地图，含"新东西该放哪一层"决策表
+- **`.claude/index/glossary.md`** — 领域词表（lead vs inquiry、KB 四层、takeover、orchestrator 等）
+- **`.claude/index/schema.md`** — 当前 DB 表/列/外键/索引快照（脚本生成）
+- **`.claude/index/routes.md`** — 所有 API 端点 + UI 页面（脚本生成）
+
+改了 schema 或加了路由后跑 `npm run index` 刷新自动产物。手写文件（MAP / glossary）在加新 feature 或改动较大时手动维护。
+
+琐碎单文件改动可以跳过索引直接 grep。
+
 ## Version Control
 
 当你接到新任务，在开始项目改造前，你应该先拉取最新的main版本然后创建新分支。
