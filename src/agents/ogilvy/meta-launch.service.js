@@ -51,6 +51,11 @@ async function metaUploadImage(imageUrl, { ad_account_id, access_token }) {
   // Graph can't ingest third-party URLs directly without special perms, so we
   // re-download + upload multipart. Works for any public image (incl. ours on
   // Supabase storage).
+  //
+  // NOTE: `ad_account_id` is stored with the `act_` prefix in DB (see
+  // app/api/meta/connect/route.js: normalized to `act_<numeric>`), so we use
+  // it as-is. Do NOT prepend another `act_` — Meta will reject with
+  // "Object with ID 'act_act_…' does not exist".
   const imgRes = await fetch(imageUrl, { signal: AbortSignal.timeout(FETCH_TIMEOUT) });
   if (!imgRes.ok) throw new Error(`Failed to download image: ${imgRes.status}`);
   const blob = await imgRes.blob();
@@ -60,7 +65,7 @@ async function metaUploadImage(imageUrl, { ad_account_id, access_token }) {
   formData.append('filename', blob, filename);
   formData.append('access_token', access_token);
 
-  const res = await fetch(graphUrl(`act_${ad_account_id}/adimages`), {
+  const res = await fetch(graphUrl(`${ad_account_id}/adimages`), {
     method: 'POST',
     body: formData,
     signal: AbortSignal.timeout(FETCH_TIMEOUT),
@@ -157,7 +162,7 @@ export async function* stageCampaigns(plan, { userId }) {
       is_adset_budget_sharing_enabled: false,
     };
     const { id: campaignId } = await metaPost(
-      `act_${ad_account_id}/campaigns`,
+      `${ad_account_id}/campaigns`,
       campaignPayload,
       access_token,
       { step: `campaign "${campaign.name}"` },
@@ -202,7 +207,7 @@ export async function* stageCampaigns(plan, { userId }) {
         status: 'PAUSED',
       };
       const { id: adsetId } = await metaPost(
-        `act_${ad_account_id}/adsets`,
+        `${ad_account_id}/adsets`,
         adsetPayload,
         access_token,
         { step: `adset "${adSet.name}"` },
@@ -256,7 +261,7 @@ export async function* stageCampaigns(plan, { userId }) {
           },
         };
         const { id: creativeId } = await metaPost(
-          `act_${ad_account_id}/adcreatives`,
+          `${ad_account_id}/adcreatives`,
           creativePayload,
           access_token,
           { step: `creative "${ad.name}"` },
@@ -272,7 +277,7 @@ export async function* stageCampaigns(plan, { userId }) {
           status: 'PAUSED',
         };
         const { id: adId } = await metaPost(
-          `act_${ad_account_id}/ads`,
+          `${ad_account_id}/ads`,
           adPayload,
           access_token,
           { step: `ad "${ad.name}"` },

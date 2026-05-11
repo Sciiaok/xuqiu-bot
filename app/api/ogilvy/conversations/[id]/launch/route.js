@@ -30,6 +30,13 @@ export async function POST(_request, { params }) {
   }
   if (!session.plan_json) return Response.json({ error: 'No plan to launch' }, { status: 400 });
   if (session.status === 'launched') return Response.json({ error: 'Already launched' }, { status: 400 });
+  // Block concurrent launches: while a previous launch is mid-flight (status
+  // 'staging') or finished stage but hasn't activated (status 'staged'), a
+  // second POST would call Meta again and duplicate the full campaign/adset/
+  // creative/ad tree. The UI disables the button but that's not authoritative.
+  if (session.status === 'staging' || session.status === 'staged') {
+    return Response.json({ error: 'Launch already in progress' }, { status: 409 });
+  }
 
   const plan = session.plan_json;
 
@@ -101,9 +108,20 @@ export async function POST(_request, { params }) {
         yield { event: 'activate_progress', data: value };
       }
     } catch (err) {
+      // Preserve adset/ad IDs from the just-finished stage step so the user
+      // (or a follow-up cleanup) can still find the orphaned PAUSED resources
+      // on Meta. Without these, only campaign IDs survive and cleanup has to
+      // crawl down from each campaign.
       await updateSession(id, {
         status: 'failed',
-        plan_json: { ...plan, status: 'failed', failed_reason: err.message, meta_campaign_ids: campaignIds },
+        plan_json: {
+          ...plan,
+          status: 'failed',
+          failed_reason: err.message,
+          meta_campaign_ids: campaignIds,
+          meta_adset_ids: stageResult.adset_ids,
+          meta_ad_ids: stageResult.ad_ids,
+        },
       });
       yield { event: 'error', data: { phase: 'activate', message: err.message } };
       return;

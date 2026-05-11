@@ -327,6 +327,10 @@ export default function OgilvyApp() {
   async function handleLaunch() {
     if (!selectedId || !plan) return;
     setLaunchProgress({ phase: 'starting', detail: '连接 Meta…' });
+    // Collect ad-level stage failures (single-ad skips during stage_progress).
+    // Stage as a whole keeps running when one image upload fails, so users
+    // would otherwise see a green ✓ launch with silently-fewer ads on Meta.
+    const skippedAds = [];
     try {
       const res = await fetch(`/api/ogilvy/conversations/${selectedId}/launch`, { method: 'POST' });
       if (!res.ok) {
@@ -349,11 +353,18 @@ export default function OgilvyApp() {
           else if (line.startsWith('data: ') && eventType) {
             try {
               const data = JSON.parse(line.slice(6));
+              if (eventType === 'stage_progress' && data?.type === 'error' && data?.ad) {
+                skippedAds.push({ ad: data.ad, error: data.error });
+              }
               handleLaunchEvent(eventType, data);
             } catch {}
             eventType = null;
           }
         }
+      }
+      if (skippedAds.length > 0) {
+        const lines = skippedAds.map(s => `· ${s.ad}: ${s.error}`).join('\n');
+        window.alert(`投放已上线，但有 ${skippedAds.length} 条广告未创建：\n${lines}`);
       }
     } catch (err) {
       window.alert(`启动失败：${err.message}`);
