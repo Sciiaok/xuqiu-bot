@@ -85,6 +85,10 @@ export default function LeadHubPage() {
   const [totalContacts, setTotalContacts] = useState(0);
   const [totalConversations, setTotalConversations] = useState(0);
   const [totalLeads, setTotalLeads] = useState(0);
+  // Server-side route distribution across **all** matching conversations (not
+  // just the in-memory window). Drives the route bar + overview cards so they
+  // don't lie when only the first page is loaded. Refreshed alongside the list.
+  const [routeBuckets, setRouteBuckets] = useState({ HUMAN_NOW: 0, CONTINUE: 0, NURTURE: 0, FAQ_END: 0 });
   const [hasMore, setHasMore] = useState(false);
   const [nextCursor, setNextCursor] = useState(null);
   const [loadingList, setLoadingList] = useState(true);
@@ -276,6 +280,7 @@ export default function LeadHubPage() {
       setTotalContacts(json.totalContacts ?? 0);
       setTotalConversations(json.totalConversations ?? 0);
       setTotalLeads(json.totalLeads ?? 0);
+      setRouteBuckets(json.routeBuckets ?? { HUMAN_NOW: 0, CONTINUE: 0, NURTURE: 0, FAQ_END: 0 });
       setHasMore(json.hasMore ?? false);
       setNextCursor(json.nextCursor ?? null);
       if (resetSelection && !selectionApplied && mapped.length > 0) {
@@ -501,7 +506,6 @@ export default function LeadHubPage() {
       .select('id, role, content, sent_at, sent_by, metadata')
       .eq('conversation_id', selectedId)
       .order('sent_at', { ascending: true })
-      .limit(50)
       .then(({ data, error }) => {
         if (cancelled) return;
         if (!error && data) setMessages(data);
@@ -736,16 +740,18 @@ export default function LeadHubPage() {
     [cards, routeFilter],
   );
 
-  // Per-route counts derived from currently-loaded cards. Used as a hint on
-  // route-bar buttons. NOTE: this only reflects the in-memory window, not the
-  // full DB — labelled accordingly in the UI (no absolute promise).
-  const routeCounts = useMemo(() => {
-    const counts = { all: cards.length, HUMAN_NOW: 0, CONTINUE: 0, NURTURE: 0, FAQ_END: 0 };
-    for (const c of cards) {
-      if (counts[c.route] !== undefined) counts[c.route] += 1;
-    }
-    return counts;
-  }, [cards]);
+  // Per-route counts come from the server (`routeBuckets`), so the numbers
+  // reflect the full filtered set rather than just the in-memory window. `all`
+  // mirrors totalConversations for the same reason. Realtime nudges may make
+  // these slightly stale until the next filter refresh — we accept that over
+  // local re-derivation that would systematically under-count.
+  const routeCounts = useMemo(() => ({
+    all: totalConversations,
+    HUMAN_NOW: routeBuckets.HUMAN_NOW || 0,
+    CONTINUE: routeBuckets.CONTINUE || 0,
+    NURTURE: routeBuckets.NURTURE || 0,
+    FAQ_END: routeBuckets.FAQ_END || 0,
+  }), [totalConversations, routeBuckets]);
 
   // Whether non-default left-panel filters are active (excludes the route bar,
   // which is a client-side slice). Drives the "重置筛选" empty-state CTA.
@@ -872,7 +878,7 @@ export default function LeadHubPage() {
                   key={f.key}
                   className={`${s.routeBtn} ${routeFilter === f.key ? s.routeBtnActive : ''} ${f.variant ? s[`routeBtn_${f.variant}`] : ''}`}
                   onClick={() => setRouteFilter(f.key)}
-                  title={`${f.label}（当前已加载 ${count} 条）`}
+                  title={`${f.label}（${count} 条）`}
                 >
                   <span className={`${s.routeDot} ${f.variant ? s[`routeDot_${f.variant}`] : s.routeDot_all}`} />
                   {f.label}
@@ -1090,7 +1096,8 @@ export default function LeadHubPage() {
                 <div className={s.hotLeadList}>
                   <div className={s.hotLeadHead}>
                     <span className={s.hotLeadStar}>✦</span>
-                    <span>高优先线索（{cards.filter(isHotLead).length}）</span>
+                    {/* 数字只反映已加载首屏 (≤20)，跨页统计代价不值——只保留列表本身 */}
+                    <span>高优先线索</span>
                   </div>
                   {cards.filter(isHotLead).slice(0, 3).map(c => (
                     <button

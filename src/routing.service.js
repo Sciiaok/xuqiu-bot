@@ -6,6 +6,10 @@
 import { sendMessage } from './whatsapp.service.js';
 import { updateLead, getLeadsByConversation } from '../lib/repositories/lead.repository.js';
 import { findProductLineByPhoneNumberId } from '../lib/repositories/product-line.repository.js';
+import {
+  getFeishuNotifiedAt,
+  markFeishuNotified,
+} from '../lib/repositories/conversation.repository.js';
 import { sendFeishuMessage } from './feishu.service.js';
 import { createTraceLogger } from '../lib/core-trace.js';
 import { config } from './config.js';
@@ -245,6 +249,20 @@ export async function executeConversationRouting(route, conversationId, waId, ha
     return { success: true, action: 'continue_conversation' };
   }
 
+  // 每个接管周期只发一次飞书通知：进入 HUMAN_NOW 时若已通知过，整批跳过。
+  // 接管被取消时（endHumanTakeover）会清掉这个时间戳，重新允许下一次。
+  if (route === 'HUMAN_NOW') {
+    try {
+      const notifiedAt = await getFeishuNotifiedAt(conversationId);
+      if (notifiedAt) {
+        logger.info('routing.feishu.skipped_already_notified', { notified_at: notifiedAt });
+        return { success: true, action: 'feishu_already_notified' };
+      }
+    } catch (lookupErr) {
+      logger.warn('routing.feishu.notified_lookup_failed', { error: lookupErr.message });
+    }
+  }
+
   // Query leads matching the target route (replaceConversationLeads already set it)
   const leads = await getLeadsByConversation(conversationId, route);
 
@@ -266,6 +284,14 @@ export async function executeConversationRouting(route, conversationId, waId, ha
 
   if (route === 'FAQ_END') {
     await sendFAQResources(waId, phoneNumberId, traceContext);
+  }
+
+  if (route === 'HUMAN_NOW' && results.some(r => r.success)) {
+    try {
+      await markFeishuNotified(conversationId);
+    } catch (markErr) {
+      logger.warn('routing.feishu.mark_notified_failed', { error: markErr.message });
+    }
   }
 
   return {

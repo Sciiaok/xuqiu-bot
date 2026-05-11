@@ -277,19 +277,42 @@ function buildLeadCountQuery(supabase, tenantId, filters, { approvedOnly = false
   return query;
 }
 
-async function fetchDistinctContactCount(supabase, tenantId, filters) {
+const EMPTY_ROUTE_BUCKETS = { HUMAN_NOW: 0, CONTINUE: 0, NURTURE: 0, FAQ_END: 0 };
+
+// Single scan that yields both the distinct contact count and the route-bucket
+// distribution. We replicate `mapConversationGroup` 's resolvedRoute rule here
+// (is_human_takeover wins; otherwise latest lead.route by updated_at; else
+// CONTINUE) so the leadhub route bar / overview tiles can show DB-true totals
+// instead of in-memory window counts.
+async function fetchAggregates(supabase, tenantId, filters) {
   const ids = new Set();
-  const selectFragment = `contact_id, contact:contacts!inner(id), ${leadsJoinFragment(filters)}(id)`;
+  const routeBuckets = { ...EMPTY_ROUTE_BUCKETS };
+  const selectFragment = `id, contact_id, is_human_takeover, contact:contacts!inner(id), ${leadsJoinFragment(filters)}(route, updated_at)`;
 
   for (let offset = 0; ; offset += CONTACT_ID_BATCH) {
     const query = buildConversationsQuery(supabase, tenantId, filters, { select: selectFragment })
+      .order('id', { ascending: true })
       .range(offset, offset + CONTACT_ID_BATCH - 1);
     const { data } = throwIfError(await query);
     const batch = data || [];
-    for (const row of batch) if (row.contact_id) ids.add(row.contact_id);
+    for (const row of batch) {
+      if (row.contact_id) ids.add(row.contact_id);
+      let resolved;
+      if (row.is_human_takeover) {
+        resolved = 'HUMAN_NOW';
+      } else {
+        const leads = row.leads || [];
+        let latest = null;
+        for (const l of leads) {
+          if (!latest || (l.updated_at || '') > (latest.updated_at || '')) latest = l;
+        }
+        resolved = latest?.route || 'CONTINUE';
+      }
+      if (resolved in routeBuckets) routeBuckets[resolved] += 1;
+    }
     if (batch.length < CONTACT_ID_BATCH) break;
   }
-  return ids.size;
+  return { totalContacts: ids.size, routeBuckets };
 }
 
 /* ─────────────────────────  quantity path  ───────────────────────── */
@@ -420,6 +443,7 @@ function emptyResponse() {
     totalConversations: 0,
     totalLeads: 0,
     approvedCount: 0,
+    routeBuckets: { ...EMPTY_ROUTE_BUCKETS },
   });
 }
 
@@ -436,6 +460,25 @@ function paginatedResponse(rows, limit, counts) {
 
 /* ─────────────────────────  handler  ───────────────────────── */
 
+function aggregateRouteBuckets(rows) {
+  const buckets = { ...EMPTY_ROUTE_BUCKETS };
+  for (const conv of rows) {
+    let resolved;
+    if (conv.is_human_takeover) {
+      resolved = 'HUMAN_NOW';
+    } else {
+      const leads = conv.leads || [];
+      let latest = null;
+      for (const l of leads) {
+        if (!latest || (l.updated_at || '') > (latest.updated_at || '')) latest = l;
+      }
+      resolved = latest?.route || 'CONTINUE';
+    }
+    if (resolved in buckets) buckets[resolved] += 1;
+  }
+  return buckets;
+}
+
 async function handleQuantityBranch(supabase, tenantId, filters, limit, cursor) {
   const rows = await fetchAllQuantityFiltered(supabase, tenantId, filters);
   const visible = rows.filter((r) => rowBeforeCursor(r, cursor));
@@ -448,26 +491,28 @@ async function handleQuantityBranch(supabase, tenantId, filters, limit, cursor) 
       (n, c) => n + (c.leads || []).filter((l) => l.approved).length,
       0,
     ),
+    routeBuckets: aggregateRouteBuckets(rows),
   });
 }
 
 async function handleStandardBranch(supabase, tenantId, filters, limit, cursor) {
-  const [dataRes, convCountRes, leadsCountRes, approvedCountRes, totalContacts] =
+  const [dataRes, convCountRes, leadsCountRes, approvedCountRes, aggregates] =
     await Promise.all([
       buildListQuery(supabase, tenantId, filters, limit, cursor),
       buildConversationCountQuery(supabase, tenantId, filters),
       buildLeadCountQuery(supabase, tenantId, filters),
       buildLeadCountQuery(supabase, tenantId, filters, { approvedOnly: true }),
-      fetchDistinctContactCount(supabase, tenantId, filters),
+      fetchAggregates(supabase, tenantId, filters),
     ]);
 
   for (const r of [dataRes, convCountRes, leadsCountRes, approvedCountRes]) throwIfError(r);
 
   return paginatedResponse(dataRes.data || [], limit, {
-    totalContacts,
+    totalContacts: aggregates.totalContacts,
     totalConversations: convCountRes.count || 0,
     totalLeads: leadsCountRes.count || 0,
     approvedCount: approvedCountRes.count || 0,
+    routeBuckets: aggregates.routeBuckets,
   });
 }
 
