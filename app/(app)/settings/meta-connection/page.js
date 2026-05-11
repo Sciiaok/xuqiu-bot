@@ -2,6 +2,8 @@
 
 import { useEffect, useState } from 'react';
 import s from './page.module.css';
+import { prefetch, readCache, invalidate } from '../../../../lib/prefetch-store';
+import { KEYS, FETCHERS } from '../../../../lib/prefetch-keys';
 
 function formatDate(iso) {
   if (!iso) return '-';
@@ -10,9 +12,10 @@ function formatDate(iso) {
 }
 
 export default function MetaConnectionPage() {
-  const [loading, setLoading] = useState(true);
+  const cached = readCache(KEYS.META_CONNECTION);
+  const [loading, setLoading] = useState(!cached);
   const [error, setError] = useState('');
-  const [state, setState] = useState({ connected: false });
+  const [state, setState] = useState(cached?.data ?? { connected: false });
 
   // 两步向导
   // step='token': 输 token → 调 preview 列资源
@@ -32,22 +35,19 @@ export default function MetaConnectionPage() {
   // 内测期：每个动作返回的 server-side log entries，console 风格披露
   const [actionLogs, setActionLogs] = useState(null);
 
-  const load = async () => {
-    setLoading(true);
-    setError('');
+  const load = async ({ silent = false } = {}) => {
+    if (!silent) { setLoading(true); setError(''); }
     try {
-      const res = await fetch('/api/meta/connection');
-      const data = await res.json();
-      if (!res.ok) throw new Error(data?.error || '加载失败');
+      const data = await prefetch(KEYS.META_CONNECTION, FETCHERS[KEYS.META_CONNECTION]);
       setState(data);
     } catch (err) {
       setError(err.message);
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
     }
   };
 
-  useEffect(() => { load(); }, []);
+  useEffect(() => { load({ silent: !!cached }); }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // 统一封装一次 action：fetch + 收集返回的 logs[] + 错误处理
   async function runAction(action, label, fetchFn) {
@@ -135,6 +135,7 @@ export default function MetaConnectionPage() {
       setSelectedWabaIds(new Set());
       setSelectedAdAccountId(null);
       setStep('token');
+      invalidate(KEYS.META_CONNECTION);
       await load();
     } catch (err) {
       setError(err.message);
@@ -166,6 +167,7 @@ export default function MetaConnectionPage() {
     setRefreshing(true);
     try {
       await runAction('refresh', '同步', () => fetch('/api/meta/refresh', { method: 'POST' }));
+      invalidate(KEYS.META_CONNECTION);
       await load();
     } catch (err) {
       setError(err.message);
@@ -181,6 +183,7 @@ export default function MetaConnectionPage() {
     setDisconnecting(true);
     try {
       await runAction('disconnect', '断开', () => fetch('/api/meta/disconnect', { method: 'POST' }));
+      invalidate(KEYS.META_CONNECTION);
       await load();
     } catch (err) {
       setError(err.message);
@@ -662,6 +665,7 @@ function PageIdSection({ initialValue }) {
       if (!res.ok) throw new Error(data?.error || '保存失败');
       setSavedValue(data.page_id || '');
       setValue(data.page_id || '');
+      invalidate(KEYS.META_CONNECTION);
       setMsg({ type: 'ok', text: data.page_id ? '已保存' : '已清空' });
     } catch (err) {
       setMsg({ type: 'err', text: err.message });

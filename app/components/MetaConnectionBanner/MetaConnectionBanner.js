@@ -3,6 +3,8 @@
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
+import { prefetch, invalidate } from '../../../lib/prefetch-store';
+import { KEYS, FETCHERS } from '../../../lib/prefetch-keys';
 
 /**
  * 顶层全局 banner：
@@ -20,16 +22,17 @@ export default function MetaConnectionBanner() {
     let alive = true;
     const load = async () => {
       try {
-        const res = await fetch('/api/meta/connection');
-        if (!res.ok) return;
-        const data = await res.json();
+        const data = await prefetch(KEYS.META_CONNECTION, FETCHERS[KEYS.META_CONNECTION]);
         if (alive) setState(data);
       } catch {
         // ignore — banner 只是辅助
       }
     };
     load();
-    const t = setInterval(load, 5 * 60 * 1000);
+    const t = setInterval(() => {
+      invalidate(KEYS.META_CONNECTION);
+      load();
+    }, 5 * 60 * 1000);
     return () => { alive = false; clearInterval(t); };
   }, []);
 

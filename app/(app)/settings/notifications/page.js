@@ -2,6 +2,8 @@
 
 import { useEffect, useState } from 'react';
 import s from './page.module.css';
+import { prefetch, readCache, invalidate } from '../../../../lib/prefetch-store';
+import { KEYS, FETCHERS } from '../../../../lib/prefetch-keys';
 
 function formatDate(iso) {
   if (!iso) return '-';
@@ -10,31 +12,29 @@ function formatDate(iso) {
 }
 
 export default function NotificationsPage() {
-  const [loading, setLoading] = useState(true);
+  const cached = readCache(KEYS.NOTIFICATIONS);
+  const [loading, setLoading] = useState(!cached);
   const [error, setError] = useState('');
   const [info, setInfo] = useState('');
-  const [state, setState] = useState({ feishu: { enabled: false, configured: false } });
+  const [state, setState] = useState(cached?.data ?? { feishu: { enabled: false, configured: false } });
   const [url, setUrl] = useState('');
   const [saving, setSaving] = useState(false);
   const [testing, setTesting] = useState(false);
   const [clearing, setClearing] = useState(false);
 
-  const load = async () => {
-    setLoading(true);
-    setError(''); setInfo('');
+  const load = async ({ silent = false } = {}) => {
+    if (!silent) { setLoading(true); setError(''); setInfo(''); }
     try {
-      const res = await fetch('/api/settings/notifications');
-      const data = await res.json();
-      if (!res.ok) throw new Error(data?.error || '加载失败');
+      const data = await prefetch(KEYS.NOTIFICATIONS, FETCHERS[KEYS.NOTIFICATIONS]);
       setState(data);
     } catch (err) {
       setError(err.message);
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
     }
   };
 
-  useEffect(() => { load(); }, []);
+  useEffect(() => { load({ silent: !!cached }); }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleSave = async (e) => {
     e.preventDefault();
@@ -49,6 +49,7 @@ export default function NotificationsPage() {
       if (!res.ok) throw new Error(data?.error || '保存失败');
       setUrl('');
       setInfo('保存成功');
+      invalidate(KEYS.NOTIFICATIONS);
       await load();
     } catch (err) {
       setError(err.message);
@@ -64,6 +65,7 @@ export default function NotificationsPage() {
       const data = await res.json();
       if (!res.ok) throw new Error(data?.error || '测试失败');
       setInfo('测试消息已发送，去飞书群里看下');
+      invalidate(KEYS.NOTIFICATIONS);
       await load();
     } catch (err) {
       setError(err.message);
@@ -84,6 +86,7 @@ export default function NotificationsPage() {
       const data = await res.json();
       if (!res.ok) throw new Error(data?.error || '关闭失败');
       setInfo('已关闭飞书通知');
+      invalidate(KEYS.NOTIFICATIONS);
       await load();
     } catch (err) {
       setError(err.message);

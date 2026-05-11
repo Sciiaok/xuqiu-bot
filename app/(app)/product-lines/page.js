@@ -5,11 +5,9 @@ import { useRouter } from 'next/navigation';
 import s from './page.module.css';
 import Button from '../../components/Button/Button';
 import Skeleton from '../../components/Skeleton/Skeleton';
-import {
-  listProductLines,
-  listWhatsAppAccounts,
-  createProductLineForPhoneNumber,
-} from '../../../lib/api/product-lines.js';
+import { createProductLineForPhoneNumber } from '../../../lib/api/product-lines.js';
+import { prefetch, readCache, invalidate } from '../../../lib/prefetch-store';
+import { KEYS, FETCHERS } from '../../../lib/prefetch-keys';
 
 /**
  * /product-lines — WhatsApp 号码列表（每个号码 = 一条产品线）
@@ -24,37 +22,40 @@ import {
  */
 export default function ProductLinesPage() {
   const router = useRouter();
-  const [lines, setLines] = useState([]);
-  const [accounts, setAccounts] = useState({ status: 'loading', numbers: [], all_numbers: [] });
-  const [loading, setLoading] = useState(true);
+  // Synchronous cache reads on first render → instant paint when preloaded.
+  const cachedLines = readCache(KEYS.PRODUCT_LINES_ALL);
+  const cachedAccts = readCache(KEYS.OGILVY_WA_ACCOUNTS);
+  const haveBoth = !!(cachedLines && cachedAccts);
+  const [lines, setLines] = useState(cachedLines?.data ?? []);
+  const [accounts, setAccounts] = useState(
+    cachedAccts?.data ?? { status: 'loading', numbers: [], all_numbers: [] },
+  );
+  const [loading, setLoading] = useState(!haveBoth);
   const [loadError, setLoadError] = useState('');
   const [openingId, setOpeningId] = useState('');
   const [openError, setOpenError] = useState('');
 
-  async function loadAll() {
-    setLoading(true);
-    setLoadError('');
+  async function loadAll({ silent = false } = {}) {
+    if (!silent) { setLoading(true); setLoadError(''); }
     try {
       const [ls, accts] = await Promise.all([
-        listProductLines(),
-        listWhatsAppAccounts().catch((err) => ({
-          status: 'error',
-          numbers: [],
-          all_numbers: [],
-          error: err.message,
+        prefetch(KEYS.PRODUCT_LINES_ALL, FETCHERS[KEYS.PRODUCT_LINES_ALL]),
+        prefetch(KEYS.OGILVY_WA_ACCOUNTS, FETCHERS[KEYS.OGILVY_WA_ACCOUNTS]).catch((err) => ({
+          status: 'error', numbers: [], all_numbers: [], error: err.message,
         })),
       ]);
       setLines(ls);
       setAccounts(accts);
+      setLoadError('');
     } catch (err) {
       setLoadError(err.message);
-      setLines([]);
+      if (!silent) setLines([]);
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
     }
   }
 
-  useEffect(() => { loadAll(); }, []);
+  useEffect(() => { loadAll({ silent: haveBoth }); }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Build one card per WA number, joined to its existing product_line (if any).
   // Numbers are the source of truth — orphan product_lines (no wa_phone_number_id)
@@ -79,6 +80,8 @@ export default function ProductLinesPage() {
     setOpenError('');
     try {
       const created = await createProductLineForPhoneNumber(number.phone_number_id);
+      invalidate(KEYS.PRODUCT_LINES_ALL);
+      invalidate(KEYS.PRODUCT_LINES_ACTIVE);
       router.push(`/product-lines/${created.id}`);
     } catch (err) {
       setOpenError(`创建配置失败：${err.message}`);
@@ -98,7 +101,11 @@ export default function ProductLinesPage() {
       {loadError && (
         <div className={s.errorBanner}>
           <span>加载失败：{loadError}</span>
-          <Button variant="ghost" size="sm" onClick={loadAll}>重试</Button>
+          <Button variant="ghost" size="sm" onClick={() => {
+            invalidate(KEYS.PRODUCT_LINES_ALL);
+            invalidate(KEYS.OGILVY_WA_ACCOUNTS);
+            loadAll();
+          }}>重试</Button>
         </div>
       )}
 

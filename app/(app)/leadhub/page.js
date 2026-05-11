@@ -14,7 +14,8 @@ import Markdown from '../../components/Markdown/Markdown';
 import AdPreviewModal from '../../components/AdPreviewModal/AdPreviewModal';
 import LeadDetail from '../../components/LeadDetail/LeadDetail';
 import Skeleton, { SkeletonStack } from '../../components/Skeleton/Skeleton';
-import { listProductLines } from '../../../lib/api/product-lines.js';
+import { prefetch, readCache } from '../../../lib/prefetch-store';
+import { KEYS, FETCHERS } from '../../../lib/prefetch-keys';
 import {
   Avatar,
   DaySeparator,
@@ -196,10 +197,20 @@ export default function LeadHubPage() {
 
   // Fetch active product lines → supply-chain dropdown options (mount once).
   // Backend's inquiries route accepts product_line slugs as `agentIds`, so we
-  // send the slug (line.id) as the filter value.
+  // send the slug (line.id) as the filter value. Routed through the prefetch
+  // store so the post-login preloader can warm this; a synchronous cache hit
+  // populates the dropdown with no spinner.
   useEffect(() => {
     let cancelled = false;
-    listProductLines({ activeOnly: true })
+    const cached = readCache(KEYS.PRODUCT_LINES_ACTIVE);
+    if (cached?.data) {
+      setSupplyChainOptions(cached.data.map(line => ({
+        value: line.id,
+        label: line.name || line.id,
+      })));
+      if (cached.fresh) return () => { cancelled = true; };
+    }
+    prefetch(KEYS.PRODUCT_LINES_ACTIVE, FETCHERS[KEYS.PRODUCT_LINES_ACTIVE])
       .then(lines => {
         if (cancelled) return;
         setSupplyChainOptions(lines.map(line => ({
@@ -253,27 +264,49 @@ export default function LeadHubPage() {
   // `resetSelection` = true on filter changes (pick first card), false on realtime
   // updates (preserve whatever the user is looking at).
   const refreshList = useCallback((resetSelection = false) => {
-    setLoadingList(true);
-    setErrorList(null);
-    if (resetSelection) {
-      setCards([]);
-      setSelectedId(null);
-    }
-    setNextCursor(null);
+    const qsString = buildQs().toString();
+    const url = `/api/inquiries?${qsString}`;
+    const cacheKey = `inquiries:${qsString}`;
 
     let cancelled = false;
-    fetch(`/api/inquiries?${buildQs()}`)
-      .then(r => r.json())
+    let selectionApplied = false;
+    const applyJson = (json) => {
+      const mapped = (json.groups || []).map(mapGroupToCard);
+      setCards(mapped);
+      setTotalContacts(json.totalContacts ?? 0);
+      setTotalConversations(json.totalConversations ?? 0);
+      setTotalLeads(json.totalLeads ?? 0);
+      setHasMore(json.hasMore ?? false);
+      setNextCursor(json.nextCursor ?? null);
+      if (resetSelection && !selectionApplied && mapped.length > 0) {
+        setSelectedId(mapped[0].id);
+        selectionApplied = true;
+      }
+    };
+
+    // Synchronous cache hit (e.g. preloaded after login) → paint immediately,
+    // no loading flicker. Fresh hit returns early; stale hit still refetches.
+    const cached = readCache(cacheKey);
+    if (cached?.data) {
+      applyJson(cached.data);
+      setLoadingList(false);
+      setErrorList(null);
+      if (cached.fresh) return () => { cancelled = true; };
+    } else {
+      setLoadingList(true);
+      setErrorList(null);
+      if (resetSelection) {
+        setCards([]);
+        setSelectedId(null);
+      }
+      setNextCursor(null);
+    }
+
+    prefetch(cacheKey, () => fetch(url).then(r => r.json()))
       .then(json => {
         if (cancelled) return;
-        const mapped = (json.groups || []).map(mapGroupToCard);
-        setCards(mapped);
-        setTotalContacts(json.totalContacts ?? 0);
-        setTotalConversations(json.totalConversations ?? 0);
-        setTotalLeads(json.totalLeads ?? 0);
-        setHasMore(json.hasMore ?? false);
-        setNextCursor(json.nextCursor ?? null);
-        if (resetSelection && mapped.length > 0) setSelectedId(mapped[0].id);
+        applyJson(json);
+        setErrorList(null);
       })
       .catch(err => {
         if (cancelled) return;

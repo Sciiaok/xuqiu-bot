@@ -4,6 +4,7 @@ import { Inter, Syne, DM_Mono } from 'next/font/google';
 import '../v5-theme.css';
 import Sidebar from '../components/Sidebar/Sidebar';
 import MetaConnectionBanner from '../components/MetaConnectionBanner/MetaConnectionBanner';
+import PostLoginPreloader from '../components/PostLoginPreloader';
 
 const inter = Inter({
   subsets: ['latin'],
@@ -28,6 +29,7 @@ export default function V5Layout({ children }) {
   return (
     <div className={`v5-root ${inter.variable} ${syne.variable} ${dmMono.variable}`}
          style={{ display: 'flex', height: '100vh' }}>
+      <PostLoginPreloader />
       <Sidebar />
       <main style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column' }}>
         <MetaConnectionBanner />
