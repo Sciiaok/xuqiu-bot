@@ -243,7 +243,7 @@ erDiagram
     text status "active|suspended|deleted"
   }
   users {
-    uuid id PK_FK_auth
+    uuid id PK "FK→auth.users"
     uuid tenant_id FK
     text email
     text role "owner"
@@ -256,13 +256,13 @@ erDiagram
     text status "pending|accepted|expired|revoked"
   }
   onboarding_progress {
-    uuid tenant_id PK_FK
+    uuid tenant_id PK "FK→tenants"
     timestamptz meta_connected_at
     timestamptz first_kb_uploaded_at
     timestamptz first_message_received_at
   }
   notification_settings {
-    uuid tenant_id PK_FK
+    uuid tenant_id PK "FK→tenants"
     bytea feishu_webhook_url_encrypted "AES-256-GCM"
     boolean feishu_enabled
   }
