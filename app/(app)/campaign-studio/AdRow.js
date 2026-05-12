@@ -2,8 +2,105 @@
 
 import { useEffect, useState } from 'react';
 import Tag from '../../components/Tag/Tag';
+import Markdown from '../../components/Markdown/Markdown';
 import { formatCount, formatCurrency, getAssessmentDetails, getStatusLabel } from './helpers';
 import s from './page.module.css';
+
+// LLM cost is real — we only call the model when the user clicks a button
+// inside an ad card. Results are cached in sessionStorage by adId so toggling
+// the card open/closed doesn't re-spend.
+function readAdReportCache(adId) {
+  try { return sessionStorage.getItem(`adReport:${adId}`) || null; } catch { return null; }
+}
+function writeAdReportCache(adId, report) {
+  try {
+    if (report) sessionStorage.setItem(`adReport:${adId}`, report);
+    else sessionStorage.removeItem(`adReport:${adId}`);
+  } catch {}
+}
+
+function AiAssessmentPanel({ ad, assessment }) {
+  const [report, setReport] = useState(() => readAdReportCache(ad.adId));
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+
+  async function generate() {
+    setLoading(true); setError('');
+    try {
+      const res = await fetch('/api/ai/report', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          type: 'campaign_analysis',
+          days: 30,
+          context: {
+            focusAdId: ad.adId,
+            adName: ad.adName,
+            adsetName: ad.adsetName,
+            campaignName: ad.campaignName,
+            businessLine: ad.businessLine,
+            status: ad.status,
+            lifetime: ad.lifetime,
+            period: ad.period,
+            ruleBasedAssessment: {
+              verdict: assessment.verdict,
+              positives: assessment.positives,
+              risks: assessment.risks,
+              suggestions: assessment.suggestions,
+            },
+          },
+        }),
+      });
+      if (!res.ok) throw new Error('生成失败');
+      const data = await res.json();
+      const text = data.report || '';
+      setReport(text);
+      writeAdReportCache(ad.adId, text);
+    } catch (err) {
+      setError(err.message || '生成失败');
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  if (report) {
+    return (
+      <div className={s.detailAI}>
+        <div className={s.aiEvalHead}>
+          <div className={s.aiEvalText}>
+            <div className={s.aiEvalTitle}>AI 深度分析</div>
+          </div>
+          <button type="button" className={s.aiRegenBtn} onClick={generate} disabled={loading}>
+            ✦ 重新生成
+          </button>
+        </div>
+        <div className={s.aiReportBody}>
+          <Markdown>{report}</Markdown>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className={s.detailAI}>
+      <div className={s.aiEvalHead}>
+        <div className={s.aiEvalText}>
+          <div className={s.aiEvalTitle}>AI 深度分析</div>
+          <div className={s.aiEvalBody}>
+            点击下方按钮，由 AI 基于这条广告的投放数据 + 转化质量生成针对性分析与建议。
+            不会自动调用，避免不必要的开销。
+          </div>
+        </div>
+      </div>
+      <div className={s.aiTriggerWrap} onClick={(e) => e.stopPropagation()}>
+        <button type="button" className={s.aiTriggerBtn} onClick={generate} disabled={loading}>
+          {loading ? <><span className={s.aiSpinner} /> AI 正在分析…</> : '✦ 生成 AI 分析'}
+        </button>
+        {error && <span className={s.aiTriggerError}>{error}</span>}
+      </div>
+    </div>
+  );
+}
 
 const CLASSIFICATION_SOURCE_LABELS = {
   attribution: '归因业务线',
@@ -55,34 +152,6 @@ function SparkBars({ data, color = 'var(--accent)' }) {
   );
 }
 
-function ScoreRing({ score, color }) {
-  const r = 22;
-  const circ = 2 * Math.PI * r;
-  const dash = (score / 100) * circ;
-  const colorMap = {
-    green: 'var(--green)',
-    amber: 'var(--amber)',
-    accent: 'var(--accent)',
-    red: 'var(--red)',
-    teal: 'var(--teal)',
-  };
-  const strokeColor = colorMap[color] || 'var(--accent)';
-  return (
-    <svg className={s.scoreRing} width="56" height="56" viewBox="0 0 56 56">
-      <circle cx="28" cy="28" r={r} fill="none" stroke="var(--border)" strokeWidth="4" />
-      <circle
-        cx="28" cy="28" r={r} fill="none"
-        stroke={strokeColor} strokeWidth="4"
-        strokeDasharray={`${dash} ${circ}`}
-        strokeLinecap="round"
-        transform="rotate(-90 28 28)"
-      />
-      <text x="28" y="33" textAnchor="middle" fontSize="13" fontWeight="700" fill={strokeColor} fontFamily="var(--font-mono)">
-        {score}
-      </text>
-    </svg>
-  );
-}
 
 // ── AdRow + AdStatusGroup ─────────────────────────────────────────────
 
@@ -205,38 +274,7 @@ function AdRow({ ad, isExpanded, onToggle, rangeLabel, isSingleDay, onPreview })
                   </div>
                 </div>
 
-                <div className={s.detailAI}>
-                  <div className={s.aiEvalHead}>
-                    <ScoreRing score={assessment.score} color={assessment.verdictColor} />
-                    <div className={s.aiEvalText}>
-                      <div className={s.aiEvalTitle}>AI 评估</div>
-                      <div className={s.aiEvalBody}>
-                        <strong>{assessment.verdict}</strong>
-                        {`。全生命周期高质量率 ${lifetime.proofRate || 0}% ，${assessment.recentLabel}高质量率 ${assessment.recentProofRate}% 。`}
-                        {assessment.recentCpa > 0 ? `近期 CPA 为 ${formatCurrency(assessment.recentCpa)}。` : ''}
-                      </div>
-                    </div>
-                  </div>
-                  <div className={s.assessmentGrid}>
-                    <div className={s.assessmentBlock}>
-                      <div className={s.assessmentTitle}>优点</div>
-                      {(assessment.positives.length > 0 ? assessment.positives : ['当前广告暂未出现明显强项，建议继续观察近期转化质量。']).map((item) => (
-                        <div key={item} className={s.assessmentItem}>{item}</div>
-                      ))}
-                    </div>
-                    <div className={s.assessmentBlock}>
-                      <div className={s.assessmentTitle}>问题</div>
-                      {(assessment.risks.length > 0 ? assessment.risks : ['最近几天没有发现明显异常，广告表现与历史水平基本一致。']).map((item) => (
-                        <div key={item} className={s.assessmentItem}>{item}</div>
-                      ))}
-                    </div>
-                  </div>
-                  <div className={s.assessmentActions}>
-                    {assessment.suggestions.map((item) => (
-                      <div key={item} className={s.assessmentAction}>{item}</div>
-                    ))}
-                  </div>
-                </div>
+                <AiAssessmentPanel ad={ad} assessment={assessment} />
               </div>
 
               <div className={s.detailStatsGrid}>

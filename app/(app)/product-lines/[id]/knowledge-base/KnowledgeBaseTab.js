@@ -39,6 +39,8 @@ import {
   deleteQaSnippet,
 } from '../../../../../lib/api/knowledge.js';
 import { LAYERS, LAYER_LABELS } from './constants.js';
+import { readCache, prefetch, invalidate } from '../../../../../lib/prefetch-store';
+import { lineKeys, buildKbFetchers } from '../../../../../lib/prefetch-keys';
 
 const MAX_FILE_SIZE_BYTES = 50 * 1024 * 1024;
 const SECTIONS = [
@@ -59,17 +61,25 @@ export default function KnowledgeBaseTab({ agentId }) {
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState('');
 
+  // Write actions invalidate the prefetch cache + refetch through it, so any
+  // other view (this tab on a different tab, the product-line detail page)
+  // sees the latest data on next mount.
   async function refreshAll() {
     if (!agentId) return;
     setLoadError('');
+    const fetchers = buildKbFetchers(agentId);
+    const keys = [
+      lineKeys.kbHealth(agentId),
+      lineKeys.kbGaps(agentId),
+      lineKeys.kbDocs(agentId),
+      lineKeys.kbQa(agentId),
+      lineKeys.kbAssets(agentId),
+    ];
     try {
-      const [h, g, d, q, a] = await Promise.all([
-        getHealth(agentId),
-        listGaps(agentId),
-        listDocuments(agentId),
-        listQaSnippets(agentId, { includeInactive: true }),
-        listAssets(agentId),
-      ]);
+      // Drop existing entries so we get fresh data, then refetch through
+      // the cache so concurrent readers (e.g. preloader) share the result.
+      for (const k of keys) invalidate(k);
+      const [h, g, d, q, a] = await Promise.all(keys.map(k => prefetch(k, fetchers[k])));
       setHealth(h); setGaps(g); setDocuments(d); setQaSnippets(q); setAssets(a);
     } catch (e) {
       setLoadError(e.message);
@@ -77,6 +87,19 @@ export default function KnowledgeBaseTab({ agentId }) {
   }
 
   useEffect(() => {
+    if (!agentId) return;
+    // Hydrate from cache synchronously if available — KB is tenant-wide
+    // prefetched by PostLoginPreloader so most opens are zero-flash.
+    const cachedH = readCache(lineKeys.kbHealth(agentId))?.data;
+    const cachedG = readCache(lineKeys.kbGaps(agentId))?.data;
+    const cachedD = readCache(lineKeys.kbDocs(agentId))?.data;
+    const cachedQ = readCache(lineKeys.kbQa(agentId))?.data;
+    const cachedA = readCache(lineKeys.kbAssets(agentId))?.data;
+    if (cachedH && cachedG && cachedD && cachedQ && cachedA) {
+      setHealth(cachedH); setGaps(cachedG); setDocuments(cachedD);
+      setQaSnippets(cachedQ); setAssets(cachedA); setLoading(false);
+      return;
+    }
     setLoading(true);
     refreshAll().finally(() => setLoading(false));
     // eslint-disable-next-line react-hooks/exhaustive-deps

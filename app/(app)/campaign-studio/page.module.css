@@ -2160,3 +2160,40 @@
   transition: color 0.15s, border-color 0.15s;
 }
 .aiRegenBtn:hover { color: var(--accent); border-color: var(--accent); }
+
+/* Per-ad manual AI trigger (lives inside expanded ad detail card) */
+.aiTriggerWrap {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 14px;
+  flex-wrap: wrap;
+}
+
+.aiTriggerBtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 18px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--accent);
+  background: var(--accent-dim);
+  border: 1px solid transparent;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+}
+.aiTriggerBtn:hover:not(:disabled) {
+  background: rgba(37, 99, 235, 0.14);
+  border-color: var(--accent);
+}
+.aiTriggerBtn:disabled {
+  cursor: wait;
+  opacity: 0.75;
+}
+
+.aiTriggerError {
+  color: var(--red);
+  font-size: 12px;
+}

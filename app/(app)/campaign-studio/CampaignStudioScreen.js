@@ -15,6 +15,8 @@ import Skeleton, { SkeletonRow, SkeletonStack } from '../../components/Skeleton/
 import EmptyState from '../../components/EmptyState/EmptyState';
 import AdStatusGroup, { ImageLightbox } from './AdRow';
 import AttributionTab from './AttributionTab';
+import { readCache } from '../../../lib/prefetch-store';
+import { KEYS } from '../../../lib/prefetch-keys';
 
 // ─── Tab definitions ──────────────────────────────────────────────
 // The legacy `ai` tab (campaign orchestrator chat) was replaced by the
@@ -107,9 +109,13 @@ export function CampaignStudioScreen({
   const [tab, setTab] = useState(initialTab);
   const shouldFetchAttribution = visibleTabKeys.includes('attribution') && tab === 'attribution';
   const [adsData, setAdsData] = useState(null);
-  const [dashboardData, setDashboardData] = useState(null);
+  // Default 30d view is preheated by PostLoginPreloader. Read the cache
+  // synchronously so the first render shows real data instead of a skeleton.
+  // The default timeFilter below is '30d' so we can check unconditionally.
+  const initialDashboardCache = readCache(KEYS.ADS_DASHBOARD_30D);
+  const [dashboardData, setDashboardData] = useState(initialDashboardCache?.data || null);
   const [quickTotals, setQuickTotals] = useState(null);
-  const [loadingAds, setLoadingAds] = useState(requiresAdsData);
+  const [loadingAds, setLoadingAds] = useState(requiresAdsData && !initialDashboardCache?.data);
   const [timeFilter, setTimeFilter] = useState('30d');
   const [customFrom, setCustomFrom] = useState('');
   const [customTo, setCustomTo] = useState('');
@@ -132,6 +138,14 @@ export function CampaignStudioScreen({
       return;
     }
 
+    // If the current view is the preheated 30d default and we already have
+    // a fresh cache entry, skip the heavy /api/ads/dashboard fetch entirely.
+    // Attribution queries still proceed below since they aren't preheated.
+    const cached = timeFilter === '30d'
+      ? readCache(KEYS.ADS_DASHBOARD_30D)
+      : null;
+    const haveDashboardFromCache = !!cached?.data && cached.fresh;
+
     // Quick KPI: fire a lightweight Meta insights call that returns in ~3-5s.
     // This populates the top metric strip immediately while the heavy dashboard
     // call (creatives, images, videos) loads in the background.
@@ -144,9 +158,14 @@ export function CampaignStudioScreen({
     async function fetchAds() {
       setLoadingAds(true);
       try {
-        const dashboardRes = await fetch(`/api/ads/dashboard?${rangeQuery}`);
-        if (!dashboardRes.ok) throw new Error('Failed to fetch ad dashboard');
-        const dashboard = await dashboardRes.json();
+        let dashboard;
+        if (haveDashboardFromCache) {
+          dashboard = cached.data;
+        } else {
+          const dashboardRes = await fetch(`/api/ads/dashboard?${rangeQuery}`);
+          if (!dashboardRes.ok) throw new Error('Failed to fetch ad dashboard');
+          dashboard = await dashboardRes.json();
+        }
         setDashboardData(dashboard);
 
         if (shouldFetchAttribution) {

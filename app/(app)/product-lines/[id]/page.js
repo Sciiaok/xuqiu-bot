@@ -10,6 +10,8 @@ import {
   getProductLine,
   updateProductLine,
 } from '../../../../lib/api/product-lines.js';
+import { readCache, prefetch, invalidate } from '../../../../lib/prefetch-store';
+import { lineKeys, buildLineDetailFetcher } from '../../../../lib/prefetch-keys';
 import KnowledgeBaseTab from './knowledge-base/KnowledgeBaseTab.js';
 import LeadFieldsEditor, { normalizeLeadFields } from './LeadFieldsEditor.js';
 import MediciSimulatorTab from './medici-simulator/MediciSimulatorTab.js';
@@ -50,18 +52,22 @@ export default function ProductLineEditPage() {
   const [savedAt, setSavedAt] = useState(0);
   const [activeTab, setActiveTab] = useState('config');
 
+  function applyLine(fetched) {
+    setLine(fetched);
+    setForm({
+      name:                     fetched.name || '',
+      business_value_guidance:  fetched.business_value_guidance || '',
+    });
+    setLeadFields(Array.isArray(fetched.lead_fields) ? fetched.lead_fields : []);
+    setLeadFieldsValid(true);
+  }
+
   async function loadAll() {
     setLoading(true);
     setLoadError('');
     try {
-      const fetched = await getProductLine(id);
-      setLine(fetched);
-      setForm({
-        name:                     fetched.name || '',
-        business_value_guidance:  fetched.business_value_guidance || '',
-      });
-      setLeadFields(Array.isArray(fetched.lead_fields) ? fetched.lead_fields : []);
-      setLeadFieldsValid(true);
+      const fetched = await prefetch(lineKeys.detail(id), buildLineDetailFetcher(id));
+      applyLine(fetched);
     } catch (err) {
       setLoadError(err.message);
     } finally {
@@ -69,7 +75,24 @@ export default function ProductLineEditPage() {
     }
   }
 
-  useEffect(() => { if (id) loadAll(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [id]);
+  useEffect(() => {
+    if (!id) return;
+    const cached = readCache(lineKeys.detail(id));
+    if (cached?.data) {
+      applyLine(cached.data);
+      setLoading(false);
+      if (!cached.fresh) {
+        // Stale-while-revalidate: silently refresh in the background.
+        invalidate(lineKeys.detail(id));
+        prefetch(lineKeys.detail(id), buildLineDetailFetcher(id))
+          .then(applyLine)
+          .catch(() => {});
+      }
+      return;
+    }
+    loadAll();
+    /* eslint-disable-next-line react-hooks/exhaustive-deps */
+  }, [id]);
 
   function handleText(key, value) {
     setForm((p) => ({ ...p, [key]: value }));
@@ -92,6 +115,7 @@ export default function ProductLineEditPage() {
       };
       const updated = await updateProductLine(id, body);
       setLine((prev) => ({ ...updated, agent_id: prev?.agent_id ?? null }));
+      invalidate(lineKeys.detail(id));
       setSavedAt(Date.now());
       setTimeout(() => setSavedAt(0), 2500);
     } catch (err) {
