@@ -5,7 +5,10 @@
 
 import { sendMessage } from './whatsapp.service.js';
 import { updateLead, getLeadsByConversation } from '../lib/repositories/lead.repository.js';
-import { findProductLineByPhoneNumberId } from '../lib/repositories/product-line.repository.js';
+import {
+  findProductLineByPhoneNumberId,
+  findProductLineById,
+} from '../lib/repositories/product-line.repository.js';
 import {
   getFeishuNotifiedAt,
   markFeishuNotified,
@@ -13,6 +16,8 @@ import {
 import { sendFeishuMessage } from './feishu.service.js';
 import { createTraceLogger } from '../lib/core-trace.js';
 import { config } from './config.js';
+import supabase from '../lib/supabase.js';
+import { getReferralAdId } from '../lib/referral-context.js';
 
 // Used when a product line hasn't customized faq_message in the config UI.
 const DEFAULT_FAQ_MESSAGE = `Thank you for your interest!
@@ -69,17 +74,32 @@ function formatFieldValue(v) {
   return String(v);
 }
 
-function buildFeishuLeadMessage(lead, handoffSummary) {
+function buildFeishuLeadMessage(lead, handoffSummary, context = {}) {
   const intents = Array.isArray(lead.conversation_intent) ? lead.conversation_intent : [];
   const intentText = intents.map((i) => INTENT_LABEL[i] || i).join(' · ') || '-';
 
-  // Header: 质量 / 价值 / 产品线 / 意图
+  // 归属头部：租户 / 产品线 / 广告 —— 一眼定位是哪个工作区 + 哪条产品线 + 哪条广告进来的
+  const { tenantName, productLineName, adHeadline } = context;
+  const tenantLabel = tenantName || (lead.tenant_id ? `\`${lead.tenant_id}\`` : '-');
+  const productLineLabel = lead.product_line
+    ? (productLineName ? `${productLineName}（\`${lead.product_line}\`）` : `\`${lead.product_line}\``)
+    : '-';
+  const adLabel = lead.meta_ad_id
+    ? `\`${lead.meta_ad_id}\`${adHeadline ? ` — ${adHeadline}` : ' —（无标题）'}`
+    : '-';
+
+  const attributionLines = [
+    `🏢 **租户** ${tenantLabel}`,
+    `📦 **产品线** ${productLineLabel}`,
+    `📣 **广告** ${adLabel}`,
+  ];
+
+  // 第二行 header：质量 / 价值 / 意图
   const headerBits = [
     `**质量** ${INQUIRY_QUALITY_LABEL[lead.inquiry_quality] || lead.inquiry_quality || '-'}`,
     `**商业价值** ${BUSINESS_VALUE_LABEL[lead.business_value] || lead.business_value || '-'}`,
+    `**意图** ${intentText}`,
   ];
-  if (lead.product_line) headerBits.push(`**产品线** \`${lead.product_line}\``);
-  headerBits.push(`**意图** ${intentText}`);
 
   // Canonical 字段按非空过滤；lead.details 里超出 CANONICAL 的 key 单独展开
   const canonicalRows = CANONICAL_FIELDS
@@ -98,6 +118,8 @@ function buildFeishuLeadMessage(lead, handoffSummary) {
 
   const lines = [
     '🔥 **侦测到重要线索，请人工跟进**',
+    '',
+    ...attributionLines,
     '',
     headerBits.join(' · '),
     '',
@@ -168,6 +190,63 @@ export async function sendFAQResources(waId, phoneNumberId, traceContext = {}) {
 }
 
 /**
+ * 解析 Feishu 通知 header 需要的归属信息：租户名 / 产品线名 / 广告标题。
+ * 任何一项查询失败都不阻塞通知；失败的字段在 header 里降级显示。
+ */
+async function resolveFeishuHeaderContext(lead, logger) {
+  const tasks = [
+    supabase
+      .from('tenants')
+      .select('name')
+      .eq('id', lead.tenant_id)
+      .maybeSingle()
+      .then(({ data, error }) => {
+        if (error) throw error;
+        return data?.name || null;
+      })
+      .catch((err) => {
+        logger.warn('routing.feishu.tenant_lookup_failed', { error: err.message });
+        return null;
+      }),
+
+    lead.product_line
+      ? findProductLineById({ tenantId: lead.tenant_id, id: lead.product_line })
+          .then((row) => row?.name || null)
+          .catch((err) => {
+            logger.warn('routing.feishu.product_line_lookup_failed', { error: err.message });
+            return null;
+          })
+      : Promise.resolve(null),
+
+    lead.meta_ad_id && lead.contact_id
+      ? supabase
+          .from('contacts')
+          .select('metadata')
+          .eq('id', lead.contact_id)
+          .maybeSingle()
+          .then(({ data, error }) => {
+            if (error) throw error;
+            const meta = data?.metadata || {};
+            const candidates = [meta.last_referral, meta.first_referral];
+            for (const ref of candidates) {
+              if (getReferralAdId(ref) === lead.meta_ad_id && ref?.headline) {
+                return ref.headline;
+              }
+            }
+            return null;
+          })
+          .catch((err) => {
+            logger.warn('routing.feishu.ad_headline_lookup_failed', { error: err.message });
+            return null;
+          })
+      : Promise.resolve(null),
+  ];
+
+  const [tenantName, productLineName, adHeadline] = await Promise.all(tasks);
+  return { tenantName, productLineName, adHeadline };
+}
+
+/**
  * Route an individual lead to sales team via Feishu
  * @param {Object} lead - Lead object from database
  * @param {string} handoffSummary - Summary for sales team
@@ -185,7 +264,8 @@ export async function routeLeadToSales(lead, handoffSummary, traceContext = {}) 
     return { success: false, error: 'lead missing tenant_id' };
   }
 
-  const message = buildFeishuLeadMessage(lead, handoffSummary);
+  const headerContext = await resolveFeishuHeaderContext(lead, logger);
+  const message = buildFeishuLeadMessage(lead, handoffSummary, headerContext);
 
   sendFeishuMessage(message, { tenantId: lead.tenant_id })
     .then(result => {
