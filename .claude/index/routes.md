@@ -1,12 +1,12 @@
 # Routes (auto-generated)
 
-Generated: 2026-05-11T09:58:59.093Z
+Generated: 2026-05-12T07:38:45.937Z
 
 Filesystem-derived list of API endpoints and UI pages. **Do not edit** — run `node scripts/build-index.mjs` to refresh.
 
 ## API Endpoints
 
-Total: **71**
+Total: **72**
 
 | Path | Methods | File |
 | --- | --- | --- |
@@ -46,6 +46,7 @@ Total: **71**
 | `/api/knowledge/corrections` | GET, POST, PUT | [app/api/knowledge/corrections/route.js](../../app/api/knowledge/corrections/route.js) |
 | `/api/knowledge/documents` | GET, DELETE | [app/api/knowledge/documents/route.js](../../app/api/knowledge/documents/route.js) |
 | `/api/knowledge/documents/download` | GET | [app/api/knowledge/documents/download/route.js](../../app/api/knowledge/documents/download/route.js) |
+| `/api/knowledge/documents/reparse` | POST | [app/api/knowledge/documents/reparse/route.js](../../app/api/knowledge/documents/reparse/route.js) |
 | `/api/knowledge/gaps` | GET, PUT | [app/api/knowledge/gaps/route.js](../../app/api/knowledge/gaps/route.js) |
 | `/api/knowledge/health` | GET | [app/api/knowledge/health/route.js](../../app/api/knowledge/health/route.js) |
 | `/api/knowledge/pending-review` | GET, POST | [app/api/knowledge/pending-review/route.js](../../app/api/knowledge/pending-review/route.js) |

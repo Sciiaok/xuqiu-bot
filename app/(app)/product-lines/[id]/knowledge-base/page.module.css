@@ -733,6 +733,9 @@
 .docStatusProcessing .docStatusDot { background: var(--amber); animation: dotPulse 1.4s ease-in-out infinite; }
 .docStatusError { color: var(--red); background: var(--red-dim); border-color: color-mix(in srgb, var(--red) 18%, transparent); }
 .docStatusError .docStatusDot { background: var(--red); }
+/* partial = 解析完成但有数据丢失嫌疑（input/output 截断、chunk 解析失败） */
+.docStatusPartial { color: var(--amber); background: var(--amber-dim); border-color: color-mix(in srgb, var(--amber) 30%, transparent); }
+.docStatusPartial .docStatusDot { background: var(--amber); }
 .docStatusUnknown { color: var(--text3); }
 
 @keyframes dotPulse {

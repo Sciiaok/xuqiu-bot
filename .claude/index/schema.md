@@ -1,6 +1,6 @@
 # Schema Snapshot (auto-generated)
 
-Generated: 2026-05-11T13:14:31.217Z
+Generated: 2026-05-12T07:38:47.482Z
 
 Live snapshot of `public` schema from Supabase. **Do not edit by hand** — run `node scripts/build-index.mjs` to refresh.
 
@@ -172,11 +172,13 @@ Tables: **47**. Listed alphabetically.
 | `created_at` | timestamp with time zone | Y | `now()` |
 | `updated_at` | timestamp with time zone | Y | `now()` |
 | `tenant_id` | uuid | N | `'00000000-0000-0000-0000-000000000001':…` |
+| `deleted_at` | timestamp with time zone | Y |  |
 
 **Foreign keys:**
 - `tenant_id` → `tenants.id`
 
 **Indexes:**
+- `idx_autopilot_sessions_active` USING btree (tenant_id, user_id, updated_at DESC) WHERE (deleted_at IS NULL)
 - `idx_autopilot_sessions_status` USING btree (status) WHERE (status <> 'archived'::text)
 - `idx_autopilot_sessions_tenant` USING btree (tenant_id)
 - `idx_autopilot_sessions_user` USING btree (user_id, created_at DESC)
@@ -454,6 +456,7 @@ Tables: **47**. Listed alphabetically.
 | `tenant_id` | uuid | N | `'00000000-0000-0000-0000-000000000001':…` |
 | `product_line_id` | text | Y |  |
 | `content_sha256` | text | Y |  |
+| `partial_reason` | text | Y |  |
 
 **Foreign keys:**
 - `agent_id` → `agents.id`

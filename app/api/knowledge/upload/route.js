@@ -189,21 +189,9 @@ async function runBackground({ tenantCtx, doc, agent, filename, mimeType, fileTy
   emitProgress(docId, 'progress', { stage: 'parsing' });
 
   try {
-    let textContent;
-    if (fileType === 'txt' || fileType === 'markdown' || fileType === 'csv') {
-      textContent = buffer.toString('utf-8');
-    } else if (fileType === 'xlsx_text') {
-      const { extractExcelText } = await import('../../../../src/kb-file-parsers.js');
-      textContent = await extractExcelText(buffer);
-    } else if (fileType === 'pdf_text') {
-      const { extractPdfText } = await import('../../../../src/kb-file-parsers.js');
-      textContent = await extractPdfText(buffer);
-    } else if (fileType === 'docx') {
-      const { extractDocxText } = await import('../../../../src/kb-file-parsers.js');
-      textContent = await extractDocxText(buffer);
-    } else {
-      textContent = buffer.toString('utf-8');
-    }
+    const { parseBufferToContent } = await import('../../../../src/kb-file-parsers.js');
+    // Excel → 切片数组（chunked extraction）；其他 → 整串文本（600K 字符 cap 兜底）
+    const parsedContent = await parseBufferToContent(buffer, fileType);
 
     const docCtx = {
       tenantId: tenantCtx.tenantId,
@@ -214,7 +202,7 @@ async function runBackground({ tenantCtx, doc, agent, filename, mimeType, fileTy
 
     const { extractAndStoreImages } = await import('../../../../src/kb-image-extractor.service.js');
     const [result, imageResult] = await Promise.all([
-      processDocument(docCtx, docId, textContent, layer, { filename, fileType, onProgress }),
+      processDocument(docCtx, docId, parsedContent, layer, { filename, fileType, onProgress }),
       extractAndStoreImages(docCtx, buffer, docId, mimeType)
         .then(r => {
           onProgress({ stage: 'images', extracted: r?.extracted || 0 });

@@ -59,12 +59,13 @@ Goal: when Claude Code picks up a task touching feature X, read this file first 
 - **Notes**: Product-line is THE scope unit. Adding a feature that's "per workspace"? Almost always means "per product-line". The detail page hosts KB + Medici simulator as tabs.
 
 ### Knowledge Base — upload, parse, embed, search, QA, gaps, corrections
+- **完整规格 / 故障排查 / 运行手册**：👉 `docs/knowledge-base.md`（动手前先扫一眼，特别是 §3 数据流 / §8 失败面 / §13 修改检查清单）
 - **UI**: `app/(app)/product-lines/[id]/knowledge-base/KnowledgeBaseTab.js` (lives inside product-line detail page)
-- **API**: `/api/knowledge/*` — `upload`, `documents`, `documents/download`, `assets`, `gaps`, `corrections`, `pending-review`, `qa-snippets`, `teach`, `health`, `conflicts/resolve`
+- **API**: `/api/knowledge/*` — `upload`, `upload/stream`, `documents`, `documents/download`, `documents/reparse`, `assets`, `gaps`, `corrections`, `pending-review`, `qa-snippets`, `teach`, `health`, `conflicts/resolve`
 - **Services** (in `src/`): `kb-upload.service.js`, `kb-search.service.js`, `kb-corrections.service.js`, `kb-gaps.service.js`, `kb-qa-snippets.service.js`, `kb-pending-review.service.js`, `kb-image-extractor.service.js`, `kb-tools.service.js`, `kb-file-parsers.js`
 - **Lib**: `lib/kb-upload-bus.js` (async event bus), `lib/repositories/knowledge-base.repository.js`
 - **Tables**: `kb_documents`, `kb_products`, `kb_shipping_routes`, `kb_knowledge_points`, `kb_qa_snippets`, `kb_corrections`, `kb_knowledge_gaps`, `kb_pending_review`, `kb_assets`, `kb_product_assets`, `kb_pricing_rules`, `kb_glossary`, `kb_test_sessions`, `kb_test_messages`
-- **Notes**: Heavy module — biggest single feature. Upload is async via `kb-upload-bus`; parsing → embedding → 4-layer KB (documents / products / routes / knowledge_points). Pending review handles editorial conflicts. Gaps track unanswered questions for KB improvement. **Flagged duplication**: services scattered across `src/` and a single repository in `lib/` — fine for now, just know both places exist.
+- **Notes**: Heavy module — biggest single feature. Upload is async via `kb-upload-bus`; Excel 走 chunked 抽取（每 sheet 80 行/片），其它格式单次调用 + 600K 字符 input cap。截断时 `status='partial'`，UI 提示 reparse。详见 docs/knowledge-base.md。
 
 ### Campaign Studio — ad campaign generation
 - **UI**: `app/(app)/campaign-studio/page.js`

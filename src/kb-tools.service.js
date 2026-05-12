@@ -62,11 +62,14 @@ export async function lookupProduct({ tenantId, productLineId, sku, model, attrs
   q = highConfidenceFilter(q);
   q = notExpiredFilter(q);
 
+  // sku 和 model 入参语义略不同，但用户问"星耀6"既可能填到 sku 也可能填到 model。
+  // 实际数据里中文车型名常落在 product_name（"现代索纳塔"），版本号落在 model
+  // （"2024款 1.5T Pro"），所以两个入参都覆盖 4 个字段，避免字段语义错配漏匹配。
   if (sku) {
-    q = q.or(`sku.ilike.%${sku}%,model.ilike.%${sku}%`);
+    q = q.or(`sku.ilike.%${sku}%,model.ilike.%${sku}%,product_name.ilike.%${sku}%,product_name_en.ilike.%${sku}%`);
   }
   if (model) {
-    q = q.or(`model.ilike.%${model}%,product_name.ilike.%${model}%,product_name_en.ilike.%${model}%`);
+    q = q.or(`sku.ilike.%${model}%,model.ilike.%${model}%,product_name.ilike.%${model}%,product_name_en.ilike.%${model}%`);
   }
   if (attrs && Object.keys(attrs).length) {
     for (const [key, value] of Object.entries(attrs)) {
@@ -85,16 +88,20 @@ export async function lookupProduct({ tenantId, productLineId, sku, model, attrs
   if (error) throw new Error(`lookupProduct failed: ${error.message}`);
 
   if (!data || data.length === 0) {
-    // SKU near-misses: list any active SKU/model the agent could suggest
+    // 没匹配时给 5 条 suggestions，让 Medici 引导客户。
+    // 之前只返回 sku||model 单字段，结果在乘用车场景下退化成 ["2024款 1.5T Pro", ...]
+    // 这种纯版本名，客户根本看不出是哪款车。改为优先拼 "车型 + 版本" 全名。
     if (sku || model) {
       const { data: near } = await supabase
         .from('kb_products')
-        .select('sku, model')
+        .select('sku, model, product_name')
         .eq('tenant_id', tenantId)
         .eq('product_line_id', productLineId)
         .eq('is_active', true)
         .limit(5);
-      const suggestions = (near || []).map(p => p.sku || p.model).filter(Boolean);
+      const suggestions = (near || [])
+        .map(p => [p.product_name, p.model || p.sku].filter(Boolean).join(' ').trim())
+        .filter(Boolean);
       return { found: false, suggestions };
     }
     return { found: false };

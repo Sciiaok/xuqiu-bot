@@ -1,8 +1,14 @@
 /**
  * Knowledge Base Upload & Parse Service
  *
- * Handles file upload, AI-powered parsing, bilingual translation,
- * embedding generation, and structured data extraction.
+ * Pipeline (entry: processDocument):
+ *   1. 把入参规整成 chunks 数组（非 Excel = 1 chunk；Excel 在 route 层已切片）
+ *   2. 对每个 chunk 并发跑「KP 抽取 + 结构化抽取」两条 LLM 通道
+ *   3. 汇总所有 chunk 的 KP，按并发 8 路逐条 translate + embed + insert，跑冲突检测
+ *   4. 结构化结果按层批量写 kb_products / kb_shipping_routes
+ *   5. 任一 chunk 报告 input/output 截断 → 文档落 status='partial' + partial_reason
+ *
+ * 写表时同时填 agent_id（旧 NOT NULL）和 product_line_id（新查询路径）。
  */
 import { jsonrepair } from 'jsonrepair';
 import { openrouter, MODELS } from './llm-client.js';
@@ -14,8 +20,20 @@ const logger = createTraceLogger({ service: 'kb-upload' });
 
 // ── Constants ────────────────────────────────────────────────────────
 
-const CHUNK_SIZE = 800; // tokens approx (characters / 1.5 for Chinese)
-const CHUNK_OVERLAP = 100;
+// 单次 LLM 调用的输入字符上限。Sonnet 4.6 上下文是 1M tokens（GA），
+// 600K 字符 ~150K~200K tokens（中文密集时更大），给 system prompt + 输出 +
+// 路由波动留充分余量。Excel 走 chunked 路径，不会触发这个 cap。
+const LLM_INPUT_HARD_CAP_CHARS = 600_000;
+
+// 输出 token 预算。每行 JSON ~150-250 tokens（中英+specs）。
+// 32K → 单次调用最多产 ~150 条结构化行 / KP。chunked 模式下每片 80 行远远够；
+// 非 Excel 单次模式可能撞顶 → 通过 finish_reason='length' 检测并标 partial。
+const KP_MAX_TOKENS       = 32_000;
+const PRODUCTS_MAX_TOKENS = 32_000;
+const SHIPPING_MAX_TOKENS = 32_000;
+
+const KP_CONCURRENCY = 8;           // 单 KP translate+embed 的并发
+const PASS_CONCURRENCY = 3;         // 多 chunk 时并行抽取的并发上限
 
 const LAYER_LABELS = {
   company: 'Company Foundation',
@@ -24,61 +42,146 @@ const LAYER_LABELS = {
   sales: 'Sales Playbook',
 };
 
+// ── Input normalization & truncation ────────────────────────────────
+
+/**
+ * 把 processDocument 接收的 content 入参规整成 chunks 数组。
+ *   - string  → [{ label:'full', content }]
+ *   - array   → [{ label, content }] (label 缺省时补 chunk-N)
+ * 每个 chunk 的 content 还要再过 capInputForLlm 兜底。
+ */
+function normalizeToChunks(input) {
+  if (typeof input === 'string') {
+    return [{ label: 'full', content: input }];
+  }
+  if (Array.isArray(input) && input.length > 0) {
+    return input.map((c, i) => ({
+      label: c.label || `chunk-${i + 1}`,
+      content: c.content || '',
+    }));
+  }
+  throw new Error('processDocument: content must be a non-empty string or array of {label, content}');
+}
+
+/**
+ * 防御性 truncate。返回 { content, truncated, original_chars }。
+ *   - 触发上限说明文件过大（>600K 字符，比单文件 50MB 阈值更早触发）
+ *   - 真触发时落 warn 日志 + 让上层把 doc 标 partial
+ * 不再静默截断 ── 这是这次修复的根因。
+ */
+function capInputForLlm(content, { docId, callSite }) {
+  if (content.length <= LLM_INPUT_HARD_CAP_CHARS) {
+    return { content, truncated: false, original_chars: content.length };
+  }
+  logger.warn('kb.upload.input_truncated', {
+    docId,
+    call_site: callSite,
+    original_chars: content.length,
+    cap_chars: LLM_INPUT_HARD_CAP_CHARS,
+  });
+  return {
+    content: content.slice(0, LLM_INPUT_HARD_CAP_CHARS) + '\n\n[... content truncated by input cap ...]',
+    truncated: true,
+    original_chars: content.length,
+  };
+}
+
 // ── Main Upload Flow ─────────────────────────────────────────────────
 
 /**
- * Process an uploaded file: parse → extract knowledge → translate → embed.
+ * Process an uploaded file. See module header for the pipeline.
  *
- * 写入 kb_* 表时同时填 agent_id（NOT NULL，老 schema）和 product_line_id
- * （新 schema，新查询路径）。读路径已切到 product_line_id。
+ * @param {Object} ctx          { tenantId, agentId, productLineId }
+ * @param {string} docId        kb_documents.id（已由 API route 创建）
+ * @param {string|Array} fileContent
+ *   - string: 整篇文本，单 chunk 模式（PDF / Word / MD / TXT / 小 Excel）
+ *   - Array<{label, content}>: 预切片，chunked 模式（大 Excel 来自 extractExcelChunks）
+ * @param {string} layer        'company' | 'product' | 'logistics' | 'sales'
+ * @param {Object} options
+ *   { filename, fileType, onProgress({stage, ...}), isReparse }
+ *   stages: 'extracting' | 'embedding' | 'structured'
+ *   isReparse=true 时：抽取阶段失败 → **保留旧数据**，把 doc 还原成之前的状态 +
+ *     error_message 标注失败原因；抽取阶段成功后才删旧数据写新数据。
  *
- * @param {Object} ctx - { tenantId, agentId, productLineId }
- * @param {string} docId - kb_documents.id（already created by the API route）
- * @param {string} fileContent
- * @param {string} layer
- * @param {Object} options - { filename, fileType, onProgress }
- *   onProgress({stage, ...}) 用来推 SSE 进度事件，stage ∈
- *   'extracting' | 'embedding' | 'structured'。可省。
+ * @returns {Promise<{knowledge_points:number, conflicts:Object[], status:'ready'|'partial', partial_reason?:string}>}
  */
 export async function processDocument(ctx, docId, fileContent, layer, options = {}) {
   const { tenantId, agentId, productLineId } = ctx || {};
   if (!tenantId || !agentId || !productLineId) {
     throw new Error('processDocument: tenantId, agentId, productLineId required');
   }
-  const { filename = '', fileType = 'txt', onProgress = () => {} } = options;
+  const { filename = '', fileType = 'txt', onProgress = () => {}, isReparse = false } = options;
+
+  // reparse 时记录抽取前的 doc 状态，抽取失败时回滚到这里。
+  // 首次 upload 时这一步是 'processing'（route 已 INSERT），失败时直接走 'error' 即可。
+  let prevSnapshot = null;
+  if (isReparse) {
+    const { data } = await supabase
+      .from('kb_documents')
+      .select('status, partial_reason, knowledge_points_count')
+      .eq('id', docId)
+      .maybeSingle();
+    prevSnapshot = data || null;
+  }
+
+  // writePhaseStarted 是关键容灾标志：
+  //   - false（仅 LLM 抽取阶段失败）：旧数据 *未* 被清，reparse 时回滚状态保留旧数据
+  //   - true （已开始落库后失败）：旧数据已清 + 新数据可能半残，必须 cleanup 标 error
+  let writePhaseStarted = false;
 
   try {
     await updateDocStatus(docId, 'processing');
 
-    // Step 1: Extract knowledge points using LLM
-    onProgress({ stage: 'extracting' });
-    const extracted = await extractKnowledgePoints(fileContent, layer, fileType, tenantId);
+    const chunks = normalizeToChunks(fileContent);
+    onProgress({ stage: 'extracting', pass_done: 0, pass_total: chunks.length });
 
-    // Step 2 + Step 3 跑成并行：
-    //   - 结构化抽取（产品 / 物流层）一次 LLM 调用，独立写 kb_products / kb_shipping_routes
-    //   - 知识点逐条 translate + embed + insert，并发 8 路（每条 1-2 个 LLM 调用）
-    // 并发上限 8 来自 OpenRouter / OpenAI 的稳定性 vs 速度的平衡点。
-    const KP_CONCURRENCY = 8;
-    const points = extracted.knowledge_points || [];
-    onProgress({ stage: 'embedding', done: 0, total: points.length });
+    // ── PHASE 1: 全部 chunk 的 LLM 抽取，**全程不写库** ──────────────────
+    // 这是最慢/最易抖动的阶段（Sonnet API、OpenRouter 路由）。在这里失败
+    // 不能动旧数据 —— 留着让 Medici 继续能用，用户重试 reparse 即可。
+    let passDone = 0;
+    const passResults = await mapWithConcurrency(chunks, async (chunk) => {
+      const r = await runExtractionPass({
+        ctx, docId, layer, fileType,
+        content: chunk.content,
+        chunkLabel: chunk.label,
+      });
+      passDone++;
+      onProgress({ stage: 'extracting', pass_done: passDone, pass_total: chunks.length });
+      return r;
+    }, PASS_CONCURRENCY);
 
-    const structuredTask =
-      layer === 'product'
-        ? extractStructuredProducts(ctx, docId, fileContent, fileType)
-            .then(n => onProgress({ stage: 'structured', kind: 'product', count: n ?? 0 }))
-        : layer === 'logistics'
-        ? extractStructuredShipping(ctx, docId, fileContent, fileType)
-            .then(n => onProgress({ stage: 'structured', kind: 'logistics', count: n ?? 0 }))
-        : Promise.resolve();
+    // 聚合
+    const allKnowledgePoints = passResults.flatMap(p => p.knowledge_points || []);
+    const allStructuredRows = passResults.flatMap(p => p.structured_rows || []);
+    const inputTruncated = passResults.some(p => p.input_truncated);
+    const outputTruncated = passResults.some(p => p.output_truncated);
+    const chunkParseFailed = passResults.some(p => p.parse_failed);
 
+    // ── PHASE 2: 切换到写库阶段 ─ 从这里开始失败要走 cleanup + error ──
+    writePhaseStarted = true;
+
+    // reparse 场景：到这一步抽取已经成功，可以安全清旧数据 + 写新数据。
+    // 首次 upload 场景：cleanupPartialDoc 是 no-op（这个 doc 还没任何子行）。
+    await cleanupPartialDoc(docId);
+
+    // ── 结构化批量写入 ───────────────────────────────────────────────
+    if (layer === 'product' && allStructuredRows.length > 0) {
+      await insertStructuredRows('kb_products', ctx, docId, allStructuredRows);
+      onProgress({ stage: 'structured', kind: 'product', count: allStructuredRows.length });
+    } else if (layer === 'logistics' && allStructuredRows.length > 0) {
+      await insertStructuredRows('kb_shipping_routes', ctx, docId, allStructuredRows);
+      onProgress({ stage: 'structured', kind: 'logistics', count: allStructuredRows.length });
+    }
+
+    // ── KP 处理（embed + translate + conflict）逐条并发 ────────────────
+    onProgress({ stage: 'embedding', done: 0, total: allKnowledgePoints.length });
     let kpDone = 0;
-    const kpTask = mapWithConcurrency(points, async (point) => {
+    const kpResults = await mapWithConcurrency(allKnowledgePoints, async (point) => {
       const pointId = await processKnowledgePoint(ctx, docId, layer, point);
       const conflict = await detectConflict({ tenantId, productLineId }, docId, layer, point, pointId);
       kpDone++;
-      // emit on every 5th point or on the final one — avoid event spam for big docs
-      if (kpDone % 5 === 0 || kpDone === points.length) {
-        onProgress({ stage: 'embedding', done: kpDone, total: points.length });
+      if (kpDone % 5 === 0 || kpDone === allKnowledgePoints.length) {
+        onProgress({ stage: 'embedding', done: kpDone, total: allKnowledgePoints.length });
       }
       return { ok: true, conflict };
     }, KP_CONCURRENCY).catch(err => {
@@ -86,40 +189,88 @@ export async function processDocument(ctx, docId, fileContent, layer, options = 
       throw err;
     });
 
-    const [, kpResults] = await Promise.all([structuredTask, kpTask]);
     const storedCount = kpResults.length;
     const conflicts = kpResults.map(r => r?.conflict).filter(Boolean);
 
-    // Step 4: Update document status
-    await supabase
-      .from('kb_documents')
-      .update({
-        status: 'ready',
-        knowledge_points_count: storedCount,
-        updated_at: new Date().toISOString(),
-      })
-      .eq('id', docId);
+    // ── 决定最终 doc 状态 ───────────────────────────────────────────
+    const partialReason =
+        inputTruncated     ? 'input_truncated'
+      : outputTruncated    ? 'output_truncated'
+      : chunkParseFailed   ? 'chunk_partial_fail'
+      : null;
+    const finalStatus = partialReason ? 'partial' : 'ready';
 
-    logger.info('kb.upload.complete', { docId, agentId, layer, points: storedCount, conflicts: conflicts.length, filename });
-    return { knowledge_points: storedCount, conflicts };
+    await finalizeDocStatus(docId, finalStatus, storedCount, partialReason);
+
+    logger.info('kb.upload.complete', {
+      docId, agentId, layer, filename,
+      points: storedCount, structured: allStructuredRows.length,
+      conflicts: conflicts.length,
+      passes: chunks.length, status: finalStatus,
+      partial_reason: partialReason,
+      is_reparse: isReparse,
+    });
+    return {
+      knowledge_points: storedCount,
+      conflicts,
+      status: finalStatus,
+      partial_reason: partialReason,
+    };
   } catch (error) {
-    logger.error('kb.upload.failed', { docId, error: error.message });
-    // Wipe any partial rows we wrote before throwing — leaving them would
-    // pollute KB search results with half-extracted content.
-    await cleanupPartialDoc(docId).catch(e =>
-      logger.error('kb.upload.cleanup_failed', { docId, error: e.message })
-    );
-    await updateDocStatus(docId, 'error', error.message);
+    logger.error('kb.upload.failed', {
+      docId, error: error.message,
+      write_phase_started: writePhaseStarted,
+      is_reparse: isReparse,
+    });
+
+    if (writePhaseStarted) {
+      // 已经开始改库了 ── 不管 reparse 还是 first upload，新数据可能半残，必须清掉。
+      // reparse 场景里此时旧数据也已经被清，doc 进 error 状态，要求用户再次 reparse。
+      await cleanupPartialDoc(docId).catch(e =>
+        logger.error('kb.upload.cleanup_failed', { docId, error: e.message })
+      );
+      await updateDocStatus(docId, 'error', error.message);
+    } else if (isReparse) {
+      // 抽取阶段失败 + reparse 模式 → 旧数据完好无损，回滚到之前的状态。
+      // Medici 继续用旧数据；UI 看到 error_message 即可重试。
+      await restoreDocAfterReparseFailure(docId, prevSnapshot, error.message);
+    } else {
+      // 抽取阶段失败 + 首次 upload → 没有旧数据可保，直接 error。
+      // 子表 cleanup 是 no-op（首次 upload 此时还没任何子行）。
+      await updateDocStatus(docId, 'error', error.message);
+    }
     throw error;
   }
 }
 
 /**
- * Delete partial rows written for a doc that ended in `error`. The doc row
- * itself stays (status='error') so the user can see what happened.
- *
- * kb_assets 用 source_doc_id ON DELETE SET NULL —— 不在这里清理，留给独立的
- * 资产维护流程，免得删错没问题但留下的图。
+ * 跑一遍 KP + 结构化抽取（一个 chunk 一次 pass）。
+ * 不写库 ── 只返回数据 + 截断/失败信号，由 processDocument 聚合后落库。
+ */
+async function runExtractionPass({ ctx, docId, layer, fileType, content, chunkLabel }) {
+  const [kpRes, structRes] = await Promise.all([
+    extractKnowledgePoints({
+      ctx, docId, content, layer, fileType, chunkLabel,
+    }),
+    layer === 'product'
+      ? extractStructuredProducts({ ctx, docId, content, fileType, chunkLabel })
+      : layer === 'logistics'
+        ? extractStructuredShipping({ ctx, docId, content, fileType, chunkLabel })
+        : Promise.resolve({ rows: [], input_truncated: false, output_truncated: false, parse_failed: false }),
+  ]);
+  return {
+    knowledge_points: kpRes.knowledge_points || [],
+    structured_rows: structRes.rows || [],
+    input_truncated: kpRes.input_truncated || structRes.input_truncated,
+    output_truncated: kpRes.output_truncated || structRes.output_truncated,
+    parse_failed: kpRes.parse_failed || structRes.parse_failed,
+  };
+}
+
+/**
+ * Delete partial rows written for a doc that ended in `error`. Used both on
+ * the failure path and at the start of a reparse to give the new run a clean
+ * slate. kb_assets uses source_doc_id ON DELETE SET NULL — leave those alone.
  */
 export async function cleanupPartialDoc(docId) {
   for (const table of ['kb_knowledge_points', 'kb_products', 'kb_shipping_routes']) {
@@ -130,7 +281,8 @@ export async function cleanupPartialDoc(docId) {
 
 // ── Knowledge Point Extraction ───────────────────────────────────────
 
-async function extractKnowledgePoints(content, layer, fileType, tenantId) {
+async function extractKnowledgePoints({ ctx, docId, content, layer, fileType, chunkLabel }) {
+  const { tenantId } = ctx;
   const layerLabel = LAYER_LABELS[layer] || layer;
 
   const systemPrompt = `You are a knowledge extraction assistant for a B2B export trading company.
@@ -166,29 +318,45 @@ Output as JSON:
   "detected_type": "product_catalog | price_list | shipping_table | policy_document | faq | general"
 }`;
 
+  const callSite = `kb.upload.extract-points${chunkLabel ? `(${chunkLabel})` : ''}`;
+  const capped = capInputForLlm(content, { docId, callSite });
+
   const response = await openrouter.messages.create({
     models: [MODELS.SONNET],
-    max_tokens: 16000,
+    max_tokens: KP_MAX_TOKENS,
     messages: [
       { role: 'system', content: systemPrompt },
-      { role: 'user', content: `File type: ${fileType}\n\nDocument content:\n${truncate(content, 15000)}` },
+      { role: 'user', content: `File type: ${fileType}\n${chunkLabel ? `Chunk: ${chunkLabel}\n` : ''}\nDocument content:\n${capped.content}` },
     ],
-  }, { tenantId, callSite: 'kb.upload.extract-points' });
+  }, { tenantId, callSite });
 
   const text = response.choices[0].message.content || '{}';
   const finishReason = response.choices[0].finish_reason;
+  const outputTruncated = finishReason === 'length';
+
+  let parsed;
   try {
-    return parseJsonFromLlm(text);
+    parsed = parseJsonFromLlm(text);
   } catch (err) {
     logger.warn('kb.extract.parse_failed', {
-      text: text.slice(0, 500),
-      finish_reason: finishReason,
+      docId, call_site: callSite, finish_reason: finishReason,
+      text_head: text.slice(0, 500),
       parse_error: err.message,
     });
-    throw new Error(
-      `LLM returned unparseable JSON (finish_reason=${finishReason}): ${err.message}`
-    );
+    return {
+      knowledge_points: [],
+      input_truncated: capped.truncated,
+      output_truncated: outputTruncated,
+      parse_failed: true,
+    };
   }
+
+  return {
+    knowledge_points: parsed.knowledge_points || [],
+    input_truncated: capped.truncated,
+    output_truncated: outputTruncated,
+    parse_failed: false,
+  };
 }
 
 /**
@@ -293,8 +461,8 @@ async function processKnowledgePoint(ctx, docId, layer, point) {
 
 // ── Structured Product Extraction ────────────────────────────────────
 
-async function extractStructuredProducts(ctx, docId, content, fileType) {
-  const { tenantId, agentId, productLineId } = ctx;
+async function extractStructuredProducts({ ctx, docId, content, fileType, chunkLabel }) {
+  const { tenantId } = ctx;
   const systemPrompt = `Extract structured product data from this document. Be permissive: the
 source can be an Excel sheet with arbitrary columns, a price-list PDF, a Word
 catalog, a markdown table, or even free-form text describing models. Column /
@@ -329,38 +497,34 @@ Output STRICT JSON only — double quotes around all keys and string values, no
 single quotes, no trailing commas, no comments, no Python-style dicts. Wrap
 the whole thing in a single object: { "products": [...] }`;
 
-  // 放宽 schema 后 LLM 倾向输出更多结构化行（每个变体一行 + 任意 specs），
-  // 16k tokens 在长价目表上会被截断 → 提到 32k 兜底；jsonrepair 还会处理零星语法问题。
+  const callSite = `kb.upload.extract-products${chunkLabel ? `(${chunkLabel})` : ''}`;
+  const capped = capInputForLlm(content, { docId, callSite });
+
   const response = await openrouter.messages.create({
     models: [MODELS.SONNET],
-    max_tokens: 32000,
+    max_tokens: PRODUCTS_MAX_TOKENS,
     messages: [
       { role: 'system', content: systemPrompt },
-      { role: 'user', content: `File type: ${fileType}\n\nContent:\n${truncate(content, 15000)}` },
+      { role: 'user', content: `File type: ${fileType}\n${chunkLabel ? `Chunk: ${chunkLabel}\n` : ''}\nContent:\n${capped.content}` },
     ],
-  }, { tenantId, callSite: 'kb.upload.extract-products' });
+  }, { tenantId, callSite });
 
   const text = response.choices[0].message.content || '{}';
   const finishReason = response.choices[0].finish_reason;
+  const outputTruncated = finishReason === 'length';
+
   let parsed;
   try {
     parsed = parseJsonFromLlm(text);
   } catch (err) {
     logger.warn('kb.products.parse_failed', {
-      docId,
-      finish_reason: finishReason,
+      docId, call_site: callSite, finish_reason: finishReason,
       parse_error: err.message,
     });
-    return;
+    return { rows: [], input_truncated: capped.truncated, output_truncated: outputTruncated, parse_failed: true };
   }
 
-  if (!parsed.products?.length) return 0;
-
-  const rows = parsed.products.map(p => ({
-    tenant_id: tenantId,
-    doc_id: docId,
-    agent_id: agentId,
-    product_line_id: productLineId,
+  const rows = (parsed.products || []).map(p => ({
     sku: p.sku || null,
     product_name: p.product_name || null,
     product_name_en: p.product_name_en || null,
@@ -372,20 +536,13 @@ the whole thing in a single object: { "products": [...] }`;
     lead_time_days: p.lead_time_days || null,
     source_row: p.source_row || null,
   }));
-
-  const { error } = await supabase.from('kb_products').insert(rows);
-  if (error) {
-    logger.error('kb.products.insert_failed', { error: error.message });
-    return 0;
-  }
-  logger.info('kb.products.extracted', { count: rows.length, docId });
-  return rows.length;
+  return { rows, input_truncated: capped.truncated, output_truncated: outputTruncated, parse_failed: false };
 }
 
 // ── Structured Shipping Extraction ───────────────────────────────────
 
-async function extractStructuredShipping(ctx, docId, content, fileType) {
-  const { tenantId, agentId, productLineId } = ctx;
+async function extractStructuredShipping({ ctx, docId, content, fileType, chunkLabel }) {
+  const { tenantId } = ctx;
   const systemPrompt = `Extract structured shipping / logistics / delivery route data from this
 document. Be permissive: the source can be an Excel rate card, a freight
 forwarder quote PDF, a Word document, an Incoterms guide, or free-form text
@@ -414,36 +571,34 @@ Rules:
 Output STRICT JSON only — double quotes, no single quotes, no trailing commas,
 no comments, no Python-style dicts. Wrap as { "routes": [...] }`;
 
+  const callSite = `kb.upload.extract-shipping${chunkLabel ? `(${chunkLabel})` : ''}`;
+  const capped = capInputForLlm(content, { docId, callSite });
+
   const response = await openrouter.messages.create({
     models: [MODELS.SONNET],
-    max_tokens: 16000,
+    max_tokens: SHIPPING_MAX_TOKENS,
     messages: [
       { role: 'system', content: systemPrompt },
-      { role: 'user', content: `File type: ${fileType}\n\nContent:\n${truncate(content, 15000)}` },
+      { role: 'user', content: `File type: ${fileType}\n${chunkLabel ? `Chunk: ${chunkLabel}\n` : ''}\nContent:\n${capped.content}` },
     ],
-  }, { tenantId, callSite: 'kb.upload.extract-shipping' });
+  }, { tenantId, callSite });
 
   const text = response.choices[0].message.content || '{}';
   const finishReason = response.choices[0].finish_reason;
+  const outputTruncated = finishReason === 'length';
+
   let parsed;
   try {
     parsed = parseJsonFromLlm(text);
   } catch (err) {
     logger.warn('kb.shipping.parse_failed', {
-      docId,
-      finish_reason: finishReason,
+      docId, call_site: callSite, finish_reason: finishReason,
       parse_error: err.message,
     });
-    return;
+    return { rows: [], input_truncated: capped.truncated, output_truncated: outputTruncated, parse_failed: true };
   }
 
-  if (!parsed.routes?.length) return 0;
-
-  const rows = parsed.routes.map(r => ({
-    tenant_id: tenantId,
-    doc_id: docId,
-    agent_id: agentId,
-    product_line_id: productLineId,
+  const rows = (parsed.routes || []).map(r => ({
     origin_port: r.origin_port || null,
     destination_port: r.destination_port || null,
     destination_country: r.destination_country || null,
@@ -452,14 +607,28 @@ no comments, no Python-style dicts. Wrap as { "routes": [...] }`;
     transit_days: r.transit_days || null,
     notes: r.notes || null,
   }));
+  return { rows, input_truncated: capped.truncated, output_truncated: outputTruncated, parse_failed: false };
+}
 
-  const { error } = await supabase.from('kb_shipping_routes').insert(rows);
+// ── Structured batch insert ─────────────────────────────────────────
+
+async function insertStructuredRows(table, ctx, docId, rows) {
+  if (!rows.length) return 0;
+  const { tenantId, agentId, productLineId } = ctx;
+  const stamped = rows.map(r => ({
+    ...r,
+    tenant_id: tenantId,
+    doc_id: docId,
+    agent_id: agentId,
+    product_line_id: productLineId,
+  }));
+  const { error } = await supabase.from(table).insert(stamped);
   if (error) {
-    logger.error('kb.shipping.insert_failed', { error: error.message });
+    logger.error(`kb.${table}.insert_failed`, { docId, error: error.message, count: stamped.length });
     return 0;
   }
-  logger.info('kb.shipping.extracted', { count: rows.length, docId });
-  return rows.length;
+  logger.info(`kb.${table}.extracted`, { count: stamped.length, docId });
+  return stamped.length;
 }
 
 // ── Conflict Detection ───────────────────────────────────────────────
@@ -592,22 +761,69 @@ async function updateDocStatus(docId, status, errorMessage = null) {
     .eq('id', docId);
 }
 
-function truncate(text, maxChars) {
-  if (text.length <= maxChars) return text;
-  return text.slice(0, maxChars) + '\n\n[... content truncated ...]';
+/**
+ * reparse 抽取阶段失败时回滚：把 doc 还原成抽取前的状态，旧子表数据已经保留
+ * （我们没在抽取阶段触发 cleanup）。error_message 标"旧数据保留"让用户知道
+ * 这次 reparse 失败但数据可用，重试即可。
+ */
+async function restoreDocAfterReparseFailure(docId, prevSnapshot, errorMessage) {
+  const prevStatus = prevSnapshot?.status || 'ready';
+  const prevPartialReason = prevSnapshot?.partial_reason || null;
+  const base = {
+    status: prevStatus,
+    error_message: `重新解析失败: ${errorMessage}（旧数据已保留，可重试）`,
+    updated_at: new Date().toISOString(),
+  };
+  const withPartialReason = { ...base, partial_reason: prevPartialReason };
+  let { error } = await supabase.from('kb_documents').update(withPartialReason).eq('id', docId);
+  if (error && /partial_reason/.test(error.message || '')) {
+    const fallback = await supabase.from('kb_documents').update(base).eq('id', docId);
+    if (fallback.error) {
+      logger.error('kb.upload.restore_failed', { docId, error: fallback.error.message });
+    }
+  } else if (error) {
+    logger.error('kb.upload.restore_failed', { docId, error: error.message });
+  }
+}
+
+/**
+ * 完成态写入：knowledge_points_count + status + partial_reason 一次到位。
+ * partial_reason 是 2026-05-12 迁移加的列，迁移没跑时这里会报错 ── 回退到
+ * 不带该列的更新，保留向前兼容。
+ */
+async function finalizeDocStatus(docId, status, knowledgePointsCount, partialReason) {
+  const base = {
+    status,
+    knowledge_points_count: knowledgePointsCount,
+    error_message: null,            // 成功完成 → 清掉上一次失败留下的错误信息
+    updated_at: new Date().toISOString(),
+  };
+  const withReason = { ...base, partial_reason: partialReason };
+  let { error } = await supabase.from('kb_documents').update(withReason).eq('id', docId);
+  if (error && /partial_reason/.test(error.message || '')) {
+    // 迁移没跑：降级到不带 partial_reason 的更新，保留 partial 状态本身
+    const fallback = await supabase.from('kb_documents').update(base).eq('id', docId);
+    if (fallback.error) {
+      logger.error('kb.upload.finalize_failed', { docId, error: fallback.error.message });
+    } else {
+      logger.warn('kb.upload.partial_reason_column_missing', { docId });
+    }
+  } else if (error) {
+    logger.error('kb.upload.finalize_failed', { docId, error: error.message });
+  }
 }
 
 // Cap concurrency over an array — like Promise.all but with worker-pool throttling.
 async function mapWithConcurrency(items, fn, concurrency) {
   const results = new Array(items.length);
-  let next = 0;
-  async function worker() {
+  let idx = 0;
+  const workers = Array.from({ length: Math.min(concurrency, items.length) }, async () => {
     while (true) {
-      const i = next++;
+      const i = idx++;
       if (i >= items.length) return;
       results[i] = await fn(items[i], i);
     }
-  }
-  await Promise.all(Array.from({ length: Math.min(concurrency, items.length) }, worker));
+  });
+  await Promise.all(workers);
   return results;
 }

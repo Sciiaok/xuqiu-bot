@@ -26,6 +26,7 @@ import {
   uploadDocument,
   subscribeUploadProgress,
   deleteDocument,
+  reparseDocument,
   getDocumentDownloadUrl,
   teachExtract,
   teachCommit,
@@ -669,44 +670,86 @@ function DocList({ documents, onChanged }) {
   if (documents.length === 0) return <div className={s.emptyState}>暂无文档</div>;
   return (
     <div className={s.docList}>
-      {documents.map(doc => {
-        const canPreview = !!doc.storage_path;
-        return (
-          <div key={doc.id} className={s.docItem}>
-            <span className={s.docName}>{doc.filename}</span>
-            <span className={s.docMeta}>{fmtSize(doc.file_size)}</span>
-            <span className={s.docMeta}>{fmtTime(doc.created_at)}</span>
-            <span className={s.docLayer}>{LAYER_LABELS[doc.layer] || doc.layer}</span>
-            <DocStatusChip status={doc.status} />
-            <button
-              className={s.docDeleteBtn}
-              disabled={!canPreview}
-              title={canPreview ? '在新标签页打开原文件' : '原文件未保存到 Storage（早期脚本导入或 Storage 暂时不可用），无法预览'}
-              onClick={async () => {
-                try {
-                  const url = await getDocumentDownloadUrl(doc.id);
-                  if (url) window.open(url, '_blank');
-                } catch (err) {
-                  window.alert(`预览失败：${err.message}`);
-                }
-              }}
-            >预览</button>
-            <button
-              className={`${s.docDeleteBtn} ${s.docDeleteBtnDanger}`}
-              title="删除文档及其抽取出的所有知识点 / 产品 / 路线（不可逆）"
-              onClick={async () => {
-                if (!window.confirm(`删除「${doc.filename}」？\n\n该文档抽取出来的知识点、结构化产品行、运输路线都会一并清理，且不可恢复。`)) return;
-                try {
-                  await deleteDocument(doc.id);
-                  onChanged?.();
-                } catch (err) {
-                  window.alert(`删除失败：${err.message}`);
-                }
-              }}
-            >删除</button>
-          </div>
-        );
-      })}
+      {documents.map(doc => (
+        <DocListItem
+          key={doc.id} doc={doc}
+          fmtSize={fmtSize} fmtTime={fmtTime}
+          onChanged={onChanged}
+        />
+      ))}
+    </div>
+  );
+}
+
+function DocListItem({ doc, fmtSize, fmtTime, onChanged }) {
+  const canPreview = !!doc.storage_path;
+  const canReparse = !!doc.storage_path && doc.status !== 'processing';
+  const [busy, setBusy] = useState(false);
+
+  const doReparse = async () => {
+    const partialHint = doc.partial_reason
+      ? `\n\n当前状态：partial（${doc.partial_reason}），重新解析会清掉旧数据再跑一遍。`
+      : '\n\n重新解析会清掉这份文档抽取出的所有知识点 / 产品 / 路线，按 storage 里的原文件重新跑一遍。';
+    if (!window.confirm(`重新解析「${doc.filename}」？${partialHint}`)) return;
+    setBusy(true);
+    try {
+      await reparseDocument(doc.id);
+      // 进度由 SSE 推到 UI（refreshAll 后会看到状态变 'processing'）
+      onChanged?.();
+    } catch (err) {
+      window.alert(`重新解析失败：${err.message}`);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className={s.docItem}>
+      <span className={s.docName}>{doc.filename}</span>
+      <span className={s.docMeta}>{fmtSize(doc.file_size)}</span>
+      <span className={s.docMeta}>{fmtTime(doc.created_at)}</span>
+      <span className={s.docLayer}>{LAYER_LABELS[doc.layer] || doc.layer}</span>
+      <DocStatusChip
+        status={doc.status}
+        partialReason={doc.partial_reason}
+        errorMessage={doc.error_message}
+      />
+      <button
+        className={s.docDeleteBtn}
+        disabled={!canPreview}
+        title={canPreview ? '在新标签页打开原文件' : '原文件未保存到 Storage（早期脚本导入或 Storage 暂时不可用），无法预览'}
+        onClick={async () => {
+          try {
+            const url = await getDocumentDownloadUrl(doc.id);
+            if (url) window.open(url, '_blank');
+          } catch (err) {
+            window.alert(`预览失败：${err.message}`);
+          }
+        }}
+      >预览</button>
+      <button
+        className={s.docDeleteBtn}
+        disabled={!canReparse || busy}
+        title={
+          !doc.storage_path ? '原文件未保存到 Storage，无法重新解析'
+          : doc.status === 'processing' ? '正在解析中，无法重复触发'
+          : '清掉旧抽取，按原文件重新跑一遍解析'
+        }
+        onClick={doReparse}
+      >{busy ? '触发中…' : '重新解析'}</button>
+      <button
+        className={`${s.docDeleteBtn} ${s.docDeleteBtnDanger}`}
+        title="删除文档及其抽取出的所有知识点 / 产品 / 路线（不可逆）"
+        onClick={async () => {
+          if (!window.confirm(`删除「${doc.filename}」？\n\n该文档抽取出来的知识点、结构化产品行、运输路线都会一并清理，且不可恢复。`)) return;
+          try {
+            await deleteDocument(doc.id);
+            onChanged?.();
+          } catch (err) {
+            window.alert(`删除失败：${err.message}`);
+          }
+        }}
+      >删除</button>
     </div>
   );
 }
@@ -762,21 +805,48 @@ function QaList({ items, agentId, onChanged }) {
   );
 }
 
-// 文档处理状态 chip —— 旧版直接渲染英文 raw 字符串 'ready/processing/error'，
-// 中英混排且无颜色信号；这里对齐其它中文 UI，状态点 + 中文标签。
-function DocStatusChip({ status }) {
+// 文档处理状态 chip。
+//   ready     绿 = 全量解析完成
+//   processing 黄 = 后台解析中
+//   error     红 = 整体失败（无数据可用）
+//   partial   橙 = 解析完成但有数据丢失嫌疑（input/output 截断、chunk 解析失败）
+//
+// 还有一个第三方向：ready/partial 但 error_message 非空 ── 这是 reparse 抽取
+// 阶段失败但旧数据保留的情况。chip 主色仍按 status 走（旧数据可用），但加一个
+// ⚠ 角标 + tooltip 让用户感知"上次 reparse 失败"。
+function DocStatusChip({ status, partialReason, errorMessage }) {
+  const partialReasonLabel = {
+    input_truncated:    '输入超 600K 字符上限被截尾',
+    output_truncated:   '某次 LLM 输出超 token 上限被截尾',
+    chunk_partial_fail: '部分 chunk 解析失败',
+  };
   const label = status === 'ready' ? '已就绪'
     : status === 'processing' ? '处理中'
     : status === 'error' ? '失败'
+    : status === 'partial' ? '部分'
     : status || '—';
   const cls = status === 'ready' ? s.docStatusReady
     : status === 'processing' ? s.docStatusProcessing
     : status === 'error' ? s.docStatusError
+    : status === 'partial' ? (s.docStatusPartial || s.docStatusError)
     : s.docStatusUnknown;
+
+  // 数据可用但有最近一次失败信号 ── 在 chip 后面加一个 ⚠ 提示
+  const hasPreservedFailure = (status === 'ready' || status === 'partial') && !!errorMessage;
+
+  const tooltip = hasPreservedFailure
+    ? `${errorMessage}（旧数据当前仍可用，建议重新解析）`
+    : status === 'partial'
+      ? `数据可能不完整：${partialReasonLabel[partialReason] || partialReason || '原因未记录'}。建议点"重新解析"重跑。`
+      : status === 'error'
+        ? errorMessage || undefined
+        : undefined;
+
   return (
-    <span className={`${s.docStatus} ${cls}`}>
+    <span className={`${s.docStatus} ${cls}`} title={tooltip}>
       <span className={s.docStatusDot} />
       {label}
+      {hasPreservedFailure && <span style={{ marginLeft: 4 }}>⚠</span>}
     </span>
   );
 }
