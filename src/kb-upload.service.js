@@ -14,6 +14,7 @@ import { jsonrepair } from 'jsonrepair';
 import { openrouter, MODELS } from './llm-client.js';
 import { generateEmbedding, translateToEnglish, detectLanguage } from './kb-search.service.js';
 import supabase from '../lib/supabase.js';
+import { getSupabaseAdmin } from '../lib/supabase-admin.js';
 import { createTraceLogger } from '../lib/core-trace.js';
 
 const logger = createTraceLogger({ service: 'kb-upload' });
@@ -270,12 +271,51 @@ async function runExtractionPass({ ctx, docId, layer, fileType, content, chunkLa
 /**
  * Delete partial rows written for a doc that ended in `error`. Used both on
  * the failure path and at the start of a reparse to give the new run a clean
- * slate. kb_assets uses source_doc_id ON DELETE SET NULL — leave those alone.
+ * slate.
+ *
+ * Also clears auto-extracted kb_assets (rows + storage objects under
+ * `<agent>/extracted/`). The image-extractor has its own
+ * `clearPriorAutoAssets` that runs at the top of every extract call — we
+ * also clean from here so a failed upload (text-side fails before
+ * image-side persists, or vice versa) doesn't leave orphan asset rows
+ * pointing at this doc. Idempotent: a second cleanup on already-empty
+ * rows is a no-op.
  */
 export async function cleanupPartialDoc(docId) {
   for (const table of ['kb_knowledge_points', 'kb_products', 'kb_shipping_routes']) {
     const { error } = await supabase.from(table).delete().eq('doc_id', docId);
     if (error) throw new Error(`cleanup ${table}: ${error.message}`);
+  }
+  await cleanupExtractedAssets(docId);
+}
+
+async function cleanupExtractedAssets(docId) {
+  const { data: assets, error: selErr } = await supabase
+    .from('kb_assets')
+    .select('id, storage_path')
+    .eq('source_doc_id', docId)
+    .like('storage_path', '%/extracted/%');
+  if (selErr) {
+    console.warn(`[kb-upload] cleanupExtractedAssets select failed: ${selErr.message}`);
+    return;
+  }
+  if (!assets || assets.length === 0) return;
+
+  const paths = assets.map((a) => a.storage_path).filter(Boolean);
+  if (paths.length > 0) {
+    try {
+      const admin = getSupabaseAdmin();
+      await admin.storage.from('kb-assets').remove(paths);
+    } catch (e) {
+      console.warn(`[kb-upload] cleanupExtractedAssets storage remove failed: ${e?.message}`);
+    }
+  }
+  const { error: delErr } = await supabase
+    .from('kb_assets')
+    .delete()
+    .in('id', assets.map((a) => a.id));
+  if (delErr) {
+    console.warn(`[kb-upload] cleanupExtractedAssets rows delete failed: ${delErr.message}`);
   }
 }
 

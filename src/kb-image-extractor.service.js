@@ -38,6 +38,13 @@ const VISION_CONCURRENCY = 8;
 // a warning rather than silently truncating.
 const SANITY_IMAGE_WARN_AT = 500;
 
+// Inner-loop memory safety cap. We load each candidate's raw pixel buffer into
+// memory before the worker pool runs, so a 5000-image doc could easily eat
+// many GB of RAM. The cap is intentionally well above SANITY_IMAGE_WARN_AT
+// so a realistic catalog never hits it; if it does, that's the rare case
+// where truncation is the lesser evil compared to OOM-killing the process.
+const MAX_IMAGES_PER_DOC = 2000;
+
 // ── Public API ───────────────────────────────────────────────────────
 
 /**

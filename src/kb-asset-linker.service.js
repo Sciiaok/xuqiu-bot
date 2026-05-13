@@ -65,12 +65,37 @@ export async function linkAssetsToProducts({ tenantId, productLineId, docId, log
     chunks.push(assets.slice(i, i + MAX_ASSETS_PER_CALL));
   }
 
+  // Valid-SKU whitelist used to discard Haiku hallucinations. Built from the
+  // exact products list we showed the matcher, so anything outside this set
+  // came from the model making up a string — never write that to a customer-
+  // facing field like linked_skus.
+  const validSkus = new Set(
+    products.map((p) => p.sku).filter((s) => typeof s === 'string' && s.length > 0),
+  );
+
   let totalLinked = 0;
+  let totalDropped = 0;
   const errors = [];
   for (const chunk of chunks) {
     try {
       const mappings = await callMatcher({ tenantId, products, assets: chunk });
-      const updates = mappings.filter((m) => m.asset_id && Array.isArray(m.skus) && m.skus.length > 0);
+      const updates = [];
+      for (const m of mappings) {
+        if (!m.asset_id || !Array.isArray(m.skus) || m.skus.length === 0) continue;
+        const cleaned = m.skus
+          .map((s) => (typeof s === 'string' ? s.trim() : ''))
+          .filter((s) => s && validSkus.has(s));
+        const dropped = m.skus.length - cleaned.length;
+        if (dropped > 0) {
+          totalDropped += dropped;
+          logger?.warn?.('kb_asset_linker.hallucinated_skus_dropped', {
+            asset_id: m.asset_id,
+            dropped,
+            raw: m.skus,
+          });
+        }
+        if (cleaned.length > 0) updates.push({ asset_id: m.asset_id, skus: cleaned });
+      }
       await Promise.all(updates.map(async (m) => {
         const { error } = await supabase
           .from('kb_assets')
@@ -88,6 +113,7 @@ export async function linkAssetsToProducts({ tenantId, productLineId, docId, log
   logger?.info?.('kb_asset_linker.done', {
     doc_id: docId,
     linked: totalLinked,
+    hallucinated_skus_dropped: totalDropped,
     total_assets: assets.length,
     total_products: products.length,
     errors: errors.length,
@@ -95,6 +121,7 @@ export async function linkAssetsToProducts({ tenantId, productLineId, docId, log
 
   return {
     linked: totalLinked,
+    hallucinated_skus_dropped: totalDropped,
     total_assets: assets.length,
     total_products: products.length,
     errors,
