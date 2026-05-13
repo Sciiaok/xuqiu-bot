@@ -345,6 +345,13 @@ async function loadAgentTools({ tenantId, productLineId }, logger) {
  * references them by id via the `attachments` envelope field. Failures
  * downgrade to an empty list — Medici keeps replying without images.
  */
+// Cap on assets injected into Medici's prompt block. Each asset costs
+// ~30–60 tokens (caption + linked_skus). Newest 150 keeps a recent catalog
+// fully addressable while bounding prompt size — once a tenant accumulates
+// hundreds of assets, older ones still live in DB and find_asset tool can
+// still reach them by semantic search; they're just not in the inline list.
+const MAX_AVAILABLE_ASSETS = 150;
+
 async function loadAvailableAssets({ tenantId, productLineId }, logger) {
   if (!tenantId || !productLineId) return [];
   try {
@@ -353,7 +360,9 @@ async function loadAvailableAssets({ tenantId, productLineId }, logger) {
       .select('id, description, mime_type, asset_type, linked_skus')
       .eq('tenant_id', tenantId)
       .eq('product_line_id', productLineId)
-      .eq('is_sendable', true);
+      .eq('is_sendable', true)
+      .order('created_at', { ascending: false })
+      .limit(MAX_AVAILABLE_ASSETS);
     if (error) throw error;
     return data || [];
   } catch (e) {

@@ -36,7 +36,10 @@ export async function GET(request) {
   const recovered = [];
   for (const doc of stale) {
     try {
-      await cleanupPartialDoc(doc.id);
+      // This is a failure-recovery path (PM2 OOM / restart). Image extractor
+      // may have written rows before the process died — pass includeAssets so
+      // we don't leak orphans alongside the doc going to 'error'.
+      await cleanupPartialDoc(doc.id, { includeAssets: true });
       const { error: updErr } = await supabase
         .from('kb_documents')
         .update({

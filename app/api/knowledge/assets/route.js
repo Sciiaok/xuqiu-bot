@@ -180,10 +180,16 @@ export async function PATCH(request) {
       return NextResponse.json({ error: 'No editable fields supplied' }, { status: 400 });
     }
 
+    // Defense-in-depth: filter by tenant_id on the row fetch too. The
+    // findAgentInTenant check below would already block cross-tenant
+    // mutations under normal data, but if a row exists with mismatched
+    // tenant_id / agent_id (data drift via service-role inserts), the
+    // tenant filter forecloses that path.
     const { data: row, error: fetchErr } = await supabase
       .from('kb_assets')
       .select('agent_id')
       .eq('id', assetId)
+      .eq('tenant_id', ctx.tenantId)
       .maybeSingle();
     if (fetchErr) throw fetchErr;
     if (!row) return NextResponse.json({ error: 'Asset not found' }, { status: 404 });
@@ -195,6 +201,7 @@ export async function PATCH(request) {
       .from('kb_assets')
       .update(updates)
       .eq('id', assetId)
+      .eq('tenant_id', ctx.tenantId)
       .select()
       .single();
     if (updErr) throw updErr;
@@ -218,12 +225,16 @@ export async function DELETE(request) {
     const assetId = new URL(request.url).searchParams.get('asset_id');
     if (!assetId) return NextResponse.json({ error: 'asset_id is required' }, { status: 400 });
 
+    // Defense-in-depth: filter by tenant_id on the row fetch (in addition to
+    // the agent-tenant check below). Prevents data-drift edge cases where a
+    // row's tenant_id and agent_id might disagree.
     const { data: row, error: fetchErr } = await supabase
       .from('kb_assets')
       .select('storage_path, agent_id')
       .eq('id', assetId)
-      .single();
-    if (fetchErr && fetchErr.code !== 'PGRST116') throw fetchErr;
+      .eq('tenant_id', ctx.tenantId)
+      .maybeSingle();
+    if (fetchErr) throw fetchErr;
     if (!row) return NextResponse.json({ error: 'Asset not found' }, { status: 404 });
 
     // 验该 asset 所属 agent 归属当前 tenant —— 否则 asset_id 一旦泄露就能跨 tenant 删数据。
@@ -235,7 +246,11 @@ export async function DELETE(request) {
       await getSupabaseAdmin().storage.from(STORAGE_BUCKET).remove([row.storage_path])
         .catch((cleanupErr) => console.warn('[knowledge/assets] storage remove failed:', cleanupErr?.message));
     }
-    const { error: delErr } = await supabase.from('kb_assets').delete().eq('id', assetId);
+    const { error: delErr } = await supabase
+      .from('kb_assets')
+      .delete()
+      .eq('id', assetId)
+      .eq('tenant_id', ctx.tenantId);
     if (delErr) throw delErr;
 
     return NextResponse.json({ success: true });

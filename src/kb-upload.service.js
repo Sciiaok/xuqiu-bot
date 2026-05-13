@@ -227,7 +227,10 @@ export async function processDocument(ctx, docId, fileContent, layer, options = 
     if (writePhaseStarted) {
       // 已经开始改库了 ── 不管 reparse 还是 first upload，新数据可能半残，必须清掉。
       // reparse 场景里此时旧数据也已经被清，doc 进 error 状态，要求用户再次 reparse。
-      await cleanupPartialDoc(docId).catch(e =>
+      // includeAssets=true 是因为这里是失败回滚 —— 把 image-extractor 已经写
+      // 进来的 kb_assets 也一并清掉。注意：PHASE 2 入口的 cleanupPartialDoc
+      // 不传这个标志（line 166），避免把并行抽取的资产误删。
+      await cleanupPartialDoc(docId, { includeAssets: true }).catch(e =>
         logger.error('kb.upload.cleanup_failed', { docId, error: e.message })
       );
       await updateDocStatus(docId, 'error', error.message);
@@ -269,27 +272,37 @@ async function runExtractionPass({ ctx, docId, layer, fileType, content, chunkLa
 }
 
 /**
- * Delete partial rows written for a doc that ended in `error`. Used both on
- * the failure path and at the start of a reparse to give the new run a clean
- * slate.
+ * Delete partial text-extracted rows for a doc. Called both at PHASE 2 entry
+ * (clean slate before new write pass) and on the failure rollback path.
  *
- * Also clears auto-extracted kb_assets (rows + storage objects under
- * `<agent>/extracted/`). The image-extractor has its own
- * `clearPriorAutoAssets` that runs at the top of every extract call — we
- * also clean from here so a failed upload (text-side fails before
- * image-side persists, or vice versa) doesn't leave orphan asset rows
- * pointing at this doc. Idempotent: a second cleanup on already-empty
- * rows is a no-op.
+ * Critical: does NOT touch kb_assets. The image extractor runs in PARALLEL
+ * with text extraction; image rows can land while PHASE 1 (text LLM passes)
+ * is still in flight. Wiping kb_assets here would silently delete the
+ * extractor's just-written rows.
+ *
+ * Asset cleanup is handled by:
+ *   - `clearPriorAutoAssets` at the top of `extractAndStoreImages` (covers
+ *     reparse and re-upload-of-same-doc cases).
+ *   - `cleanupExtractedAssets` exported below, called explicitly from the
+ *     failure rollback path so a half-successful upload doesn't leave
+ *     orphan asset rows.
  */
-export async function cleanupPartialDoc(docId) {
+export async function cleanupPartialDoc(docId, options = {}) {
+  const { includeAssets = false } = options;
   for (const table of ['kb_knowledge_points', 'kb_products', 'kb_shipping_routes']) {
     const { error } = await supabase.from(table).delete().eq('doc_id', docId);
     if (error) throw new Error(`cleanup ${table}: ${error.message}`);
   }
-  await cleanupExtractedAssets(docId);
+  if (includeAssets) {
+    await cleanupExtractedAssets(docId);
+  }
 }
 
-async function cleanupExtractedAssets(docId) {
+/**
+ * Delete auto-extracted kb_assets (rows + storage objects under
+ * `<agent>/extracted/`) for one doc. Idempotent. Safe to call multiple times.
+ */
+export async function cleanupExtractedAssets(docId) {
   const { data: assets, error: selErr } = await supabase
     .from('kb_assets')
     .select('id, storage_path')

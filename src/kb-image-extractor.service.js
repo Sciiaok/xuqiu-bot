@@ -117,17 +117,21 @@ export async function extractAndStoreImages(ctx, buffer, docId, mimeType, option
     onProgress?.({ stage: 'images', total: candidates.length, done: 0 });
   }
 
+  // Probe once up-front whether the content_sha256 column exists, before
+  // spawning workers. Previously this was a per-image lazy probe with
+  // `hashColumnState.probed`, but all 8 workers would race past the probe
+  // simultaneously and each fire its own SELECT (N round-trips instead of 1).
+  // One probe at the top, shared via ctx.
+  const hashColumnExists = await probeContentShaColumn();
+
   // Worker-pool: VISION_CONCURRENCY parallel processOneImage calls. Each emits
   // a progress tick when it finishes so the UI counter ticks live.
   // `seenHashes` is shared across workers — same-bytes image (logo repeated
   // across sheets) is dropped without a wasted DB SELECT or storage write.
-  // `hashColumnExists` is probed once on the first call and reused so every
-  // image after the first either trusts the column is present, or skips the
-  // dedup query entirely. Saves N round-trips on big xlsx uploads.
   const ctxShared = {
     tenantId, agentId, productLineId, docId,
     seenHashes: new Set(),
-    hashColumnState: { probed: false, exists: true },
+    hashColumnExists,
   };
   let extracted = 0;
   let processed = 0;
@@ -156,6 +160,30 @@ export async function extractAndStoreImages(ctx, buffer, docId, mimeType, option
     total: candidates.length,
     errors,
   };
+}
+
+/**
+ * Cheap probe: does `kb_assets` have the `content_sha256` column?
+ * If the 2026-05-13 migration hasn't been applied, the column is missing
+ * and Postgres replies with 42703 — we treat that as "skip dedup features"
+ * for the rest of the run.
+ *
+ * One call up-front instead of having every worker race their own probe.
+ */
+async function probeContentShaColumn() {
+  try {
+    const { error } = await supabase
+      .from('kb_assets')
+      .select('content_sha256', { head: true, count: 'exact' })
+      .limit(1);
+    if (!error) return true;
+    if (error.code === '42703' || /content_sha256/i.test(error.message || '')) return false;
+    // unknown error → assume column exists; later INSERT will surface specifics
+    return true;
+  } catch (e) {
+    if (/content_sha256/i.test(e?.message || '')) return false;
+    return true;
+  }
 }
 
 /**
@@ -195,7 +223,7 @@ async function clearPriorAutoAssets({ tenantId, docId }) {
 // ── Per-image pipeline ──────────────────────────────────────────────
 
 async function processOneImage(ctx, img, idx) {
-  const { tenantId, agentId, productLineId, docId, seenHashes, hashColumnState } = ctx;
+  const { tenantId, agentId, productLineId, docId, seenHashes, hashColumnExists } = ctx;
 
   // 1. Encode raw pixel buffer → JPEG (consistent format for storage + vision)
   const jpegBuffer = await encodeToJpeg(img);
@@ -204,44 +232,12 @@ async function processOneImage(ctx, img, idx) {
   // 1b. In-memory dedup: if a worker already enqueued this exact byte stream
   //     in the current batch (logo repeated across xlsx sheets), drop it
   //     without any DB or storage I/O.
+  //
+  //     Note: `has` and `add` are back-to-back synchronous calls with no await
+  //     in between, so a worker can't interleave between them. JS event loop
+  //     guarantees atomicity here.
   if (seenHashes?.has(contentSha256)) return false;
   seenHashes?.add(contentSha256);
-
-  // 1c. DB dedup probe — only on the first image of the batch. We just cleared
-  //     prior auto-extracted rows for this doc, so any leftover hit means a
-  //     concurrent run; honor it and skip. Subsequent images can rely on the
-  //     in-memory Set (we just inserted the row a moment ago, but it's the
-  //     same process — Set covers it).
-  const probeState = hashColumnState || { probed: true, exists: true };
-  if (!probeState.probed) {
-    try {
-      const { data: dup, error: dupErr } = await supabase
-        .from('kb_assets')
-        .select('id')
-        .eq('tenant_id', tenantId)
-        .eq('source_doc_id', docId)
-        .eq('content_sha256', contentSha256)
-        .maybeSingle();
-      if (dupErr) {
-        if (dupErr.code === '42703' || /content_sha256/i.test(dupErr.message || '')) {
-          probeState.exists = false;
-        } else {
-          throw dupErr;
-        }
-      } else if (dup) {
-        probeState.probed = true;
-        return false;
-      }
-    } catch (e) {
-      if (/content_sha256/i.test(e?.message || '')) {
-        probeState.exists = false;
-      } else {
-        throw e;
-      }
-    }
-    probeState.probed = true;
-  }
-  const hashColumnExists = probeState.exists;
 
   // 2. Storage upload + Vision caption in parallel — neither depends on the
   //    other's result. Saves ~200-500ms per image.
@@ -291,8 +287,17 @@ async function processOneImage(ctx, img, idx) {
   if (hashColumnExists) insertRow.content_sha256 = contentSha256;
   const { error: insErr } = await supabase.from('kb_assets').insert(insertRow);
   if (insErr) {
-    // Roll back the storage upload to avoid orphans (use admin client — same
-    // role that wrote the object, so it can also delete it).
+    // 23505 = unique_violation on (tenant_id, source_doc_id, content_sha256).
+    // Means a concurrent run (reparse-vs-upload, PM2 restart respawn) already
+    // wrote this exact image. Treat as soft-dedup: DON'T rollback storage —
+    // the row that won the race is using the same path (`upsert:true` above
+    // means our blob WAS the one persisted, and removing it would orphan the
+    // legitimate row).
+    if (insErr.code === '23505') {
+      return false;
+    }
+    // Other errors: roll back the storage upload to avoid orphans (use admin
+    // client — same role that wrote the object, so it can also delete it).
     await admin.storage.from(STORAGE_BUCKET).remove([storagePath])
       .catch((cleanupErr) => console.warn('[kb-image-extractor] rollback storage remove failed:', cleanupErr?.message));
     throw new Error(`insert kb_assets: ${insErr.message}`);

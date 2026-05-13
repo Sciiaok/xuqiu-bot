@@ -11,6 +11,7 @@
  * Failures are non-fatal: assets stay with empty linked_skus and Medici falls
  * back to caption matching.
  */
+import { jsonrepair } from 'jsonrepair';
 import supabase from '../lib/supabase.js';
 import { openrouter, MODELS } from './llm-client.js';
 
@@ -173,6 +174,20 @@ Respond with ONLY valid JSON in this exact shape:
   const text = response.choices?.[0]?.message?.content?.trim() || '{}';
   const jsonMatch = text.match(/\{[\s\S]*\}/);
   if (!jsonMatch) return [];
-  const parsed = JSON.parse(jsonMatch[0]);
-  return Array.isArray(parsed.mappings) ? parsed.mappings : [];
+
+  // Haiku occasionally returns truncated/malformed JSON (trailing commas,
+  // unclosed braces). jsonrepair is the same lifeline kb-upload.service.js
+  // uses for extract-points/extract-products parses. Without it, one bad
+  // chunk silently loses up to MAX_ASSETS_PER_CALL mappings.
+  let parsed;
+  try {
+    parsed = JSON.parse(jsonMatch[0]);
+  } catch {
+    try {
+      parsed = JSON.parse(jsonrepair(jsonMatch[0]));
+    } catch {
+      return [];
+    }
+  }
+  return Array.isArray(parsed?.mappings) ? parsed.mappings : [];
 }
