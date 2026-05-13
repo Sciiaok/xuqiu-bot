@@ -66,6 +66,35 @@ them. Pre-existing dead code stays.
 
 The test: every changed line should trace directly to the user's request.
 
+### Parallel-first
+
+**Independent steps run together. Serial only when there's a real dependency.**
+
+Before starting a task, identify which steps have no data dependency on each
+other and dispatch them in a single message instead of chaining them.
+
+**Run in parallel:**
+
+- The four `.claude/index/` files at task start — one message, four `Read`
+  calls.
+- Independent greps, finds, or file reads across the codebase.
+- Cross-module exploration (frontend + backend + schema) — spawn several
+  `Explore` subagents in one message, each scoped to one area.
+- Edits to unrelated files — issue the `Edit` calls together.
+- Read-only verification probes (`curl` healthcheck, log greps, `git status`)
+  and independent Playwright flows during a system test.
+
+**Run serially:**
+
+- Real data dependencies (step B consumes step A's output).
+- Multiple edits to the same file.
+- Git write operations (commit, push, rebase).
+- Dev server startup before browser-driven tests.
+
+**Don't over-fragment.** Subagent startup and context loading have overhead.
+For trivial lookups, a direct tool call beats spinning up an agent. Match the
+granularity of parallelism to the size of the work.
+
 ## Architecture & database
 
 **Understand before you change.** This project runs on Supabase. Before adding
