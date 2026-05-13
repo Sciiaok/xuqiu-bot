@@ -2,9 +2,12 @@
 
 Words that appear repeatedly across code, schema, and UI. Many are not self-explanatory or have UI/DB naming divergence.
 
+> A concept might appear in `schema.md` but be dead in current code — when in doubt about whether a table is wired up, check [`tables-actual-usage.md`](tables-actual-usage.md) before extending it. Strikethrough entries below mean "table exists, no runtime code refs it".
+
 **Update this file when:**
 - Adding a new domain concept (table, agent role, lifecycle state)
 - Renaming a concept (note both old and new names during transition)
+- A concept goes dead (move it to a strikethrough form rather than deleting outright)
 
 ---
 
@@ -51,18 +54,15 @@ Words that appear repeatedly across code, schema, and UI. Many are not self-expl
 - **Correction** (`kb_corrections`) — Founder-submitted fix to a KB answer. Used to override/augment LLM outputs.
 - **Pending review** (`kb_pending_review`) — Editorial buffer for KB writes that conflict with existing content (e.g. new product overlaps an existing one). Founder approves/rejects.
 - **Asset** (`kb_assets`) — Media item (image, etc.) extracted from KB docs. Has caption embedding for visual search. Tagged with `scenario`, `view`, `color`, `language`.
-- **Glossary** (`kb_glossary`) — Per-tenant term dictionary used during KB search / lead extraction. (Different from this file.)
-- **Pricing rule** (`kb_pricing_rules`) — Pricing logic extracted from KB (used by quote generation).
-- **KB test session / message** — Sandbox for "what would the AI say to this question with current KB" — exposed in dev tools.
+- **Pricing rule** (`kb_pricing_rules`) — Pricing logic extracted from KB (used by quote generation). Read-only at runtime; managed offline.
+- ~~**KB glossary**~~ / ~~**KB test session / message**~~ — Tables exist (`kb_glossary`, `kb_test_sessions`, `kb_test_messages`) but no code references them. Pre-decision or shelved features. See `tables-actual-usage.md` §B.
 - **Teach** (`/api/knowledge/teach`) — Entry point for founder to add a knowledge point / answer a gap. Writes into `kb_knowledge_points` or `kb_corrections`.
 
 ## Campaign / orchestrator
 
-- **Campaign brief** — High-level ad campaign description (audience, goal, budget). Stored in `campaign_briefs`.
-- **Campaign message** — Generated creative copy/material for a campaign.
-- **Orchestrator session** — Unit of LLM-driven multi-turn generation (campaign brief, Ogilvy plan). Multiple `orchestrator_messages` per session.
-- **AIGC asset** — AI-generated image. Lives in storage bucket `aigc-assets`. Best-of-N controlled by `AIGC_BEST_OF_N`.
-- **Autopilot session / message** — Older / parallel orchestrator concept (`autopilot_sessions`, `autopilot_messages`). Verify usage before extending.
+- **Ogilvy session** — Unit of LLM-driven multi-turn ad planning. **Stored in `autopilot_sessions` + `autopilot_messages`** (table names retained from the pre-Ogilvy iteration; the code calls them Ogilvy sessions). `plan_json` holds the in-progress ad draft. Soft-delete via `deleted_at`.
+- **AIGC asset** — AI-generated image. Row in `aigc_assets`, file in storage bucket `aigc-assets`. Best-of-N controlled by `AIGC_BEST_OF_N`.
+- ~~**Campaign brief / Campaign message / Orchestrator session**~~ — Pre-Ogilvy orchestrator concepts. The tables (`campaign_briefs`, `campaign_messages`, `orchestrator_sessions`, `orchestrator_messages`) still exist in DB but no code references them. Don't extend or rely on them — see `tables-actual-usage.md` §B.
 
 ## Meta / WhatsApp
 

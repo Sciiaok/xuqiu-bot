@@ -79,7 +79,7 @@ flowchart TB
 
   subgraph DB["Supabase Postgres"]
     AUTH[(auth.users)]
-    TENANTS[(tenants · users · invitations<br/>onboarding · audit_log)]
+    TENANTS[(tenants · users · invitations<br/>onboarding_progress · notification_settings)]
     BIZ[(contacts · conversations · messages · leads<br/>product_lines · agents · kb_*)]
     META_T[(meta_connections<br/>meta_phone_numbers · meta_ad_accounts)]
     NOTIF[(notification_settings)]
@@ -179,14 +179,15 @@ export async function POST(request) {
 
 ### 数据表总览（代码实际引用）
 
-> 仅列出 application code（`app/` `lib/` `src/` `scripts/` `proxy.js`）里 `.from(...)` / `.rpc(...)` 出现过的表。新增表时请同步本表。
+> 仅列出 application code（`app/` `lib/` `src/` `scripts/` `proxy.js`）里 `.from(...)` / `.rpc(...)` 真实用到的表。**列级**的"哪几个字段在用"详见 [`.claude/index/tables-actual-usage.md`](.claude/index/tables-actual-usage.md)（含 schema 中存在但代码已不再读写的"死字段"清单）。
+>
+> DB 实有 47 张表（`.claude/index/schema.md`）；下表为**实际接线**的 ~33 张。其余 14 张为遗留孤儿表（`campaign_briefs` / `orchestrator_*` / `kb_test_*` / `kb_glossary` / `kb_product_assets` / `fix_knowledge` / `product_documents` / `product_specs` / `product_embeddings` / `product_assets` / `product_doc_operations`），保留旧数据但代码不再引用，详见 tables-actual-usage.md §B。
 
 | 域 | 表 | 用途 | 关键引用 |
 |---|---|---|---|
 | **账号 / 平台** | `tenants` | 租户主表 | [signup/route.js](app/api/auth/signup/route.js) |
 | | `users` | 业务用户（`id` 关联 `auth.users`） | [tenant-context.js](lib/tenant-context.js) |
 | | `invitations` | 邀请码（founder 颁发，token 一次性） | [signup/route.js](app/api/auth/signup/route.js) |
-| | `audit_log` | 平台关键事件审计 | [audit-log.repository.js](lib/repositories/audit-log.repository.js) |
 | | `onboarding_progress` | 新租户引导里程碑（1:1） | [onboarding.repository.js](lib/repositories/onboarding.repository.js) |
 | | `notification_settings` | 飞书 webhook（AES-256-GCM, 1:1） | [notification.repository.js](lib/repositories/notification.repository.js) |
 | **Meta 接入** | `meta_connections` | BM 级连接 + 加密 system token | [meta-connection.repository.js](lib/repositories/meta-connection.repository.js) |
@@ -200,7 +201,7 @@ export async function POST(request) {
 | | `message_queue` | 入站聚合队列（`FOR UPDATE SKIP LOCKED`） | [queue.repository.js](lib/repositories/queue.repository.js) |
 | | `lead_sync_logs` | Lead 推送外部 CRM 的状态/重试 | [sync-log.repository.js](lib/repositories/sync-log.repository.js) |
 | **产品线 / KB** | `product_lines` | 产品线（slug 主键，挂 1 个 phone_number） | [product-line.repository.js](lib/repositories/product-line.repository.js) |
-| | `agents` | 旧 Agent 桥（`tenant_id + product_line` slug） | [tenant-context.js](lib/tenant-context.js) |
+| | `agents` | 旧 Agent 桥（`tenant_id + product_line` slug）— **runtime 只读**，仅取 `id` / `tenant_id` / `product_line` / `name` / `display_label`；`system_prompt` / `output_schema` / `qualification_config` 等字段当前已停用 | [tenant-context.js](lib/tenant-context.js) |
 | | `kb_documents` | KB 原始文件 / 抽取来源 | [knowledge-base.repository.js](lib/repositories/knowledge-base.repository.js) |
 | | `kb_knowledge_points` | 切片 + 1536d 向量（pgvector / IVFFLAT）+ `confidence` | 同上 + [kb-search.service.js](src/kb-search.service.js) |
 | | `kb_products` | 结构化 SKU / specs / FOB + `effective_date` / `expiry_date` / `confidence` / `source_doc_id` | 同上 + [kb-tools.service.js](src/kb-tools.service.js) |
@@ -213,13 +214,19 @@ export async function POST(request) {
 | | `kb_knowledge_gaps` | 客户问到但 KB 缺失的话题（频次 + 问法举例 + 触发工具） | [knowledge/gaps/route.js](app/api/knowledge/gaps/route.js) |
 | **Ogilvy / 报表** | `autopilot_sessions` | Ogilvy 会话（含 `plan_json`，表名沿用旧 autopilot 前缀以保持向前兼容） | [ogilvy.repository.js](lib/repositories/ogilvy.repository.js) |
 | | `autopilot_messages` | Ogilvy 单条消息 / tool I/O（表名同上） | 同上 |
-| | `ai_reports` | 日 / 周 / 月报 | [report-generator.js](lib/services/report-generator.js) |
-| | `inquiry_dashboard_summaries` | 询盘看板缓存（每租户 1 行） | [inquiry-dashboard/summary/route.js](app/api/inquiry-dashboard/summary/route.js) |
+| | `aigc_assets` | Ogilvy 生成的广告图（storage path 指向 `aigc-assets` bucket） | [creative.service.js](src/agents/ogilvy/creative.service.js) |
+| | `ai_reports` | 日 / 周 / 月报 | [report-generator.service.js](src/report-generator.service.js) |
 | **平台运维** | `llm_usage_logs` | 每次 LLM 调用一行（tokens + 计价 + tenant + callSite + 模型）；fire-and-forget 落表 | [llm-client.js](src/llm-client.js) 写入 · [admin/llm-usage/route.js](app/api/admin/llm-usage/route.js) 聚合 |
 
-**RPC 函数**（`supabase.rpc(...)`）：`acquire_queue_messages` · `release_stale_queue_locks` · `search_kb_knowledge_en` · `search_kb_qa_snippets` · `search_product_embeddings` · `query_product_specs` · `get_spec_fields` · `ad_conversation_stats` · `dev_exec_sql`。
+**RPC 函数**（`supabase.rpc(...)` 运行时真正调用的）：`acquire_queue_messages` · `release_stale_queue_locks` · `search_kb_knowledge_en` · `search_kb_qa_snippets` · `ad_conversation_stats` · `dev_exec_sql`（仅 scripts / admin SQL 面板）。`search_product_embeddings` / `query_product_specs` / `get_spec_fields` 等老 RPC 仍存在于 migration 里，但应用代码已不再调用，可在后续清理中下线。
 
-**Storage buckets**：`kb-assets`（KB 文件）· `kb_assets`（兼容路径）· `chat-uploads`（Ogilvy 上传）· `chat-media`（聊天媒体）。
+**Storage buckets**：`kb-assets`（KB 文件）· `kb_assets`（兼容路径）· `chat-uploads`（Ogilvy 上传）· `chat-media`（聊天媒体）· `aigc-assets`（AI 生成的广告图）。
+
+**断链引用（代码引用但 DB 不存在 → 静默失败，需修复或下线）：**
+- `audit_log` — [audit-log.repository.js](lib/repositories/audit-log.repository.js)、meta/connect、meta/disconnect 三处写入；migration `2026-04-26-phase3-audit-log.sql` 未真正生效。
+- `inquiry_dashboard_summaries` — [inquiry-dashboard/summary/route.js](app/api/inquiry-dashboard/summary/route.js)；migration `2026-04-01-inquiry-dashboard-summaries.sql` 未生效。当前看板由 `/api/inquiry-dashboard` 直接查 `leads` 兜底。
+
+详见 [`.claude/index/tables-actual-usage.md`](.claude/index/tables-actual-usage.md) §C。
 
 ---
 
@@ -231,7 +238,6 @@ erDiagram
   tenants ||--o{ invitations : "issued by"
   tenants ||--|| onboarding_progress : "1:1"
   tenants ||--|| notification_settings : "1:1"
-  tenants ||--o{ audit_log : "records"
   tenants ||--o{ meta_connections : "has"
   meta_connections ||--o{ meta_phone_numbers : "syncs"
   meta_connections ||--o{ meta_ad_accounts : "syncs"
@@ -445,8 +451,8 @@ erDiagram
 erDiagram
   tenants ||--o{ autopilot_sessions : "owns"
   autopilot_sessions ||--o{ autopilot_messages : "contains"
+  tenants ||--o{ aigc_assets : "generates"
   tenants ||--o{ ai_reports : "scheduled"
-  tenants ||--|| inquiry_dashboard_summaries : "1:1 cache"
 
   autopilot_sessions {
     uuid id PK
@@ -454,6 +460,7 @@ erDiagram
     text status "active|staging|launched|failed"
     jsonb plan_json "Ad 草稿"
     text[] meta_campaign_ids
+    timestamptz deleted_at "soft delete"
   }
   autopilot_messages {
     uuid id PK
@@ -463,18 +470,19 @@ erDiagram
     jsonb tool_input
     jsonb tool_result
   }
+  aigc_assets {
+    uuid id PK
+    uuid tenant_id FK
+    text prompt
+    text model
+    text storage_path "→ aigc-assets bucket"
+  }
   ai_reports {
     uuid id PK
     uuid tenant_id FK
     text type "daily|weekly|monthly"
     daterange period
     jsonb content
-  }
-  inquiry_dashboard_summaries {
-    uuid id PK
-    uuid tenant_id FK
-    jsonb summary_data
-    timestamptz updated_at
   }
 ```
 

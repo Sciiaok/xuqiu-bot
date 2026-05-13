@@ -2,6 +2,8 @@
 
 Goal: when Claude Code picks up a task touching feature X, read this file first to know which directories/files to open. Saves 5–10 minutes of grepping per task.
 
+> **Before adding columns or trusting `schema.md`:** the DB has 14 orphan tables and 2 broken code-only references — see [`tables-actual-usage.md`](tables-actual-usage.md) for what's actually wired up vs. dead weight. Don't just pick a table out of `schema.md`; verify it appears in section A of that file.
+
 **Update this file when:**
 - Adding a new top-level feature (new section)
 - Moving a feature's primary files to a different directory
@@ -64,23 +66,23 @@ Goal: when Claude Code picks up a task touching feature X, read this file first 
 - **API**: `/api/knowledge/*` — `upload`, `upload/stream`, `documents`, `documents/download`, `documents/reparse`, `assets`, `gaps`, `corrections`, `pending-review`, `qa-snippets`, `teach`, `health`, `conflicts/resolve`
 - **Services** (in `src/`): `kb-upload.service.js`, `kb-search.service.js`, `kb-corrections.service.js`, `kb-gaps.service.js`, `kb-qa-snippets.service.js`, `kb-pending-review.service.js`, `kb-image-extractor.service.js`, `kb-tools.service.js`, `kb-file-parsers.js`
 - **Lib**: `lib/kb-upload-bus.js` (async event bus), `lib/repositories/knowledge-base.repository.js`
-- **Tables**: `kb_documents`, `kb_products`, `kb_shipping_routes`, `kb_knowledge_points`, `kb_qa_snippets`, `kb_corrections`, `kb_knowledge_gaps`, `kb_pending_review`, `kb_assets`, `kb_product_assets`, `kb_pricing_rules`, `kb_glossary`, `kb_test_sessions`, `kb_test_messages`
+- **Tables (wired)**: `kb_documents`, `kb_products`, `kb_shipping_routes`, `kb_knowledge_points`, `kb_qa_snippets`, `kb_corrections`, `kb_knowledge_gaps`, `kb_pending_review`, `kb_assets`, `kb_pricing_rules`
+- **Tables (orphan — exist in DB but no code refs)**: ~~`kb_product_assets`~~, ~~`kb_glossary`~~, ~~`kb_test_sessions`~~, ~~`kb_test_messages`~~ — see `tables-actual-usage.md` §B
 - **Notes**: Heavy module — biggest single feature. Upload is async via `kb-upload-bus`; Excel 走 chunked 抽取（每 sheet 80 行/片），其它格式单次调用 + 600K 字符 input cap。截断时 `status='partial'`，UI 提示 reparse。详见 docs/knowledge-base.md。
 
-### Campaign Studio — ad campaign generation
+### Campaign Studio — ad reporting dashboard
 - **UI**: `app/(app)/campaign-studio/page.js`
 - **API**: `/api/ads/{route,dashboard,metrics,preview,by-campaign,creative-image}`
-- **Agents**: `src/agents/` (orchestrator code for brief + creative generation)
-- **Tables**: `campaign_briefs`, `campaign_messages`, `orchestrator_sessions`, `orchestrator_messages`, `aigc_assets`
-- **Notes**: Orchestrator session is the unit of work. AIGC images go to the `aigc-assets` Supabase Storage bucket.
+- **Tables**: reads `conversations` + `agents` for attribution; pulls ad data live from Meta Graph API via `ad_conversation_stats` RPC. **No persistent campaign tables** — the legacy `campaign_briefs` / `campaign_messages` / `orchestrator_*` tables are orphaned (see `tables-actual-usage.md` §B).
+- **Notes**: Read-only ad reporting; the original "brief → generate creative" orchestrator was retired in favor of Ogilvy.
 
 ### Ogilvy — overseas ad planning skill
 - **UI**: `app/(app)/ogilvy/page.js` (+ `components/`, `hooks/`)
 - **API**: `/api/ogilvy/*`
 - **Skill**: `skills/overseas-ad-planning/SKILL.md` (v1.1, 10 chapters w/ stage-independent calls)
 - **Repositories**: `lib/repositories/ogilvy.repository.js`
-- **Tables**: shares `orchestrator_sessions`, `orchestrator_messages` with Campaign Studio
-- **Notes**: Front-end to the overseas-ad-planning skill. Reuses orchestrator tables.
+- **Tables**: `autopilot_sessions` (one row per conversation, `plan_json` holds the draft) + `autopilot_messages` (turn-by-turn transcript) + `aigc_assets` (generated images). Table names retain the `autopilot_*` prefix for back-compat; the code calls them "Ogilvy sessions".
+- **Notes**: Front-end to the overseas-ad-planning skill. Soft-delete via `autopilot_sessions.deleted_at`.
 
 ### Meta / WhatsApp Integration
 - **UI**: `app/(app)/settings/meta-connection/page.js`
@@ -95,17 +97,19 @@ Goal: when Claude Code picks up a task touching feature X, read this file first 
 ### Reports & Analytics
 - **UI**: `app/(app)/reports/page.js`, `app/(app)/reports/[id]/page.js`, `app/(app)/analytics/page.js`
 - **API**: `/api/reports`, `/api/reports/[id]`, `/api/reports/export`, `/api/ai/report`, `/api/ai/report/stream`, `/api/inquiry-dashboard`, `/api/cron/generate-reports`
-- **Services**: `src/llm-client.js` (all LLM calls + cost logging), `src/llm-pricing.js`
+- **Services**: `src/report-generator.service.js` (rollup), `src/llm-client.js` (LLM cost logging), `src/llm-pricing.js`
 - **Lib**: `lib/ai-summary.js`, `lib/sse.js` + `lib/consume-sse.js` (streaming reports)
-- **Tables**: `inquiry_dashboard_summaries` (pre-computed), `ai_reports`, `llm_usage_logs`
-- **Notes**: Inquiry dashboard summaries are pre-computed (cron-generated). AI report streams via SSE. LLM cost dashboard reads `llm_usage_logs`.
+- **Tables**: `ai_reports`, `llm_usage_logs`
+- **Broken refs**: `inquiry_dashboard_summaries` is referenced by `/api/inquiry-dashboard/summary/route.js` but the table doesn't exist in the live DB — that endpoint is dead code. The live dashboard queries `leads` directly via `/api/inquiry-dashboard`. See `tables-actual-usage.md` §C.
+- **Notes**: AI report streams via SSE. LLM cost dashboard reads `llm_usage_logs`.
 
 ### Onboarding & Auth
 - **UI**: `app/(auth)/*` (login/signup pages), `app/(app)/admin/invitations/page.js`
 - **API**: `/api/auth/signup`, `/api/auth/invitation/[token]`, `/api/onboarding/progress`
 - **Lib**: `lib/session.js`, `lib/founder-id.js`, `lib/tenant-context.js` (and `meta-tenant-context.js` for webhook ingestion)
-- **Repositories**: `lib/repositories/onboarding.repository.js`
+- **Repositories**: `lib/repositories/onboarding.repository.js`, `lib/repositories/audit-log.repository.js`
 - **Tables**: `tenants`, `users`, `invitations`, `onboarding_progress`
+- **Broken refs**: `audit_log` is referenced from `lib/repositories/audit-log.repository.js` and the meta connect/disconnect routes, but the table doesn't exist in the live DB — those writes silently fail. The migration `2026-04-26-phase3-audit-log.sql` was never applied. See `tables-actual-usage.md` §C.
 - **Notes**: Single founder per tenant. `FOUNDER_TENANT_ID` constant gates admin routes. Onboarding progress tracks milestone timestamps (meta_connected_at, first_ai_reply_at, etc.).
 
 ### Settings
@@ -147,5 +151,7 @@ Goal: when Claude Code picks up a task touching feature X, read this file first 
 ## Known duplication / "why are there two of these"
 
 - ~~`src/*.service.js` + `lib/services/`~~: collapsed — all services now at `src/*.service.js`. The old split was incidental, not principled.
-- **`orchestrator_*` tables**: shared by Campaign Studio + Ogilvy. Don't assume one feature owns them.
-- **`product_doc_operations` / `product_documents` / `product_specs`** (older) vs **`kb_*`** (newer): legacy product-doc tables predate the 4-layer KB redesign (see `2026-05-08-kb-collapse-to-four-layers.sql`). Reads should target `kb_*` going forward; legacy tables still exist for backward compat.
+- **`autopilot_*` vs `orchestrator_*` tables**: Ogilvy now uses `autopilot_sessions` / `autopilot_messages` (back-compat naming). The `orchestrator_*` tables are orphaned data from the pre-Ogilvy iteration — see `tables-actual-usage.md` §B.
+- **`product_doc_operations` / `product_documents` / `product_specs` / `product_embeddings` / `product_assets`** (older) vs **`kb_*`** (newer): legacy product-doc tables predate the 4-layer KB redesign (see `2026-05-08-kb-collapse-to-four-layers.sql`). New code must use `kb_*`. The legacy tables are no longer read or written by any runtime code — they survive only as historical data.
+- **`sessions` table**: orphan since the `conversations` + `messages` split. 0 rows; only counted by the healthcheck. Safe to drop.
+- **`agents` vs `product_lines`**: kept as a 1:1 side table by slug. Runtime never writes `agents` — `system_prompt`, `output_schema`, `wa_phone_number_id`, `ad_context_map`, `qualification_config` columns all unused today. Only `id`, `tenant_id`, `product_line`, `name`, `display_label` are read.
