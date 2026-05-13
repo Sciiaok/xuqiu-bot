@@ -59,8 +59,18 @@ function fmtDayShort(iso) {
   return `${m}/${d}`;
 }
 
+function fmtHourShort(key, { withDate = true } = {}) {
+  // 'YYYY-MM-DD HH:00' → 'MM/DD HH:00' 或 'HH:00'
+  if (!key) return '';
+  const [day, hm] = key.split(' ');
+  if (!withDate) return hm || '';
+  const [, m, d] = day.split('-');
+  return `${m}/${d} ${hm || ''}`;
+}
+
 export default function AdminLlmUsagePage() {
   const [preset, setPreset] = useState('week');
+  const [granularity, setGranularity] = useState('day'); // 'hour' | 'day'
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -69,6 +79,11 @@ export default function AdminLlmUsagePage() {
     const p = PRESETS.find(x => x.key === preset) || PRESETS[1];
     return { from: isoDaysAgo(p.days), to: new Date().toISOString(), days: p.days };
   }, [preset]);
+
+  // 切换 preset 时给个合理默认：今日→小时，其它→天
+  useEffect(() => {
+    setGranularity(range.days <= 1 ? 'hour' : 'day');
+  }, [range.days]);
 
   useEffect(() => {
     let aborted = false;
@@ -156,45 +171,13 @@ export default function AdminLlmUsagePage() {
             })()}
           </div>
 
-          {data.byDay.length > 1 && (
-            <Section title="按日成本">
-              <div className={s.chartWrap}>
-                <ResponsiveContainer width="100%" height={200}>
-                  <AreaChart data={data.byDay} margin={{ top: 8, right: 16, left: 0, bottom: 4 }}>
-                    <defs>
-                      <linearGradient id="costFill" x1="0" y1="0" x2="0" y2="1">
-                        <stop offset="0%"   stopColor="#4C7FF0" stopOpacity={0.35} />
-                        <stop offset="100%" stopColor="#4C7FF0" stopOpacity={0} />
-                      </linearGradient>
-                    </defs>
-                    <CartesianGrid stroke="var(--border)" strokeDasharray="3 3" vertical={false} />
-                    <XAxis
-                      dataKey="day"
-                      tickFormatter={fmtDayShort}
-                      tick={{ fontSize: 11, fill: 'var(--text3)' }}
-                      tickLine={false}
-                      axisLine={{ stroke: 'var(--border)' }}
-                    />
-                    <YAxis
-                      tick={{ fontSize: 11, fill: 'var(--text3)' }}
-                      tickLine={false}
-                      axisLine={false}
-                      width={48}
-                      tickFormatter={(v) => fmtUsd(v, { compact: true })}
-                    />
-                    <Tooltip content={<DayTooltip />} />
-                    <Area
-                      type="monotone"
-                      dataKey="cost_usd"
-                      stroke="#4C7FF0"
-                      strokeWidth={1.75}
-                      fill="url(#costFill)"
-                    />
-                  </AreaChart>
-                </ResponsiveContainer>
-              </div>
-            </Section>
-          )}
+          <TrendChart
+            granularity={granularity}
+            onGranularityChange={setGranularity}
+            byDay={data.byDay}
+            byHour={data.byHour}
+            rangeDays={data.range.days}
+          />
 
           <BreakdownTable
             title="按租户"
@@ -310,16 +293,87 @@ function ShareBar({ value }) {
   );
 }
 
-function DayTooltip({ active, payload }) {
+function TrendTooltip({ active, payload }) {
   if (!active || !payload || !payload[0]) return null;
   const p = payload[0].payload;
+  // 'YYYY-MM-DD HH:00' (UTC) → 本地时间展示；'YYYY-MM-DD' 保持原样
+  const label = p.hour
+    ? new Date(p.hour.replace(' ', 'T') + ':00Z').toLocaleString()
+    : p.day;
   return (
     <div className={s.tooltip}>
-      <div className={s.tooltipDay}>{p.day}</div>
+      <div className={s.tooltipDay}>{label}</div>
       <div className={s.tooltipRow}><span>成本</span><b>{fmtUsd(p.cost_usd)}</b></div>
       <div className={s.tooltipRow}><span>调用</span><b>{fmtInt(p.calls)}</b></div>
       <div className={s.tooltipRow}><span>Tokens</span><b>{fmtCompact((p.prompt_tokens || 0) + (p.completion_tokens || 0))}</b></div>
     </div>
+  );
+}
+
+function TrendChart({ granularity, onGranularityChange, byDay, byHour, rangeDays }) {
+  const isHour = granularity === 'hour';
+  const series = isHour ? (byHour || []) : (byDay || []);
+  if (series.length <= 1) return null;
+  const dataKey = isHour ? 'hour' : 'day';
+  const tickFormatter = isHour
+    ? (v) => fmtHourShort(v, { withDate: rangeDays > 1 })
+    : fmtDayShort;
+  // 小时维度下，长范围里 tick 太密，让 recharts 自动间隔
+  const xAxisInterval = isHour && series.length > 48 ? 'preserveStartEnd' : 0;
+  return (
+    <Section
+      title="成本走势"
+      action={
+        <div className={s.granGroup}>
+          <button
+            className={!isHour ? `${s.granBtn} ${s.granActive}` : s.granBtn}
+            onClick={() => onGranularityChange('day')}
+          >天</button>
+          <button
+            className={isHour ? `${s.granBtn} ${s.granActive}` : s.granBtn}
+            onClick={() => onGranularityChange('hour')}
+          >小时</button>
+        </div>
+      }
+    >
+      <div className={s.chartWrap}>
+        <ResponsiveContainer width="100%" height={200}>
+          <AreaChart data={series} margin={{ top: 8, right: 16, left: 0, bottom: 4 }}>
+            <defs>
+              <linearGradient id="costFill" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0%"   stopColor="#4C7FF0" stopOpacity={0.35} />
+                <stop offset="100%" stopColor="#4C7FF0" stopOpacity={0} />
+              </linearGradient>
+            </defs>
+            <CartesianGrid stroke="var(--border)" strokeDasharray="3 3" vertical={false} />
+            <XAxis
+              dataKey={dataKey}
+              tickFormatter={tickFormatter}
+              interval={xAxisInterval}
+              minTickGap={isHour ? 24 : 4}
+              tick={{ fontSize: 11, fill: 'var(--text3)' }}
+              tickLine={false}
+              axisLine={{ stroke: 'var(--border)' }}
+            />
+            <YAxis
+              tick={{ fontSize: 11, fill: 'var(--text3)' }}
+              tickLine={false}
+              axisLine={false}
+              width={48}
+              tickFormatter={(v) => fmtUsd(v, { compact: true })}
+            />
+            <Tooltip content={<TrendTooltip />} />
+            <Area
+              type="monotone"
+              dataKey="cost_usd"
+              stroke="#4C7FF0"
+              strokeWidth={1.75}
+              fill="url(#costFill)"
+            />
+          </AreaChart>
+        </ResponsiveContainer>
+      </div>
+    </Section>
   );
 }
 
@@ -333,10 +387,13 @@ function Stat({ label, value, sub }) {
   );
 }
 
-function Section({ title, children }) {
+function Section({ title, action, children }) {
   return (
     <section className={s.section}>
-      <h2 className={s.sectionTitle}>{title}</h2>
+      <div className={s.sectionHeader}>
+        <h2 className={s.sectionTitle}>{title}</h2>
+        {action}
+      </div>
       {children}
     </section>
   );

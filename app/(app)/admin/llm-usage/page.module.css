@@ -112,11 +112,41 @@
 .section {
   margin-bottom: 28px;
 }
+.sectionHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+}
 .sectionTitle {
   font-family: var(--font-display);
   font-size: 16px;
   font-weight: 600;
-  margin: 0 0 10px;
+  margin: 0;
+}
+
+.granGroup {
+  display: inline-flex;
+  border: 1px solid var(--border);
+  border-radius: var(--r);
+  overflow: hidden;
+}
+.granBtn {
+  background: var(--bg2);
+  color: var(--text2);
+  border: none;
+  padding: 4px 10px;
+  font-size: 11px;
+  font-family: var(--font-sans);
+  cursor: pointer;
+  border-right: 1px solid var(--border);
+}
+.granBtn:last-child { border-right: none; }
+.granBtn:hover { color: var(--text); }
+.granActive {
+  background: var(--accent, #2d6cdf);
+  color: white;
 }
 
 .chartWrap {

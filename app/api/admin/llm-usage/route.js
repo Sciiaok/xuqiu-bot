@@ -81,6 +81,7 @@ export async function GET(request) {
     const byModel = new Map();
     const byProvider = new Map();
     const byDay = new Map();
+    const byHour = new Map();
 
     const bumpBucket = (map, key, row) => {
       const cur = map.get(key) || {
@@ -121,6 +122,11 @@ export async function GET(request) {
 
       const day = (r.created_at || '').slice(0, 10);
       if (day) bumpBucket(byDay, day, r);
+      // 'YYYY-MM-DDTHH:...' → 'YYYY-MM-DD HH:00'（UTC，与 byDay 一致）
+      const hourSlice = (r.created_at || '').slice(0, 13);
+      if (hourSlice.length === 13) {
+        bumpBucket(byHour, hourSlice.replace('T', ' ') + ':00', r);
+      }
     }
 
     // latency percentiles —— 一次性 sort 全量行，O(n log n)，n<=50000 没压力
@@ -173,6 +179,19 @@ export async function GET(request) {
       };
     });
 
+    // byHour：同上，按小时补齐
+    const hourKeys = enumerateHours(fromIso, toIso);
+    const hourList = hourKeys.map(hour => {
+      const b = byHour.get(hour);
+      return {
+        hour,
+        calls: b?.calls || 0,
+        prompt_tokens: b?.prompt_tokens || 0,
+        completion_tokens: b?.completion_tokens || 0,
+        cost_usd: round6(b?.cost_usd || 0),
+      };
+    });
+
     return NextResponse.json({
       range: { from: fromIso, to: toIso, days },
       totals: {
@@ -196,6 +215,7 @@ export async function GET(request) {
       byModel: modelList,
       byProvider: providerList,
       byDay: dayList,
+      byHour: hourList,
       sampleSize: rows?.length || 0,
       capped: (rows?.length || 0) >= ROW_LIMIT,
       hasCacheCols,
@@ -216,6 +236,19 @@ function enumerateDays(fromIso, toIso) {
   const end = new Date(toIso.slice(0, 10) + 'T00:00:00Z');
   for (let t = start.getTime(); t <= end.getTime(); t += 86400000) {
     out.push(new Date(t).toISOString().slice(0, 10));
+  }
+  return out;
+}
+
+function enumerateHours(fromIso, toIso) {
+  const out = [];
+  const start = new Date(fromIso);
+  start.setUTCMinutes(0, 0, 0);
+  const end = new Date(toIso);
+  end.setUTCMinutes(0, 0, 0);
+  for (let t = start.getTime(); t <= end.getTime(); t += 3600 * 1000) {
+    const iso = new Date(t).toISOString();
+    out.push(iso.slice(0, 13).replace('T', ' ') + ':00');
   }
   return out;
 }
