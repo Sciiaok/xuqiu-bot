@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "next dev -p 3002",
+    "dev": "node scripts/dev-with-redis.mjs",
     "build": "next build",
     "start": "next start -p 3002",
     "lint": "next lint",
