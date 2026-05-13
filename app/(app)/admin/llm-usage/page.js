@@ -1,28 +1,62 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
+import {
+  AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
+} from 'recharts';
 import s from './page.module.css';
 
 const PRESETS = [
   { key: 'today',  label: '今日',     days: 1 },
   { key: 'week',   label: '近 7 天',  days: 7 },
   { key: 'month',  label: '近 30 天', days: 30 },
+  { key: 'q',      label: '近 90 天', days: 90 },
 ];
 
 function isoDaysAgo(days) {
-  const d = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
-  return d.toISOString();
+  return new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
 }
 
-function fmtUsd(n) {
-  if (n == null) return '$0';
-  if (n < 0.01) return `$${Number(n).toFixed(6)}`;
-  if (n < 1)    return `$${Number(n).toFixed(4)}`;
-  return `$${Number(n).toFixed(2)}`;
+function fmtUsd(n, { compact = false } = {}) {
+  const v = Number(n) || 0;
+  if (compact && v >= 1000) return `$${(v / 1000).toFixed(2)}K`;
+  if (v === 0) return '$0';
+  if (v < 0.01) return `$${v.toFixed(6)}`;
+  if (v < 1)    return `$${v.toFixed(4)}`;
+  return `$${v.toFixed(2)}`;
 }
 
 function fmtInt(n) {
   return Number(n || 0).toLocaleString();
+}
+
+function fmtCompact(n) {
+  const v = Number(n) || 0;
+  if (v >= 1_000_000) return `${(v / 1_000_000).toFixed(1)}M`;
+  if (v >= 1_000)     return `${(v / 1_000).toFixed(1)}K`;
+  return String(v);
+}
+
+function fmtMs(n) {
+  if (n == null) return '—';
+  if (n >= 10_000) return `${(n / 1000).toFixed(1)}s`;
+  if (n >= 1000)   return `${(n / 1000).toFixed(2)}s`;
+  return `${n} ms`;
+}
+
+function fmtPct(x) {
+  const v = (Number(x) || 0) * 100;
+  if (v === 0) return '0%';
+  if (v < 0.1) return '<0.1%';
+  if (v < 10)  return `${v.toFixed(1)}%`;
+  return `${Math.round(v)}%`;
+}
+
+function fmtDayShort(iso) {
+  // 'YYYY-MM-DD' → 'MM/DD'
+  if (!iso) return '';
+  const [, m, d] = iso.split('-');
+  return `${m}/${d}`;
 }
 
 export default function AdminLlmUsagePage() {
@@ -33,7 +67,7 @@ export default function AdminLlmUsagePage() {
 
   const range = useMemo(() => {
     const p = PRESETS.find(x => x.key === preset) || PRESETS[1];
-    return { from: isoDaysAgo(p.days), to: new Date().toISOString() };
+    return { from: isoDaysAgo(p.days), to: new Date().toISOString(), days: p.days };
   }, [preset]);
 
   useEffect(() => {
@@ -57,8 +91,8 @@ export default function AdminLlmUsagePage() {
       <div className={s.header}>
         <h1 className={s.title}>大模型成本</h1>
         <p className={s.subtitle}>
-          系统所有 LLM 调用的 token 用量与成本统计。按租户 / 调用部位 / 模型分别聚合（仅 founder 可见）。
-          {' '}成本根据 <code>src/llm-pricing.js</code> 的静态价表估算，仅供参考。
+          按租户 / 调用部位 / 模型 / Provider 聚合的 token 用量、成本与延迟（仅 founder 可见）。
+          成本读自 <code>llm_usage_logs.cost_usd</code>，由 <code>src/llm-pricing.js</code> 静态价表在写入时估算，仅供参考。
         </p>
       </div>
 
@@ -81,77 +115,116 @@ export default function AdminLlmUsagePage() {
 
       {loading || !data ? (
         <div className={s.muted}>加载中…</div>
+      ) : data.totals.calls === 0 ? (
+        <div className={s.empty}>该时间范围内没有 LLM 调用记录。</div>
       ) : (
         <>
           <div className={s.statRow}>
-            <Stat label="总成本 (USD)" value={fmtUsd(data.totals.cost_usd)} />
-            <Stat label="调用次数"     value={fmtInt(data.totals.calls)} />
-            <Stat label="Prompt tokens"     value={fmtInt(data.totals.prompt_tokens)} />
-            <Stat label="Completion tokens" value={fmtInt(data.totals.completion_tokens)} />
+            <Stat
+              label="总成本 (USD)"
+              value={fmtUsd(data.totals.cost_usd)}
+              sub={`${fmtUsd(data.totals.cost_per_day)} / 天 · ${fmtUsd(data.totals.avg_cost_per_call)} / 调用`}
+            />
+            <Stat
+              label="调用次数"
+              value={fmtInt(data.totals.calls)}
+              sub={`${data.totals.calls_per_day.toLocaleString()} / 天 · ${data.range.days} 天窗口`}
+            />
+            <Stat
+              label="Token 总量"
+              value={fmtCompact(data.totals.total_tokens)}
+              sub={`${fmtCompact(data.totals.prompt_tokens)} in · ${fmtCompact(data.totals.completion_tokens)} out`}
+            />
+            <Stat
+              label="平均延迟"
+              value={fmtMs(data.totals.avg_duration_ms)}
+              sub={data.totals.sampled_for_latency
+                ? `p50 ${fmtMs(data.totals.p50_duration_ms)} · p95 ${fmtMs(data.totals.p95_duration_ms)}`
+                : '无延迟数据'}
+            />
           </div>
 
-          <Section title="按租户" empty="范围内没有调用">
-            <table className={s.table}>
-              <thead>
-                <tr><th>租户</th><th className={s.numCol}>调用</th><th className={s.numCol}>Prompt</th><th className={s.numCol}>Completion</th><th className={s.numCol}>成本</th></tr>
-              </thead>
-              <tbody>
-                {data.byTenant.map(r => (
-                  <tr key={r.tenant_id || '__null__'}>
-                    <td>
-                      <div className={s.cellMain}>{r.tenant_name}</div>
-                      <div className={s.muted}>{r.tenant_id || '—'}</div>
-                    </td>
-                    <td className={s.numCol}>{fmtInt(r.calls)}</td>
-                    <td className={s.numCol}>{fmtInt(r.prompt_tokens)}</td>
-                    <td className={s.numCol}>{fmtInt(r.completion_tokens)}</td>
-                    <td className={`${s.numCol} ${s.cost}`}>{fmtUsd(r.cost_usd)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </Section>
+          {data.byDay.length > 1 && (
+            <Section title="按日成本">
+              <div className={s.chartWrap}>
+                <ResponsiveContainer width="100%" height={200}>
+                  <AreaChart data={data.byDay} margin={{ top: 8, right: 16, left: 0, bottom: 4 }}>
+                    <defs>
+                      <linearGradient id="costFill" x1="0" y1="0" x2="0" y2="1">
+                        <stop offset="0%"   stopColor="#4C7FF0" stopOpacity={0.35} />
+                        <stop offset="100%" stopColor="#4C7FF0" stopOpacity={0} />
+                      </linearGradient>
+                    </defs>
+                    <CartesianGrid stroke="var(--border)" strokeDasharray="3 3" vertical={false} />
+                    <XAxis
+                      dataKey="day"
+                      tickFormatter={fmtDayShort}
+                      tick={{ fontSize: 11, fill: 'var(--text3)' }}
+                      tickLine={false}
+                      axisLine={{ stroke: 'var(--border)' }}
+                    />
+                    <YAxis
+                      tick={{ fontSize: 11, fill: 'var(--text3)' }}
+                      tickLine={false}
+                      axisLine={false}
+                      width={48}
+                      tickFormatter={(v) => fmtUsd(v, { compact: true })}
+                    />
+                    <Tooltip content={<DayTooltip />} />
+                    <Area
+                      type="monotone"
+                      dataKey="cost_usd"
+                      stroke="#4C7FF0"
+                      strokeWidth={1.75}
+                      fill="url(#costFill)"
+                    />
+                  </AreaChart>
+                </ResponsiveContainer>
+              </div>
+            </Section>
+          )}
 
-          <Section title="按调用部位 (call_site)" empty="范围内没有调用">
-            <table className={s.table}>
-              <thead>
-                <tr><th>Call site</th><th className={s.numCol}>调用</th><th className={s.numCol}>Prompt</th><th className={s.numCol}>Completion</th><th className={s.numCol}>成本</th></tr>
-              </thead>
-              <tbody>
-                {data.byCallSite.map(r => (
-                  <tr key={r.call_site}>
-                    <td><code>{r.call_site}</code></td>
-                    <td className={s.numCol}>{fmtInt(r.calls)}</td>
-                    <td className={s.numCol}>{fmtInt(r.prompt_tokens)}</td>
-                    <td className={s.numCol}>{fmtInt(r.completion_tokens)}</td>
-                    <td className={`${s.numCol} ${s.cost}`}>{fmtUsd(r.cost_usd)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </Section>
+          <BreakdownTable
+            title="按租户"
+            rows={data.byTenant}
+            firstHeader="租户"
+            renderFirst={r => (
+              <>
+                <div className={s.cellMain}>{r.tenant_name}</div>
+                <div className={s.muted}>{r.tenant_id || '—'}</div>
+              </>
+            )}
+            rowKey={r => r.tenant_id || '__null__'}
+          />
 
-          <Section title="按模型" empty="范围内没有调用">
-            <table className={s.table}>
-              <thead>
-                <tr><th>Model</th><th className={s.numCol}>调用</th><th className={s.numCol}>Prompt</th><th className={s.numCol}>Completion</th><th className={s.numCol}>成本</th></tr>
-              </thead>
-              <tbody>
-                {data.byModel.map(r => (
-                  <tr key={r.model}>
-                    <td><code>{r.model}</code></td>
-                    <td className={s.numCol}>{fmtInt(r.calls)}</td>
-                    <td className={s.numCol}>{fmtInt(r.prompt_tokens)}</td>
-                    <td className={s.numCol}>{fmtInt(r.completion_tokens)}</td>
-                    <td className={`${s.numCol} ${s.cost}`}>{fmtUsd(r.cost_usd)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </Section>
+          <BreakdownTable
+            title="按调用部位 (call_site)"
+            rows={data.byCallSite}
+            firstHeader="Call site"
+            renderFirst={r => <code>{r.call_site}</code>}
+            rowKey={r => r.call_site}
+          />
+
+          <BreakdownTable
+            title="按模型"
+            rows={data.byModel}
+            firstHeader="Model"
+            renderFirst={r => <code>{r.model}</code>}
+            rowKey={r => r.model}
+          />
+
+          <BreakdownTable
+            title="按 Provider"
+            rows={data.byProvider}
+            firstHeader="Provider"
+            renderFirst={r => <code>{r.provider}</code>}
+            rowKey={r => r.provider}
+          />
 
           <div className={s.footnote}>
-            采样 {fmtInt(data.sampleSize)} 行（上限 50000）。
+            采样 {fmtInt(data.sampleSize)} 行
+            {data.capped && <span className={s.warn}>（已达 50000 行上限，结果可能不完整）</span>}
+            · 延迟样本 {fmtInt(data.totals.sampled_for_latency)} 行
           </div>
         </>
       )}
@@ -159,22 +232,90 @@ export default function AdminLlmUsagePage() {
   );
 }
 
-function Stat({ label, value }) {
+function BreakdownTable({ title, rows, firstHeader, renderFirst, rowKey }) {
+  if (!rows || rows.length === 0) {
+    return (
+      <Section title={title}>
+        <div className={s.emptyInline}>无数据</div>
+      </Section>
+    );
+  }
   return (
-    <div className={s.stat}>
-      <div className={s.statLabel}>{label}</div>
-      <div className={s.statValue}>{value}</div>
+    <Section title={title}>
+      <div className={s.tableWrap}>
+        <table className={s.table}>
+          <thead>
+            <tr>
+              <th>{firstHeader}</th>
+              <th className={s.numCol}>调用</th>
+              <th className={s.numCol}>Prompt</th>
+              <th className={s.numCol}>Completion</th>
+              <th className={s.numCol}>平均延迟</th>
+              <th className={s.numCol}>成本</th>
+              <th className={s.numCol}>占比</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map(r => (
+              <tr key={rowKey(r)}>
+                <td>{renderFirst(r)}</td>
+                <td className={s.numCol}>{fmtInt(r.calls)}</td>
+                <td className={s.numCol}>{fmtInt(r.prompt_tokens)}</td>
+                <td className={s.numCol}>{fmtInt(r.completion_tokens)}</td>
+                <td className={s.numCol}>{fmtMs(r.avg_duration_ms)}</td>
+                <td className={`${s.numCol} ${s.cost}`}>{fmtUsd(r.cost_usd)}</td>
+                <td className={s.numCol}>
+                  <ShareBar value={r.share} />
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </Section>
+  );
+}
+
+function ShareBar({ value }) {
+  const pct = Math.min(100, Math.max(0, (Number(value) || 0) * 100));
+  return (
+    <div className={s.shareCell}>
+      <div className={s.shareBar}>
+        <div className={s.shareBarFill} style={{ width: `${pct}%` }} />
+      </div>
+      <span className={s.shareText}>{fmtPct(value)}</span>
     </div>
   );
 }
 
-function Section({ title, children, empty }) {
+function DayTooltip({ active, payload }) {
+  if (!active || !payload || !payload[0]) return null;
+  const p = payload[0].payload;
+  return (
+    <div className={s.tooltip}>
+      <div className={s.tooltipDay}>{p.day}</div>
+      <div className={s.tooltipRow}><span>成本</span><b>{fmtUsd(p.cost_usd)}</b></div>
+      <div className={s.tooltipRow}><span>调用</span><b>{fmtInt(p.calls)}</b></div>
+      <div className={s.tooltipRow}><span>Tokens</span><b>{fmtCompact((p.prompt_tokens || 0) + (p.completion_tokens || 0))}</b></div>
+    </div>
+  );
+}
+
+function Stat({ label, value, sub }) {
+  return (
+    <div className={s.stat}>
+      <div className={s.statLabel}>{label}</div>
+      <div className={s.statValue}>{value}</div>
+      {sub && <div className={s.statSub}>{sub}</div>}
+    </div>
+  );
+}
+
+function Section({ title, children }) {
   return (
     <section className={s.section}>
       <h2 className={s.sectionTitle}>{title}</h2>
-      <div className={s.tableWrap}>
-        {children}
-      </div>
+      {children}
     </section>
   );
 }
