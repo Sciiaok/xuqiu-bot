@@ -120,7 +120,7 @@ src/agents/medici/
 └── types.md                运行时契约（TS 类型 + invariants + "我想改 X 去哪个文件" 对照表）
 
 skills/
-└── ai-reception-deal.skill  ★ skill bundle (zip)：通用 AI 接待谈单方法论
+└── ai-reception-deal/       ★ skill bundle（目录形态）：通用 AI 接待谈单方法论
                                  内含 SKILL.md + references/{stages-definition, kb-usage-rules,
                                  tool-priority-rules, handover-rules, response-style,
                                  state-output-schema, test-scenarios, acceptance-cases}.md
@@ -129,7 +129,7 @@ skills/
 **设计原则**：Agent 运行时一整套逻辑放一个文件（index.js），一眼能扫完整流程——
 模仿 [Ogilvy](../ogilvy/ogilvy-design.md) 的做法。拆成 sidecar 只在以下情况：
 
-- **方法论 prose**（`skills/ai-reception-deal.skill`）—— PM 维护的业务规则包，不进代码 review；可热替换
+- **方法论 prose**（`skills/ai-reception-deal/`）—— PM 维护的业务规则包，不进代码 review；可热替换
 - **宿主收口 prose**（`skill-host-patch.md`）—— RD 维护，把 skill 校准到 LeadEngine 的 envelope / 工具 / 路由
 - **纯数据常量**（`output-schema.js`）—— 塞进 index.js 会压垮阅读体验
 - **配置装配层**（`config.js`）—— DB 行 → agentConfig 的纯转换 + 缓存，被 queue-processor 和 /product-lines 后台 UI 共同消费
@@ -138,7 +138,7 @@ skills/
 ### 4.1 系统 prompt 三段拼装
 
 ```
-SYSTEM_STATIC = SKILL.systemPrompt      ← skills/ai-reception-deal.skill bundle
+SYSTEM_STATIC = SKILL.systemPrompt      ← skills/ai-reception-deal/ bundle
               + '\n---\n'
               + HOST_PATCH               ← skill-host-patch.md
    ↑ cache_control: ephemeral，所有 product_line 共享同一份缓存
@@ -265,7 +265,7 @@ prompt cache 是 Anthropic 原生机制。`callClaude` 用 `provider: { order: [
 
 ## 5. skill bundle 维护
 
-`skills/ai-reception-deal.skill` 是 zip 格式，结构与 Ogilvy 一致：
+`skills/ai-reception-deal/` 是目录形态，结构与 Ogilvy 一致：
 
 ```
 ai-reception-deal/
@@ -281,7 +281,7 @@ ai-reception-deal/
     └── acceptance-cases.md
 ```
 
-PM 改 skill 内容 → 重新打 zip 替换文件 → 重启 Next.js 服务即生效（[skills-runtime/loader.js](../skills-runtime/loader.js) 按 mtime 缓存）。
+PM 直接编辑目录下的 markdown → 重启 Next.js 服务即生效（[skills-runtime/loader.js](../skills-runtime/loader.js) 在进程内模块级缓存）。
 
 PM 与 RD 的接口契约见 aaa 包随附的 `CONTRACT.md`：
 - skill 负责方法论（阶段定义 / KB 使用规则 / 转人工原则 / 测试场景）
@@ -339,7 +339,7 @@ Medici 在客户主动要图时回传知识库里的图片，例如"能看下实
 
 | 场景 | 改哪里 |
 |---|---|
-| 通用接待方法论（阶段定义 / 转人工规则 / KB 使用规则） | `skills/ai-reception-deal.skill` 内的 SKILL.md / references/*.md（PM owned） |
+| 通用接待方法论（阶段定义 / 转人工规则 / KB 使用规则） | `skills/ai-reception-deal/` 内的 SKILL.md / references/*.md（PM owned） |
 | 宿主收口（envelope 字段、阶段映射、工具白名单） | `skill-host-patch.md` |
 | 提示词文案（某产品线的目录 / 业务价值口径 / 字段说明） | `/product-lines/[id]` 后台 UI |
 | 通用 lead schema 加字段 | `output-schema.js::GENERIC_LEAD_OUTPUT_SCHEMA` |
@@ -387,7 +387,7 @@ dev-tools 里的 **Medici 调试台** (`/medici-simulator`) 直接调 `runMedici
 ## 10. 一次迭代需要哪些人
 
 - **改产品话术**（某产品线）→ 运营在 `/product-lines/[id]` UI 改，60s 内生效，不需要 RD
-- **改方法论**（阶段定义 / 转人工规则）→ PM 改 `skills/ai-reception-deal.skill` 内的 SKILL.md / references，重新打 zip → 重启服务
+- **改方法论**（阶段定义 / 转人工规则）→ PM 直接编辑 `skills/ai-reception-deal/` 下的 SKILL.md / references → 重启服务
 - **改宿主收口**（envelope / 工具白名单 / 阶段映射）→ RD 改 `skill-host-patch.md` → 重启服务
 - **加字段 / 改分类逻辑** → RD 改 `lead_fields` schema 或 `index.js` 的 Prompt assembly 段
 - **加工具** → RD 写新方法到 `kb-tools.js`，`index.js` 的 `dispatchTool` 自动带上

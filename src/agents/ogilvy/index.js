@@ -10,10 +10,10 @@
  * as SSE. New tools register here; the loop structure stays stable.
  *
  * 2026-04 魔改：agent prompt 来源切换为 overseas-ad-planning skill
- * (`skills/overseas-ad-planning.skill`)，五阶段 SOP 由 skill 主导。
+ * (`skills/overseas-ad-planning/`)，五阶段 SOP 由 skill 主导。
  * Click-to-WhatsApp 收口约束写在 `skill-host-patch.md` 里追加到
- * skill prompt 之后。skill 可热替换，宿主代码改动只在 SYSTEM_STATIC、
- * TOOLS 数组、dispatcher 三处。
+ * skill prompt 之后。skill 内容可直接编辑文件热替换，宿主代码改动只在
+ * SYSTEM_STATIC、TOOLS 数组、dispatcher 三处。
  */
 import fs from 'node:fs';
 import path from 'node:path';
@@ -37,9 +37,9 @@ const MAX_ITERATIONS = 20;
 
 // ── Skill bundle + host patch (loaded once, cached at module scope) ─────
 //
-// Top-level await loads the .skill bundle synchronously at first import. The
-// loader memoizes by file path + mtime, so subsequent imports are free.
-// Restart the Next.js server to pick up a swapped skill bundle.
+// Top-level await loads the skill bundle synchronously at first import. The
+// loader memoizes by directory path, so subsequent imports are free.
+// Restart the Next.js server to pick up edits to the skill bundle.
 const SKILL = await loadSkill('overseas-ad-planning');
 // Resolve sibling skill-host-patch.md via import.meta.url so the path holds
 // regardless of process cwd (dev / standalone build / serverless).
@@ -251,7 +251,7 @@ const TOOLS = [
 // ── System prompt ───────────────────────────────────────────────────────
 //
 // Composed of four parts:
-//   1. SKILL  — overseas-ad-planning skill body (loaded from .skill bundle).
+//   1. SKILL  — overseas-ad-planning skill body (loaded from skills/<name>/).
 //      Defines the 5-stage SOP (needs intake → market analysis → strategy →
 //      creative → Meta launch docs).
 //   2. HOST_PATCH — CTW collar prose. Tells the model: no filesystem, tool

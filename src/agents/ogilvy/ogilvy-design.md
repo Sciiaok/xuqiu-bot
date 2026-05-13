@@ -312,7 +312,7 @@ POST /{ad_id}        { status: "ACTIVE" }
 
 ### 5.5 Skill 驱动架构（2026-04 末魔改）
 
-Agent 的 system prompt 不再由 ogilvy 自己写，而是从 `skills/overseas-ad-planning.skill` 加载。skill 是 Anthropic 标准 .skill 包格式（zip），定义了海外广告投放的五阶段 SOP（需求对接 → 市场分析 → 17 章策划案 → 素材生成 → Meta 双文档输出）。CTW 投放约束作为"宿主补丁"追加在 skill 之后，最终蒸馏到 `draft_ad_plan` 提交。
+Agent 的 system prompt 不再由 ogilvy 自己写，而是从 `skills/overseas-ad-planning/` 加载。skill 是 Anthropic 标准 skill bundle 格式（目录形态），定义了海外广告投放的五阶段 SOP（需求对接 → 市场分析 → 10 章策划案 → 素材生成 → Meta 双文档输出）。CTW 投放约束作为"宿主补丁"追加在 skill 之后，最终蒸馏到 `draft_ad_plan` 提交。
 
 **核心原则**：skill 是可热替换资产，宿主代码改动控制在 SYSTEM_STATIC、TOOLS 数组、dispatcher 三处，其余不动。
 
@@ -320,8 +320,8 @@ Agent 的 system prompt 不再由 ogilvy 自己写，而是从 `skills/overseas-
 
 | 文件 | 作用 |
 |---|---|
-| `skills/overseas-ad-planning.skill` | zip 格式 skill 包，含 `SKILL.md` + `references/*.md`。已 patch 改造：所有"present_files / 落盘"指令删除，改为对话内输出；阶段四生图改为调本系统的 `generate_ad_creative` 而非 OpenRouter |
-| `src/agents/skills-runtime/loader.js` | 通用 skill 加载器：解 zip / 读扩展目录、解析 frontmatter、构建 references 查找表。模块级缓存（按 path+mtime） |
+| `skills/overseas-ad-planning/` | 目录形态 skill 包，含 `SKILL.md` + `references/*.md`。已 patch 改造：所有"present_files / 落盘"指令删除，改为对话内输出；阶段四生图改为调本系统的 `generate_ad_creative` 而非 OpenRouter |
+| `src/agents/skills-runtime/loader.js` | 通用 skill 加载器：读 `skills/<name>/`、解析 frontmatter、构建 references 查找表。模块级缓存（按 dirPath） |
 | `src/agents/skills-runtime/index.js` | 极薄 export，`loadSkill(name)` 唯一对外接口 |
 | `src/agents/ogilvy/skill-host-patch.md` | CTW 收口指令：运行环境约束（无文件系统）、工具白名单、CTW 蒸馏规则、阶段一补充 WA 字段。属于集成层，与 skill 解耦 |
 
@@ -340,15 +340,12 @@ Agent 的 system prompt 不再由 ogilvy 自己写，而是从 `skills/overseas-
   └── 不进 prompt，按需通过 read_skill_reference 工具拉取
 ```
 
-**对比早期"自研 prompt + 全塞 references"方案**：常驻段从 ~30K 降到 ~10K，未用到的 reference 完全不付费；prompt 内容通过替换 .skill 文件即可热升级。
+**对比早期"自研 prompt + 全塞 references"方案**：常驻段从 ~30K 降到 ~10K，未用到的 reference 完全不付费；prompt 内容通过直接编辑 `skills/<name>/` 下的 markdown 即可热升级。
 
 #### Skill 升级流程
 
-1. 改完 SKILL.md / references 后重新打 zip：`cd <extracted-dir>/.. && zip -rq overseas-ad-planning.skill overseas-ad-planning`
-2. 替换 `skills/overseas-ad-planning.skill` 文件
-3. 重启 next.js 服务（loader 会自动检测 mtime 变化重新加载）
-
-也支持扩展目录形式：`skills/overseas-ad-planning/`（扩展后的目录）。两种格式同时存在时优先 zip。
+1. 直接编辑 `skills/overseas-ad-planning/` 目录下的 SKILL.md / references
+2. 重启 next.js 服务（loader 在进程内模块级缓存，重启后重新读盘）
 
 #### CTW 收口的 sanity check
 

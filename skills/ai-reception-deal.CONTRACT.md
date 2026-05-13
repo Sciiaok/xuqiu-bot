@@ -2,9 +2,9 @@
 
 > 本文件定义 LeadEngine 询盘接待 Agent（"宿主"，工程名 Medici）对 `ai-reception-deal` skill bundle 的接口约束。**skill 作者迭代时必须遵守，否则宿主端集成会断裂。**
 >
-> 本契约的存在前提是：skill 包是可热替换资产（zip 形式落到 `skills/<name>.skill`），宿主代码与 skill 内容物理隔离。只要契约不破，skill 作者可以自由迭代内容；契约破了，宿主端要同步改代码或拒绝加载。
+> 本契约的存在前提是：skill 包是可热替换资产（解包后的目录落到 `skills/<name>/`），宿主代码与 skill 内容物理隔离。只要契约不破，skill 作者可以自由迭代内容；契约破了，宿主端要同步改代码或拒绝加载。
 >
-> 文档版本：v1.0（2026-05-06，初版）
+> 文档版本：v1.1（2026-05-14，bundle 形态由 zip 改为目录）
 
 ---
 
@@ -12,21 +12,20 @@
 
 ### 1.1 命名与位置
 
-skill 包必须命名为 `ai-reception-deal.skill`，是一个标准 ZIP 文件，**zip 内有且仅有一个顶级目录**：`ai-reception-deal/`。
+skill 包必须以目录形态落地为 `skills/ai-reception-deal/`，**目录名严格等于 skill 名**。
 
 ```
-ai-reception-deal.skill (zip)
-└── ai-reception-deal/
-    ├── SKILL.md               # 必须，主文档
-    └── references/            # 可选，按需添加
-        ├── stages-definition.md
-        ├── kb-usage-rules.md
-        ├── tool-priority-rules.md
-        ├── handover-rules.md
-        ├── response-style.md
-        ├── state-output-schema.md
-        ├── test-scenarios.md
-        └── acceptance-cases.md
+skills/ai-reception-deal/
+├── SKILL.md               # 必须，主文档
+└── references/            # 可选，按需添加
+    ├── stages-definition.md
+    ├── kb-usage-rules.md
+    ├── tool-priority-rules.md
+    ├── handover-rules.md
+    ├── response-style.md
+    ├── state-output-schema.md
+    ├── test-scenarios.md
+    └── acceptance-cases.md
 ```
 
 ### 1.2 SKILL.md 必须存在
@@ -59,7 +58,7 @@ ai-reception-deal.skill (zip)
 
 ```yaml
 ---
-name: ai-reception-deal              # 必须等于文件名（不含 .skill 后缀）
+name: ai-reception-deal              # 必须等于目录名 skills/ai-reception-deal/
 description: >
   一句话或一段话，描述这个 skill 做什么、何时被触发。
   支持 YAML 块标量 `>` 折叠多行（loader 会拼成一行）。
@@ -369,12 +368,12 @@ skill 主文档与 references **禁止**包含以下"看起来像方法论但实
 
 ### 8.1 我方迭代发布流程
 
-1. skill 作者发布新版 zip
+1. skill 作者交付新版 bundle（目录或 zip 均可，最终落地形态是目录）
 2. 我方（宿主集成方）拿到新版后：
    - 在本地用宿主的 loader smoke test 加载校验
    - 在 `/medici-simulator`（dev-tools 里的零副作用调试台）跑几个典型场景
-   - 替换 `skills/ai-reception-deal.skill` 文件
-   - 重启 next.js 服务（loader 自动检测 mtime）
+   - 覆盖 `skills/ai-reception-deal/` 目录内容
+   - 重启 next.js 服务（loader 模块级缓存只在进程内存活）
 3. 跑一次端到端会话验证（webhook → queue-processor → runMedici → 真实 WhatsApp 回复）
 
 ### 8.2 skill 作者本地校验（建议）
@@ -382,13 +381,13 @@ skill 主文档与 references **禁止**包含以下"看起来像方法论但实
 skill 作者可在本地用以下方式快速验证 bundle 结构合法：
 
 ```bash
-# 解压验证目录结构
-unzip -l ai-reception-deal.skill
+# 检查目录结构
+ls skills/ai-reception-deal/
+ls skills/ai-reception-deal/references/
 
 # 应看到：
-#   ai-reception-deal/
-#   ai-reception-deal/SKILL.md
-#   ai-reception-deal/references/...
+#   SKILL.md
+#   references/  (内含 *.md)
 ```
 
 frontmatter 必须能被简化 YAML 解析器读懂（用 Python 的 `yaml.safe_load` 解析顶部 `---` 块通过即可）。
@@ -426,7 +425,7 @@ frontmatter 必须能被简化 YAML 解析器读懂（用 Python 的 `yaml.safe_
 
 - skill 内容问题、迭代建议：联系 skill 作者
 - 宿主集成问题、契约更新、扩展提案：联系 LeadEngine 集成方（即本仓库维护者）
-- 紧急 bug（skill 加载失败、模型行为偏离严重）：双方协商，必要时降级到上一版 skill bundle 回滚（保留旧版 zip 作为应急）
+- 紧急 bug（skill 加载失败、模型行为偏离严重）：双方协商，必要时通过 git 回滚 `skills/ai-reception-deal/` 目录到上一版
 
 ---
 

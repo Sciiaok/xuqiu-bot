@@ -8,10 +8,11 @@
  * banking-and-diplomacy in one.
  *
  * 2026-05 重构：agent prompt 来源切换为 ai-reception-deal skill
- * (`skills/ai-reception-deal.skill`)，方法论由 skill 主导。LeadEngine 宿主收口
+ * (`skills/ai-reception-deal/`)，方法论由 skill 主导。LeadEngine 宿主收口
  * （submit_response envelope、阶段→inquiry_quality/route 映射、转人工与
- * 风格规则）写在 skill-host-patch.md 里追加到 skill 之后。skill 可热替换，
- * 宿主代码改动只在 dynamic context 拼装、tools 列表、dispatcher 三处。
+ * 风格规则）写在 skill-host-patch.md 里追加到 skill 之后。skill 内容可直接
+ * 编辑文件热替换，宿主代码改动只在 dynamic context 拼装、tools 列表、
+ * dispatcher 三处。
  *
  * Public API: `runMedici({ history, input, context, agentConfig, trace })`.
  * Contract and pipeline diagram live in medici-design.md.
@@ -54,9 +55,9 @@ const STANDARD_DB_FIELDS = new Set([
 
 // ─── Skill bundle + host patch (loaded once, cached at module scope) ─
 //
-// Top-level await loads the .skill bundle synchronously at first import. The
-// loader memoizes by file path + mtime, so subsequent imports are free.
-// Restart the Next.js server to pick up a swapped skill bundle.
+// Top-level await loads the skill bundle synchronously at first import. The
+// loader memoizes by directory path, so subsequent imports are free.
+// Restart the Next.js server to pick up edits to the skill bundle.
 const SKILL = await loadSkill('ai-reception-deal');
 const HOST_PATCH = fs.readFileSync(
   path.join(path.dirname(fileURLToPath(import.meta.url)), 'skill-host-patch.md'),

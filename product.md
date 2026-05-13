@@ -219,7 +219,7 @@ AI ：[一键 stage & launch 到 Meta，返回 campaign_id]
 - 上传 PDF / 网址作为素材参考
 - AI 自动调 Meta Graph API 检索 ad account / page / WhatsApp 号
 - 全程 SSE 流式回复，每步工具调用过程可见
-- skill 包驱动（`overseas-ad-planning.skill`），输出契约固定为 10 章 + CTW 收口，可单独跳到任一阶段重跑而不必从头来过
+- skill 包驱动（`skills/overseas-ad-planning/`），输出契约固定为 10 章 + CTW 收口，可单独跳到任一阶段重跑而不必从头来过
 
 #### b) Medici · AI 外贸员（自动后台运行，无需 UI 操作）
 

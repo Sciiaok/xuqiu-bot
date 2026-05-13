@@ -108,7 +108,7 @@ type RunMediciResult = {
 
 | You want to...                          | Edit file          |
 | --------------------------------------- | ------------------ |
-| Tweak the methodology / SOP             | `skills/ai-reception-deal.skill` (PM-owned skill bundle) |
+| Tweak the methodology / SOP             | `skills/ai-reception-deal/` (PM-owned skill bundle) |
 | Tweak the host collar (envelope, tools, routing rules) | `skill-host-patch.md` |
 | Tweak the per-product-line content      | product_lines DB (via /product-lines UI) |
 | Add a new per-turn context field        | `index.js` (Prompt assembly section, `buildDynamicContext`) |

@@ -2,14 +2,9 @@
 
 > 本文件定义 LeadEngine 自动获客 Agent（"宿主"）对 `overseas-ad-planning` skill bundle 的接口约束。**skill 作者迭代时必须遵守，否则宿主端集成会断裂。**
 >
-> 本契约的存在前提是：skill 包是可热替换资产（zip 形式落到 `skills/<name>.skill`），宿主代码与 skill 内容物理隔离。只要契约不破，skill 作者可以自由迭代内容；契约破了，宿主端要同步改代码或拒绝加载。
+> 本契约的存在前提是：skill 包是可热替换资产（解包后的目录落到 `skills/<name>/`），宿主代码与 skill 内容物理隔离。只要契约不破，skill 作者可以自由迭代内容；契约破了，宿主端要同步改代码或拒绝加载。
 >
-> 文档版本：v1.1（2026-05-08，根据 skill 端业务反馈调整）
->
-> **v1.0 → v1.1 变更摘要**(详见第八部分 8.4 节):
-> 1. 阶段三章节数从 17 章调整为 10 章（章节标题与编号同步重定义)
-> 2. 五阶段从"顺序执行"调整为"按依赖独立调用"(配合输入契约校验)
-> 3. 第 4.2 节 sanity check 增加澄清:与独立调用并行不冲突
+> 文档版本：v1.2（2026-05-14，bundle 形态由 zip 改为目录）
 
 ---
 
@@ -17,17 +12,16 @@
 
 ### 1.1 命名与位置
 
-skill 包必须命名为 `overseas-ad-planning.skill`，是一个标准 ZIP 文件，**zip 内有且仅有一个顶级目录**：`overseas-ad-planning/`。
+skill 包必须以目录形态落地为 `skills/overseas-ad-planning/`，**目录名严格等于 skill 名**。
 
 ```
-overseas-ad-planning.skill (zip)
-└── overseas-ad-planning/
-    ├── SKILL.md               # 必须，主文档
-    └── references/            # 可选，按需添加
-        ├── data-sources.md
-        ├── strategy-template.md
-        ├── meta-creative-specs.md
-        └── meta-api-template.md
+skills/overseas-ad-planning/
+├── SKILL.md               # 必须，主文档
+└── references/            # 可选，按需添加
+    ├── data-sources.md
+    ├── strategy-template.md
+    ├── meta-creative-specs.md
+    └── meta-api-template.md
 ```
 
 ### 1.2 SKILL.md 必须存在
@@ -59,7 +53,7 @@ overseas-ad-planning.skill (zip)
 
 ```yaml
 ---
-name: overseas-ad-planning           # 必须等于文件名（不含 .skill 后缀）
+name: overseas-ad-planning           # 必须等于目录名 skills/overseas-ad-planning/
 description: >
   一句话或一段话，描述这个 skill 做什么、何时被触发。
   支持 YAML 块标量 `>` 折叠多行（loader 会拼成一行）。
@@ -311,12 +305,11 @@ skill 不要在任何阶段产出 Google Ads / LinkedIn / TikTok 相关执行细
 
 ### 8.1 我方迭代发布流程
 
-1. skill 作者发布新版 zip
+1. skill 作者交付新版 bundle（目录或 zip 均可，最终落地形态是目录）
 2. 我方（宿主集成方）拿到新版后：
-   - 对照 [`overseas-ad-planning.CHANGES.md`](overseas-ad-planning.CHANGES.md) 重新合并差量改动
    - 在本地用宿主的 loader smoke test 加载校验
-   - 替换 `skills/overseas-ad-planning.skill` 文件
-   - 重启 next.js 服务（loader 自动检测 mtime）
+   - 覆盖 `skills/overseas-ad-planning/` 目录内容
+   - 重启 next.js 服务（loader 模块级缓存只在进程内存活）
 3. 跑一次端到端会话验证
 
 ### 8.2 skill 作者本地校验（建议）
@@ -324,13 +317,13 @@ skill 不要在任何阶段产出 Google Ads / LinkedIn / TikTok 相关执行细
 skill 作者可在本地用以下方式快速验证 bundle 结构合法：
 
 ```bash
-# 解压验证目录结构
-unzip -l overseas-ad-planning.skill
+# 检查目录结构
+ls skills/overseas-ad-planning/
+ls skills/overseas-ad-planning/references/
 
 # 应看到：
-#   overseas-ad-planning/
-#   overseas-ad-planning/SKILL.md
-#   overseas-ad-planning/references/...
+#   SKILL.md
+#   references/  (内含 *.md)
 ```
 
 frontmatter 必须能被简化 YAML 解析器读懂（用 Python 的 `yaml.safe_load` 解析顶部 `---` 块通过即可）。
@@ -338,30 +331,6 @@ frontmatter 必须能被简化 YAML 解析器读懂（用 Python 的 `yaml.safe_
 ### 8.3 破坏性变更协调
 
 如果 skill 新版需要打破本契约的任何约束（例如：新增第六阶段、改 frontmatter 格式、要求新工具支持），请**提前**与宿主集成方沟通，由双方共同评估并升级宿主代码。
-
-### 8.4 v1.0 → v1.1 变更详细说明(2026-05-08)
-
-本次升级源于 skill 端业务反馈,经双方协商达成两项调整。详细评估见配套文档 `overseas-ad-planning_CONTRACT_v1.0_to_v1.1_CHANGES.md`。
-
-**变更 1:阶段三章节数 17 → 10**
-
-- 影响位置:5.1 节(产出形式)、7.1 节(必须保留的核心结构)、新增 7.4 节(10 章框架附表)
-- 影响范围:仅 skill 阶段三的 markdown 输出量;不影响 plan_json schema、不影响 CTW 锁定字段、不影响工具签名
-- 宿主端是否需要改代码:**否**(章节数是 skill 内部呈现层面,宿主只接收 plan_json,不读 markdown 章节)
-- 风险评估:低风险
-
-**变更 2:五阶段从顺序执行调整为独立调用**
-
-- 影响位置:7.1 节(必须保留的核心结构)、4.2 节(sanity check 增加协调说明)
-- 影响范围:用户可从任意阶段进入,但走到 `draft_ad_plan` 仍必须经过阶段四生图(sanity check 不放开)
-- 宿主端是否需要改代码:**视具体 host-patch 实现而定**——
-  - 如果 host-patch 假设"用户消息开头总是从阶段一开始",可能需要扩展为"识别用户当前所处阶段"
-  - 如果 host-patch 仅在最后一步(模型完成阶段五后)注入 `draft_ad_plan` 指令,**不需要改**
-  - 现行 host-patch 行为请由宿主集成方自查
-- 风险评估:中等风险,**上线前需做端到端回归测试**,覆盖以下场景:
-  - 顺序模式(阶段一→五)产生 plan_json
-  - 直接进入阶段四(用户已上传产品图,只需要素材) — 验证不调用 draft_ad_plan,自然结束
-  - 直接进入阶段五(用户提供已有素材 url 与策划) — 验证 sanity check 拦截、提示用户先调阶段四
 
 ---
 
@@ -384,10 +353,8 @@ frontmatter 必须能被简化 YAML 解析器读懂（用 Python 的 `yaml.safe_
 
 - skill 内容问题、迭代建议：联系原作者
 - 宿主集成问题、契约更新、扩展提案：联系 LeadEngine 集成方（即本仓库维护者）
-- 紧急 bug（skill 加载失败、模型行为偏离严重）：双方协商，必要时降级到上一版 skill bundle 回滚（保留旧版 zip 作为应急）
+- 紧急 bug（skill 加载失败、模型行为偏离严重）：双方协商，必要时通过 git 回滚 `skills/overseas-ad-planning/` 目录到上一版
 
 ---
 
-> 本契约 v1.0 与 skill 包 sha256 头 `375f242d`（2026-04-29 patch 版本）配套生效。
->
-> 本契约 v1.1 与 skill 包 sha256 头 `1e4f2e76`(2026-05-08)配套生效。后续版本升级会同步更新本文件版本号。
+> 本契约 v1.2 (2026-05-14) 起，skill bundle 形态由 zip 改为目录；不再以 sha256 配套号锚定版本，改用 git 提交历史追踪。
