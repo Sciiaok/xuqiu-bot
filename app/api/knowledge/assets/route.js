@@ -106,7 +106,11 @@ export async function POST(request) {
     }
 
     const buffer = Buffer.from(await file.arrayBuffer());
-    const storagePath = `${agentId}/${Date.now()}_${file.name}`;
+    // Sanitize filename before it lands in a storage path — same regex the
+    // document upload uses (route.js:100). Without this, Chinese filenames
+    // and `../` traversal attempts both end up in the path.
+    const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, '_');
+    const storagePath = `${agentId}/${Date.now()}_${safeName}`;
     // kb-assets bucket has no anon-write policy; use service-role.
     const { error: uploadErr } = await getSupabaseAdmin().storage
       .from(STORAGE_BUCKET)

@@ -598,6 +598,69 @@
   font-family: var(--font-mono);
 }
 
+.singleImagePreview {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  margin-top: 12px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-size: 12.5px;
+}
+
+.singleImageName {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text);
+  font-family: var(--font-sans);
+  font-weight: 500;
+}
+
+.singleImageSize {
+  font-size: 11px;
+  color: var(--text3);
+  font-family: var(--font-mono);
+}
+
+.imgErrorsChip {
+  margin-left: 6px;
+  padding: 2px 8px;
+  background: rgba(201, 127, 0, 0.1);
+  border: 1px solid rgba(201, 127, 0, 0.4);
+  border-radius: 999px;
+  color: var(--orange, #c97f00);
+  font-size: 11px;
+  font-family: var(--font-sans);
+  cursor: pointer;
+  transition: background .15s;
+}
+
+.imgErrorsChip:hover {
+  background: rgba(201, 127, 0, 0.2);
+}
+
+.imgErrorsList {
+  margin: 4px 0 0 18px;
+  padding: 6px 10px;
+  background: rgba(201, 127, 0, 0.06);
+  border-left: 2px solid rgba(201, 127, 0, 0.4);
+  border-radius: 0 4px 4px 0;
+  font-size: 11px;
+  color: var(--text2);
+  font-family: var(--font-mono);
+  list-style: none;
+}
+
+.imgErrorsList li {
+  padding: 2px 0;
+  word-break: break-all;
+}
+
 .formRow {
   display: flex;
   align-items: center;

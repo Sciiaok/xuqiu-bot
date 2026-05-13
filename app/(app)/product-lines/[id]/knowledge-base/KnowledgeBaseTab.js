@@ -297,7 +297,8 @@ function InputSection({ agentId, onChanged }) {
 
 function FileUploadCard({ agentId, onChanged }) {
   const [layer, setLayer] = useState('product');
-  // items: { key, name, state, stage?, total?, done?, kpCount?, imgCount?, error?, dedup? }
+  // items: { key, name, state, stage?, total?, done?, kpCount?, imgCount?,
+  //   imgErrors?: string[], linkedAssets?: number, error?, dedup?, warning? }
   // state ∈ 'uploading' | 'processing' | 'ready' | 'error'
   const [items, setItems] = useState([]);
   const [dragOver, setDragOver] = useState(false);
@@ -329,6 +330,8 @@ function FileUploadCard({ agentId, onChanged }) {
           state: 'ready',
           kpCount: data.knowledge_points || 0,
           imgCount: data.images?.extracted || 0,
+          imgErrors: Array.isArray(data.images?.errors) ? data.images.errors : [],
+          linkedAssets: data.linked_assets || 0,
         });
         subsRef.current.delete(key);
         onChanged?.();
@@ -428,6 +431,7 @@ const STAGE_LABEL = {
 };
 
 function UploadItemRow({ item }) {
+  const [imgErrorsExpanded, setImgErrorsExpanded] = useState(false);
   const inFlight = item.state === 'uploading' || item.state === 'processing';
   const icon = item.state === 'ready' ? '✓'
             : item.state === 'error' ? '✗'
@@ -450,9 +454,16 @@ function UploadItemRow({ item }) {
     const parts = [];
     if (item.dedup) parts.push('已有相同文件，复用');
     else if (item.kpCount != null) parts.push(`AI 抽取 ${item.kpCount} 知识点`);
-    if (item.imgCount > 0) parts.push(`${item.imgCount} 张图`);
+    if (item.imgCount > 0) {
+      const linked = item.linkedAssets || 0;
+      parts.push(linked > 0
+        ? `${item.imgCount} 张图（${linked} 关联 SKU）`
+        : `${item.imgCount} 张图`);
+    }
     stageText = parts.join(' · ');
   }
+
+  const imgErrorCount = Array.isArray(item.imgErrors) ? item.imgErrors.length : 0;
 
   return (
     <div className={s.uploadFileName}>
@@ -461,6 +472,22 @@ function UploadItemRow({ item }) {
       <span>{item.name}</span>
       {stageText && (
         <span style={{ color: 'var(--text3)', marginLeft: 4 }}>· {stageText}</span>
+      )}
+      {imgErrorCount > 0 && (
+        <button
+          type="button"
+          className={s.imgErrorsChip}
+          onClick={() => setImgErrorsExpanded((v) => !v)}
+          title="点击查看详情"
+        >
+          ⚠ 图片抽取 {imgErrorCount} 处失败 {imgErrorsExpanded ? '▾' : '▸'}
+        </button>
+      )}
+      {imgErrorsExpanded && imgErrorCount > 0 && (
+        <ul className={s.imgErrorsList}>
+          {item.imgErrors.slice(0, 5).map((e, i) => <li key={i}>{e}</li>)}
+          {imgErrorCount > 5 && <li style={{ color: 'var(--text3)' }}>…还有 {imgErrorCount - 5} 条</li>}
+        </ul>
       )}
       {item.warning && (
         <div style={{ color: 'var(--orange, #c97f00)', marginLeft: 18, fontSize: 11, marginTop: 2 }}>
@@ -614,12 +641,51 @@ function TeachCard({ agentId, onChanged }) {
   );
 }
 
+const SINGLE_IMAGE_MAX_BYTES = 5 * 1024 * 1024; // mirror /api/knowledge/assets cap
+const SINGLE_IMAGE_ACCEPT = 'image/jpeg,image/png,image/webp,image/gif';
+
 function SingleImageCard({ agentId, onChanged }) {
   const [file, setFile] = useState(null);
   const [description, setDescription] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
+  const [dragOver, setDragOver] = useState(false);
   const inputRef = useRef(null);
+
+  function pickFile(picked) {
+    if (!picked) return;
+    if (!SINGLE_IMAGE_ACCEPT.split(',').includes(picked.type)) {
+      setError('仅支持 JPEG / PNG / WebP / GIF');
+      return;
+    }
+    if (picked.size > SINGLE_IMAGE_MAX_BYTES) {
+      setError(`超过 5 MB（当前 ${(picked.size / 1024 / 1024).toFixed(1)} MB）`);
+      return;
+    }
+    setError('');
+    setFile(picked);
+  }
+
+  function reset() {
+    setFile(null);
+    setDescription('');
+    setError('');
+    if (inputRef.current) inputRef.current.value = '';
+  }
+
+  async function handleUpload() {
+    if (!file) return;
+    setBusy(true); setError('');
+    try {
+      await uploadAsset(agentId, file, description.trim());
+      reset();
+      onChanged?.();
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setBusy(false);
+    }
+  }
 
   return (
     <div className={s.uploadCard}>
@@ -627,25 +693,48 @@ function SingleImageCard({ agentId, onChanged }) {
       <div className={s.uploadCardDesc}>
         没有附在文档里的零散图片。注意：<b>大多数情况下不需要这里上传——只要把含图的 PDF/Word 通过"文档上传"传上来，图就会自动抽取入库</b>。
       </div>
-      <div className={s.formRow}>
-        <input ref={inputRef} type="file" accept="image/jpeg,image/png,image/webp,image/gif"
-          onChange={e => setFile(e.target.files?.[0] || null)} />
-      </div>
+
+      {file ? (
+        <div className={s.singleImagePreview}>
+          <span className={s.singleImageName}>{file.name}</span>
+          <span className={s.singleImageSize}>· {(file.size / 1024).toFixed(0)} KB</span>
+          <Button variant="ghost" size="sm" onClick={reset} disabled={busy}>移除</Button>
+        </div>
+      ) : (
+        <div
+          className={`${s.dropzone} ${dragOver ? s.dropzoneActive : ''}`}
+          onDrop={(e) => { e.preventDefault(); setDragOver(false); pickFile(e.dataTransfer.files?.[0]); }}
+          onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
+          onDragLeave={() => setDragOver(false)}
+          onClick={() => inputRef.current?.click()}
+          style={{ marginTop: 12 }}
+        >
+          <div className={s.dropzoneIcon}>+</div>
+          <div className={s.dropzoneText}>拖拽图片到此处或点击选择</div>
+          <div className={s.dropzoneHint}>JPEG / PNG / WebP / GIF · 单图最大 5 MB</div>
+        </div>
+      )}
+      <input
+        ref={inputRef}
+        type="file"
+        accept={SINGLE_IMAGE_ACCEPT}
+        style={{ display: 'none' }}
+        onChange={(e) => pickFile(e.target.files?.[0])}
+      />
+
       <div className={s.formRow} style={{ marginTop: 8 }}>
-        <textarea className={s.teachTextarea} style={{ minHeight: 60 }}
-          placeholder="描述（医生越具体，medici 找图越准）"
-          value={description} onChange={e => setDescription(e.target.value)} />
+        <textarea
+          className={s.teachTextarea}
+          style={{ minHeight: 60 }}
+          placeholder="描述（越具体，Medici 找图越准）"
+          value={description}
+          onChange={(e) => setDescription(e.target.value)}
+        />
       </div>
       <div className={s.teachActions} style={{ marginTop: 8 }}>
-        <Button variant="primary" size="sm" disabled={busy || !file} onClick={async () => {
-          setBusy(true); setError('');
-          try {
-            await uploadAsset(agentId, file, description.trim());
-            setFile(null); setDescription(''); if (inputRef.current) inputRef.current.value = '';
-            onChanged?.();
-          } catch (e) { setError(e.message); }
-          finally { setBusy(false); }
-        }}>{busy ? '上传中…' : '上传'}</Button>
+        <Button variant="primary" size="sm" disabled={busy || !file} onClick={handleUpload}>
+          {busy ? '上传中…' : '上传'}
+        </Button>
         {error && <span style={{ color: 'var(--red)', fontSize: 12 }}>{error}</span>}
       </div>
     </div>
