@@ -50,6 +50,75 @@ const SECTIONS = [
   { key: 'content',  label: '内容' },
 ];
 
+// ── 使用须知 / 限制说明 ─────────────────────────────────────────────
+// 用户每次上传都可能撞到这些限制，与其等他们撞墙后困惑、不如把"会发生什么"
+// 提前讲清楚。每条都对应代码里一个 hard cap 或路径分支，改限制时也来这里
+// 同步文案。
+function LimitsNotice() {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className={s.limitsNotice} aria-expanded={open}>
+      <button
+        type="button"
+        className={s.limitsNoticeHeader}
+        onClick={() => setOpen(v => !v)}
+        aria-controls="kb-limits-body"
+      >
+        <span className={s.limitsNoticeTitleWrap}>
+          <span className={s.limitsNoticeBadge}>使用须知</span>
+          <span className={s.limitsNoticeSummary}>
+            上传 / 抽图 / Medici 检索的能力边界 —— 上传前花 30 秒扫一眼
+          </span>
+        </span>
+        <span className={s.limitsNoticeToggle}>{open ? '收起 ↑' : '查看 →'}</span>
+      </button>
+      {open && (
+        <div className={s.limitsNoticeBody} id="kb-limits-body">
+          <div className={s.limitsNoticeGroup}>
+            <div className={s.limitsNoticeGroupTitle}>文件处理</div>
+            <ul className={s.limitsNoticeList}>
+              <li>
+                单文件最大 <b>50 MB</b>。支持 PDF / Word / Excel / CSV / Markdown / TXT —— <b>不要求固定模板</b>，AI 会自己读懂多样格式。
+              </li>
+              <li>
+                解析完文档会落到三种状态：<b>就绪</b>（全文已索引）/ <b>部分</b>（文件过大被分段，某段超 LLM 上限，知识点会有遗漏，可在文档列表点"重新解析"重试）/ <b>失败</b>（整段解析没跑通）。
+              </li>
+              <li>
+                Excel 按 <b>80 行/批</b> 送 AI；其他格式单次最多送 <b>60 万字符</b>。超过这个量级的文档容易进入"部分"状态。
+              </li>
+            </ul>
+          </div>
+          <div className={s.limitsNoticeGroup}>
+            <div className={s.limitsNoticeGroupTitle}>图片资产</div>
+            <ul className={s.limitsNoticeList}>
+              <li>
+                嵌入图片自动抽取：<b>PDF / Word / Excel 支持</b>；CSV / Markdown / TXT 不抽（这些格式无图）。
+              </li>
+              <li>
+                <b>只有 Excel 的图片会自动绑到对应行的车型 / 产品</b>（标准单元格图 + WPS DISPIMG 公式两种都支持）。PDF / Word 抽出来的图只有 AI 视觉描述，<b>不会自动绑产品</b>；需要时可在"内容 → 图片资产"里手动补 tag。
+              </li>
+              <li>
+                每文档最多抽 <b>2000</b> 张图，超过 500 张会弹耗时提醒。小于 <b>100×100 像素</b> 的小图（页眉 logo / 装饰图标）自动跳过。
+              </li>
+              <li>
+                "重新解析"会清掉<b>这份文档自动抽出的图</b>重抽，但你手动单独上传的图<b>保留不变</b>。
+              </li>
+            </ul>
+          </div>
+          <div className={s.limitsNoticeGroup}>
+            <div className={s.limitsNoticeGroupTitle}>Medici 对话检索</div>
+            <ul className={s.limitsNoticeList}>
+              <li>
+                KB 列表里所有产品都看得到，但 Medici 在对话时<b>只调用置信度为"已验证 / 高"的行</b>。AI 抽取出来标"低"置信度的产品，需要先在内容页编辑或确认后，才会被 Medici 看到。
+              </li>
+            </ul>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function KnowledgeBaseTab({ agentId }) {
   const [section, setSection] = useState('overview');
 
@@ -114,6 +183,7 @@ export default function KnowledgeBaseTab({ agentId }) {
 
   return (
     <div className={s.uploadSection}>
+      <LimitsNotice />
       <div className={s.segmented} role="tablist" aria-label="知识库小节">
         {SECTIONS.map(sec => {
           const active = section === sec.key;

@@ -253,18 +253,30 @@ async function processOneImage(ctx, img, idx) {
   ]);
   if (uploadResult.error) throw new Error(`storage upload: ${uploadResult.error.message}`);
 
-  // 3. Caption embedding (so semantic find_asset can reach it). Must follow
-  //    vision because the input is the caption text.
+  // 3. Row context (XLSX only). When the source XLSX has the image anchored
+  //    to a cell, we know which row → which product. Prepend that to the
+  //    caption so the embedding sees it, and surface linked_skus so the
+  //    tag-based find_asset path can hit ("VA3" → matches this image).
+  //    Without this, vision-only captions read like "a gray sedan" with
+  //    zero linkage back to the model name in the spreadsheet.
+  const rowContext = img.rowContext || null;
+  const enrichedCaption = rowContext?.summary
+    ? `[${rowContext.summary}] ${visionResult.caption || ''}`.trim()
+    : (visionResult.caption || '');
+
+  // 4. Caption embedding (so semantic find_asset can reach it). Must follow
+  //    vision because the input is the caption text. Embed the enriched
+  //    version so semantic search picks up "捷达VA3 / Jetta VA3" tokens.
   let captionEmbedding = null;
   try {
-    if (visionResult.caption) {
-      captionEmbedding = await generateEmbedding(visionResult.caption);
+    if (enrichedCaption) {
+      captionEmbedding = await generateEmbedding(enrichedCaption);
     }
   } catch {
     // Embedding is best-effort — kb_assets row should still land
   }
 
-  // 4. Write kb_assets row. Only include content_sha256 if the column exists —
+  // 5. Write kb_assets row. Only include content_sha256 if the column exists —
   //    a missing column raises 42703 and aborts the insert, so we omit it when
   //    the dedup probe earlier signaled the migration isn't applied yet.
   const insertRow = {
@@ -276,12 +288,13 @@ async function processOneImage(ctx, img, idx) {
     storage_path: storagePath,
     mime_type: 'image/jpeg',
     file_size_bytes: jpegBuffer.length,
-    description: visionResult.caption,
-    description_en: visionResult.caption,
+    description: enrichedCaption,
+    description_en: enrichedCaption,
     caption_embedding: captionEmbedding,
     view: visionResult.view,
     scenario: visionResult.scenario,
     is_sendable: visionResult.is_sendable,
+    linked_skus: rowContext?.linkedSkus?.length ? rowContext.linkedSkus : null,
     source_doc_id: docId,
   };
   if (hashColumnExists) insertRow.content_sha256 = contentSha256;
@@ -374,10 +387,15 @@ async function extractDocxImages(buffer) {
 
 // xlsx is a ZIP; embedded pictures (Insert → Picture, or pasted images)
 // land in `xl/media/imageN.{png|jpeg|gif|...}`. Cell anchors live in
-// `xl/drawings/*.xml` — we don't need them for retrieval, the raw bytes are
-// enough for vision-caption + sendable judgment.
+// `xl/drawings/*.xml`. We parse those anchors to map each image back to its
+// row, then pull brand / product / model from the row's cells so the kb_assets
+// row gets linked_skus + an enriched caption — without this binding, the
+// image is just "a gray car" to find_asset.
 async function extractXlsxImages(buffer) {
   const zip = await JSZip.loadAsync(buffer);
+  // Build path → rowContext map once, before walking media files.
+  const anchorMap = await buildXlsxAnchorMap(zip).catch(() => new Map());
+
   const mediaFiles = Object.keys(zip.files).filter(
     (p) => p.startsWith('xl/media/') && !zip.files[p].dir,
   );
@@ -396,12 +414,296 @@ async function extractXlsxImages(buffer) {
         height: info.height,
         channels: info.channels,
         key: path,
+        rowContext: anchorMap.get(path) || null,
       });
     } catch {
       // Skip undecodable entries (rare format / corrupt blob).
     }
   }
   return out;
+}
+
+// ── XLSX anchor → row context ────────────────────────────────────────
+// XLSX is OOXML. Pictures referenced as `<xdr:pic>` inside
+// `xl/drawings/drawingN.xml` carry an anchor (<xdr:from>/<xdr:row>) and an
+// embed rId. The drawing's _rels file maps rId → media path. The sheet that
+// owns the drawing is found through `xl/worksheets/_rels/sheetN.xml.rels`.
+//
+// We bypass a full XML parser dep (xlsx community edition doesn't preserve
+// images, fast-xml-parser isn't installed). The shapes we need are well-
+// structured enough that scoped regexes handle them — wrap the whole pipeline
+// in a single try/catch in the caller so any parse miss degrades to "no
+// anchor info" rather than failing the upload.
+
+async function buildXlsxAnchorMap(zip) {
+  const map = new Map();
+  const sharedStrings = await loadXlsxSharedStrings(zip);
+
+  const sheetPaths = Object.keys(zip.files).filter(
+    (p) => /^xl\/worksheets\/sheet\d+\.xml$/.test(p) && !zip.files[p].dir,
+  );
+
+  // WPS DISPIMG: build the global ID→media map once. The user's catalog
+  // XLSX uses this scheme (`_xlfn.DISPIMG("ID_xxx",1)` formulas referencing
+  // pictures in `xl/cellimages.xml`) instead of standard <xdr:pic> anchors.
+  // Without this branch, only ~1 image gets bound; the rest fall back to
+  // anonymous vision-captioned blobs.
+  const dispImgIdToMedia = await loadWpsDispImgMap(zip);
+
+  for (const sheetPath of sheetPaths) {
+    const sheetNum = (sheetPath.match(/sheet(\d+)\.xml$/) || [])[1];
+    if (!sheetNum) continue;
+
+    const sheetXml = await zip.files[sheetPath].async('string');
+    const headerCols = parseHeaderRow(sheetXml, sharedStrings);
+
+    // Path A: standard cell anchors via xl/drawings/drawing*.xml
+    const sheetRelsPath = `xl/worksheets/_rels/sheet${sheetNum}.xml.rels`;
+    if (zip.files[sheetRelsPath]) {
+      const sheetRelsXml = await zip.files[sheetRelsPath].async('string');
+      const drawingNum = (sheetRelsXml.match(/Target="[^"]*drawings\/drawing(\d+)\.xml"/) || [])[1];
+      if (drawingNum) {
+        const drawingRelsPath = `xl/drawings/_rels/drawing${drawingNum}.xml.rels`;
+        const drawingPath = `xl/drawings/drawing${drawingNum}.xml`;
+        if (zip.files[drawingRelsPath] && zip.files[drawingPath]) {
+          const [drawingRelsXml, drawingXml] = await Promise.all([
+            zip.files[drawingRelsPath].async('string'),
+            zip.files[drawingPath].async('string'),
+          ]);
+          const rIdToMedia = parseRelsTargets(drawingRelsXml, drawingRelsPath);
+          const anchors = parseDrawingAnchors(drawingXml, rIdToMedia);
+          if (headerCols.size) {
+            for (const anchor of anchors) {
+              const rowNum = anchor.row + 1;
+              const rowCells = parseSheetRowCells(sheetXml, rowNum, sharedStrings);
+              if (!rowCells.size) continue;
+              const ctx = buildRowContext(headerCols, rowCells);
+              if (ctx) map.set(anchor.mediaPath, ctx);
+            }
+          }
+        }
+      }
+    }
+
+    // Path B: WPS DISPIMG formulas inside sheet cells. The row is the cell's
+    // own row; the image is looked up by the DISPIMG ID through cellimages.xml.
+    if (dispImgIdToMedia.size && headerCols.size) {
+      const cellHits = findDispImgCells(sheetXml);
+      for (const hit of cellHits) {
+        const mediaPath = dispImgIdToMedia.get(hit.dispId);
+        if (!mediaPath) continue;
+        if (map.has(mediaPath)) continue; // Path A wins if it already bound
+        const rowCells = parseSheetRowCells(sheetXml, hit.row, sharedStrings);
+        if (!rowCells.size) continue;
+        const ctx = buildRowContext(headerCols, rowCells);
+        if (ctx) map.set(mediaPath, ctx);
+      }
+    }
+  }
+  return map;
+}
+
+// `<Relationship Id="rId1" Target="..."/>` parser. Resolves Target relative
+// to the rels file's owner document (drawing1.xml → drawings/, cellimages.xml
+// → xl/). Returns Map<rId, absoluteZipPath>.
+function parseRelsTargets(xml, relsPath) {
+  const ownerDir = relsPath.replace(/_rels\/[^/]+\.rels$/, '').replace(/\/$/, '');
+  const map = new Map();
+  // Attributes contain "/" inside URL-shaped Type= values, so the inner
+  // class must accept "/" — only the trailing literal /> is forbidden.
+  for (const m of xml.matchAll(/<Relationship\b([^>]+?)\/>/g)) {
+    const attrs = m[1];
+    const id = (attrs.match(/\bId="([^"]+)"/) || [])[1];
+    const target = (attrs.match(/\bTarget="([^"]+)"/) || [])[1];
+    if (!id || !target) continue;
+    if (!/\.(png|jpe?g|gif|bmp|tiff?|webp)$/i.test(target)) continue;
+    map.set(id, resolveRelPath(ownerDir, target));
+  }
+  return map;
+}
+
+function resolveRelPath(ownerDir, target) {
+  if (target.startsWith('/')) return target.slice(1);
+  const parts = ownerDir ? ownerDir.split('/').filter(Boolean) : [];
+  for (const seg of target.split('/')) {
+    if (seg === '..') parts.pop();
+    else if (seg && seg !== '.') parts.push(seg);
+  }
+  return parts.join('/');
+}
+
+async function loadWpsDispImgMap(zip) {
+  const map = new Map();
+  if (!zip.files['xl/cellimages.xml'] || !zip.files['xl/_rels/cellimages.xml.rels']) return map;
+  const [ci, ciRels] = await Promise.all([
+    zip.files['xl/cellimages.xml'].async('string'),
+    zip.files['xl/_rels/cellimages.xml.rels'].async('string'),
+  ]);
+  const rIdToMedia = parseRelsTargets(ciRels, 'xl/_rels/cellimages.xml.rels');
+  // Each <etc:cellImage> wraps <xdr:pic> with cNvPr name="ID_xxx" and
+  // <a:blip r:embed="rIdN"/>. The name IS the DISPIMG formula's first arg.
+  for (const m of ci.matchAll(/<etc:cellImage\b[^>]*>([\s\S]*?)<\/etc:cellImage>/g)) {
+    const inner = m[1];
+    const idName = (inner.match(/<xdr:cNvPr\b[^>]*\bname="([^"]+)"/) || [])[1];
+    const rId = (inner.match(/r:embed="([^"]+)"/) || [])[1];
+    if (!idName || !rId) continue;
+    const media = rIdToMedia.get(rId);
+    if (media) map.set(idName, media);
+  }
+  return map;
+}
+
+function findDispImgCells(sheetXml) {
+  // Walk each <c r="X#" ...>body</c> block separately so DISPIMG matches are
+  // scoped to a single cell. A single span-the-whole-sheet regex caught the
+  // first <c> in the document plus the next DISPIMG anywhere downstream,
+  // producing wrong (col,row) pairs.
+  const hits = [];
+  for (const c of sheetXml.matchAll(/<c\b([^>]*)>([\s\S]*?)<\/c>/g)) {
+    const attrs = c[1];
+    const body = c[2];
+    if (!body.includes('DISPIMG')) continue;
+    const refMatch = attrs.match(/\br="([A-Z]+)(\d+)"/);
+    if (!refMatch) continue;
+    const dispMatch = body.match(/DISPIMG\([^,]*?(?:"|&quot;)(ID_[A-Fa-f0-9]+)(?:"|&quot;)/);
+    if (!dispMatch) continue;
+    hits.push({ col: refMatch[1], row: parseInt(refMatch[2], 10), dispId: dispMatch[1] });
+  }
+  return hits;
+}
+
+function parseDrawingAnchors(xml, rIdToMedia) {
+  const anchors = [];
+  const anchorRegex = /<xdr:(twoCellAnchor|oneCellAnchor)\b[^>]*>([\s\S]*?)<\/xdr:\1>/g;
+  for (const m of xml.matchAll(anchorRegex)) {
+    const inner = m[2];
+    const fromBlock = inner.match(/<xdr:from>([\s\S]*?)<\/xdr:from>/);
+    if (!fromBlock) continue;
+    const rowMatch = fromBlock[1].match(/<xdr:row>(\d+)<\/xdr:row>/);
+    if (!rowMatch) continue;
+    const embedMatch = inner.match(/r:embed="([^"]+)"/);
+    if (!embedMatch) continue;
+    const mediaPath = rIdToMedia.get(embedMatch[1]);
+    if (!mediaPath) continue;
+    anchors.push({ row: parseInt(rowMatch[1], 10), mediaPath });
+  }
+  return anchors;
+}
+
+async function loadXlsxSharedStrings(zip) {
+  const path = 'xl/sharedStrings.xml';
+  if (!zip.files[path]) return [];
+  const xml = await zip.files[path].async('string');
+  const out = [];
+  for (const m of xml.matchAll(/<si\b[^>]*>([\s\S]*?)<\/si>/g)) {
+    const texts = [...m[1].matchAll(/<t(?:\s+[^>]*)?>([\s\S]*?)<\/t>/g)]
+      .map((t) => decodeXmlEntities(t[1]));
+    out.push(texts.join(''));
+  }
+  return out;
+}
+
+function decodeXmlEntities(s) {
+  return String(s ?? '')
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&apos;/g, "'");
+}
+
+function parseHeaderRow(sheetXml, sharedStrings) {
+  // Try the first non-empty row in the sheet — covers files that have a
+  // title row above the header.
+  for (let r = 1; r <= 5; r++) {
+    const cells = parseSheetRowCells(sheetXml, r, sharedStrings);
+    if (cells.size >= 3) return cells;
+  }
+  return new Map();
+}
+
+function parseSheetRowCells(sheetXml, rowNum, sharedStrings) {
+  const out = new Map();
+  const re = new RegExp(`<row\\b[^>]*\\br="${rowNum}"[^>]*>([\\s\\S]*?)</row>`);
+  const m = sheetXml.match(re);
+  if (!m) return out;
+  const rowBody = m[1];
+  for (const c of rowBody.matchAll(/<c\b([^>]*)>([\s\S]*?)<\/c>/g)) {
+    const attrs = c[1];
+    const body = c[2];
+    const cellRef = (attrs.match(/\br="([A-Z]+)\d+"/) || [])[1];
+    if (!cellRef) continue;
+    const t = (attrs.match(/\bt="([^"]+)"/) || [])[1] || 'n';
+    let value = null;
+    if (t === 'inlineStr') {
+      const inline = body.match(/<is>[\s\S]*?<t[^>]*>([\s\S]*?)<\/t>[\s\S]*?<\/is>/);
+      if (inline) value = decodeXmlEntities(inline[1]);
+    } else {
+      const v = body.match(/<v>([\s\S]*?)<\/v>/);
+      if (v) {
+        if (t === 's') {
+          const idx = parseInt(v[1], 10);
+          value = sharedStrings[idx] || '';
+        } else {
+          value = decodeXmlEntities(v[1]);
+        }
+      }
+    }
+    if (value != null && String(value).trim() !== '') out.set(cellRef, String(value).trim());
+  }
+  return out;
+}
+
+// Header aliases — covers the columns that actually carry product identity.
+// Add new aliases here if a new tenant's catalog uses different header text.
+const HEADER_ALIASES = {
+  brand: ['品牌', '厂商', '制造商', 'brand', 'manufacturer', 'maker'],
+  product: ['产品', '车型', '型号系列', 'product', 'series'],
+  model: ['型号', '版本', 'model', 'version', 'variant'],
+  modelEn: ['型号英', '英文型号', 'modelen', 'englishmodel'],
+  sku: ['sku', '编码', '编号', 'code'],
+};
+
+function normalizeHeaderKey(s) {
+  return String(s || '')
+    .toLowerCase()
+    .replace(/[\s（）()【】\[\]:：]/g, '')
+    .trim();
+}
+
+function buildRowContext(headerCols, rowCells) {
+  if (!headerCols.size || !rowCells.size) return null;
+  const resolved = { brand: null, product: null, model: null, modelEn: null, sku: null };
+  for (const [col, headerName] of headerCols) {
+    const norm = normalizeHeaderKey(headerName);
+    for (const key of Object.keys(HEADER_ALIASES)) {
+      if (resolved[key]) continue;
+      if (HEADER_ALIASES[key].some((alias) => normalizeHeaderKey(alias) === norm)) {
+        const v = rowCells.get(col);
+        if (v) resolved[key] = v;
+      }
+    }
+  }
+
+  const summaryParts = [resolved.brand, resolved.product, resolved.model].filter(Boolean);
+  const summary = summaryParts.join(' ').trim();
+
+  const skus = new Set();
+  const push = (v) => { if (v) skus.add(String(v).trim()); };
+  push(resolved.brand);
+  push(resolved.product);
+  push(resolved.model);
+  push(resolved.modelEn);
+  push(resolved.sku);
+  if (resolved.product && resolved.model) push(`${resolved.product} ${resolved.model}`);
+  if (resolved.product && resolved.brand) push(`${resolved.brand} ${resolved.product}`);
+  if (resolved.brand && resolved.product && resolved.model) {
+    push(`${resolved.brand} ${resolved.product} ${resolved.model}`);
+  }
+
+  const linkedSkus = [...skus].filter(Boolean);
+  if (linkedSkus.length === 0) return null;
+  return { summary, linkedSkus };
 }
 
 // ── Vision caption + safety judgment ────────────────────────────────

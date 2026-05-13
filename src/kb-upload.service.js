@@ -672,6 +672,10 @@ async function insertStructuredRows(table, ctx, docId, rows) {
     ...r,
     tenant_id: tenantId,
     doc_id: docId,
+    // kb_tools.service.js 的 lookupProduct / lookupShipping 引用的是 source_doc_id
+    // 作为 citation 的 doc 字段。写入端只填 doc_id 会让 source_doc_id 为 null，
+    // 导致 quote_price 等返回的 source.doc_id 是 null。这里同步两个字段。
+    source_doc_id: docId,
     agent_id: agentId,
     product_line_id: productLineId,
   }));

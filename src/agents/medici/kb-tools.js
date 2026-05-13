@@ -47,12 +47,12 @@ const TOOL_DEFS = {
   lookup_product: {
     name: 'lookup_product',
     description:
-      'Find products by SKU, model name, or attribute filters (e.g. horsepower, fuel type). Returns {found:true, products:[...]} with structured product data, or {found:false, suggestions?:[...], missing_fields?:[...]}. Use this BEFORE quoting any price.',
+      'Find products by SKU, model name, or attribute filters (e.g. horsepower, fuel type). Returns {found:true, products:[...]} with structured product data, or {found:false, suggestions?:[...], missing_fields?:[...]}. The tool tokenizes input automatically (whitespace, CJK/Latin transitions), so pass the keyword verbatim — do NOT insert or strip spaces yourself. When the customer asks whether a specific product exists, you MUST call this tool before answering "no". If found=false with non-empty suggestions, treat those as the closest catalog items and offer them — do not claim the product line is empty.',
     input_schema: {
       type: 'object',
       properties: {
-        sku: { type: 'string', description: 'Exact or partial SKU/model identifier' },
-        model: { type: 'string', description: 'Model keyword to search by name' },
+        sku: { type: 'string', description: 'Exact or partial SKU/model identifier. Tokenized automatically.' },
+        model: { type: 'string', description: 'Model keyword to search by name. Tokenized automatically — pass the user\'s phrase verbatim.' },
         attrs: {
           type: 'object',
           description: 'Structured attribute filters. Use _lte / _gte suffixes for range queries (e.g. {"horsepower_lte": 50, "fuel_type": "diesel"})',

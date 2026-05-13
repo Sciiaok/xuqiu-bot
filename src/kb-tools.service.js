@@ -36,6 +36,35 @@ function round2(n) {
 
 // ── 1. lookupProduct ─────────────────────────────────────────────────
 
+// Tokenize a search value so that:
+//   - whitespace is normalized (folds "捷达 VA3" → ["捷达", "VA3"])
+//   - mixed CJK/Latin runs are also split ("捷达VA3" → ["捷达", "VA3", "捷达VA3"])
+// Each token feeds an OR-over-4-fields filter; the AND across tokens means
+// "every token must match SOMEWHERE on the row", which beats the old single
+// ILIKE that died on whitespace ('捷达 VA3' ILIKE '%捷达VA3...%' → no hit).
+function tokenizeSearch(input) {
+  if (!input) return [];
+  const trimmed = String(input).trim().replace(/\s+/g, ' ');
+  if (!trimmed) return [];
+  const tokens = new Set();
+  for (const part of trimmed.split(' ')) {
+    if (!part) continue;
+    tokens.add(part);
+    // Sub-split on CJK ↔ Latin transitions so "捷达VA3" yields "捷达" + "VA3".
+    const subs = part.split(/(?<=[一-鿿])(?=[A-Za-z0-9])|(?<=[A-Za-z0-9])(?=[一-鿿])/);
+    if (subs.length > 1) for (const s of subs) if (s) tokens.add(s);
+  }
+  return [...tokens];
+}
+
+// PostgREST .or() builder for one token. Sanitize comma/paren/% so the
+// filter parser stays well-formed even if a user pastes "(VA3)" or similar.
+function ilikeOrClauseForToken(token) {
+  const safe = String(token).replace(/[%_,()\\]/g, ' ').trim();
+  if (!safe) return null;
+  return `sku.ilike.%${safe}%,model.ilike.%${safe}%,product_name.ilike.%${safe}%,product_name_en.ilike.%${safe}%`;
+}
+
 /**
  * Find products by SKU, model name, or structured attrs.
  *
@@ -53,61 +82,95 @@ export async function lookupProduct({ tenantId, productLineId, sku, model, attrs
     return { found: false, missing_fields: ['sku', 'model', 'attrs'] };
   }
 
-  let q = supabase
-    .from('kb_products')
-    .select('id, sku, model, product_name, product_name_en, category, specs, fob_price_usd, moq, lead_time_days, effective_date, expiry_date, confidence, source_doc_id')
-    .eq('tenant_id', tenantId)
-    .eq('product_line_id', productLineId)
-    .eq('is_active', true);
-  q = highConfidenceFilter(q);
-  q = notExpiredFilter(q);
-
   // sku 和 model 入参语义略不同，但用户问"星耀6"既可能填到 sku 也可能填到 model。
   // 实际数据里中文车型名常落在 product_name（"现代索纳塔"），版本号落在 model
   // （"2024款 1.5T Pro"），所以两个入参都覆盖 4 个字段，避免字段语义错配漏匹配。
-  if (sku) {
-    q = q.or(`sku.ilike.%${sku}%,model.ilike.%${sku}%,product_name.ilike.%${sku}%,product_name_en.ilike.%${sku}%`);
-  }
-  if (model) {
-    q = q.or(`sku.ilike.%${model}%,model.ilike.%${model}%,product_name.ilike.%${model}%,product_name_en.ilike.%${model}%`);
-  }
-  if (attrs && Object.keys(attrs).length) {
-    for (const [key, value] of Object.entries(attrs)) {
-      // Convention: { fieldname_lte: x }, { fieldname_gte: x }, { fieldname: x }
-      if (key.endsWith('_lte')) {
-        q = q.lte(`specs->>${key.slice(0, -4)}`, String(value));
-      } else if (key.endsWith('_gte')) {
-        q = q.gte(`specs->>${key.slice(0, -4)}`, String(value));
-      } else {
-        q = q.eq(`specs->>${key}`, String(value));
+  const tokens = [...new Set([...tokenizeSearch(sku), ...tokenizeSearch(model)])];
+
+  async function runQuery(tokenList) {
+    let q = supabase
+      .from('kb_products')
+      .select('id, sku, model, product_name, product_name_en, category, specs, fob_price_usd, moq, lead_time_days, effective_date, expiry_date, confidence, source_doc_id')
+      .eq('tenant_id', tenantId)
+      .eq('product_line_id', productLineId)
+      .eq('is_active', true);
+    q = highConfidenceFilter(q);
+    q = notExpiredFilter(q);
+    for (const t of tokenList) {
+      const clause = ilikeOrClauseForToken(t);
+      if (clause) q = q.or(clause);
+    }
+    if (attrs && Object.keys(attrs).length) {
+      for (const [key, value] of Object.entries(attrs)) {
+        // Convention: { fieldname_lte: x }, { fieldname_gte: x }, { fieldname: x }
+        if (key.endsWith('_lte')) {
+          q = q.lte(`specs->>${key.slice(0, -4)}`, String(value));
+        } else if (key.endsWith('_gte')) {
+          q = q.gte(`specs->>${key.slice(0, -4)}`, String(value));
+        } else {
+          q = q.eq(`specs->>${key}`, String(value));
+        }
       }
     }
+    return q.limit(10);
   }
 
-  const { data, error } = await q.limit(10);
-  if (error) throw new Error(`lookupProduct failed: ${error.message}`);
+  // Pass 1: AND-of-OR — every token must match somewhere on the row.
+  const primary = await runQuery(tokens);
+  if (primary.error) throw new Error(`lookupProduct failed: ${primary.error.message}`);
+  if (primary.data && primary.data.length > 0) {
+    return { found: true, products: primary.data };
+  }
 
-  if (!data || data.length === 0) {
-    // 没匹配时给 5 条 suggestions，让 Medici 引导客户。
-    // 之前只返回 sku||model 单字段，结果在乘用车场景下退化成 ["2024款 1.5T Pro", ...]
-    // 这种纯版本名，客户根本看不出是哪款车。改为优先拼 "车型 + 版本" 全名。
-    if (sku || model) {
-      const { data: near } = await supabase
-        .from('kb_products')
-        .select('sku, model, product_name')
-        .eq('tenant_id', tenantId)
-        .eq('product_line_id', productLineId)
-        .eq('is_active', true)
-        .limit(5);
-      const suggestions = (near || [])
-        .map(p => [p.product_name, p.model || p.sku].filter(Boolean).join(' ').trim())
-        .filter(Boolean);
-      return { found: false, suggestions };
+  // Pass 2 fallback: if there were multiple tokens, retry with only the
+  // most discriminative (longest) one. Catches "Foton VA3" / "捷达 V100"
+  // typos where one token has no hits in the catalog but the other does.
+  if (tokens.length > 1) {
+    const longest = [...tokens].sort((a, b) => b.length - a.length)[0];
+    const fb = await runQuery([longest]);
+    if (fb.error) throw new Error(`lookupProduct failed: ${fb.error.message}`);
+    if (fb.data && fb.data.length > 0) {
+      return {
+        found: true,
+        products: fb.data,
+        relaxed_match: { matched_token: longest, dropped_tokens: tokens.filter(t => t !== longest) },
+      };
     }
-    return { found: false };
   }
 
-  return { found: true, products: data };
+  // Still nothing — return suggestions that share at least one token with
+  // the query. NEVER return random "first 5 rows": those used to look like
+  // unrelated products and the LLM kept concluding "we don't have it".
+  const suggestions = await buildLookupSuggestions({ tenantId, productLineId, tokens });
+  return { found: false, suggestions };
+}
+
+async function buildLookupSuggestions({ tenantId, productLineId, tokens }) {
+  if (!tokens.length) return [];
+  const orClauses = tokens.map(ilikeOrClauseForToken).filter(Boolean).join(',');
+  if (!orClauses) return [];
+  let q = supabase
+    .from('kb_products')
+    .select('product_name, product_name_en, model, sku')
+    .eq('tenant_id', tenantId)
+    .eq('product_line_id', productLineId)
+    .eq('is_active', true)
+    .or(orClauses)
+    .limit(5);
+  const { data, error } = await q;
+  if (error || !data) return [];
+  const seen = new Set();
+  const out = [];
+  for (const p of data) {
+    // product_name 已经是 "捷达VA3 手动挡" 这种全名，不再死拼 model（重复 token）。
+    const name = p.product_name || p.product_name_en || p.sku || p.model;
+    if (!name) continue;
+    const key = name.trim();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(key);
+  }
+  return out;
 }
 
 // ── 2. quotePrice ────────────────────────────────────────────────────
