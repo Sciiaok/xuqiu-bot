@@ -128,15 +128,36 @@ async function runReparseBackground({ docCtx, docId, buffer, fileType, filename,
         filename, fileType, onProgress,
         isReparse: true,   // 关键：LLM 抽取失败时保留旧数据，详见 processDocument 的容灾说明
       }),
-      extractAndStoreImages(docCtx, buffer, docId, mimeFromFileType(fileType))
-        .then(r => { onProgress({ stage: 'images', extracted: r?.extracted || 0 }); return r; })
-        .catch(e => ({ extracted: 0, skipped: 0, errors: [`extraction failed: ${e.message}`] })),
+      extractAndStoreImages(docCtx, buffer, docId, mimeFromFileType(fileType), { onProgress })
+        .then(r => {
+          onProgress({
+            stage: 'images',
+            total: r?.total || 0,
+            done: r?.extracted || 0,
+            extracted: r?.extracted || 0,
+            errors: r?.errors?.length || 0,
+          });
+          return r;
+        })
+        .catch(e => ({ extracted: 0, skipped: 0, total: 0, errors: [`extraction failed: ${e.message}`] })),
     ]);
+
+    let linkResult = { linked: 0 };
+    if ((imageResult?.extracted || 0) > 0) {
+      onProgress({ stage: 'linking', total: imageResult.extracted, done: 0 });
+      const { linkAssetsToProducts } = await import('../../../../../src/kb-asset-linker.service.js');
+      linkResult = await linkAssetsToProducts({
+        tenantId: docCtx.tenantId,
+        productLineId: docCtx.productLineId,
+        docId,
+      }).catch((e) => ({ linked: 0, errors: [`linker failed: ${e.message}`] }));
+    }
 
     emitProgress(docId, 'done', {
       knowledge_points: result.knowledge_points || 0,
       conflicts: result.conflicts || [],
       images: imageResult,
+      linked_assets: linkResult.linked || 0,
       status: result.status,
       partial_reason: result.partial_reason || null,
     });

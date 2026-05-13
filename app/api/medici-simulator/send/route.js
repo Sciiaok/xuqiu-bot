@@ -4,6 +4,61 @@ import { runMedici } from '../../../../src/agents/medici/index.js';
 import { getMissingFields } from '../../../../src/inquiry-quality.js';
 import { getMediciConfig } from '../../../../src/agents/medici/config.js';
 import { formatReferralContextForPrompt } from '../../../../lib/referral-context.js';
+import supabase from '../../../../lib/supabase.js';
+import { getSupabaseAdmin } from '../../../../lib/supabase-admin.js';
+
+const ASSET_BUCKET = 'kb-assets';
+// 1 hour — keeps old simulator messages viewable across a typical debug session
+// without forcing a refresh. The simulator is ephemeral so longer is harmless.
+const ASSET_URL_TTL_SECONDS = 3600;
+
+/**
+ * The simulator never hits WhatsApp, so production's sendMediciAttachments
+ * isn't in the loop. Resolve each asset_id Medici emitted to a signed URL
+ * + caption so the chat pane can render <img> bubbles inline.
+ *
+ * Failures per attachment are non-fatal — text reply still comes through.
+ */
+async function resolveAttachmentUrls(rawAttachments, { tenantId, productLineId }) {
+  if (!Array.isArray(rawAttachments) || rawAttachments.length === 0) return [];
+
+  const ids = rawAttachments.map((a) => a?.asset_id).filter(Boolean);
+  if (ids.length === 0) return [];
+
+  const { data: rows, error } = await supabase
+    .from('kb_assets')
+    .select('id, filename, storage_path, mime_type, description')
+    .eq('tenant_id', tenantId)
+    .eq('product_line_id', productLineId)
+    .in('id', ids);
+  if (error || !rows) return [];
+
+  const byId = new Map(rows.map((r) => [r.id, r]));
+  const admin = getSupabaseAdmin();
+
+  const resolved = await Promise.all(rawAttachments.map(async (att) => {
+    const row = byId.get(att?.asset_id);
+    if (!row) return null;
+    try {
+      const { data, error: urlErr } = await admin.storage
+        .from(ASSET_BUCKET)
+        .createSignedUrl(row.storage_path, ASSET_URL_TTL_SECONDS);
+      if (urlErr || !data?.signedUrl) return null;
+      return {
+        asset_id: row.id,
+        url: data.signedUrl,
+        filename: row.filename,
+        mime_type: row.mime_type,
+        caption: typeof att.caption === 'string' ? att.caption : '',
+        description: row.description || '',
+      };
+    } catch {
+      return null;
+    }
+  }));
+
+  return resolved.filter(Boolean);
+}
 
 /**
  * POST /api/medici-simulator/send
@@ -203,8 +258,19 @@ export async function POST(request) {
       ? `Reply: "${reply.slice(0, 160)}${reply.length > 160 ? '…' : ''}"`
       : 'Reply: (empty — spam/FAQ_END case)');
 
+    const attachments = await resolveAttachmentUrls(response.attachments, {
+      tenantId: ctx.tenantId,
+      productLineId: agentConfig.product_line,
+    });
+    if (attachments.length > 0) {
+      log('info', `Resolved ${attachments.length} attachment(s) for chat render`, {
+        asset_ids: attachments.map((a) => a.asset_id),
+      });
+    }
+
     return NextResponse.json({
       reply,
+      attachments,
       response,
       trace,
       // Surface the product_line's field definitions so the UI can render the

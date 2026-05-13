@@ -146,6 +146,63 @@ export async function POST(request) {
 }
 
 /**
+ * PATCH /api/knowledge/assets?asset_id=xxx
+ *
+ * Editable fields: description, is_sendable, linked_skus, view, color,
+ * scenario, language, asset_type. All optional; only the provided fields
+ * are updated. Used by the KB UI to fix wrong captions / toggle the
+ * sendability flag after vision-caption misjudges an image.
+ */
+export async function PATCH(request) {
+  try {
+    const ctx = await getTenantContext();
+    if (!ctx) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+
+    const assetId = new URL(request.url).searchParams.get('asset_id');
+    if (!assetId) return NextResponse.json({ error: 'asset_id is required' }, { status: 400 });
+
+    const body = await request.json().catch(() => ({}));
+    const updates = {};
+    if (typeof body.description === 'string') updates.description = body.description.trim() || null;
+    if (typeof body.is_sendable === 'boolean' || body.is_sendable === null) updates.is_sendable = body.is_sendable;
+    if (Array.isArray(body.linked_skus)) updates.linked_skus = body.linked_skus.map(String).filter(Boolean);
+    if (typeof body.view === 'string') updates.view = body.view.trim() || null;
+    if (typeof body.color === 'string') updates.color = body.color.trim() || null;
+    if (typeof body.scenario === 'string') updates.scenario = body.scenario.trim() || null;
+    if (typeof body.language === 'string') updates.language = body.language.trim() || null;
+    if (typeof body.asset_type === 'string') updates.asset_type = body.asset_type.trim();
+
+    if (Object.keys(updates).length === 0) {
+      return NextResponse.json({ error: 'No editable fields supplied' }, { status: 400 });
+    }
+
+    const { data: row, error: fetchErr } = await supabase
+      .from('kb_assets')
+      .select('agent_id')
+      .eq('id', assetId)
+      .maybeSingle();
+    if (fetchErr) throw fetchErr;
+    if (!row) return NextResponse.json({ error: 'Asset not found' }, { status: 404 });
+    if (!(await findAgentInTenant({ tenantId: ctx.tenantId, agentId: row.agent_id }))) {
+      return NextResponse.json({ error: 'Asset not found' }, { status: 404 });
+    }
+
+    const { data: updated, error: updErr } = await supabase
+      .from('kb_assets')
+      .update(updates)
+      .eq('id', assetId)
+      .select()
+      .single();
+    if (updErr) throw updErr;
+
+    return NextResponse.json({ asset: updated });
+  } catch (err) {
+    console.error('[knowledge/assets PATCH] failed:', err);
+    return NextResponse.json({ error: err.message }, { status: 500 });
+  }
+}
+
+/**
  * DELETE /api/knowledge/assets?asset_id=xxx
  * Cleans up both the row and the underlying storage object.
  */

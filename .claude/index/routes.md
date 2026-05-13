@@ -1,6 +1,6 @@
 # Routes (auto-generated)
 
-Generated: 2026-05-12T07:38:45.937Z
+Generated: 2026-05-13T16:00:15.794Z
 
 Filesystem-derived list of API endpoints and UI pages. **Do not edit** — run `node scripts/build-index.mjs` to refresh.
 
@@ -41,7 +41,7 @@ Total: **72**
 | `/api/health` | GET | [app/api/health/route.js](../../app/api/health/route.js) |
 | `/api/inquiries` | GET | [app/api/inquiries/route.js](../../app/api/inquiries/route.js) |
 | `/api/inquiry-dashboard` | GET | [app/api/inquiry-dashboard/route.js](../../app/api/inquiry-dashboard/route.js) |
-| `/api/knowledge/assets` | GET, POST, DELETE | [app/api/knowledge/assets/route.js](../../app/api/knowledge/assets/route.js) |
+| `/api/knowledge/assets` | GET, POST, PATCH, DELETE | [app/api/knowledge/assets/route.js](../../app/api/knowledge/assets/route.js) |
 | `/api/knowledge/conflicts/resolve` | POST | [app/api/knowledge/conflicts/resolve/route.js](../../app/api/knowledge/conflicts/resolve/route.js) |
 | `/api/knowledge/corrections` | GET, POST, PUT | [app/api/knowledge/corrections/route.js](../../app/api/knowledge/corrections/route.js) |
 | `/api/knowledge/documents` | GET, DELETE | [app/api/knowledge/documents/route.js](../../app/api/knowledge/documents/route.js) |

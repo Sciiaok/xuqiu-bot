@@ -301,6 +301,16 @@
   border: 1px solid var(--border);
 }
 
+.msgAttachment {
+  margin-top: 6px;
+}
+
+.msgAttachmentCaption {
+  font-size: 12px;
+  color: var(--text2);
+  margin-top: 2px;
+}
+
 .pendingImage {
   display: flex;
   align-items: center;

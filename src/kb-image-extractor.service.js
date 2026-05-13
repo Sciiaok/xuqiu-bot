@@ -5,16 +5,19 @@
  * Currently handles:
  *   - PDF  (via unpdf → raw pixels + sharp → JPEG)
  *   - DOCX (via mammoth's image converter)
+ *   - XLSX (via jszip → xl/media/* → sharp)
  *
- * .xlsx / .csv / .txt / .md don't have meaningful embedded images.
+ * .csv / .txt / .md don't have meaningful embedded images.
  *
  * Output: each extracted image becomes a kb_assets row with source_doc_id
  * pointing back to the document, an auto-generated caption, and tag
  * inferences (is_sendable=false if vision marks it as internal-looking).
  */
+import crypto from 'node:crypto';
 import sharp from 'sharp';
 import { extractImages } from 'unpdf';
 import mammoth from 'mammoth';
+import JSZip from 'jszip';
 import supabase from '../lib/supabase.js';
 import { getSupabaseAdmin } from '../lib/supabase-admin.js';
 import { openrouter, MODELS } from './llm-client.js';
@@ -26,8 +29,14 @@ const STORAGE_BUCKET = 'kb-assets';
 // Threshold tuned so a 200×200 product thumb still passes but a 32×32 icon doesn't.
 const MIN_IMAGE_PIXELS = 100 * 100;
 
-// Cap on extraction work per document to avoid runaway costs on huge brochures.
-const MAX_IMAGES_PER_DOC = 20;
+// Vision-caption fan-out. 8 keeps Haiku rate-limit-safe while collapsing
+// a 50-image extract from ~minutes (serial) to ~10s.
+const VISION_CONCURRENCY = 8;
+
+// "Are you sure?" tripwire. The 50 MB file ceiling is the real cap; this only
+// fires for pathological cases (someone fits 5000 logos into one doc) and emits
+// a warning rather than silently truncating.
+const SANITY_IMAGE_WARN_AT = 500;
 
 // ── Public API ───────────────────────────────────────────────────────
 
@@ -36,17 +45,33 @@ const MAX_IMAGES_PER_DOC = 20;
  * kb_assets rows. Returns a summary so the upload route can include it
  * in its response.
  *
- * @param {Object} ctx          { tenantId, agentId, productLineId }
- * @param {Buffer} buffer       Raw file bytes (already validated upstream)
- * @param {string} docId        kb_documents.id this file became
- * @param {string} mimeType     File MIME type
- * @returns {Promise<{extracted: number, skipped: number, errors: string[]}>}
+ * Reparse-safe: before extracting, deletes any prior kb_assets rows (and
+ * their storage objects) that this same source_doc_id wrote under
+ * `<agent_id>/extracted/`. Manually-uploaded assets at other paths are
+ * untouched.
+ *
+ * @param {Object} ctx                   { tenantId, agentId, productLineId }
+ * @param {Buffer} buffer                Raw file bytes (already validated upstream)
+ * @param {string} docId                 kb_documents.id this file became
+ * @param {string} mimeType              File MIME type
+ * @param {Object} [options]
+ * @param {(ev:any)=>void} [options.onProgress]  Receives
+ *                                       `{stage:'images', total, done, warning?}`
+ *                                       events. Surfaced via SSE in the upload
+ *                                       pipeline so the KB UI can show "12/47".
+ * @returns {Promise<{extracted: number, skipped: number, total: number, errors: string[]}>}
  */
-export async function extractAndStoreImages(ctx, buffer, docId, mimeType) {
+export async function extractAndStoreImages(ctx, buffer, docId, mimeType, options = {}) {
   const { tenantId, agentId, productLineId } = ctx || {};
   if (!tenantId || !agentId || !productLineId) {
     throw new Error('extractAndStoreImages: tenantId+agentId+productLineId required');
   }
+  const onProgress = typeof options.onProgress === 'function' ? options.onProgress : null;
+
+  // Clear prior auto-extracted rows for this doc so reparse / re-upload don't
+  // pile up duplicates. We scope deletion to storage paths under
+  // `<agent>/extracted/`, leaving any future hand-uploaded assets alone.
+  await clearPriorAutoAssets({ tenantId, docId });
 
   let rawImages = [];
   try {
@@ -54,61 +79,179 @@ export async function extractAndStoreImages(ctx, buffer, docId, mimeType) {
       rawImages = await extractPdfImages(buffer);
     } else if (mimeType === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document') {
       rawImages = await extractDocxImages(buffer);
+    } else if (mimeType === 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet') {
+      rawImages = await extractXlsxImages(buffer);
     } else {
-      // Other types (xlsx/csv/md/txt): no extraction
-      return { extracted: 0, skipped: 0, errors: [] };
+      // Other types (csv/md/txt): no extraction
+      onProgress?.({ stage: 'images', total: 0, done: 0 });
+      return { extracted: 0, skipped: 0, total: 0, errors: [] };
     }
   } catch (e) {
-    return { extracted: 0, skipped: 0, errors: [`extract failed: ${e.message}`] };
+    return { extracted: 0, skipped: 0, total: 0, errors: [`extract failed: ${e.message}`] };
   }
 
-  // Cap + filter tiny
-  const candidates = rawImages
-    .filter(img => img.width * img.height >= MIN_IMAGE_PIXELS)
-    .slice(0, MAX_IMAGES_PER_DOC);
+  const candidates = rawImages.filter(img => img.width * img.height >= MIN_IMAGE_PIXELS);
+  const skippedTiny = rawImages.length - candidates.length;
 
+  if (candidates.length === 0) {
+    onProgress?.({ stage: 'images', total: 0, done: 0 });
+    return { extracted: 0, skipped: skippedTiny, total: 0, errors: [] };
+  }
+
+  // Sanity warning, not a cap — emit through SSE so the UI can show it.
+  if (candidates.length >= SANITY_IMAGE_WARN_AT) {
+    onProgress?.({
+      stage: 'images',
+      total: candidates.length,
+      done: 0,
+      warning: `本文件包含 ${candidates.length} 张图，将全部抽取（可能耗时较久）。`,
+    });
+  } else {
+    onProgress?.({ stage: 'images', total: candidates.length, done: 0 });
+  }
+
+  // Worker-pool: VISION_CONCURRENCY parallel processOneImage calls. Each emits
+  // a progress tick when it finishes so the UI counter ticks live.
+  // `seenHashes` is shared across workers — same-bytes image (logo repeated
+  // across sheets) is dropped without a wasted DB SELECT or storage write.
+  // `hashColumnExists` is probed once on the first call and reused so every
+  // image after the first either trusts the column is present, or skips the
+  // dedup query entirely. Saves N round-trips on big xlsx uploads.
+  const ctxShared = {
+    tenantId, agentId, productLineId, docId,
+    seenHashes: new Set(),
+    hashColumnState: { probed: false, exists: true },
+  };
   let extracted = 0;
+  let processed = 0;
   const errors = [];
-  for (const [idx, img] of candidates.entries()) {
-    try {
-      await processOneImage({ tenantId, agentId, productLineId, docId }, img, idx);
-      extracted++;
-    } catch (e) {
-      errors.push(`image ${idx}: ${e.message}`);
+  let nextIdx = 0;
+  const worker = async () => {
+    while (true) {
+      const myIdx = nextIdx++;
+      if (myIdx >= candidates.length) return;
+      try {
+        const ok = await processOneImage(ctxShared, candidates[myIdx], myIdx);
+        if (ok !== false) extracted++;
+      } catch (e) {
+        errors.push(`image ${myIdx}: ${e.message}`);
+      }
+      processed++;
+      onProgress?.({ stage: 'images', total: candidates.length, done: processed });
     }
-  }
+  };
+  const workerCount = Math.min(VISION_CONCURRENCY, candidates.length);
+  await Promise.all(Array.from({ length: workerCount }, worker));
 
   return {
     extracted,
-    skipped: rawImages.length - candidates.length,
+    skipped: skippedTiny,
+    total: candidates.length,
     errors,
   };
+}
+
+/**
+ * Remove auto-extracted kb_assets (and their storage objects) for one source
+ * document. Scoped to `<agent>/extracted/` so we don't trash anything a human
+ * uploaded under a different prefix. Best-effort: failures here don't block
+ * the fresh extraction pass that follows.
+ */
+async function clearPriorAutoAssets({ tenantId, docId }) {
+  if (!docId) return;
+  try {
+    const { data: prior } = await supabase
+      .from('kb_assets')
+      .select('id, storage_path')
+      .eq('tenant_id', tenantId)
+      .eq('source_doc_id', docId)
+      .like('storage_path', '%/extracted/%');
+    if (!prior || prior.length === 0) return;
+
+    const admin = getSupabaseAdmin();
+    const paths = prior.map((r) => r.storage_path).filter(Boolean);
+    if (paths.length > 0) {
+      try {
+        await admin.storage.from(STORAGE_BUCKET).remove(paths);
+      } catch (e) {
+        console.warn('[kb-image-extractor] storage cleanup failed:', e?.message);
+      }
+    }
+    const ids = prior.map((r) => r.id);
+    const { error } = await supabase.from('kb_assets').delete().in('id', ids);
+    if (error) console.warn('[kb-image-extractor] kb_assets cleanup failed:', error.message);
+  } catch (e) {
+    console.warn('[kb-image-extractor] clearPriorAutoAssets failed:', e?.message);
+  }
 }
 
 // ── Per-image pipeline ──────────────────────────────────────────────
 
 async function processOneImage(ctx, img, idx) {
-  const { tenantId, agentId, productLineId, docId } = ctx;
+  const { tenantId, agentId, productLineId, docId, seenHashes, hashColumnState } = ctx;
 
   // 1. Encode raw pixel buffer → JPEG (consistent format for storage + vision)
   const jpegBuffer = await encodeToJpeg(img);
+  const contentSha256 = crypto.createHash('sha256').update(jpegBuffer).digest('hex');
 
-  // 2. Upload to storage. Use admin (service-role) client because this runs
-  //    as a back-end side effect of the user-initiated doc upload — there's
-  //    no user session to inherit, and the kb-assets bucket RLS only permits
-  //    'authenticated' role.
+  // 1b. In-memory dedup: if a worker already enqueued this exact byte stream
+  //     in the current batch (logo repeated across xlsx sheets), drop it
+  //     without any DB or storage I/O.
+  if (seenHashes?.has(contentSha256)) return false;
+  seenHashes?.add(contentSha256);
+
+  // 1c. DB dedup probe — only on the first image of the batch. We just cleared
+  //     prior auto-extracted rows for this doc, so any leftover hit means a
+  //     concurrent run; honor it and skip. Subsequent images can rely on the
+  //     in-memory Set (we just inserted the row a moment ago, but it's the
+  //     same process — Set covers it).
+  const probeState = hashColumnState || { probed: true, exists: true };
+  if (!probeState.probed) {
+    try {
+      const { data: dup, error: dupErr } = await supabase
+        .from('kb_assets')
+        .select('id')
+        .eq('tenant_id', tenantId)
+        .eq('source_doc_id', docId)
+        .eq('content_sha256', contentSha256)
+        .maybeSingle();
+      if (dupErr) {
+        if (dupErr.code === '42703' || /content_sha256/i.test(dupErr.message || '')) {
+          probeState.exists = false;
+        } else {
+          throw dupErr;
+        }
+      } else if (dup) {
+        probeState.probed = true;
+        return false;
+      }
+    } catch (e) {
+      if (/content_sha256/i.test(e?.message || '')) {
+        probeState.exists = false;
+      } else {
+        throw e;
+      }
+    }
+    probeState.probed = true;
+  }
+  const hashColumnExists = probeState.exists;
+
+  // 2. Storage upload + Vision caption in parallel — neither depends on the
+  //    other's result. Saves ~200-500ms per image.
   const admin = getSupabaseAdmin();
   const filename = `${docId}_img${String(idx + 1).padStart(2, '0')}.jpg`;
   const storagePath = `${agentId}/extracted/${filename}`;
-  const { error: upErr } = await admin.storage
-    .from(STORAGE_BUCKET)
-    .upload(storagePath, jpegBuffer, { contentType: 'image/jpeg', upsert: true });
-  if (upErr) throw new Error(`storage upload: ${upErr.message}`);
 
-  // 3. Vision caption + safety call
-  const visionResult = await captionAndJudge(jpegBuffer);
+  const [uploadResult, visionResult] = await Promise.all([
+    admin.storage.from(STORAGE_BUCKET).upload(storagePath, jpegBuffer, {
+      contentType: 'image/jpeg', upsert: true,
+    }),
+    captionAndJudge(jpegBuffer),
+  ]);
+  if (uploadResult.error) throw new Error(`storage upload: ${uploadResult.error.message}`);
 
-  // 4. Caption embedding (so semantic find_asset can reach it)
+  // 3. Caption embedding (so semantic find_asset can reach it). Must follow
+  //    vision because the input is the caption text.
   let captionEmbedding = null;
   try {
     if (visionResult.caption) {
@@ -118,8 +261,10 @@ async function processOneImage(ctx, img, idx) {
     // Embedding is best-effort — kb_assets row should still land
   }
 
-  // 5. Write kb_assets row
-  const { error: insErr } = await supabase.from('kb_assets').insert({
+  // 4. Write kb_assets row. Only include content_sha256 if the column exists —
+  //    a missing column raises 42703 and aborts the insert, so we omit it when
+  //    the dedup probe earlier signaled the migration isn't applied yet.
+  const insertRow = {
     tenant_id: tenantId,
     agent_id: agentId,
     product_line_id: productLineId,
@@ -135,7 +280,9 @@ async function processOneImage(ctx, img, idx) {
     scenario: visionResult.scenario,
     is_sendable: visionResult.is_sendable,
     source_doc_id: docId,
-  });
+  };
+  if (hashColumnExists) insertRow.content_sha256 = contentSha256;
+  const { error: insErr } = await supabase.from('kb_assets').insert(insertRow);
   if (insErr) {
     // Roll back the storage upload to avoid orphans (use admin client — same
     // role that wrote the object, so it can also delete it).
@@ -211,6 +358,40 @@ async function extractDocxImages(buffer) {
   return collected;
 }
 
+// ── XLSX ─────────────────────────────────────────────────────────────
+
+// xlsx is a ZIP; embedded pictures (Insert → Picture, or pasted images)
+// land in `xl/media/imageN.{png|jpeg|gif|...}`. Cell anchors live in
+// `xl/drawings/*.xml` — we don't need them for retrieval, the raw bytes are
+// enough for vision-caption + sendable judgment.
+async function extractXlsxImages(buffer) {
+  const zip = await JSZip.loadAsync(buffer);
+  const mediaFiles = Object.keys(zip.files).filter(
+    (p) => p.startsWith('xl/media/') && !zip.files[p].dir,
+  );
+
+  const out = [];
+  for (const path of mediaFiles) {
+    if (out.length >= MAX_IMAGES_PER_DOC) break;
+    try {
+      const imgBuffer = await zip.files[path].async('nodebuffer');
+      const meta = await sharp(imgBuffer).metadata();
+      if (!meta.width || !meta.height) continue;
+      const { data, info } = await sharp(imgBuffer).raw().toBuffer({ resolveWithObject: true });
+      out.push({
+        data: new Uint8ClampedArray(data.buffer, data.byteOffset, data.byteLength),
+        width: info.width,
+        height: info.height,
+        channels: info.channels,
+        key: path,
+      });
+    } catch {
+      // Skip undecodable entries (rare format / corrupt blob).
+    }
+  }
+  return out;
+}
+
 // ── Vision caption + safety judgment ────────────────────────────────
 
 const VISION_PROMPT = `Look at this image from a B2B export company's product document and reply with ONLY a JSON object:
@@ -252,13 +433,15 @@ async function captionAndJudge(jpegBuffer) {
       is_sendable: parsed.is_sendable !== false,
     };
   } catch (e) {
-    // Vision failure: fall back to generic caption, mark unsendable so a human reviews
+    // Vision failure: keep the image but flag for review (is_sendable=null,
+    // not false — false hides it from Medici forever; null marks it "pending"
+    // so the operator can decide in the KB UI).
     return {
-      caption: '(auto-caption failed)',
-      asset_type: 'other',
+      caption: '(auto-caption failed — pending review)',
+      asset_type: 'product_image',
       view: null,
       scenario: null,
-      is_sendable: false,
+      is_sendable: null,
     };
   }
 }

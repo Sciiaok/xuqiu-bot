@@ -855,6 +855,94 @@
   background: var(--red-dim);
 }
 
+.assetActions {
+  display: flex;
+  gap: 6px;
+  margin-top: 6px;
+  flex-wrap: wrap;
+}
+
+.assetActionBtn {
+  padding: 4px 10px;
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-size: 11px;
+  font-family: var(--font-sans);
+  color: var(--text2);
+  cursor: pointer;
+  transition: color .15s, border-color .15s, background .15s, opacity .15s;
+}
+
+.assetActionBtn:hover:not(:disabled) {
+  color: var(--text);
+  border-color: var(--text3);
+  background: var(--bg2);
+}
+
+.assetActionBtn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.assetEditInput {
+  width: 100%;
+  margin-top: 4px;
+  padding: 6px 8px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  font-size: 12px;
+  font-family: var(--font-sans);
+  color: var(--text);
+  resize: vertical;
+}
+
+.assetEditInput:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.assetEditRow {
+  display: flex;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+.assetSaveBtn,
+.assetCancelBtn {
+  padding: 4px 12px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-family: var(--font-sans);
+  cursor: pointer;
+  transition: opacity .15s;
+}
+
+.assetSaveBtn {
+  background: var(--accent);
+  border: 1px solid var(--accent);
+  color: #fff;
+}
+
+.assetCancelBtn {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--text2);
+}
+
+.assetSaveBtn:disabled,
+.assetCancelBtn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.assetEditError {
+  color: var(--red);
+  font-size: 11px;
+  margin-top: 4px;
+}
+
 /* Teach section */
 .teachBox {
   display: flex;

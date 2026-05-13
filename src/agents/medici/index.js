@@ -101,7 +101,10 @@ function renderAvailableAssets(assets) {
   if (!Array.isArray(assets) || assets.length === 0) return '';
   const lines = assets.map((a) => {
     const desc = a.description ? a.description.replace(/\s+/g, ' ').trim() : '(no description)';
-    return `- asset_id=${a.id}  ${desc}`;
+    const skus = Array.isArray(a.linked_skus) && a.linked_skus.length > 0
+      ? `  [SKUs: ${a.linked_skus.join(', ')}]`
+      : '';
+    return `- asset_id=${a.id}${skus}  ${desc}`;
   });
   return `\n## AVAILABLE ASSETS (images you may attach to a reply)
 ${lines.join('\n')}
@@ -109,33 +112,21 @@ ${lines.join('\n')}
 ATTACHMENT RULES:
 - Default: do NOT attach any image. Leave \`attachments\` as [].
 - ONLY attach when the customer explicitly asks for an image / photo / 图 / 图片 / 看一下实物 / picture (or similar visual request).
-- Pick the asset_id whose description best matches what they asked for. If none fits, say so politely and don't attach.
+- Match priority: 1) If the customer named a specific SKU/model, pick the asset whose [SKUs: ...] tag contains it. 2) Otherwise pick by description fit. If none fits, say so politely and don't attach.
 - The image arrives as a separate WhatsApp message right after your text reply, so it's fine to write next_message like "Sending you the photo:" and let the image follow.`;
 }
 
 /**
- * Render the per-conversation dynamic system block. This is the entire payload
- * the skill methodology delegates to the host: per-line rules (catalog,
- * glossary, business-value guidance, lead fields) + per-turn state (missing
- * fields, prior classification, ad referral, sendable assets).
+ * Per-product-line context — stable across all conversations for one line.
+ * Lives in a cacheable block so Anthropic's prompt cache absorbs catalogue
+ * + business-value guidance + the AVAILABLE ASSETS list (which can balloon
+ * to 30+ image descriptions) instead of repaying full-price tokens each turn.
  */
-export function buildDynamicContext({ injection, missing_fields, prior_state, car_recommendation, ad_referral, available_assets } = {}) {
+export function buildPerLineContext({ injection, available_assets } = {}) {
   const inj = injection || {};
-  const missing = Array.isArray(missing_fields) && missing_fields.length > 0
-    ? missing_fields.join(', ')
-    : '(none)';
-  const priorLines = buildPriorStateLines(prior_state);
-  const priorBlock = priorLines.length > 0
-    ? priorLines.map((l) => `- ${l}`).join('\n')
-    : '- (no prior state — first turn)';
-
-  const carRecBlock = car_recommendation ? `\n\n## CAR RECOMMENDATION\n${car_recommendation}` : '';
-  const adBlock = ad_referral
-    ? `\n\n## Ad the customer clicked to start this conversation\n${ad_referral}`
-    : '';
   const assetsBlock = renderAvailableAssets(available_assets);
 
-  return `# DYNAMIC CONTEXT (this conversation)
+  return `# DYNAMIC CONTEXT (per product line)
 
 ## PRODUCT LINE: ${inj.line_name || '(unset)'}
 
@@ -150,26 +141,61 @@ Required-field tiers (used to decide inquiry_quality):
 
 ## BUSINESS VALUE GUIDANCE
 
-${inj.business_value_guidance || '(no guidance configured)'}
+${inj.business_value_guidance || '(no guidance configured)'}${assetsBlock}`;
+}
 
-## CURRENT MISSING FIELDS
+/**
+ * Per-turn / per-conversation state — varies each Medici call. Kept out of
+ * the cached block so we don't bust the per-line cache on every reply.
+ */
+export function buildPerTurnContext({ missing_fields, prior_state, car_recommendation, ad_referral } = {}) {
+  const missing = Array.isArray(missing_fields) && missing_fields.length > 0
+    ? missing_fields.join(', ')
+    : '(none)';
+  const priorLines = buildPriorStateLines(prior_state);
+  const priorBlock = priorLines.length > 0
+    ? priorLines.map((l) => `- ${l}`).join('\n')
+    : '- (no prior state — first turn)';
+
+  const carRecBlock = car_recommendation ? `\n\n## CAR RECOMMENDATION\n${car_recommendation}` : '';
+  const adBlock = ad_referral
+    ? `\n\n## Ad the customer clicked to start this conversation\n${ad_referral}`
+    : '';
+
+  return `## CURRENT MISSING FIELDS
 
 ${missing}
 
 ## PRIOR STATE
 
-${priorBlock}${carRecBlock}${adBlock}${assetsBlock}`;
+${priorBlock}${carRecBlock}${adBlock}`;
 }
 
 /**
- * Two blocks:
- *   [0] static skill body + host patch  (cache_control: ephemeral → cached)
- *   [1] dynamic per-conversation context (not cached)
+ * Legacy single-block helper, kept so external callers / tests that already
+ * consumed buildDynamicContext still get an equivalent string.
  */
-export function buildSystemBlocks(staticPrompt, dynamicContext) {
+export function buildDynamicContext(opts = {}) {
+  return `${buildPerLineContext(opts)}
+
+${buildPerTurnContext(opts)}`;
+}
+
+/**
+ * Three blocks for Anthropic prompt caching:
+ *   [0] static skill body + host patch  (cache_control: ephemeral)
+ *   [1] per-product-line context        (cache_control: ephemeral)
+ *   [2] per-turn / per-conversation state (not cached — varies)
+ *
+ * Two cache breakpoints means the per-line block (incl. AVAILABLE ASSETS)
+ * survives across every turn of every conversation for that product_line,
+ * not just within a single conversation.
+ */
+export function buildSystemBlocks(staticPrompt, perLine, perTurn) {
   return [
     { type: 'text', text: staticPrompt, cache_control: { type: 'ephemeral' } },
-    { type: 'text', text: dynamicContext },
+    { type: 'text', text: perLine, cache_control: { type: 'ephemeral' } },
+    { type: 'text', text: perTurn },
   ];
 }
 
@@ -323,7 +349,7 @@ async function loadAvailableAssets({ tenantId, productLineId }, logger) {
   try {
     const { data, error } = await supabase
       .from('kb_assets')
-      .select('id, description, mime_type, asset_type')
+      .select('id, description, mime_type, asset_type, linked_skus')
       .eq('tenant_id', tenantId)
       .eq('product_line_id', productLineId)
       .eq('is_sendable', true);
@@ -382,9 +408,16 @@ function markLastToolForCache(tools) {
 // ─── LLM transport (OpenRouter → Anthropic) ──────────────────────────
 
 function callClaude({ systemBlocks, messages, tools, toolChoice, tenantId }) {
-  // OpenRouter expects a single 'system' message, not Anthropic's block array.
+  // Pass system as a structured content array so `cache_control` markers
+  // reach Anthropic via OpenRouter. Flattening to a single string strips
+  // them and forces OpenRouter's auto-prefix-cache, which only gives us
+  // ONE breakpoint (the skill body) — explicit markers give us two
+  // (skill body + per-line block), so the AVAILABLE ASSETS / line config
+  // survives the cache instead of being re-paid every turn.
   const systemContent = Array.isArray(systemBlocks)
-    ? systemBlocks.map((b) => (typeof b === 'string' ? b : b.text || '')).join('\n\n')
+    ? systemBlocks
+        .filter((b) => b && typeof b === 'object' && typeof b.text === 'string' && b.text.length > 0)
+        .map((b) => (b.cache_control ? { type: 'text', text: b.text, cache_control: b.cache_control } : { type: 'text', text: b.text }))
     : typeof systemBlocks === 'string'
       ? systemBlocks
       : String(systemBlocks || '');
@@ -539,15 +572,17 @@ export async function runMedici({
   ];
   const toolsWithCache = markLastToolForCache(tools);
 
-  const dynamicContext = buildDynamicContext({
+  const perLineContext = buildPerLineContext({
     injection: agentConfig.dynamic_injection,
+    available_assets: availableAssets,
+  });
+  const perTurnContext = buildPerTurnContext({
     missing_fields: context.missing_fields,
     prior_state: context.prior_state,
     car_recommendation: context.car_recommendation,
     ad_referral: context.ad_referral,
-    available_assets: availableAssets,
   });
-  const systemBlocks = buildSystemBlocks(SYSTEM_STATIC, dynamicContext);
+  const systemBlocks = buildSystemBlocks(SYSTEM_STATIC, perLineContext, perTurnContext);
 
   logger.info('medici.request.started', {
     message_count: messages.length,

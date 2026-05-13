@@ -34,6 +34,7 @@ import {
   listAssets,
   uploadAsset,
   deleteAsset,
+  patchAsset,
   listQaSnippets,
   updateQaSnippet,
   deleteQaSnippet,
@@ -317,7 +318,12 @@ function FileUploadCard({ agentId, onChanged }) {
 
   function attachStream(key, docId) {
     const close = subscribeUploadProgress(docId, {
-      onProgress: (data) => patchItem(key, { stage: data.stage, total: data.total, done: data.done }),
+      onProgress: (data) => patchItem(key, {
+        stage: data.stage,
+        total: data.total,
+        done: data.done,
+        ...(data.warning ? { warning: data.warning } : {}),
+      }),
       onDone: (data) => {
         patchItem(key, {
           state: 'ready',
@@ -435,7 +441,7 @@ function UploadItemRow({ item }) {
     stageText = '上传中…';
   } else if (item.state === 'processing') {
     const base = STAGE_LABEL[item.stage] || '处理中';
-    if (item.stage === 'embedding' && item.total > 0) {
+    if ((item.stage === 'embedding' || item.stage === 'images') && item.total > 0) {
       stageText = `${base} ${item.done || 0}/${item.total}`;
     } else {
       stageText = `${base}…`;
@@ -455,6 +461,11 @@ function UploadItemRow({ item }) {
       <span>{item.name}</span>
       {stageText && (
         <span style={{ color: 'var(--text3)', marginLeft: 4 }}>· {stageText}</span>
+      )}
+      {item.warning && (
+        <div style={{ color: 'var(--orange, #c97f00)', marginLeft: 18, fontSize: 11, marginTop: 2 }}>
+          ⚠ {item.warning}
+        </div>
       )}
       {item.error && (
         <div style={{ color: 'var(--red)', marginLeft: 18, fontSize: 11, marginTop: 2 }}>
@@ -889,16 +900,85 @@ function AssetList({ assets, onChanged }) {
   if (assets.length === 0) return <div className={s.emptyState}>暂无图片资产</div>;
   return (
     <div className={s.assetGrid}>
-      {assets.map(a => (
-        <div key={a.id} className={s.assetCard}>
-          {a.preview_url ? (
-            // eslint-disable-next-line @next/next/no-img-element
-            <img src={a.preview_url} alt={a.description || a.filename} className={s.assetThumb} />
-          ) : <div className={s.assetThumbPlaceholder}>无预览</div>}
-          <div className={s.assetMeta}>
-            <div className={s.assetFilename}>{a.filename}</div>
+      {assets.map(a => <AssetCard key={a.id} asset={a} onChanged={onChanged} />)}
+    </div>
+  );
+}
+
+function AssetCard({ asset: a, onChanged }) {
+  const [editing, setEditing] = useState(false);
+  const [draftDesc, setDraftDesc] = useState(a.description || '');
+  const [draftSkus, setDraftSkus] = useState((a.linked_skus || []).join(', '));
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState('');
+
+  const sendableState = a.is_sendable === true ? 'on'
+    : a.is_sendable === false ? 'off'
+    : 'pending';
+
+  async function toggleSendable() {
+    setBusy(true); setErr('');
+    try {
+      // Cycle: pending → on → off → on …
+      const next = sendableState === 'on' ? false : true;
+      await patchAsset(a.id, { is_sendable: next });
+      onChanged?.();
+    } catch (e) {
+      setErr(e.message || '操作失败');
+    } finally { setBusy(false); }
+  }
+
+  async function saveEdit() {
+    setBusy(true); setErr('');
+    try {
+      const skus = draftSkus.split(/[,，\s]+/).map(s => s.trim()).filter(Boolean);
+      await patchAsset(a.id, { description: draftDesc, linked_skus: skus });
+      setEditing(false);
+      onChanged?.();
+    } catch (e) {
+      setErr(e.message || '保存失败');
+    } finally { setBusy(false); }
+  }
+
+  return (
+    <div className={s.assetCard}>
+      {a.preview_url ? (
+        // eslint-disable-next-line @next/next/no-img-element
+        <img src={a.preview_url} alt={a.description || a.filename} className={s.assetThumb} />
+      ) : <div className={s.assetThumbPlaceholder}>无预览</div>}
+      <div className={s.assetMeta}>
+        <div className={s.assetFilename}>{a.filename}</div>
+
+        {editing ? (
+          <>
+            <textarea
+              className={s.assetEditInput}
+              value={draftDesc}
+              onChange={(e) => setDraftDesc(e.target.value)}
+              placeholder="描述（这张图片画的是什么）"
+              rows={2}
+              disabled={busy}
+            />
+            <input
+              className={s.assetEditInput}
+              value={draftSkus}
+              onChange={(e) => setDraftSkus(e.target.value)}
+              placeholder="关联 SKU，逗号分隔（如 星耀6, 星耀8）"
+              disabled={busy}
+            />
+            <div className={s.assetEditRow}>
+              <button className={s.assetSaveBtn} onClick={saveEdit} disabled={busy}>
+                {busy ? '保存中…' : '保存'}
+              </button>
+              <button className={s.assetCancelBtn} onClick={() => { setEditing(false); setDraftDesc(a.description || ''); setDraftSkus((a.linked_skus || []).join(', ')); }} disabled={busy}>
+                取消
+              </button>
+            </div>
+          </>
+        ) : (
+          <>
             {a.description && <div className={s.assetDesc}>{a.description}</div>}
-            {(a.view || a.color || a.scenario || a.linked_skus?.length) && (
+            {(a.view || a.color || a.scenario || a.linked_skus?.length || sendableState !== 'on') && (
               <div className={s.assetDesc} style={{ fontSize: 11, color: 'var(--text3)' }}>
                 {[
                   a.asset_type && a.asset_type !== 'product_image' && a.asset_type,
@@ -906,18 +986,34 @@ function AssetList({ assets, onChanged }) {
                   a.color && `色:${a.color}`,
                   a.scenario && `场景:${a.scenario}`,
                   a.linked_skus?.length && `SKU:${a.linked_skus.join(',')}`,
-                  a.is_sendable === false && '不发送',
+                  sendableState === 'off' && '不发送',
+                  sendableState === 'pending' && '待审核',
                 ].filter(Boolean).join(' · ')}
               </div>
             )}
             <div className={s.assetSize}>{a.mime_type} · {fmtAssetSize(a.file_size_bytes)}</div>
-          </div>
+          </>
+        )}
+        {err && <div className={s.assetEditError}>{err}</div>}
+      </div>
+
+      {!editing && (
+        <div className={s.assetActions}>
+          <button className={s.assetActionBtn} onClick={() => setEditing(true)} title="编辑描述 / SKU 关联">编辑</button>
+          <button
+            className={s.assetActionBtn}
+            onClick={toggleSendable}
+            disabled={busy}
+            title={sendableState === 'on' ? '当前可发送，点击改为不发送' : '当前不可发送，点击允许发送'}
+          >
+            {sendableState === 'on' ? '✓ 可发送' : sendableState === 'off' ? '✗ 不发送' : '⏳ 待审核'}
+          </button>
           <button className={s.docDeleteBtn} onClick={async () => {
             if (!window.confirm('删除这张图片？')) return;
             await deleteAsset(a.id); onChanged?.();
           }} title="删除">删除</button>
         </div>
-      ))}
+      )}
     </div>
   );
 }

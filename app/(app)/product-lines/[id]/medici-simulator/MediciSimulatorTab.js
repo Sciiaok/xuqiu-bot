@@ -165,7 +165,11 @@ export default function MediciSimulatorTab({ productLineSlug }) {
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
 
-      setHistory((prev) => [...prev, { role: 'assistant', content: data.reply || '' }]);
+      setHistory((prev) => [...prev, {
+        role: 'assistant',
+        content: data.reply || '',
+        attachments: Array.isArray(data.attachments) ? data.attachments : [],
+      }]);
       const envelopeQuality = data.response?.inquiry_quality;
       const envelopeValue = data.response?.business_value;
       const stampedLeads = (data.response?.leads || []).map((lead) => ({
@@ -321,8 +325,12 @@ export default function MediciSimulatorTab({ productLineSlug }) {
             ) : (
               history.map((m, i) => {
                 const hasImage = m.image?.data_url;
+                const assistantAttachments = m.role === 'assistant' && Array.isArray(m.attachments)
+                  ? m.attachments
+                  : [];
+                const hasAttachments = assistantAttachments.length > 0;
                 const hasText = m.content && m.content.trim().length > 0;
-                const isEmpty = !hasImage && !hasText;
+                const isEmpty = !hasImage && !hasText && !hasAttachments;
                 return (
                   <div
                     key={i}
@@ -337,7 +345,17 @@ export default function MediciSimulatorTab({ productLineSlug }) {
                     )}
                     {hasText
                       ? <div>{m.content}</div>
-                      : (!hasImage && '(空回复 — spam / FAQ_END 场景)')}
+                      : (!hasImage && !hasAttachments && '(空回复 — spam / FAQ_END 场景)')}
+                    {hasAttachments && assistantAttachments.map((att) => (
+                      <div key={att.asset_id} className={s.msgAttachment}>
+                        <img
+                          src={att.url}
+                          alt={att.caption || att.description || att.filename || 'image'}
+                          className={s.msgImage}
+                        />
+                        {att.caption && <div className={s.msgAttachmentCaption}>{att.caption}</div>}
+                      </div>
+                    ))}
                   </div>
                 );
               })

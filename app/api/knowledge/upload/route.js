@@ -203,18 +203,38 @@ async function runBackground({ tenantCtx, doc, agent, filename, mimeType, fileTy
     const { extractAndStoreImages } = await import('../../../../src/kb-image-extractor.service.js');
     const [result, imageResult] = await Promise.all([
       processDocument(docCtx, docId, parsedContent, layer, { filename, fileType, onProgress }),
-      extractAndStoreImages(docCtx, buffer, docId, mimeType)
+      extractAndStoreImages(docCtx, buffer, docId, mimeType, { onProgress })
         .then(r => {
-          onProgress({ stage: 'images', extracted: r?.extracted || 0 });
+          onProgress({
+            stage: 'images',
+            total: r?.total || 0,
+            done: r?.extracted || 0,
+            extracted: r?.extracted || 0,
+            errors: r?.errors?.length || 0,
+          });
           return r;
         })
-        .catch(e => ({ extracted: 0, skipped: 0, errors: [`extraction failed: ${e.message}`] })),
+        .catch(e => ({ extracted: 0, skipped: 0, total: 0, errors: [`extraction failed: ${e.message}`] })),
     ]);
+
+    // Asset → SKU linking. Runs *after* both extractors finish so kb_products
+    // and kb_assets are both populated. Failures don't block the doc going ready.
+    let linkResult = { linked: 0 };
+    if ((imageResult?.extracted || 0) > 0) {
+      onProgress({ stage: 'linking', total: imageResult.extracted, done: 0 });
+      const { linkAssetsToProducts } = await import('../../../../src/kb-asset-linker.service.js');
+      linkResult = await linkAssetsToProducts({
+        tenantId: tenantCtx.tenantId,
+        productLineId: agent.product_line,
+        docId,
+      }).catch((e) => ({ linked: 0, errors: [`linker failed: ${e.message}`] }));
+    }
 
     emitProgress(docId, 'done', {
       knowledge_points: result.knowledge_points || 0,
       conflicts: result.conflicts || [],
       images: imageResult,
+      linked_assets: linkResult.linked || 0,
     });
   } catch (err) {
     // processDocument's own catch already cleaned up partial rows + set
