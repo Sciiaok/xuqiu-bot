@@ -43,6 +43,13 @@ export const config = {
     baseURL: 'https://api.firecrawl.dev/v1',
   },
 
+  // Tavily — web search REST API（Ogilvy 用，替代 Anthropic 原生 web_search Haiku 中转）。
+  // 未配置时 webSearch 自动 fallback 到 Anthropic 原生 web_search（贵 ~20×）。
+  tavily: {
+    apiKey: process.env.TAVILY_API_KEY,
+    baseURL: 'https://api.tavily.com',
+  },
+
   // AIGC — image generation knobs.
   // Client (apiKey/baseURL) is owned by llm-client's openrouter.
   aigc: {

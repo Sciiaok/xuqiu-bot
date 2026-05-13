@@ -64,9 +64,19 @@ function parseSSELine(line) {
 
 // ── Logging ──────────────────────────────────────────────────────────
 
-function logLlmCall({ method, provider, models, responseModel, tools, toolChoice, finishReason, promptTokens, completionTokens, durationMs, tenantId, callSite }) {
+function logLlmCall({
+  method, provider, models, responseModel, tools, toolChoice, finishReason,
+  promptTokens, completionTokens, cacheCreationInputTokens, cacheReadInputTokens,
+  durationMs, tenantId, callSite,
+}) {
   const model = responseModel || models?.[0];
-  const costUsd = calcCostUsd({ model, promptTokens, completionTokens });
+  const costUsd = calcCostUsd({
+    model,
+    promptTokens,
+    completionTokens,
+    cacheCreationInputTokens,
+    cacheReadInputTokens,
+  });
 
   console.log(JSON.stringify({
     ts: new Date().toISOString(),
@@ -83,6 +93,8 @@ function logLlmCall({ method, provider, models, responseModel, tools, toolChoice
     finish_reason: finishReason || null,
     prompt_tokens: promptTokens || 0,
     completion_tokens: completionTokens || 0,
+    cache_creation_input_tokens: cacheCreationInputTokens || 0,
+    cache_read_input_tokens: cacheReadInputTokens || 0,
     cost_usd: costUsd,
     duration_ms: durationMs,
     tenant_id: tenantId || null,
@@ -91,26 +103,63 @@ function logLlmCall({ method, provider, models, responseModel, tools, toolChoice
 
   // Fire-and-forget 落表，不 await、不抛错 —— 写不进去也不应该影响 LLM 返回。
   // callSite 缺失时仍记一行，便于发现哪些调用点没埋点。
+  //
+  // 兼容性：cache_*_tokens 列在 2026-05-13 migration 才加上。migration 还没 apply
+  // 的环境，PostgREST 会回 42703 undefined_column；这时退回到只写老列，不丢日志。
   try {
-    getSupabaseAdmin()
-      .from('llm_usage_logs')
-      .insert({
-        tenant_id: tenantId || null,
-        call_site: callSite || 'unknown',
-        provider,
-        model: model || null,
-        prompt_tokens: promptTokens || 0,
-        completion_tokens: completionTokens || 0,
-        cost_usd: costUsd,
-        duration_ms: durationMs ?? null,
-        finish_reason: finishReason || null,
-      })
-      .then(({ error }) => {
-        if (error) console.error('[llm-client] persist usage failed:', error.message);
-      });
+    const baseRow = {
+      tenant_id: tenantId || null,
+      call_site: callSite || 'unknown',
+      provider,
+      model: model || null,
+      prompt_tokens: promptTokens || 0,
+      completion_tokens: completionTokens || 0,
+      cost_usd: costUsd,
+      duration_ms: durationMs ?? null,
+      finish_reason: finishReason || null,
+    };
+    const rowWithCache = {
+      ...baseRow,
+      cache_creation_input_tokens: cacheCreationInputTokens || 0,
+      cache_read_input_tokens: cacheReadInputTokens || 0,
+    };
+    const admin = getSupabaseAdmin();
+    admin.from('llm_usage_logs').insert(rowWithCache).then(({ error }) => {
+      if (!error) return;
+      // 42703 = undefined_column —— migration 没 apply，退回老 schema 重试。
+      if (error.code === '42703' || /column .* does not exist/i.test(error.message || '')) {
+        admin.from('llm_usage_logs').insert(baseRow).then(({ error: fallbackErr }) => {
+          if (fallbackErr) console.error('[llm-client] persist usage failed:', fallbackErr.message);
+        });
+      } else {
+        console.error('[llm-client] persist usage failed:', error.message);
+      }
+    });
   } catch (err) {
     console.error('[llm-client] persist usage threw:', err?.message);
   }
+}
+
+// Anthropic prompt-caching 的 usage 字段在 OpenRouter 透传时藏在不同位置，
+// 不同 provider 命名也略有差异 —— 这个 helper 把它们统一成 { cacheCreate, cacheRead }。
+//
+// 已知字段路径（命中过的形态都兜底）：
+//   usage.cache_creation_input_tokens / usage.cache_read_input_tokens   ← OpenRouter 直透 Anthropic
+//   usage.prompt_tokens_details.{cached_tokens, cache_write_tokens}     ← OpenAI 兼容字段（部分 provider）
+//   usage.cached_tokens                                                 ← 旧版兜底
+function extractCacheTokens(usage) {
+  if (!usage) return { cacheCreate: 0, cacheRead: 0 };
+  const details = usage.prompt_tokens_details || {};
+  const cacheCreate =
+    usage.cache_creation_input_tokens ??
+    details.cache_write_tokens ??
+    0;
+  const cacheRead =
+    usage.cache_read_input_tokens ??
+    details.cached_tokens ??
+    usage.cached_tokens ??
+    0;
+  return { cacheCreate: Number(cacheCreate) || 0, cacheRead: Number(cacheRead) || 0 };
 }
 
 // ══════════════════════════════════════════════════════════════════════
@@ -310,12 +359,15 @@ const openrouter = {
       }
       const result = await response.json();
 
+      const { cacheCreate, cacheRead } = extractCacheTokens(result.usage);
       logLlmCall({
         ...logMeta,
         responseModel: result.model,
         finishReason: result.choices?.[0]?.finish_reason,
         promptTokens: result.usage?.prompt_tokens,
         completionTokens: result.usage?.completion_tokens,
+        cacheCreationInputTokens: cacheCreate,
+        cacheReadInputTokens: cacheRead,
         durationMs: Date.now() - t0,
       });
       return result;
@@ -340,12 +392,15 @@ const openrouter = {
       const streamObj = createStream(params);
 
       streamObj.finalMessage().then(result => {
+        const { cacheCreate, cacheRead } = extractCacheTokens(result.usage);
         logLlmCall({
           ...logMeta,
           responseModel: result.model,
           finishReason: result.choices?.[0]?.finish_reason,
           promptTokens: result.usage?.prompt_tokens,
           completionTokens: result.usage?.completion_tokens,
+          cacheCreationInputTokens: cacheCreate,
+          cacheReadInputTokens: cacheRead,
           durationMs: Date.now() - t0,
         });
       }).catch(err => {

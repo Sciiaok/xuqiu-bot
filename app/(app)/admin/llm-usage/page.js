@@ -142,6 +142,18 @@ export default function AdminLlmUsagePage() {
                 ? `p50 ${fmtMs(data.totals.p50_duration_ms)} · p95 ${fmtMs(data.totals.p95_duration_ms)}`
                 : '无延迟数据'}
             />
+            {data.hasCacheCols && (() => {
+              const read  = data.totals.cache_read_input_tokens || 0;
+              const write = data.totals.cache_creation_input_tokens || 0;
+              const totalInput = (data.totals.prompt_tokens || 0) + read + write;
+              return (
+                <Stat
+                  label="Prompt cache"
+                  value={`${fmtCompact(read)} 命中`}
+                  sub={`${fmtCompact(write)} 写入 · 命中率 ${fmtPct(totalInput ? read / totalInput : 0)}`}
+                />
+              );
+            })()}
           </div>
 
           {data.byDay.length > 1 && (
@@ -195,6 +207,7 @@ export default function AdminLlmUsagePage() {
               </>
             )}
             rowKey={r => r.tenant_id || '__null__'}
+            showCache={data.hasCacheCols}
           />
 
           <BreakdownTable
@@ -203,6 +216,7 @@ export default function AdminLlmUsagePage() {
             firstHeader="Call site"
             renderFirst={r => <code>{r.call_site}</code>}
             rowKey={r => r.call_site}
+            showCache={data.hasCacheCols}
           />
 
           <BreakdownTable
@@ -211,6 +225,7 @@ export default function AdminLlmUsagePage() {
             firstHeader="Model"
             renderFirst={r => <code>{r.model}</code>}
             rowKey={r => r.model}
+            showCache={data.hasCacheCols}
           />
 
           <BreakdownTable
@@ -219,6 +234,7 @@ export default function AdminLlmUsagePage() {
             firstHeader="Provider"
             renderFirst={r => <code>{r.provider}</code>}
             rowKey={r => r.provider}
+            showCache={data.hasCacheCols}
           />
 
           <div className={s.footnote}>
@@ -232,7 +248,7 @@ export default function AdminLlmUsagePage() {
   );
 }
 
-function BreakdownTable({ title, rows, firstHeader, renderFirst, rowKey }) {
+function BreakdownTable({ title, rows, firstHeader, renderFirst, rowKey, showCache = false }) {
   if (!rows || rows.length === 0) {
     return (
       <Section title={title}>
@@ -250,6 +266,7 @@ function BreakdownTable({ title, rows, firstHeader, renderFirst, rowKey }) {
               <th className={s.numCol}>调用</th>
               <th className={s.numCol}>Prompt</th>
               <th className={s.numCol}>Completion</th>
+              {showCache && <th className={s.numCol} title="cache_read / cache_creation tokens">Cache R/W</th>}
               <th className={s.numCol}>平均延迟</th>
               <th className={s.numCol}>成本</th>
               <th className={s.numCol}>占比</th>
@@ -262,6 +279,11 @@ function BreakdownTable({ title, rows, firstHeader, renderFirst, rowKey }) {
                 <td className={s.numCol}>{fmtInt(r.calls)}</td>
                 <td className={s.numCol}>{fmtInt(r.prompt_tokens)}</td>
                 <td className={s.numCol}>{fmtInt(r.completion_tokens)}</td>
+                {showCache && (
+                  <td className={s.numCol}>
+                    {fmtCompact(r.cache_read_input_tokens)} / {fmtCompact(r.cache_creation_input_tokens)}
+                  </td>
+                )}
                 <td className={s.numCol}>{fmtMs(r.avg_duration_ms)}</td>
                 <td className={`${s.numCol} ${s.cost}`}>{fmtUsd(r.cost_usd)}</td>
                 <td className={s.numCol}>

@@ -34,19 +34,35 @@ export async function GET(request) {
     const admin = getSupabaseAdmin();
 
     // PostgREST 默认每次 1000 行上限，单纯 .limit(N) 不能突破。分页拉满上限。
+    // cache_*_tokens 列在 2026-05-13 migration 才加上。第一页探测：失败（42703）
+    // 退回老 schema，整窗口都按老列拉，避免每页都重试。
     const PAGE_SIZE = 1000;
     const ROW_LIMIT = 50000;
+    const FULL_COLS = 'tenant_id, call_site, provider, model, prompt_tokens, completion_tokens, cache_creation_input_tokens, cache_read_input_tokens, cost_usd, duration_ms, created_at';
+    const BASE_COLS = 'tenant_id, call_site, provider, model, prompt_tokens, completion_tokens, cost_usd, duration_ms, created_at';
+    let hasCacheCols = true;
+    let selectCols = FULL_COLS;
     const rows = [];
     for (let from = 0; from < ROW_LIMIT; from += PAGE_SIZE) {
       const to = Math.min(from + PAGE_SIZE - 1, ROW_LIMIT - 1);
       const { data: page, error } = await admin
         .from('llm_usage_logs')
-        .select('tenant_id, call_site, provider, model, prompt_tokens, completion_tokens, cost_usd, duration_ms, created_at')
+        .select(selectCols)
         .gte('created_at', fromIso)
         .lte('created_at', toIso)
         .order('created_at', { ascending: false })
         .range(from, to);
-      if (error) throw error;
+      if (error) {
+        // 仅首页且是 missing-column 时降级；其它情况直接抛
+        if (from === 0 && hasCacheCols
+            && (error.code === '42703' || /column .* does not exist/i.test(error.message || ''))) {
+          hasCacheCols = false;
+          selectCols = BASE_COLS;
+          from -= PAGE_SIZE;  // 重试同一页
+          continue;
+        }
+        throw error;
+      }
       if (!page || page.length === 0) break;
       rows.push(...page);
       if (page.length < PAGE_SIZE) break;
@@ -55,7 +71,11 @@ export async function GET(request) {
     const { data: tenants } = await admin.from('tenants').select('id, name, slug');
     const tenantNameById = new Map((tenants || []).map(t => [t.id, t.name || t.slug || t.id]));
 
-    const totals = { calls: 0, prompt_tokens: 0, completion_tokens: 0, cost_usd: 0 };
+    const totals = {
+      calls: 0, prompt_tokens: 0, completion_tokens: 0,
+      cache_creation_input_tokens: 0, cache_read_input_tokens: 0,
+      cost_usd: 0,
+    };
     const byTenant = new Map();
     const byCallSite = new Map();
     const byModel = new Map();
@@ -68,6 +88,8 @@ export async function GET(request) {
         calls: 0,
         prompt_tokens: 0,
         completion_tokens: 0,
+        cache_creation_input_tokens: 0,
+        cache_read_input_tokens: 0,
         cost_usd: 0,
         duration_sum: 0,
         duration_count: 0,
@@ -75,6 +97,8 @@ export async function GET(request) {
       cur.calls += 1;
       cur.prompt_tokens += row.prompt_tokens || 0;
       cur.completion_tokens += row.completion_tokens || 0;
+      cur.cache_creation_input_tokens += row.cache_creation_input_tokens || 0;
+      cur.cache_read_input_tokens += row.cache_read_input_tokens || 0;
       cur.cost_usd += Number(row.cost_usd) || 0;
       if (row.duration_ms != null) {
         cur.duration_sum += row.duration_ms;
@@ -87,6 +111,8 @@ export async function GET(request) {
       totals.calls += 1;
       totals.prompt_tokens += r.prompt_tokens || 0;
       totals.completion_tokens += r.completion_tokens || 0;
+      totals.cache_creation_input_tokens += r.cache_creation_input_tokens || 0;
+      totals.cache_read_input_tokens += r.cache_read_input_tokens || 0;
       totals.cost_usd += Number(r.cost_usd) || 0;
       bumpBucket(byTenant, r.tenant_id || '__null__', r);
       bumpBucket(byCallSite, r.call_site || 'unknown', r);
@@ -116,6 +142,8 @@ export async function GET(request) {
       calls: b.calls,
       prompt_tokens: b.prompt_tokens,
       completion_tokens: b.completion_tokens,
+      cache_creation_input_tokens: b.cache_creation_input_tokens,
+      cache_read_input_tokens: b.cache_read_input_tokens,
       cost_usd: round6(b.cost_usd),
       avg_duration_ms: b.duration_count ? Math.round(b.duration_sum / b.duration_count) : null,
       share: totalCost > 0 ? b.cost_usd / totalCost : 0,
@@ -152,6 +180,8 @@ export async function GET(request) {
         prompt_tokens: totals.prompt_tokens,
         completion_tokens: totals.completion_tokens,
         total_tokens: totals.prompt_tokens + totals.completion_tokens,
+        cache_creation_input_tokens: totals.cache_creation_input_tokens,
+        cache_read_input_tokens: totals.cache_read_input_tokens,
         cost_usd: totalCost,
         avg_cost_per_call: totals.calls ? round6(totals.cost_usd / totals.calls) : 0,
         avg_duration_ms: avgDur,
@@ -168,6 +198,7 @@ export async function GET(request) {
       byDay: dayList,
       sampleSize: rows?.length || 0,
       capped: (rows?.length || 0) >= ROW_LIMIT,
+      hasCacheCols,
     });
   } catch (err) {
     console.error('[admin/llm-usage GET] failed:', err);

@@ -48,6 +48,29 @@ const HOST_PATCH = fs.readFileSync(
   'utf8',
 );
 
+// References are inlined into the cached system prompt (see SYSTEM_STATIC below).
+// Past iterations exposed a `read_skill_reference` tool that streamed a single
+// reference's content into the conversation as a tool_result — but each call
+// added 10–20K characters of permanent history bloat. Inlining all four ~once,
+// inside the ephemeral-cached static prefix, costs the bundle once per cache
+// window (5min) at 0.1× input price on cache reads, and removes the per-call
+// tool round-trip entirely.
+const REFERENCES_INLINED = (() => {
+  const order = ['data-sources', 'strategy-template', 'meta-creative-specs', 'meta-api-template'];
+  const parts = ['## 附录 · 参考资料（已内联，无需调用工具）\n'];
+  for (const key of order) {
+    const content = SKILL.references.get(key);
+    if (!content) continue;
+    parts.push(`### references/${key}.md\n\n${content.trim()}\n`);
+  }
+  // Any reference not in `order` (forward-compat for future skill bundles)
+  for (const [key, content] of SKILL.references) {
+    if (order.includes(key)) continue;
+    parts.push(`### references/${key}.md\n\n${(content || '').trim()}\n`);
+  }
+  return parts.join('\n');
+})();
+
 // ── Tool schemas ────────────────────────────────────────────────────────
 
 const TOOLS = [
@@ -178,24 +201,6 @@ const TOOLS = [
     },
   },
   {
-    name: 'read_skill_reference',
-    description:
-      '按需读取 overseas-ad-planning skill 的 references/*.md 详细模板内容。' +
-      'skill 主文档里出现 [详见](references/xxx.md) 这种引用时，调本工具拉取。' +
-      '可用名字：data-sources / strategy-template / meta-creative-specs / meta-api-template。' +
-      'name 不带路径前缀和 .md 后缀。',
-    input_schema: {
-      type: 'object',
-      required: ['name'],
-      properties: {
-        name: {
-          type: 'string',
-          description: 'reference 文件名（不含路径和 .md 后缀），如 "strategy-template"',
-        },
-      },
-    },
-  },
-  {
     name: 'generate_ad_creative',
     description:
       '生成一张 1080×1080 广告图。必须有用户上传的参考图。' +
@@ -245,21 +250,31 @@ const TOOLS = [
 
 // ── System prompt ───────────────────────────────────────────────────────
 //
-// Composed of three parts:
+// Composed of four parts:
 //   1. SKILL  — overseas-ad-planning skill body (loaded from .skill bundle).
 //      Defines the 5-stage SOP (needs intake → market analysis → strategy →
 //      creative → Meta launch docs).
 //   2. HOST_PATCH — CTW collar prose. Tells the model: no filesystem, tool
 //      whitelist, distill to single CTW campaign before calling draft_ad_plan,
 //      etc. Lives in skill-host-patch.md.
-//   3. DYNAMIC — per-session facts (WA numbers + uploaded image list). Built
-//      per-turn in buildDynamicSystemPrompt().
+//   3. REFERENCES_INLINED — full content of skills/.../references/*.md, joined
+//      with section headers. ~16K tokens. Previously pulled lazily via the
+//      now-removed `read_skill_reference` tool; inlining removes the tool
+//      round-trip and lets the cache absorb the cost: at 0.1× input price on
+//      cache hits this is ~$0.0003 per cached read vs ~$0.05+ each time the
+//      old tool roundtripped a 10-20k char tool_result into history.
+//   4. DYNAMIC — per-session facts (WA numbers + uploaded image list). Built
+//      per-turn in buildDynamicSystemPrompt(). NOT part of the cached prefix.
 //
-// Static segment (1 + 2) is stable across turns and gets cache_control. Skill
-// body alone is ~10K tokens; references/*.md are NOT included here — the agent
-// pulls them on demand via the read_skill_reference tool.
+// Static segment (1 + 2 + 3) is stable across turns and gets cache_control.
 
-const SYSTEM_STATIC = SKILL.systemPrompt + '\n\n---\n\n' + HOST_PATCH;
+const SYSTEM_STATIC = [
+  SKILL.systemPrompt,
+  '---',
+  HOST_PATCH,
+  '---',
+  REFERENCES_INLINED,
+].join('\n\n');
 
 /**
  * Collect every image URL the user has uploaded in this session (in order).
@@ -311,19 +326,27 @@ ${uploadsBlock}
 
 // ── Message helpers ────────────────────────────────────────────────────
 // Build the messages array for OpenRouter with Anthropic prompt caching.
-// The static prompt gets `cache_control: ephemeral` so it's reused across
-// turns (5min TTL, charged once per 5min window).
 //
-// NOTE (2026-04): OpenRouter's routing may send the request to Bedrock or
-// other providers that strip cache_control, in which case we see 0 cached
-// tokens in usage stats. Leaving the flag in place is harmless and activates
-// automatically once routing picks Anthropic-direct. Benchmarked: with
-// provider: { order: ['anthropic'], allow_fallbacks: false } we still got 0
-// writes in one test — investigating separately. Other optimizations (B/C/D/
-// E/F) deliver the bulk of the speedup regardless.
+// Two cache breakpoints are placed (Anthropic allows up to 4):
+//   1. End of SYSTEM_STATIC — caches skill body + host patch + references
+//      (~22K tokens) for the entire 5-min window. Stable across all turns.
+//   2. Last user/assistant message in `history` — caches the growing
+//      conversation prefix. Subsequent iterations of the same tool-use loop
+//      (and the user's next turn within 5min) replay the prefix at the
+//      cache-read rate (0.10× input price).
+//
+// Tool messages and assistant tool_call-only rows are skipped for the second
+// breakpoint because OpenAI-format tool messages aren't a reliable place to
+// attach cache_control (we'd need to alter content shape). Walking back to the
+// most recent user/assistant text message keeps the format clean and still
+// captures > 90% of multi-turn savings.
+//
+// Provider is pinned to Anthropic direct (see the call site) — Bedrock and
+// other OpenRouter providers strip cache_control silently, which makes the
+// usage stats show zero cache hits even when the request was well-formed.
 
 function buildMessagesWithCache(staticPrompt, dynamicPrompt, history) {
-  return [
+  const messages = [
     {
       role: 'system',
       content: [
@@ -331,8 +354,103 @@ function buildMessagesWithCache(staticPrompt, dynamicPrompt, history) {
         { type: 'text', text: dynamicPrompt },
       ],
     },
-    ...history,
+    ...history.map(m => ({ ...m })),
   ];
+
+  // Walk back through history to find the most recent user/assistant message
+  // with non-null content and tag its last text block with cache_control.
+  for (let i = messages.length - 1; i >= 1; i--) {
+    const m = messages[i];
+    if (m.role !== 'user' && m.role !== 'assistant') continue;
+    if (m.content === null || m.content === undefined) continue;
+    if (typeof m.content === 'string') {
+      m.content = [
+        { type: 'text', text: m.content, cache_control: { type: 'ephemeral' } },
+      ];
+      break;
+    }
+    if (Array.isArray(m.content) && m.content.length > 0) {
+      const arr = m.content.slice();
+      let tagged = false;
+      for (let j = arr.length - 1; j >= 0; j--) {
+        if (arr[j]?.type === 'text') {
+          arr[j] = { ...arr[j], cache_control: { type: 'ephemeral' } };
+          tagged = true;
+          break;
+        }
+      }
+      // Image-only message (e.g. user uploaded a photo with no caption) — append
+      // a zero-width breadcrumb so we still have a text block to anchor the cache.
+      if (!tagged) {
+        arr.push({ type: 'text', text: '​', cache_control: { type: 'ephemeral' } });
+      }
+      m.content = arr;
+      break;
+    }
+  }
+
+  return messages;
+}
+
+// ── Model routing ──────────────────────────────────────────────────────
+//
+// Stage-aware model picker. Reads the recent conversation and routes
+// Stage-3 / Stage-5 turns to Sonnet (chain-of-reasoning matters there) and
+// everything else to Haiku. Synthesis iterations after a tool result are
+// always Haiku — they're small structured outputs Haiku does well.
+//
+// Keyword list is hand-tuned against the skill body + host patch. Bias is
+// conservative: when a Stage 3/5 marker shows up *anywhere* in the last 4
+// messages, we stay on Sonnet for the entire turn (and all its tool-use
+// iterations, since the keyword stays in history). Better to over-spend a
+// few dollars than to produce a thin 10-章 策划案.
+
+// Stage-3 / Stage-5 / 蒸馏 triggers. Lowercased; matched as substring.
+// Order doesn't matter — first hit wins.
+const SONNET_STAGE_TRIGGERS = [
+  '阶段三', '阶段五',
+  '策划案', '10 章', '10章', '十章',
+  'plan_json', '投放方案', '后台操作手册',
+  '蒸馏', 'draft_ad_plan',
+  '完整方案', '出方案', '出策划', '生成方案', '输出方案', '正式输出',
+];
+
+function extractText(content) {
+  if (typeof content === 'string') return content;
+  if (Array.isArray(content)) {
+    return content
+      .filter(b => b?.type === 'text' && typeof b.text === 'string')
+      .map(b => b.text)
+      .join(' ');
+  }
+  return '';
+}
+
+export function pickModelForOgilvyTurn(history) {
+  // Synthesis after tool result: Haiku is strictly better — fast, cheap,
+  // structured-output strong. Long reasoning doesn't help here.
+  const last = history[history.length - 1];
+  if (last?.role === 'tool') return MODELS.HAIKU;
+
+  // Scan the last 4 messages (user + assistant prose) for stage triggers.
+  // Why a window: a Stage-3 trigger can sit in the assistant's prior message
+  // ("即将输出 10 章策划案") and the user's reply might just be "好的，继续";
+  // we still want Sonnet on this turn.
+  const recentText = history
+    .slice(-4)
+    .map(m => extractText(m.content))
+    .join(' ')
+    .toLowerCase();
+  if (SONNET_STAGE_TRIGGERS.some(k => recentText.includes(k))) return MODELS.SONNET;
+
+  // First user message of the session: the intake dialog quality (asking
+  // smart clarifying questions, role identification) benefits from Sonnet.
+  // `history` here always includes the just-added user message, so "no prior
+  // assistant" means this is iteration 1 of the first turn.
+  const hasAssistantPrior = history.slice(0, -1).some(m => m.role === 'assistant');
+  if (!hasAssistantPrior) return MODELS.SONNET;
+
+  return MODELS.HAIKU;
 }
 
 // ── Main generator ─────────────────────────────────────────────────────
@@ -390,14 +508,13 @@ export async function* runOgilvy(sessionId, userText, attachments = [], userId =
     const accToolCalls = {};
     let finishReason = null;
 
-    // Model routing: turns that synthesize output from tool results (writing
-    // the plan JSON, summarizing search results, etc.) don't need Sonnet's
-    // reasoning — Haiku is 3-5× faster at the same quality for structured
-    // output. Conversational turns (info gathering, asking user questions)
-    // still use Sonnet.
-    const last = history[history.length - 1];
-    const synthesisTurn = last?.role === 'tool';
-    const model = synthesisTurn ? MODELS.HAIKU : MODELS.SONNET;
+    // Model routing — stage-aware. The previous "first-turn Sonnet, else Haiku"
+    // rule was too crude: Stage 3 (10-章策划案) and Stage 5 (双文档 + plan_json
+    // 蒸馏) are exactly the turns where chain-of-reasoning quality matters, and
+    // Haiku produces visibly weaker 章节连贯性 there. pickModelForOgilvyTurn
+    // scans recent messages for canonical stage markers and routes those turns
+    // back to Sonnet while keeping the cheap default for everything else.
+    const model = pickModelForOgilvyTurn(history);
 
     try {
       const stream = openrouter.messages.stream({
@@ -600,26 +717,9 @@ async function executeTool(name, input, ctx) {
     case 'draft_ad_plan':
       return draftAdPlan(input, ctx);
     case 'web_search':
-      return webSearch(input, { tenantId: ctx.tenantId });
+      return webSearch(input, { tenantId: ctx.tenantId, sessionId: ctx.sessionId });
     case 'read_webpage':
       return readWebpage(input, { tenantId: ctx.tenantId });
-    case 'read_skill_reference': {
-      // Lazy-load a skill reference. Keeping references out of the system
-      // prompt saves ~20K tokens per turn; the agent pulls only what it needs
-      // for the current stage. Reference content is returned verbatim — large
-      // (up to ~8K tokens for meta-api-template) but the call is one-shot so
-      // it lands in tool_result history (cached on subsequent turns).
-      const refName = String(input?.name || '').replace(/\.md$/, '').replace(/^references\//, '');
-      const content = SKILL.references.get(refName);
-      if (!content) {
-        return {
-          error: 'reference_not_found',
-          message: `未找到 reference "${refName}"。`,
-          available: [...SKILL.references.keys()],
-        };
-      }
-      return { name: refName, content };
-    }
     case 'generate_ad_creative': {
       // Translate 1-based index references into real Supabase URLs. Keeping
       // URLs out of tool args saves ~200-600 tokens per call (Supabase URLs

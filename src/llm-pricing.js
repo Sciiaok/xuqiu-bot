@@ -4,6 +4,10 @@
 // （cost = 0），不影响调用，只是统计成本会偏低 —— 看到「成本=0 但调用数>0」
 // 就该来补这张表。
 //
+// Anthropic prompt caching 三段计费（OpenRouter 透传 Anthropic 字段）：
+//   - 常规 prompt_tokens          ：input 价
+//   - cache_creation_input_tokens ：input × 1.25（写入 cache）
+//   - cache_read_input_tokens     ：input × 0.10（命中 cache）
 // 价格参考 OpenRouter pricing 页面（人工抄录，会随时间漂移）。
 
 // 注意：请求方 model 字符串和 OpenRouter 返回的 model 字符串可能不一样。
@@ -33,6 +37,11 @@ const PRICES = {
 
 const UNKNOWN = { input: 0, output: 0 };
 
+// Anthropic prompt cache 折扣系数（相对 input 价）。
+// 文档值：写入 1.25×，命中读取 0.1×。
+const CACHE_WRITE_MULT = 1.25;
+const CACHE_READ_MULT  = 0.10;
+
 // 找最贴近的价格条目。OpenRouter 返回的 model 字段有时会带 ":nitro" / 路由后缀，
 // 先精确匹配，再 startsWith 兜底。
 function lookupPrice(model) {
@@ -44,9 +53,33 @@ function lookupPrice(model) {
   return UNKNOWN;
 }
 
-export function calcCostUsd({ model, promptTokens = 0, completionTokens = 0 }) {
+/**
+ * 计算单次 LLM 调用的成本。
+ *
+ * promptTokens 在 Anthropic prompt-caching 启用时含义会变化：OpenRouter 透传
+ * 的 usage 字段把"未缓存的常规输入"留在 prompt_tokens 里，把缓存写入 / 命中
+ * 拆到 cache_creation_input_tokens / cache_read_input_tokens。三者互不重叠。
+ *
+ * @param {object} p
+ * @param {string} p.model
+ * @param {number} [p.promptTokens=0]
+ * @param {number} [p.completionTokens=0]
+ * @param {number} [p.cacheCreationInputTokens=0]
+ * @param {number} [p.cacheReadInputTokens=0]
+ */
+export function calcCostUsd({
+  model,
+  promptTokens = 0,
+  completionTokens = 0,
+  cacheCreationInputTokens = 0,
+  cacheReadInputTokens = 0,
+}) {
   const p = lookupPrice(model);
-  const cost = (promptTokens / 1000) * p.input + (completionTokens / 1000) * p.output;
+  const cost =
+    (promptTokens / 1000) * p.input +
+    (completionTokens / 1000) * p.output +
+    (cacheCreationInputTokens / 1000) * p.input * CACHE_WRITE_MULT +
+    (cacheReadInputTokens / 1000) * p.input * CACHE_READ_MULT;
   // 6 位小数，跟 DB 列一致
   return Math.round(cost * 1_000_000) / 1_000_000;
 }
