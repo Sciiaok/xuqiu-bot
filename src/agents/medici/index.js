@@ -571,8 +571,10 @@ function buildTraceContextInfo(contextInfo = {}) {
  * @param {Array}    opts.history      Prior {role, content, metadata} turns.
  * @param {string|object|Array} opts.input  Latest user input (plain text,
  *                                          single message, or aggregated batch).
- * @param {object}   [opts.context]    { missing_fields, prior_state,
- *                                       car_recommendation, ad_referral }
+ * @param {object}   [opts.context]    { missing_fields, qualify_missing_fields,
+ *                                       prior_state, car_recommendation, ad_referral }
+ *                                     qualify_missing_fields gates the price
+ *                                     lock in KB tools (non-empty → strip).
  * @param {object}   opts.agentConfig  Resolved product_line config.
  *                                     REQUIRED: dynamic_injection, tenant_id,
  *                                     product_line. Optional: output_schema.
@@ -685,6 +687,7 @@ export async function runMedici({
       const result = await dispatchTool(toolName, toolInput, {
         tenantId,
         productLineId,
+        qualifyMissingFields: context.qualify_missing_fields || [],
       });
       onToolEvent?.({ type: 'tool_result', tool: toolName, result, iteration: iterations });
       return { tc, result };

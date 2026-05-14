@@ -139,17 +139,26 @@ export async function POST(request) {
 
     // 4. Build contextInfo. Simulator has no persisted lead, so prior_state
     //    and lead_data are empty; missing_fields comes from the tier=GOOD rule.
+    //    qualify_missing_fields gates the price lock in KB tools (see
+    //    medici/kb-tools.js): non-empty → fob_price_usd / unit_cost stripped,
+    //    quote_price short-circuits.
     const missingFields = getMissingFields('GOOD', {}, {
+      qualificationConfig: agentConfig.qualification_config,
+      lead: null,
+    });
+    const qualifyMissingFields = getMissingFields('QUALIFY', {}, {
       qualificationConfig: agentConfig.qualification_config,
       lead: null,
     });
     const contextInfo = {
       missing_fields: missingFields,
+      qualify_missing_fields: qualifyMissingFields,
       prior_state: null,
       ...(adReferral ? { ad_referral: adReferral } : {}),
     };
     log('info', 'Built contextInfo', {
       missing_fields: missingFields,
+      qualify_missing_fields: qualifyMissingFields,
       has_ad_referral: Boolean(adReferral),
     });
 

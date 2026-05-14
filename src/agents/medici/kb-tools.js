@@ -47,7 +47,7 @@ const TOOL_DEFS = {
   lookup_product: {
     name: 'lookup_product',
     description:
-      'Find products by SKU, model name, or attribute filters (e.g. horsepower, fuel type). Returns {found:true, products:[...]} with structured product data, or {found:false, suggestions?:[...], missing_fields?:[...]}. The tool tokenizes input automatically (whitespace, CJK/Latin transitions), so pass the keyword verbatim — do NOT insert or strip spaces yourself. When the customer asks whether a specific product exists, you MUST call this tool before answering "no". If found=false with non-empty suggestions, treat those as the closest catalog items and offer them — do not claim the product line is empty.',
+      'Find products by SKU, model name, or attribute filters (e.g. horsepower, fuel type). Returns {found:true, products:[...]} with structured product data, or {found:false, suggestions?:[...], missing_fields?:[...]}. The tool tokenizes input automatically (whitespace, CJK/Latin transitions), so pass the keyword verbatim — do NOT insert or strip spaces yourself. When the customer asks whether a specific product exists, you MUST call this tool before answering "no". If found=false with non-empty suggestions, treat those as the closest catalog items and offer them — do not claim the product line is empty. **Price lock**: if the result includes `_price_locked` (leads not yet QUALIFY-complete), `fob_price_usd` is intentionally absent — do NOT quote any price (number, range, ballpark); see skill-host-patch §10.',
     input_schema: {
       type: 'object',
       properties: {
@@ -65,7 +65,7 @@ const TOOL_DEFS = {
   quote_price: {
     name: 'quote_price',
     description:
-      'Quote a price for a specific product. Returns {ok:true, unit_price, total_price, breakdown, validity, source} OR {ok:false, missing_fields|needs_human|not_found}. NEVER guess prices — always call this. CIF/DDP requires destination_port.',
+      'Quote a price for a specific product. Returns {ok:true, unit_price, total_price, breakdown, validity, source} OR {ok:false, missing_fields|needs_human|not_found}. NEVER guess prices — always call this. CIF/DDP requires destination_port. **Price lock**: when leads are not QUALIFY-complete the host short-circuits this tool to {ok:false, missing_fields:[...], reason:"leads_incomplete", _price_locked:{...}} — do NOT quote any price (number, range, ballpark); ask for the missing leads instead. See skill-host-patch §10.',
     input_schema: {
       type: 'object',
       properties: {
@@ -82,7 +82,7 @@ const TOOL_DEFS = {
   lookup_shipping: {
     name: 'lookup_shipping',
     description:
-      'Look up shipping route to a destination. Returns {found:true, route:{unit_cost, transit_days, ...}} or {found:false, alternatives:[...]} with same-country alternatives.',
+      'Look up shipping route to a destination. Returns {found:true, route:{unit_cost, transit_days, ...}} or {found:false, alternatives:[...]} with same-country alternatives. **Price lock**: if `_price_locked` is present (leads not QUALIFY-complete), `unit_cost` is intentionally absent — do NOT quote shipping cost; see skill-host-patch §10.',
     input_schema: {
       type: 'object',
       properties: {
@@ -210,6 +210,64 @@ function questionFromToolInput(toolName, input) {
 }
 
 /**
+ * Strip price-bearing fields from a tool result when the conversation hasn't
+ * collected enough leads yet. The host (queue-processor / medici-simulator)
+ * computes ctx.qualifyMissingFields = getMissingFields('QUALIFY', ...). When
+ * non-empty we hide every price-like field from the model's view and stamp
+ * `_price_locked` so the agent knows it's intentional, not an empty DB.
+ *
+ * Rule lives at skills/ai-reception-deal/SKILL.md §3.2 and
+ * src/agents/medici/skill-host-patch.md §10.
+ */
+
+// kb_products.specs is free-form JSONB (users can name price fields anything),
+// so we use a heuristic: strip keys mentioning price/cost/quote/floor/etc, OR
+// ending with a common currency suffix. Conservative — non-price specs like
+// weight_kg, wheelbase_mm pass through.
+const PRICE_KEY_RE = /(?:price|cost|quote|floor|ceiling|msrp|retail|wholesale|guide)/i;
+const CURRENCY_SUFFIX_RE = /_(?:usd|cny|eur|gbp|jpy|aed|inr|myr|hkd|sgd|brl|mxn|try|krw|thb|vnd|idr|php)$/i;
+
+function isPriceKey(key) {
+  return PRICE_KEY_RE.test(key) || CURRENCY_SUFFIX_RE.test(key);
+}
+
+function stripPriceKeys(obj) {
+  if (!obj || typeof obj !== 'object' || Array.isArray(obj)) return obj;
+  const out = {};
+  for (const [k, v] of Object.entries(obj)) {
+    if (isPriceKey(k)) continue;
+    out[k] = v;
+  }
+  return out;
+}
+
+function applyPriceLock(toolName, result, missingLeads) {
+  if (!Array.isArray(missingLeads) || missingLeads.length === 0) return result;
+  if (!result || typeof result !== 'object') return result;
+  const lock = { reason: 'leads_incomplete', missing: missingLeads };
+
+  if (toolName === 'lookup_product') {
+    if (!result.found || !Array.isArray(result.products)) return result;
+    return {
+      ...result,
+      products: result.products.map((p) => {
+        const stripped = stripPriceKeys(p);
+        if (p.specs && typeof p.specs === 'object') {
+          stripped.specs = stripPriceKeys(p.specs);
+        }
+        return stripped;
+      }),
+      _price_locked: lock,
+    };
+  }
+  if (toolName === 'lookup_shipping') {
+    if (!result.found || !result.route) return result;
+    return { ...result, route: stripPriceKeys(result.route), _price_locked: lock };
+  }
+  return result;
+}
+
+/**
  * Execute a knowledge-base tool call from Claude.
  * @returns {Promise<string>} JSON-encoded result for tool_result content.
  */
@@ -217,12 +275,24 @@ export async function executeKbTool(toolName, input, ctx = {}) {
   try {
     let result;
     const base = { tenantId: ctx.tenantId, productLineId: ctx.productLineId };
+    const missingLeads = Array.isArray(ctx.qualifyMissingFields) ? ctx.qualifyMissingFields : [];
+    const leadsLocked = missingLeads.length > 0;
 
     switch (toolName) {
       case 'lookup_product':
         result = await lookupProduct({ ...base, sku: input.sku, model: input.model, attrs: input.attrs });
+        result = applyPriceLock('lookup_product', result, missingLeads);
         break;
       case 'quote_price':
+        if (leadsLocked) {
+          result = {
+            ok: false,
+            missing_fields: missingLeads,
+            reason: 'leads_incomplete',
+            _price_locked: { reason: 'leads_incomplete', missing: missingLeads },
+          };
+          break;
+        }
         result = await quotePrice({
           ...base,
           sku: input.sku,
@@ -239,6 +309,7 @@ export async function executeKbTool(toolName, input, ctx = {}) {
           shippingMethod: input.shipping_method,
           originPort: input.origin_port,
         });
+        result = applyPriceLock('lookup_shipping', result, missingLeads);
         break;
       case 'lookup_policy':
         result = await lookupPolicy({
