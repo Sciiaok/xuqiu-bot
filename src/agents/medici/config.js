@@ -21,13 +21,7 @@ import {
   findProductLineByPhoneNumberId,
   setConversationProductLine,
 } from '../../../lib/repositories/product-line.repository.js';
-import {
-  INTENT_ENUM,
-  INQUIRY_QUALITY_ENUM,
-  BUSINESS_VALUE_ENUM,
-  ROUTE_ENUM,
-  ENVELOPE_REQUIRED,
-} from './output-schema.js';
+import { buildEnvelopeSchema } from './output-schema.js';
 
 // ─── Assembly helpers ────────────────────────────────────────────────
 
@@ -106,72 +100,12 @@ export function assembleOutputSchema(row) {
     leadRequired.push(field.key);
   }
 
-  return {
+  return buildEnvelopeSchema({
     type: 'object',
     additionalProperties: false,
-    required: ENVELOPE_REQUIRED,
-    properties: {
-      conversation_intent: {
-        type: 'array',
-        items: { type: 'string', enum: INTENT_ENUM },
-        description: 'Customer intent(s) — one conversation can exhibit multiple.',
-      },
-      conversation_intent_summary: {
-        type: 'string',
-        description: 'Brief analysis of detected intents and customer situation.',
-      },
-      inquiry_quality: {
-        type: 'string',
-        enum: INQUIRY_QUALITY_ENUM,
-        description: 'Lead qualification level.',
-      },
-      business_value: {
-        type: 'string',
-        enum: BUSINESS_VALUE_ENUM,
-        description: 'Business value assessment based on quantity and customer type.',
-      },
-      leads: {
-        type: 'array',
-        description: 'Leads extracted from the entire conversation.',
-        items: {
-          type: 'object',
-          additionalProperties: false,
-          required: leadRequired,
-          properties: leadProperties,
-        },
-      },
-      route: {
-        type: 'string',
-        enum: ROUTE_ENUM,
-        description: 'Routing decision based on inquiry_quality.',
-      },
-      next_message: {
-        type: 'string',
-        description: 'The next response (max 180 chars, WhatsApp-style friendly).',
-      },
-      handoff_summary: {
-        type: 'string',
-        description: 'Summary for sales team when routing to HUMAN_NOW.',
-      },
-      attachments: {
-        type: 'array',
-        description:
-          'Image assets to send to the customer alongside next_message. ' +
-          'Only populate when the customer EXPLICITLY asked for an image / photo / picture. ' +
-          'Each asset_id must come from the AVAILABLE ASSETS list in the dynamic context. ' +
-          'Empty array if no image is being sent.',
-        items: {
-          type: 'object',
-          additionalProperties: false,
-          required: ['asset_id'],
-          properties: {
-            asset_id: { type: 'string', description: 'kb_assets.id from the available list' },
-            caption: { type: 'string', description: 'Optional WhatsApp caption shown under the image.' },
-          },
-        },
-      },
-    },
-  };
+    required: leadRequired,
+    properties: leadProperties,
+  });
 }
 
 /**

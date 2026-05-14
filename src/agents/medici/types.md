@@ -62,30 +62,22 @@ type StoredMessage = {
 
 ## Output
 
-Identical envelope regardless of which output_schema was used. `leads[]`
-items vary per product_line but always carry the canonical DB columns.
+Envelope shape (fields / enums / required) lives in
+[output-schema.js](./output-schema.js) — `buildEnvelopeSchema` builds the
+outer shell, `*_ENUM` constants own the enum values, `ENVELOPE_REQUIRED`
+owns the required list. The leads[] item schema varies per product_line
+(canonical DB columns guaranteed by post-process; extras land in `details`).
+
+Conceptual shape (refer to output-schema.js for the precise schema):
 
 ```ts
 type RunMediciResult = {
-  conversation_intent: Array<
-    | 'personal_consumer' | 'business_inquiry'
-    | 'business_cooperation' | 'other'
-  >;
+  conversation_intent: Array<IntentEnum>;
   conversation_intent_summary: string;
-  inquiry_quality: 'BAD' | 'GOOD' | 'QUALIFY' | 'PROOF';
-  business_value: 'LOW' | 'AVERAGE' | 'HIGH';
-  leads: Array<{
-    product_name: string; brand?: string;
-    destination_country: string; destination_port?: string;
-    loading_port?: string;
-    international_commercial_term?: string;
-    company_name: string; timeline?: string;
-    qty_bucket: string;
-    // Product-line-specific extras land in `details` via post-process.
-    details?: Record<string, unknown>;
-    [k: string]: unknown;
-  }>;
-  route: 'CONTINUE' | 'HUMAN_NOW' | 'FAQ_END';
+  inquiry_quality: InquiryQualityEnum;
+  business_value: BusinessValueEnum;
+  leads: Array<Lead & { details?: Record<string, unknown>; [k: string]: unknown }>;
+  route: RouteEnum;
   next_message: string;           // Max ~180 chars, WhatsApp-style.
   handoff_summary: string;        // Populated when routing to HUMAN_NOW.
   attachments: Array<{ asset_id: string; caption?: string }>;

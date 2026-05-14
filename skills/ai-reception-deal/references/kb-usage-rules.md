@@ -12,9 +12,10 @@
 
 ### 2.1 价格
 
-- 客户问价格、报价、FOB / CIF、最终价前置条件时，必须先查知识库
-- 默认优先级建议为：优先 `calculate_price`，若条件不足或需解释规则，再补充 `search_knowledge`
-- 该优先级在实现时需要结合研发最终的知识库存储方案设计，是否完全沿用该默认顺序，由研发结合现网知识库结构最终拍板
+- 客户问价格、报价、FOB / CIF / DDP、最终价前置条件时，必须先查知识库
+- 默认链路：先 `lookup_product` 确认 SKU → `quote_price` 计算报价；报价规则 / 商务背景类追问补 `lookup_policy({free_text})`
+- CIF / DDP 缺 `destination_port` 时先反问客户补齐，不要默认到任意港口
+- 详细工具优先级见 `tool-priority-rules`
 
 ### 2.2 库存
 

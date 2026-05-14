@@ -646,7 +646,7 @@ npm run deploy   # rsync + 远端 npm ci + build + pm2 reload
 | Meta 连接 | `/settings/meta-connection` 粘 token + BM ID，preview 步骤的 logs 面板可见每步 Graph API 调用 |
 | 飞书通知 | `/settings/notifications` 配自定义机器人 webhook → 点测试 |
 | 邀请注册 | founder 在 `/admin/invitations` 生成链接 → 隐身窗口走 signup |
-| KB 检索 | 「Medici 调试台」tab 的 trace 里能看到 `search_knowledge` tool_call + tool_result |
+| KB 检索 | 「Medici 调试台」tab 的 trace 里能看到 `lookup_product` / `quote_price` / `lookup_shipping` / `lookup_policy` / `find_asset` / `check_constraint` 等 tool_call + tool_result |
 
 ### PM2（4 进程）
 

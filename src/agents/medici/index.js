@@ -380,7 +380,7 @@ const READ_SKILL_REFERENCE_TOOL = {
   description:
     '按需读取 ai-reception-deal skill 的 references/*.md 详细规则文档。' +
     'skill 主文档里出现 [详见](references/xxx.md) 这种引用时调本工具拉取。' +
-    '可用名字：stages-definition / kb-usage-rules / tool-priority-rules / handover-rules / response-style / state-output-schema / test-scenarios / acceptance-cases。' +
+    '可用名字：stages-definition / kb-usage-rules / tool-priority-rules / handover-rules / response-style。' +
     'name 不带路径前缀和 .md 后缀。',
   input_schema: {
     type: 'object',

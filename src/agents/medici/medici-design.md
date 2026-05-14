@@ -2,7 +2,7 @@
 
 `src/agents/medici/` — WhatsApp 询盘的接待官。每条客户消息进来，它同时完成**回复客户**、**分类意图**、**评估商机**、**抽取线索**、**决定路由**这五件事。
 
-> 文档版本：2026-05-06（迁移到 skill runtime 形态：方法论由 `ai-reception-deal` skill bundle 主导，宿主收口写在 `skill-host-patch.md`，对齐 Ogilvy 模式；2026-05-06 知识库录入区简化为 3 卡 + 全链路 LLM 用量埋点）
+> 文档版本：2026-05-14（envelope 真源收口到 `output-schema.js::buildEnvelopeSchema`；references 收敛到模型实际用的 5 份；dev-only 验收/测试场景挪出 bundle；CONTRACT 删除 marketplace 包装）
 
 ---
 
@@ -58,28 +58,11 @@ Medici = 第 7 步。**前 1-6 为它准备输入，后 8-11 消化它的输出*
 
 唯一入口：`runMedici(opts)` 来自 [index.js](./index.js)。详尽 TS 类型见 [types.md](./types.md)。
 
-### 输出 envelope（与 skill 解耦的真源）
+### 输出 envelope
 
-```ts
-{
-  conversation_intent:        Array<'personal_consumer' | 'business_inquiry' |
-                                    'business_cooperation' | 'other'>
-  conversation_intent_summary: string
-  inquiry_quality:            'BAD' | 'GOOD' | 'QUALIFY' | 'PROOF'
-  business_value:             'LOW' | 'AVERAGE' | 'HIGH'
-  leads:                      Array<Lead>   // 字段由 product_line 的 output_schema 决定
-                                            // 非标字段自动落到 lead.details
-  route:                      'CONTINUE' | 'HUMAN_NOW' | 'FAQ_END'
-  next_message:               string        // ≤180 字符，WhatsApp 口吻
-  handoff_summary:            string        // 转人工时给销售的一段话
-  attachments:                Array<{ asset_id, caption? }>
-}
-```
+字段 / 枚举 / required 真源在 [output-schema.js](./output-schema.js)（`buildEnvelopeSchema` + `ENVELOPE_REQUIRED` + `*_ENUM`）。skill 阶段 → `inquiry_quality` / `route` 的映射、特殊路由、attachments 规则真源在 [skill-host-patch.md](./skill-host-patch.md) §3 / §5 / §7。
 
-> 注：`ai-reception-deal` skill 的 `state-output-schema` reference 写的是 skill
-> 自己的 `current_stage` / `known_fields` 那套字段——**这些是 skill 用来表达
-> 方法论的，不是宿主的提交 schema**。`skill-host-patch.md §2-3` 明确告诉模型
-> 真正提交的 envelope，并给出了 skill 阶段 → `inquiry_quality` / `route` 的映射表。
+简单概览：`{ conversation_intent, conversation_intent_summary, inquiry_quality, business_value, leads, route, next_message, handoff_summary, attachments }`。`leads[]` 字段集由 product_line 的 `output_schema` 决定，非标字段自动落到 `lead.details`。
 
 ### 不变量
 
@@ -120,10 +103,13 @@ src/agents/medici/
 └── types.md                运行时契约（TS 类型 + invariants + "我想改 X 去哪个文件" 对照表）
 
 skills/
-└── ai-reception-deal/       ★ skill bundle（目录形态）：通用 AI 接待谈单方法论
-                                 内含 SKILL.md + references/{stages-definition, kb-usage-rules,
-                                 tool-priority-rules, handover-rules, response-style,
-                                 state-output-schema, test-scenarios, acceptance-cases}.md
+├── ai-reception-deal/                  ★ skill bundle（目录形态）：通用 AI 接待谈单方法论
+│                                          内含 SKILL.md + references/{stages-definition,
+│                                          kb-usage-rules, tool-priority-rules, handover-rules,
+│                                          response-style}.md
+├── ai-reception-deal.CONTRACT.md       PM/RD 契约（接口约束）
+├── ai-reception-deal.ACCEPTANCE.md     dev-only 最小验收集
+└── ai-reception-deal.TEST-SCENARIOS.md dev-only 典型测试场景
 ```
 
 **设计原则**：Agent 运行时一整套逻辑放一个文件（index.js），一眼能扫完整流程——
@@ -238,9 +224,10 @@ callClaude(tools, tool_choice: auto)
 
 #### `read_skill_reference` —— skill references 按需取用
 
-- **可用名字**：`stages-definition` / `kb-usage-rules` / `tool-priority-rules` / `handover-rules` / `response-style` / `state-output-schema` / `test-scenarios` / `acceptance-cases`
+- **可用名字**：`stages-definition` / `kb-usage-rules` / `tool-priority-rules` / `handover-rules` / `response-style`
 - **dispatcher**：`SKILL.references.get(name)`，找不到时返回 `{error: 'reference_not_found', available: [...]}`
-- **为什么按需取**：把 8 份 reference 全塞进 system prompt 会多 ~10K tokens × 每轮，按需取只在该会话用到时才付一次成本（且会进入 tool_result history 缓存）
+- **为什么按需取**：把 5 份 reference 全塞进 system prompt 会多 ~5K tokens × 每轮，按需取只在该会话用到时才付一次成本（且会进入 tool_result history 缓存）
+- **真实命中率值得观察**：cache 命中后 1 token ≈ 0.1 token 计价，全 inline 稳态约 +500 tokens/轮。若平均每会话拉 ≥3 份 references，应改为全 inline；用 `/medici-simulator` 的 trace 统计后再决定
 
 #### 6 个 KB typed tools
 
@@ -275,18 +262,16 @@ ai-reception-deal/
     ├── kb-usage-rules.md
     ├── tool-priority-rules.md
     ├── handover-rules.md
-    ├── response-style.md
-    ├── state-output-schema.md
-    ├── test-scenarios.md
-    └── acceptance-cases.md
+    └── response-style.md
 ```
 
 PM 直接编辑目录下的 markdown → 重启 Next.js 服务即生效（[skills-runtime/loader.js](../skills-runtime/loader.js) 在进程内模块级缓存）。
 
-PM 与 RD 的接口契约见 aaa 包随附的 `CONTRACT.md`：
-- skill 负责方法论（阶段定义 / KB 使用规则 / 转人工原则 / 测试场景）
+PM 与 RD 的接口契约见 [`skills/ai-reception-deal.CONTRACT.md`](../../../skills/ai-reception-deal.CONTRACT.md)：
+- skill 负责方法论（阶段定义 / KB 使用规则 / 转人工原则）
 - 宿主负责工程（envelope schema / 工具注册 / 动态注入 / 路由 / 持久化）
 - skill 不得把 `BUSINESS_VALUE_GUIDANCE / LEAD_FIELDS_HINTS` 写死，必须接受宿主动态注入
+- dev-only 制品（验收集 / 测试场景）住在 bundle 之外的 sibling 文件，不进 references/，模型不读
 
 ---
 

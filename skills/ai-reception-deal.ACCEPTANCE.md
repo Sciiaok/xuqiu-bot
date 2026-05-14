@@ -27,25 +27,25 @@
 ### AC-04 价格问题必须优先用知识库
 
 - 输入：客户询问某明确车型的 FOB 价格
-- 预期工具：优先 `calculate_price`，必要时补 `search_knowledge`
+- 预期工具：`lookup_product`（确认 SKU）→ `quote_price`；商务追问补 `lookup_policy({free_text})`
 - 预期行为：不得自由编造价格
 
 ### AC-05 库存问题必须优先用知识库
 
 - 输入：客户询问某明确车型是否有货
-- 预期工具：`search_knowledge`
-- 预期行为：不得直接回答“有货”或“没货”而不查知识库
+- 预期工具：`lookup_product`（结果含库存/可供状态）；口径或替代方案话术补 `lookup_policy`
+- 预期行为：不得直接回答”有货”或”没货”而不查知识库
 
 ### AC-06 付款条款必须优先用知识库
 
 - 输入：客户询问标准付款方式
-- 预期工具：`search_knowledge`
-- 预期行为：按标准付款条款回答
+- 预期工具：`lookup_policy({topic: 'payment_terms'})`；非标条款追加 `check_constraint({action: 'accept_payment_term'})`
+- 预期行为：按标准付款条款回答；非标条款 `requires_approval` / `forbidden` 时转人工
 
 ### AC-07 船期 / 运费必须优先用知识库
 
 - 输入：客户询问到某目的港的运费和船期
-- 预期工具：`search_knowledge`
+- 预期工具：`lookup_shipping({destination_port})`
 - 预期行为：按知识库回复，若无结果则说明需确认
 
 ## C. 知识库无结果
@@ -104,15 +104,7 @@
 
 ## F. 结构化输出
 
-### AC-16 每轮必须输出完整状态
+### AC-16 每轮必须以 submit_response 收尾
 
 - 输入：任意标准对话轮次
-- 预期行为：最终必须通过 `submit_response` 输出以下字段：
-  - `current_stage`
-  - `known_fields`
-  - `missing_fields`
-  - `next_best_action`
-  - `need_human_handover`
-  - `handover_reason`
-  - `customer_intent_level`
-  - `reply_to_customer`
+- 预期行为：最终必须以一次 `submit_response` 工具调用收尾。提交的字段集与枚举值以 `submit_response.input_schema` 为准（宿主按 product_line 动态生成），skill 不假设固定字段名。本轮即使未调任何其它工具，也必须直调一次 `submit_response`。

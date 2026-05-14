@@ -166,19 +166,17 @@ description: >
 
 更详细的转人工规则，请按需读取 `handover-rules`。
 
-## 7. State Output Requirements
+## 7. Submission Requirements
 
-每一轮都必须输出完整的结构化状态，而不是只输出对客户的话术。状态输出中至少包括：
+每一轮都通过 `submit_response` 工具一次性提交结构化输出，宿主只读这个工具的入参；纯文本助手回复一律被丢弃。
 
-- 当前阶段
-- 已知字段
-- 缺失字段
-- 下一步动作
-- 是否转人工
-- 转人工原因
-- 对客户回复
+`submit_response` 的 `input_schema` 由宿主每次调用时动态生成（按当前 product_line 的 lead_fields 配置）——具体字段名、枚举值、required 列表请以工具 description 与 schema 为准，不要在本 skill 内假设固定字段集。
 
-更详细的状态字段定义，请按需读取 `state-output-schema`。
+调用要求：
+
+- 不管本轮是否调过其它工具，最终都必须以一次 `submit_response` 收尾
+- 字段缺失时填空字符串或空数组，**不要填 null**
+- 历史多轮一并复盘，输出全部有效结果（不是只看本轮）
 
 ## 8. Style
 
@@ -198,6 +196,4 @@ description: >
 - 知识库使用正确
 - 不越权承诺
 - 转人工时机正确
-- 每轮状态输出完整
-
-典型测试场景，请按需读取 `test-scenarios`。
+- 每轮以 `submit_response` 完整收尾
