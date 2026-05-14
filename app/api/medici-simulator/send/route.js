@@ -155,7 +155,26 @@ export async function POST(request) {
 
     // 5. Call Medici. Reuse the production agent entry so the simulator
     //    exercises the identical prompt assembly + tool loop.
-    const conversationHistory = history.map((m) => ({ role: m.role, content: m.content }));
+    //
+    //    Mirror production's send-attachments shape: each attachment the bot
+    //    delivered becomes its own assistant turn carrying metadata.kb_asset_id.
+    //    Without this the medici/index.js → extractSentAssetIds() walk returns
+    //    [], the "ATTACHMENTS ALREADY SENT" prompt block stays empty, and the
+    //    LLM re-attaches the same image every turn.
+    const conversationHistory = history.flatMap((m) => {
+      const base = { role: m.role, content: m.content };
+      if (m.role !== 'assistant' || !Array.isArray(m.attachments) || m.attachments.length === 0) {
+        return [base];
+      }
+      const attachmentTurns = m.attachments
+        .filter((a) => a?.asset_id)
+        .map((a) => ({
+          role: 'assistant',
+          content: `[image: ${a.filename || a.asset_id}]`,
+          metadata: { kb_asset_id: a.asset_id },
+        }));
+      return [base, ...attachmentTurns];
+    });
     log('info', `Calling Medici — history=${conversationHistory.length}, latest="${String(message).slice(0, 80)}"`);
 
     // Capture tool_call / tool_result events as they stream through Medici's

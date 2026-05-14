@@ -167,7 +167,13 @@ export default function MediciSimulatorTab({ productLineSlug }) {
             media_type:    selectedAd.media_type,
             thumbnail_url: selectedAd.thumbnail_url,
           },
-          history: history.map(({ role, content }) => ({ role, content })),
+          history: history.map(({ role, content, attachments }) => ({
+            role,
+            content,
+            ...(Array.isArray(attachments) && attachments.length > 0
+              ? { attachments: attachments.map((a) => ({ asset_id: a.asset_id, filename: a.filename })) }
+              : {}),
+          })),
           message,
           ...(imagePayload
             ? {
