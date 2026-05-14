@@ -88,7 +88,7 @@ export async function POST(request) {
     }
 
     const body = await request.json();
-    const { productLine, ad, history = [], message, image } = body || {};
+    const { productLine, ad, history = [], message, image, priorLead } = body || {};
 
     if (!productLine) return NextResponse.json({ error: 'productLine is required' }, { status: 400 });
     if (!ad?.id)       return NextResponse.json({ error: 'ad.id is required' }, { status: 400 });
@@ -137,28 +137,46 @@ export async function POST(request) {
     const adReferral = formatReferralContextForPrompt(referral);
     log('info', 'Built synthetic ad referral', { ad_id: ad.id, headline: referral.headline });
 
-    // 4. Build contextInfo. Simulator has no persisted lead, so prior_state
-    //    and lead_data are empty; missing_fields comes from the tier=GOOD rule.
-    //    qualify_missing_fields gates the price lock in KB tools (see
-    //    medici/kb-tools.js): non-empty → fob_price_usd / unit_cost stripped,
-    //    quote_price short-circuits.
-    const missingFields = getMissingFields('GOOD', {}, {
+    // 4. Build contextInfo. The simulator has no persistence, so the caller
+    //    echoes back the previous turn's `response.leads[0]` as `priorLead`.
+    //    We use it as `leadData` for getMissingFields so qualify_missing_fields
+    //    shrinks as fields fill — without this the price-lock gate in
+    //    medici/kb-tools.js never opens (it reads qualify_missing_fields), and
+    //    quote_price / lookup_product short-circuit forever even after the LLM
+    //    has collected every QUALIFY field. Mirrors lib/queue-processor.js
+    //    which feeds session.lead_data into the same call.
+    const priorLeadData = priorLead && typeof priorLead === 'object' && !Array.isArray(priorLead)
+      ? priorLead
+      : null;
+    const currentTier = priorLeadData?.inquiry_quality || 'GOOD';
+    const missingFields = getMissingFields(currentTier, priorLeadData || {}, {
       qualificationConfig: agentConfig.qualification_config,
       lead: null,
     });
-    const qualifyMissingFields = getMissingFields('QUALIFY', {}, {
+    const qualifyMissingFields = getMissingFields('QUALIFY', priorLeadData || {}, {
       qualificationConfig: agentConfig.qualification_config,
       lead: null,
     });
+    const priorState = priorLeadData ? {
+      conversation_intent: priorLeadData.conversation_intent,
+      inquiry_quality: priorLeadData.inquiry_quality,
+      business_value: priorLeadData.business_value,
+      car_model: priorLeadData.car_model || priorLeadData.product_name || null,
+      qty_bucket: priorLeadData.qty_bucket || null,
+      destination_country: priorLeadData.destination_country || null,
+      company_name: priorLeadData.company_name || null,
+    } : null;
     const contextInfo = {
       missing_fields: missingFields,
       qualify_missing_fields: qualifyMissingFields,
-      prior_state: null,
+      prior_state: priorState,
       ...(adReferral ? { ad_referral: adReferral } : {}),
     };
     log('info', 'Built contextInfo', {
+      tier: currentTier,
       missing_fields: missingFields,
       qualify_missing_fields: qualifyMissingFields,
+      has_prior_lead: Boolean(priorLeadData),
       has_ad_referral: Boolean(adReferral),
     });
 

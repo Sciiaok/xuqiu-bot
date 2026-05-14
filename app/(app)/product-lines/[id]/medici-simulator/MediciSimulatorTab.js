@@ -149,6 +149,14 @@ export default function MediciSimulatorTab({ productLineSlug }) {
     setSending(true);
     setSendError('');
 
+    // The simulator has no DB. Pass back the latest emitted lead so the
+    // backend can compute qualify_missing_fields against accumulated state
+    // — otherwise kb-tools' price lock never opens and quote_price stays
+    // short-circuited even after every QUALIFY field is collected.
+    const priorLead = [...turns]
+      .reverse()
+      .find((t) => Array.isArray(t.leads) && t.leads.length > 0)?.leads?.[0] || null;
+
     try {
       const res = await fetch('/api/medici-simulator/send', {
         method: 'POST',
@@ -175,6 +183,7 @@ export default function MediciSimulatorTab({ productLineSlug }) {
               : {}),
           })),
           message,
+          ...(priorLead ? { priorLead } : {}),
           ...(imagePayload
             ? {
                 image: {
@@ -196,10 +205,14 @@ export default function MediciSimulatorTab({ productLineSlug }) {
       }]);
       const envelopeQuality = data.response?.inquiry_quality;
       const envelopeValue = data.response?.business_value;
+      const envelopeIntent = Array.isArray(data.response?.conversation_intent)
+        ? data.response.conversation_intent.join(',')
+        : data.response?.conversation_intent || null;
       const stampedLeads = (data.response?.leads || []).map((lead) => ({
         ...lead,
         inquiry_quality: lead.inquiry_quality || envelopeQuality,
         business_value: lead.business_value || envelopeValue,
+        conversation_intent: lead.conversation_intent || envelopeIntent,
       }));
       setTurns((prev) => [...prev, {
         turn: prev.length + 1,
