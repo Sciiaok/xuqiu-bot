@@ -56,7 +56,6 @@ Goal: when Claude Code picks up a task touching feature X, read this file first 
 - **UI**: `app/(app)/product-lines/page.js`, `app/(app)/product-lines/[id]/page.js`
 - **API**: `/api/product-lines`, `/api/product-lines/[id]`
 - **Repositories**: `lib/repositories/product-line.repository.js`
-- **Lib**: `lib/car-catalog-context.js` (catalog snapshot for LLM prompts)
 - **Tables**: `product_lines` (composite PK `tenant_id, id`)
 - **Notes**: Product-line is THE scope unit. Adding a feature that's "per workspace"? Almost always means "per product-line". The detail page hosts KB + Medici simulator as tabs.
 

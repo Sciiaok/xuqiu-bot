@@ -171,7 +171,6 @@ ${lines.join('\n')}`;
 export function buildPerTurnContext({
   missing_fields,
   prior_state,
-  car_recommendation,
   ad_referral,
   sent_assets,
   available_assets,
@@ -184,7 +183,6 @@ export function buildPerTurnContext({
     ? priorLines.map((l) => `- ${l}`).join('\n')
     : '- (no prior state — first turn)';
 
-  const carRecBlock = car_recommendation ? `\n\n## CAR RECOMMENDATION\n${car_recommendation}` : '';
   const adBlock = ad_referral
     ? `\n\n## Ad the customer clicked to start this conversation\n${ad_referral}`
     : '';
@@ -196,7 +194,7 @@ ${missing}
 
 ## PRIOR STATE
 
-${priorBlock}${carRecBlock}${adBlock}${sentAssetsBlock}`;
+${priorBlock}${adBlock}${sentAssetsBlock}`;
 }
 
 /**
@@ -572,7 +570,7 @@ function buildTraceContextInfo(contextInfo = {}) {
  * @param {string|object|Array} opts.input  Latest user input (plain text,
  *                                          single message, or aggregated batch).
  * @param {object}   [opts.context]    { missing_fields, qualify_missing_fields,
- *                                       prior_state, car_recommendation, ad_referral }
+ *                                       prior_state, ad_referral }
  *                                     qualify_missing_fields gates the price
  *                                     lock in KB tools (non-empty → strip).
  * @param {object}   opts.agentConfig  Resolved product_line config.
@@ -636,7 +634,6 @@ export async function runMedici({
   const perTurnContext = buildPerTurnContext({
     missing_fields: context.missing_fields,
     prior_state: context.prior_state,
-    car_recommendation: context.car_recommendation,
     ad_referral: context.ad_referral,
     sent_assets: sentAssetIds,
     available_assets: availableAssets,

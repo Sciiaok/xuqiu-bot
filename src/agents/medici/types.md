@@ -27,7 +27,6 @@ type RunMediciOpts = {
       car_model?: string; qty_bucket?: string;
       destination_country?: string; company_name?: string;
     };
-    car_recommendation?: string;  // One-line catalog hint from buildCarCatalogContext.
     ad_referral?: string;         // Meta ad creative the customer clicked.
   };
   agentConfig: {                  // Resolved product_line config. REQUIRED.
