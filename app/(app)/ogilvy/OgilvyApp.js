@@ -320,6 +320,19 @@ export default function OgilvyApp() {
     if (selectedId) await refreshSelected();
   }
 
+  // ── Export current conversation to a markdown file ─────────
+  // Pure client-side: serialize whatever is on screen (messages + plan) into
+  // markdown and trigger a browser download. No network round-trip.
+  function handleExportConversation() {
+    if (!selectedId || messages.length === 0) return;
+    const sess = sessions.find(x => x.id === selectedId);
+    const md = buildConversationMarkdown({ session: sess, messages, plan });
+    const ts = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+    const safeTitle = (sess?.plan_json?.summary || sess?.title || 'ogilvy')
+      .replace(/[\\/:*?"<>|\s]+/g, '_').slice(0, 40) || 'ogilvy';
+    downloadTextFile(`${safeTitle}_${ts}.md`, md, 'text/markdown;charset=utf-8');
+  }
+
   // ── Launch flow ────────────────────────────────────────────
   // Streams progress from /launch into `launchProgress`, then refetches the
   // session so the card reflects the final plan_json (status, meta_ids).
@@ -469,6 +482,22 @@ export default function OgilvyApp() {
           <WhatsAppGateCard gate={gate} onRecheck={recheckGate} />
         ) : (
           <>
+            {selectedId && messages.length > 0 && (
+              <button
+                type="button"
+                className={s.exportBtn}
+                onClick={handleExportConversation}
+                title="导出对话为 Markdown 文件"
+                aria-label="导出对话"
+              >
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                  <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+                  <polyline points="7 10 12 15 17 10" />
+                  <line x1="12" y1="15" x2="12" y2="3" />
+                </svg>
+                <span>导出</span>
+              </button>
+            )}
             <div className={s.chatScroll} ref={scrollRef}>
               <div className={s.chatInner}>
                 {loadingMessages ? (
@@ -779,6 +808,88 @@ function formatRelativeTime(iso) {
   if (diff < 7 * 86_400_000)    return `${Math.floor(diff / 86_400_000)} 天前`;
   const d = new Date(then);
   return `${d.getMonth() + 1}/${d.getDate()}`;
+}
+
+/**
+ * Serialize a conversation (session + messages + plan) to a self-contained
+ * markdown document. Each message becomes a fenced section keyed by role; tool
+ * calls render as collapsible JSON blocks; the latest plan_json is appended
+ * verbatim so the export captures both transcript and outcome.
+ */
+function buildConversationMarkdown({ session, messages, plan }) {
+  const lines = [];
+  const title = plan?.summary || session?.plan_json?.summary || session?.title || '(无标题)';
+  lines.push(`# Ogilvy 对话 · ${title}`);
+  lines.push('');
+  if (session?.id) lines.push(`- 会话 ID: \`${session.id}\``);
+  if (session?.status) lines.push(`- 状态: ${session.status}`);
+  if (session?.created_at) lines.push(`- 创建: ${session.created_at}`);
+  if (session?.updated_at) lines.push(`- 更新: ${session.updated_at}`);
+  lines.push(`- 导出时间: ${new Date().toISOString()}`);
+  lines.push('');
+  lines.push('---');
+  lines.push('');
+  lines.push('## 对话');
+  lines.push('');
+
+  for (const m of messages) {
+    if (m.role === 'user') {
+      lines.push('### 👤 用户');
+      lines.push('');
+      if (m.content) { lines.push(m.content); lines.push(''); }
+      if (Array.isArray(m.attachments) && m.attachments.length) {
+        lines.push('附件:');
+        for (const att of m.attachments) {
+          if (att?.url) lines.push(`- ${att.url}`);
+        }
+        lines.push('');
+      }
+    } else if (m.role === 'assistant') {
+      if (!m.content) continue; // tool-use frames have no prose
+      lines.push('### 🤖 助手');
+      lines.push('');
+      lines.push(m.content);
+      lines.push('');
+    } else if (m.role === 'tool') {
+      const name = m.tool_name || '(unknown)';
+      lines.push(`### 🛠 工具 · ${name}`);
+      lines.push('');
+      if (m.tool_result !== undefined) {
+        lines.push('```json');
+        try { lines.push(JSON.stringify(m.tool_result, null, 2)); }
+        catch { lines.push(String(m.tool_result)); }
+        lines.push('```');
+        lines.push('');
+      }
+    }
+  }
+
+  if (plan) {
+    lines.push('---');
+    lines.push('');
+    lines.push('## 最终方案 (plan_json)');
+    lines.push('');
+    lines.push('```json');
+    try { lines.push(JSON.stringify(plan, null, 2)); }
+    catch { lines.push(String(plan)); }
+    lines.push('```');
+    lines.push('');
+  }
+
+  return lines.join('\n');
+}
+
+/** Trigger a browser download of a string as a file. */
+function downloadTextFile(filename, text, mime = 'text/plain;charset=utf-8') {
+  const blob = new Blob([text], { type: mime });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  setTimeout(() => URL.revokeObjectURL(url), 0);
 }
 
 function stageDetailLabel(evt) {

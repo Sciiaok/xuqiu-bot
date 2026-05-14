@@ -113,6 +113,24 @@ export default function MediciSimulatorTab({ productLineSlug }) {
     setPendingImage(null);
   }
 
+  // Serialize the trace pane (all turns rendered on screen) as plain text and
+  // trigger a browser download. No DB round-trip — what you see is what you get.
+  function handleExportTrace() {
+    if (turns.length === 0) return;
+    const text = buildTraceText({ productLineSlug, ad: selectedAd, turns });
+    const ts = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+    const adTag = (selectedAd?.id || 'no-ad').replace(/[\\/:*?"<>|\s]+/g, '_').slice(0, 30);
+    const blob = new Blob([text], { type: 'text/plain;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `medici-trace_${adTag}_${ts}.txt`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    setTimeout(() => URL.revokeObjectURL(url), 0);
+  }
+
   async function handleSend() {
     if (!canSend) return;
     const message = draft.trim();
@@ -247,7 +265,18 @@ export default function MediciSimulatorTab({ productLineSlug }) {
           <div className={`${s.pane} ${s.tracePane}`}>
             <div className={s.paneHeader}>
               <span className={s.paneTitle}>实时系统日志</span>
-              <span>{turns.length} 轮</span>
+              <div className={s.paneHeaderRight}>
+                <span>{turns.length} 轮</span>
+                <button
+                  type="button"
+                  className={s.exportBtn}
+                  onClick={handleExportTrace}
+                  disabled={turns.length === 0}
+                  title="将日志导出为文本文件"
+                >
+                  导出
+                </button>
+              </div>
             </div>
             <div className={s.traceList} ref={traceRef}>
               {turns.length === 0 ? (
@@ -440,6 +469,59 @@ function toAdOption(ad) {
     media_type: ad.creativeMediaType || '',
     thumbnail_url: ad.creativePreviewUrl || ad.creativeThumbnailUrl || '',
   };
+}
+
+/**
+ * Render the in-memory trace state as plain text, matching what's visible in
+ * the "实时系统日志" pane: a header section, then for each turn the user
+ * preview, every trace line (`+Xms` + kind + msg + indented JSON data), and
+ * the classification summary.
+ */
+function buildTraceText({ productLineSlug, ad, turns }) {
+  const out = [];
+  out.push('Medici 实时系统日志');
+  out.push('═══════════════════════════════════════════════════════════');
+  out.push(`产品线   : ${productLineSlug}`);
+  if (ad) {
+    out.push(`广告     : ${ad.id}${ad.name ? ` · ${ad.name}` : ''}`);
+    if (ad.headline) out.push(`广告标题 : ${ad.headline}`);
+  } else {
+    out.push('广告     : (未选择)');
+  }
+  out.push(`轮数     : ${turns.length}`);
+  out.push(`导出时间 : ${new Date().toISOString()}`);
+  out.push('');
+
+  for (const t of turns) {
+    out.push('───────────────────────────────────────────────────────────');
+    out.push(`Turn #${t.turn} · user: "${t.userPreview}"`);
+    out.push('───────────────────────────────────────────────────────────');
+    for (const line of (t.trace || [])) {
+      const tag = line.kind ? `[${line.kind}]` : '';
+      out.push(`+${line.t}ms  ${tag} ${line.msg ?? ''}`.trimEnd());
+      if (line.data !== undefined) {
+        let dumped;
+        try { dumped = JSON.stringify(line.data, null, 2); }
+        catch { dumped = String(line.data); }
+        for (const dl of dumped.split('\n')) out.push(`        ${dl}`);
+      }
+    }
+    if (t.summary) {
+      out.push(
+        `✓ result: intent=${JSON.stringify(t.summary.intent)}, ` +
+        `quality=${t.summary.quality}, value=${t.summary.value}, ` +
+        `route=${t.summary.route}, leads=${t.summary.leads}`
+      );
+    }
+    if (Array.isArray(t.leads) && t.leads.length) {
+      out.push('');
+      out.push(`Leads (${t.leads.length}):`);
+      try { out.push(JSON.stringify(t.leads, null, 2)); }
+      catch { out.push(String(t.leads)); }
+    }
+    out.push('');
+  }
+  return out.join('\n');
 }
 
 const boxStyle = {
