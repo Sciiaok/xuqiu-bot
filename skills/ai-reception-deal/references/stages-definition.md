@@ -27,22 +27,17 @@
 
 关键字段：
 
-- 配置
-- 颜色
-- 数量
-- 目的国
-- 目的港
-- 贸易方式
-- 公司名称
+- 由宿主按当前 product_line 的 lead_fields 配置注入，参见动态段 `LEAD FIELDS` + `good_fields / qualify_fields / proof_fields` 三层划分
+- skill 本体不假设具体字段名
 
 最低完成标准：
 
-- 上述字段全部补齐，方可视为 leads 收集完成
-- 在整车业务线中，进入正式谈单前必须先完成 leads 收集
+- `qualify_fields` 全部补齐方可视为 leads 收集完成、可进入正式谈单
+- 任何业务线下，正式报价 / 进入 dealing 前都必须先完成 leads 收集
 
 下一步去向：
 
-- 字段齐全后进入 `dealing`
+- `qualify_fields` 齐全后进入 `dealing`
 - 若客户在过程中直接出现高风险/高意向信号，可直接进入 `human_handover`
 
 ## 3. dealing

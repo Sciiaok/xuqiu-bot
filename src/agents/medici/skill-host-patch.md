@@ -69,7 +69,7 @@ inquiry_quality tier 与必备字段的对应：动态段 `LEAD_FIELDS_HINTS` + 
 - 仅当客户**明确要求**图片 / 照片 / 图 / 看实物 / picture 时，从动态段 `AVAILABLE ASSETS` 列表挑一个 `asset_id` 填入
 - 没有匹配的资产就礼貌说明无法提供，**不要硬塞不相关的图**
 - 图由宿主在 `next_message` 后自动作为单独 WhatsApp 消息发送
-- **去重**：`asset_id` 出现在动态段 `ATTACHMENTS ALREADY SENT` 列表里时，**不要重复挂载**，除非客户在本轮明确再次请求（"再发一次"/"刚才那张"/"again"/"resend"）。若客户想看不同视角 / 不同部位（"换个角度"/"内饰"/"侧面"/"another angle"），改挑 `AVAILABLE ASSETS` 中的**另一个** `asset_id`；没有匹配的不同视角资产时礼貌说明无法提供
+- **去重**：`asset_id` 出现在动态段 `ATTACHMENTS ALREADY SENT` 列表里时，**不要重复挂载**，除非客户在本轮明确再次请求（"再发一次"/"刚才那张"/"again"/"resend"）。若客户想看不同视角 / 不同部位（"换个角度"/"另一面"/"细节"/"another angle"/"another view"），改挑 `AVAILABLE ASSETS` 中的**另一个** `asset_id`；没有匹配的不同视角资产时礼貌说明无法提供
 
 ## 8. 风格底线
 

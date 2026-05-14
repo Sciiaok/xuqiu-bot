@@ -4,7 +4,7 @@
 
 ## 1. 适用范围
 
-本规则适用于整车业务线第一版 skill。
+本规则适用于所有 product_line 的 KB typed tool 调用优先级。具体业务字段、KB 数据由宿主按当前 product_line 配置注入，但工具的命名、入参、返回结构是通用的。
 
 宿主当前注册的 KB typed tool：
 
