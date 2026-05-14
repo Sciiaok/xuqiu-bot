@@ -15,6 +15,19 @@ import supabase from '../../../lib/supabase.js';
 const FETCH_TIMEOUT = 120_000;
 const STORAGE_BUCKET = 'aigc-assets';
 
+// Prefix every legitimate creative URL produced by saveAssetToStorage starts
+// with. Used by the launch path to refuse plans whose image_url didn't come
+// from our own generator (e.g. an attacker-controlled URL that slipped into
+// plan_json via prompt injection through web_search / read_webpage). Anchored
+// to the public URL Supabase returns from getPublicUrl(), so it stays correct
+// even if STORAGE_BUCKET is renamed.
+export const ALLOWED_CREATIVE_URL_PREFIX =
+  `${config.supabase.url.replace(/\/$/, '')}/storage/v1/object/public/${STORAGE_BUCKET}/`;
+
+export function isAllowedCreativeUrl(url) {
+  return typeof url === 'string' && url.startsWith(ALLOWED_CREATIVE_URL_PREFIX);
+}
+
 // Fallback chain — we try models in order; the first that returns an image wins.
 const IMAGE_MODELS = [
   'google/gemini-3.1-flash-image-preview',

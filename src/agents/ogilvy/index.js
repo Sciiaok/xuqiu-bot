@@ -31,9 +31,13 @@ import {
 import { loadSkill } from '../skills-runtime/index.js';
 import { listWhatsAppAccountsForUser } from './whatsapp-accounts.service.js';
 import { webSearch, readWebpage } from './tools.service.js';
-import { generateAdCreative } from './creative.service.js';
+import { generateAdCreative, isAllowedCreativeUrl } from './creative.service.js';
 
-const MAX_ITERATIONS = 20;
+// Tool-use loop cap. 30-day usage data shows real chain depth maxes out at 6
+// (p90=4, avg=1.7), so 10 gives ~67% headroom while bounding the blast radius
+// of a misbehaving agent that keeps emitting tool calls. Hitting this limit
+// yields an `error` event and the user can resume by sending a new message.
+const MAX_ITERATIONS = 10;
 
 // ── Skill bundle + host patch (loaded once, cached at module scope) ─────
 //
@@ -923,6 +927,15 @@ function validatePlanShape(campaigns) {
         if (!ad?.creative?.primary_text) issues.push(`${aTag}.creative.primary_text 缺失`);
         if (!ad?.creative?.image_url) {
           issues.push(`${aTag}.creative.image_url 缺失——请先调 generate_ad_creative 拿到 URL 再填回来`);
+        } else if (!isAllowedCreativeUrl(ad.creative.image_url)) {
+          // Only URLs returned by our own generate_ad_creative are accepted.
+          // External URLs (e.g. attacker-controlled, leaked via injected tool
+          // output) would be downloaded and uploaded to the user's Meta ad
+          // account by metaUploadImage, wasting budget on adversarial assets.
+          issues.push(
+            `${aTag}.creative.image_url 不是 generate_ad_creative 返回的素材 URL。` +
+            '只能使用本次会话里 generate_ad_creative 工具返回的 url 字段，不要填外部链接或自己拼路径。',
+          );
         }
         if (!ad?.welcome_message) issues.push(`${aTag}.welcome_message 缺失`);
       }

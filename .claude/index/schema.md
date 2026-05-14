@@ -1,6 +1,6 @@
 # Schema Snapshot (auto-generated)
 
-Generated: 2026-05-13T04:55:48.241Z
+Generated: 2026-05-14T04:11:48.770Z
 
 Live snapshot of `public` schema from Supabase. **Do not edit by hand** — run `node scripts/build-index.mjs` to refresh.
 
@@ -385,6 +385,7 @@ Tables: **47**. Listed alphabetically.
 | `expiry_date` | date | Y |  |
 | `caption_embedding` | vector | Y |  |
 | `source_doc_id` | uuid | Y |  |
+| `content_sha256` | text | Y |  |
 
 **Foreign keys:**
 - `agent_id` → `agents.id`
@@ -393,6 +394,7 @@ Tables: **47**. Listed alphabetically.
 
 **Indexes:**
 - `idx_kb_assets_agent` USING btree (agent_id)
+- `idx_kb_assets_content_sha` USING btree (content_sha256) WHERE (content_sha256 IS NOT NULL)
 - `idx_kb_assets_scenario` USING btree (tenant_id, product_line_id, scenario)
 - `idx_kb_assets_skus` USING gin (linked_skus)
 - `idx_kb_assets_source_doc` USING btree (source_doc_id)
@@ -400,6 +402,7 @@ Tables: **47**. Listed alphabetically.
 - `idx_kb_assets_tenant_pl` USING btree (tenant_id, product_line_id)
 - `idx_kb_assets_type` USING btree (asset_type)
 - `idx_kb_assets_view` USING btree (tenant_id, product_line_id, view)
+- `uq_kb_assets_doc_content` USING btree (tenant_id, source_doc_id, content_sha256) WHERE ((source_doc_id IS NOT NULL) AND (content_sha256 IS NOT NULL))
 
 ### `kb_corrections`
 

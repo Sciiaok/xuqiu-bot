@@ -2,6 +2,7 @@ import { getTenantContext } from '../../../../../../lib/tenant-context.js';
 import {
   getSession,
   updateSession,
+  transitionSessionStatus,
 } from '../../../../../../lib/repositories/ogilvy.repository.js';
 import { stageCampaigns, activateCampaigns } from '../../../../../../src/agents/ogilvy/meta-launch.service.js';
 import { streamSSE } from '../../../../../../lib/sse.js';
@@ -29,23 +30,35 @@ export async function POST(_request, { params }) {
     return Response.json({ error: 'Session not found' }, { status: 404 });
   }
   if (!session.plan_json) return Response.json({ error: 'No plan to launch' }, { status: 400 });
-  if (session.status === 'launched') return Response.json({ error: 'Already launched' }, { status: 400 });
-  // Block concurrent launches: while a previous launch is mid-flight (status
-  // 'staging') or finished stage but hasn't activated (status 'staged'), a
-  // second POST would call Meta again and duplicate the full campaign/adset/
-  // creative/ad tree. The UI disables the button but that's not authoritative.
-  if (session.status === 'staging' || session.status === 'staged') {
-    return Response.json({ error: 'Launch already in progress' }, { status: 409 });
+
+  // Atomic claim: only sessions in `active` may transition to `staging`. This
+  // replaces a read-then-write check that had a real race (two POSTs in flight
+  // before either persisted `staging` would both pass the if-else and double-
+  // stage the campaign tree on Meta). It also closes the `failed` retry path
+  // — a previous launch that crashed has already created PAUSED resources on
+  // Meta; re-running stage would orphan a second set. Re-launch requires
+  // deleting the session and rebuilding the plan.
+  const plan = session.plan_json;
+  const claim = await transitionSessionStatus(id, {
+    from: ['active'],
+    to: 'staging',
+    extraUpdates: { plan_json: { ...plan, status: 'staging' } },
+  });
+  if (claim?.conflict) {
+    const cur = claim.conflict.current_status;
+    if (cur === 'launched') return Response.json({ error: 'Already launched' }, { status: 400 });
+    if (cur === 'staging' || cur === 'staged') {
+      return Response.json({ error: 'Launch already in progress' }, { status: 409 });
+    }
+    if (cur === 'failed') {
+      return Response.json({
+        error: 'Previous launch failed; this session has PAUSED resources on Meta. Delete this session and recreate the plan to launch again.',
+      }, { status: 409 });
+    }
+    return Response.json({ error: `Session not in launchable state (status=${cur})` }, { status: 409 });
   }
 
-  const plan = session.plan_json;
-
   async function* runLaunch() {
-    // Move to 'staging' so the UI disables the button and shows the spinner.
-    await updateSession(id, {
-      status: 'staging',
-      plan_json: { ...plan, status: 'staging' },
-    });
     yield { event: 'status', data: { status: 'staging' } };
 
     // ── Phase 1: stage (PAUSED) ──

@@ -16,6 +16,7 @@
  */
 import { config } from '../../config.js';
 import { getMetaAccountForUser } from './whatsapp-accounts.service.js';
+import { isAllowedCreativeUrl } from './creative.service.js';
 
 const FETCH_TIMEOUT = 60_000;
 const GRAPH_VERSION = config.meta.apiVersion || 'v21.0';
@@ -110,6 +111,26 @@ function buildPageWelcomeMessageJson(text) {
  * will flip to ACTIVE).
  */
 export async function* stageCampaigns(plan, { userId }) {
+  // Pre-flight: scan every ad's image_url and refuse the whole launch if any
+  // of them weren't produced by our own generate_ad_creative. Catching it
+  // here (before any Meta API call) avoids the previous failure mode where a
+  // tampered plan still produced a real campaign on Meta before the deep-
+  // nested per-ad check fired. The per-ad check below is kept as defense in
+  // depth in case future code adds a path that bypasses this scan.
+  for (const c of plan?.campaigns || []) {
+    for (const as of c?.ad_sets || []) {
+      for (const ad of as?.ads || []) {
+        const u = ad?.creative?.image_url;
+        if (u && !isAllowedCreativeUrl(u)) {
+          throw new Error(
+            `Refusing to launch ad "${ad.name}": image_url is not from our generate_ad_creative output. ` +
+            'Plan tampering or a stale plan from an older session is the likely cause; delete this session and rebuild.',
+          );
+        }
+      }
+    }
+  }
+
   const account = await getMetaAccountForUser(userId);
   if (!account) throw new Error('Meta 未连接：请先在「设置 → Meta 连接」完成接入');
   const { access_token, ad_account_id, page_id } = account;
@@ -220,6 +241,17 @@ export async function* stageCampaigns(plan, { userId }) {
         if (!creative.image_url) {
           yield { type: 'error', ad: ad.name, error: '缺少 creative.image_url，跳过此广告' };
           continue;
+        }
+        // Hard fail (vs. skip with `continue`): plan_json carrying a non-
+        // whitelisted URL got past validatePlanShape, which is either a code
+        // bug or a tampered DB row. Aborting the whole launch is the safe
+        // move — better than uploading an attacker-controlled asset to Meta
+        // and continuing as if everything were fine.
+        if (!isAllowedCreativeUrl(creative.image_url)) {
+          throw new Error(
+            `Refusing to launch ad "${ad.name}": image_url is not from our generate_ad_creative output. ` +
+            'Plan tampering or a stale plan from an older session is the likely cause; delete this session and rebuild.',
+          );
         }
 
         // 3. Upload the image to get a hash.
