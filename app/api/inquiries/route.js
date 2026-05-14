@@ -169,24 +169,54 @@ function applyConversationFilters(query, filters, { foreignTable } = {}) {
   return query;
 }
 
-// The `customer` search box matches any of company_name / name / wa_id.
+// The `customer` search box matches any of company_name / name / wa_id /
+// leads.destination_country. Because destination_country lives on a sibling
+// table (leads), the cross-table OR can't be expressed in a single PostgREST
+// query — the caller pre-resolves matching conversation_ids into
+// filters._customerConvIds, and this helper just narrows by that set.
 // `waPrefix` is a separate legacy param that still narrows wa_id only.
-function applyContactFilters(query, filters, foreignTable = 'contact') {
-  const customer = filters.customer.trim();
-  if (customer) {
-    // PostgREST .or() commas are delimiters — strip them from user input so
-    // the expression stays well-formed. Safe for a search box.
-    const safe = customer.replace(/,/g, ' ');
-    const like = `*${safe}*`;
-    query = query.or(
-      `company_name.ilike.${like},name.ilike.${like},wa_id.ilike.${like}`,
-      { foreignTable },
-    );
+function applyContactFilters(query, filters, opts = {}) {
+  const { foreignTable = 'contact', conversationIdCol = 'id' } = opts;
+  if (Array.isArray(filters._customerConvIds)) {
+    query = query.in(conversationIdCol, filters._customerConvIds);
   }
   if (filters.waPrefix.trim()) {
     query = query.ilike(`${foreignTable}.wa_id`, makeLikePattern(filters.waPrefix));
   }
   return query;
+}
+
+// Resolve the `customer` free-text search into the union of conversation_ids
+// matched via contact fields and via leads.destination_country.
+async function resolveCustomerConvIds(supabase, tenantId, rawCustomer) {
+  const safe = rawCustomer.trim().replace(/,/g, ' ');
+  if (!safe) return null;
+  const orLike = `*${safe}*`;
+  const ilikePattern = `%${safe}%`;
+
+  const [byContact, byCountry] = await Promise.all([
+    supabase
+      .from('conversations')
+      .select('id, contact:contacts!inner(id)')
+      .eq('tenant_id', tenantId)
+      .or(
+        `company_name.ilike.${orLike},name.ilike.${orLike},wa_id.ilike.${orLike}`,
+        { foreignTable: 'contact' },
+      ),
+    supabase
+      .from('leads')
+      .select('conversation_id')
+      .eq('tenant_id', tenantId)
+      .ilike('destination_country', ilikePattern)
+      .not('conversation_id', 'is', null),
+  ]);
+  throwIfError(byContact);
+  throwIfError(byCountry);
+
+  const ids = new Set();
+  for (const r of byContact.data || []) ids.add(r.id);
+  for (const r of byCountry.data || []) ids.add(r.conversation_id);
+  return Array.from(ids);
 }
 
 function applyLeadFilters(query, filters, prefix = 'leads.') {
@@ -272,7 +302,7 @@ function buildLeadCountQuery(supabase, tenantId, filters, { approvedOnly = false
 
   query = applyLeadFilters(query, filters, '');
   query = applyConversationFilters(query, filters, { foreignTable: 'conversation' });
-  query = applyContactFilters(query, filters);
+  query = applyContactFilters(query, filters, { conversationIdCol: 'conversation_id' });
   if (approvedOnly) query = query.eq('approved', true);
   return query;
 }
@@ -535,6 +565,14 @@ export async function GET(request) {
     // Supply-chain token that maps to zero agents → no conversation can match.
     if (rawAgentIds.length > 0 && filters.agentIds.length === 0) {
       return emptyResponse();
+    }
+
+    // Resolve free-text customer search into a conversation_id set so downstream
+    // queries can union contact-field matches with leads.destination_country
+    // matches (cross-table OR can't be expressed inline in PostgREST).
+    if (filters.customer.trim()) {
+      filters._customerConvIds = await resolveCustomerConvIds(supabase, tenantId, filters.customer);
+      if (filters._customerConvIds.length === 0) return emptyResponse();
     }
 
     return hasActiveQuantityFilter(filters)

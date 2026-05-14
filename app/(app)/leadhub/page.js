@@ -101,7 +101,6 @@ export default function LeadHubPage() {
   const [supplyChain, setSupplyChain] = useState(SUPPLY_CHAIN_ALL);
   const [supplyChainOptions, setSupplyChainOptions] = useState([]);
   const [quality, setQuality] = useState(QUALITY_ALL);
-  const [country, setCountry] = useState('all');
   const [datePreset, setDatePreset] = useState('all');
   const [customFrom, setCustomFrom] = useState('');
   const [customTo, setCustomTo] = useState('');
@@ -124,7 +123,6 @@ export default function LeadHubPage() {
     const qs = next.toString();
     router.replace(qs ? `${pathname}?${qs}` : pathname, { scroll: false });
   }, [searchParams, router, pathname]);
-  const [availableCountries, setAvailableCountries] = useState([]);
   // `?customer=<wa_id>` pre-fills the search box. Used by the Feishu high-intent
   // lead card so sales can one-click into the specific customer's conversation.
   const [search, setSearch] = useState(() => searchParams?.get('customer') || '');
@@ -226,22 +224,6 @@ export default function LeadHubPage() {
     return () => { cancelled = true; };
   }, []);
 
-  // Fetch distinct destination countries for the filter dropdown (mount once)
-  useEffect(() => {
-    let cancelled = false;
-    const supabase = createClient();
-    supabase
-      .from('leads')
-      .select('destination_country')
-      .not('destination_country', 'is', null)
-      .then(({ data, error }) => {
-        if (cancelled || error || !data) return;
-        const unique = [...new Set(data.map(r => r.destination_country).filter(Boolean))].sort();
-        setAvailableCountries(unique);
-      });
-    return () => { cancelled = true; };
-  }, []);
-
   // Build query string from current filters.
   // NOTE: `routeFilter` is intentionally NOT included here — route-bar buttons
   // (全部/人工跟进中/AI跟进中/待培育/已结束) filter the already-loaded list
@@ -251,7 +233,6 @@ export default function LeadHubPage() {
     qs.set('limit', '20');
     if (supplyChain !== SUPPLY_CHAIN_ALL) qs.append('agentIds', supplyChain);
     if (quality !== QUALITY_ALL) qs.append('inquiryQuality', quality);
-    if (country !== 'all') qs.set('country', country);
     if (debouncedSearch) qs.set('customer', debouncedSearch);
     const { dateFrom, dateTo } = resolveDateRange(datePreset, customFrom, customTo);
     if (dateFrom) qs.set('dateFrom', dateFrom);
@@ -262,7 +243,7 @@ export default function LeadHubPage() {
       qs.set('cursorId', cursor.cursorId);
     }
     return qs;
-  }, [supplyChain, quality, country, datePreset, customFrom, customTo, debouncedSearch, metaAdIds]);
+  }, [supplyChain, quality, datePreset, customFrom, customTo, debouncedSearch, metaAdIds]);
 
   // Shared fetch for the first page — used by both initial load and realtime refresh.
   // `resetSelection` = true on filter changes (pick first card), false on realtime
@@ -758,7 +739,6 @@ export default function LeadHubPage() {
   const hasActiveFilter =
     supplyChain !== SUPPLY_CHAIN_ALL ||
     quality !== QUALITY_ALL ||
-    country !== 'all' ||
     datePreset !== 'all' ||
     !!debouncedSearch ||
     metaAdIds.length > 0;
@@ -766,7 +746,6 @@ export default function LeadHubPage() {
   const resetFilters = useCallback(() => {
     setSupplyChain(SUPPLY_CHAIN_ALL);
     setQuality(QUALITY_ALL);
-    setCountry('all');
     setDatePreset('all');
     setCustomFrom('');
     setCustomTo('');
@@ -787,9 +766,6 @@ export default function LeadHubPage() {
       const opt = QUALITY_OPTIONS.find((o) => o.value === quality);
       chips.push({ key: 'quality', label: `质量：${opt?.label || quality}`, clear: () => setQuality(QUALITY_ALL) });
     }
-    if (country !== 'all') {
-      chips.push({ key: 'country', label: `国家：${country}`, clear: () => setCountry('all') });
-    }
     if (datePreset !== 'all') {
       const opt = DATE_PRESETS.find((p) => p.key === datePreset);
       chips.push({ key: 'date', label: `时间：${opt?.label || datePreset}`, clear: () => { setDatePreset('all'); setCustomFrom(''); setCustomTo(''); } });
@@ -798,7 +774,7 @@ export default function LeadHubPage() {
       chips.push({ key: 'search', label: `搜索：${debouncedSearch}`, clear: () => setSearch('') });
     }
     return chips;
-  }, [supplyChain, supplyChainOptions, quality, country, datePreset, debouncedSearch]);
+  }, [supplyChain, supplyChainOptions, quality, datePreset, debouncedSearch]);
 
   // ── Keyboard shortcuts ──
   // `/` focuses the search box (Slack/Linear pattern). Esc clears focus or
@@ -902,12 +878,6 @@ export default function LeadHubPage() {
                   <option key={opt.value} value={opt.value}>{opt.label}</option>
                 ))}
               </select>
-              <select className={s.filterSelect} value={country} onChange={e => setCountry(e.target.value)} title="目的国">
-                <option value="all">全部国家</option>
-                {availableCountries.map(c => (
-                  <option key={c} value={c}>{c}</option>
-                ))}
-              </select>
               <select
                 className={s.filterSelect}
                 value={datePreset}
@@ -947,7 +917,7 @@ export default function LeadHubPage() {
                 <input
                   ref={searchInputRef}
                   className={s.searchInput}
-                  placeholder="搜索电话或名称（按 / 聚焦）"
+                  placeholder="搜索电话/名称/公司/国家（按 / 聚焦）"
                   value={search}
                   onChange={e => setSearch(e.target.value)}
                 />
