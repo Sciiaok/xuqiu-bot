@@ -91,23 +91,38 @@ inquiry_quality tier 与必备字段的对应：动态段 `LEAD_FIELDS_HINTS` + 
 - 用广告里的具体型号 / 促销作为澄清问题的锚点
 - **不要把广告原文复述给客户**，也不要提你能看到广告元数据
 
-## 10. 报价闸口（leads 未齐时）
+## 10. 报价闸口
 
-宿主在客户 leads 字段未收集到 QUALIFY 完整度时，会从工具返回里把价格字段拿掉：
+宿主在两种情况下会从工具返回里把价格字段拿掉，并打上 `_price_locked` 标记。**任一标记出现，行为要求都一样——不报价。**
+
+### 10.1 `reason: "leads_incomplete"`（leads 未齐到 QUALIFY）
+
+客户 leads 字段未收集到 QUALIFY 完整度时：
 
 - `lookup_product` 返回的 products 不含 `fob_price_usd`
 - `lookup_freight` 返回的 route 不含 `unit_cost`
 - `quote_price` 直接返回 `{ ok: false, missing_fields: [...], reason: 'leads_incomplete' }`，不会真正算价
 
-被拿掉时，tool_result 上会附带 `_price_locked: { reason: 'leads_incomplete', missing: [<缺失字段>] }` 标记。
+标记形如：`_price_locked: { reason: 'leads_incomplete', missing: [<缺失字段>] }`
 
-行为要求：
+### 10.2 `reason: "config_not_picked"`（leads 齐了但 SKU 未收敛）
 
-- 看到 `_price_locked` → **不输出任何价格数字 / 区间 / ballpark / 参考价**；告诉客户"价格需要先确认 [missing 中列的字段]"，同一轮顺带追问 1–2 个最关键字段
+leads 已齐，但 `lookup_product` 返回 >1 条产品——客户没把"配置 / 版本"收敛到单一 SKU 时：
+
+- `lookup_product` 把每条 product 的 `fob_price_usd` / `quote_fca_usd` / `bottom_price_fca_usd` 都抽掉
+- 标记形如：`_price_locked: { reason: 'config_not_picked', products: <返回条数> }`
+
+这条对应飞书验收"配置" 必填——客户没选具体配置前不允许给参考价。
+
+### 10.3 行为要求（两种 lock 通用）
+
+- 看到 `_price_locked` → **不输出任何价格数字 / 区间 / ballpark / 参考价**——尤其禁止 "$X 起 / from $X / $X–$Y / 大概 $X" 这类话术
+- `reason: "leads_incomplete"` → 告诉客户"价格需要先确认 [missing 中列的字段]"，同一轮顺带追问 1–2 个最关键字段
+- `reason: "config_not_picked"` → 列出 lookup_product 返回的配置（型号 / 续航 / 版本），问"您倾向哪个？"——**只列配置名，不列任何价格相关字段**
 - 允许的非价格答复：品牌定位、产品档次、相对竞品的非数字描述
 - 客户硬推报价 → 按 §5 转人工
 
-字段补齐后，工具返回会自动恢复价格，无需做任何特殊处理。
+字段补齐 / SKU 收敛后，工具返回会自动恢复价格，无需做任何特殊处理。
 
 ---
 

@@ -4,6 +4,7 @@ import { runMedici } from '../../../../src/agents/medici/index.js';
 import { getMissingFields } from '../../../../src/inquiry-quality.js';
 import { getMediciConfig } from '../../../../src/agents/medici/config.js';
 import { formatReferralContextForPrompt } from '../../../../lib/referral-context.js';
+import { filterAttachmentsBySkuContext } from '../../../../src/agents/medici/attachment-guard.js';
 import supabase from '../../../../lib/supabase.js';
 import { getSupabaseAdmin } from '../../../../lib/supabase-admin.js';
 
@@ -19,7 +20,7 @@ const ASSET_URL_TTL_SECONDS = 3600;
  *
  * Failures per attachment are non-fatal — text reply still comes through.
  */
-async function resolveAttachmentUrls(rawAttachments, { tenantId, productLineId }) {
+async function resolveAttachmentUrls(rawAttachments, { tenantId, productLineId, productContext, log }) {
   if (!Array.isArray(rawAttachments) || rawAttachments.length === 0) return [];
 
   const ids = rawAttachments.map((a) => a?.asset_id).filter(Boolean);
@@ -27,16 +28,35 @@ async function resolveAttachmentUrls(rawAttachments, { tenantId, productLineId }
 
   const { data: rows, error } = await supabase
     .from('kb_assets')
-    .select('id, filename, storage_path, mime_type, description')
+    .select('id, filename, storage_path, mime_type, description, linked_skus')
     .eq('tenant_id', tenantId)
     .eq('product_line_id', productLineId)
     .in('id', ids);
   if (error || !rows) return [];
 
   const byId = new Map(rows.map((r) => [r.id, r]));
+
+  // SKU/brand guard — same logic as production send-attachments.js.
+  const guardLogger = {
+    warn: (msg, data) => log?.('warn', msg, data),
+  };
+  const { kept, dropped } = filterAttachmentsBySkuContext(
+    rawAttachments,
+    byId,
+    productContext || {},
+    guardLogger,
+  );
+  if (dropped.length > 0) {
+    log?.('warn', `Dropped ${dropped.length} attachment(s) — SKU mismatch with conversation context`, {
+      dropped,
+      context: productContext || {},
+    });
+  }
+  const safeAttachments = kept;
+
   const admin = getSupabaseAdmin();
 
-  const resolved = await Promise.all(rawAttachments.map(async (att) => {
+  const resolved = await Promise.all(safeAttachments.map(async (att) => {
     const row = byId.get(att?.asset_id);
     if (!row) return null;
     try {
@@ -297,6 +317,7 @@ export async function POST(request) {
       business_value: response.business_value,
       route: response.route,
       leads_count: (response.leads || []).length,
+      handoff_summary_len: (response.handoff_summary || '').length,
     });
 
     const reply = response.next_message || '';
@@ -304,9 +325,25 @@ export async function POST(request) {
       ? `Reply: "${reply.slice(0, 160)}${reply.length > 160 ? '…' : ''}"`
       : 'Reply: (empty — spam/FAQ_END case)');
 
+    // 飞书验收用例 12 需要直接核对 handoff_summary。HUMAN_NOW 时单独打成
+    // 一行 trace，让 reviewer 不用扒 envelope 也能一眼看到。
+    if (response.route === 'HUMAN_NOW' && response.handoff_summary) {
+      log('info', 'handoff_summary', { handoff_summary: response.handoff_summary });
+    }
+
+    // Same logic as queue-processor's productContext build: use the freshest
+    // lead's product fields so the guard can drop SKU-mismatched attachments.
+    const freshLead = Array.isArray(response.leads) ? response.leads[0] : null;
+    const productContext = freshLead ? {
+      carModel: freshLead.car_model || null,
+      brand: freshLead.brand || null,
+      productName: freshLead.product_name || null,
+    } : {};
     const attachments = await resolveAttachmentUrls(response.attachments, {
       tenantId: ctx.tenantId,
       productLineId: agentConfig.product_line,
+      productContext,
+      log,
     });
     if (attachments.length > 0) {
       log('info', `Resolved ${attachments.length} attachment(s) for chat render`, {

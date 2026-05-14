@@ -19,6 +19,7 @@
 import supabase from '../../../lib/supabase.js';
 import { sendMedia } from '../../whatsapp.service.js';
 import { createMessage } from '../../../lib/repositories/message.repository.js';
+import { filterAttachmentsBySkuContext } from './attachment-guard.js';
 
 const STORAGE_BUCKET = 'kb-assets';
 
@@ -32,7 +33,7 @@ function asMediaType(mimeType) {
 async function fetchAsset(assetId) {
   const { data: row, error } = await supabase
     .from('kb_assets')
-    .select('id, agent_id, filename, storage_path, mime_type, is_sendable')
+    .select('id, agent_id, filename, storage_path, mime_type, is_sendable, linked_skus, description')
     .eq('id', assetId)
     .maybeSingle();
   if (error) throw error;
@@ -48,6 +49,21 @@ async function fetchAsset(assetId) {
 }
 
 /**
+ * Pre-fetch only the {id, linked_skus} we need for the guard. Cheaper than
+ * downloading every asset just to validate; the survivors go through
+ * fetchAsset() in the main loop.
+ */
+async function fetchAssetMetaForGuard(assetIds) {
+  if (assetIds.length === 0) return new Map();
+  const { data: rows, error } = await supabase
+    .from('kb_assets')
+    .select('id, linked_skus')
+    .in('id', assetIds);
+  if (error || !rows) return new Map();
+  return new Map(rows.map((r) => [r.id, r]));
+}
+
+/**
  * Send each attachment WhatsApp-side and record a corresponding assistant
  * message. Returns counts so callers can log a summary.
  */
@@ -57,19 +73,33 @@ export async function sendMediciAttachments({
   tenantId,
   waId,
   phoneNumberId,
+  productContext,
   logger,
 }) {
   if (!Array.isArray(attachments) || attachments.length === 0) {
-    return { sent: 0, failed: 0 };
+    return { sent: 0, failed: 0, dropped: 0 };
   }
   if (!tenantId) {
     throw new Error('sendMediciAttachments: tenantId required');
   }
 
+  // SKU/brand guard — drop attachments that obviously don't match the
+  // conversation's product context. See attachment-guard.js.
+  const assetIds = attachments.map((a) => a?.asset_id).filter(Boolean);
+  const assetMetaById = await fetchAssetMetaForGuard(assetIds);
+  const { kept, dropped } = filterAttachmentsBySkuContext(
+    attachments,
+    assetMetaById,
+    productContext || {},
+    logger,
+  );
+  const droppedCount = dropped.length;
+  const safeAttachments = kept;
+
   let sent = 0;
   let failed = 0;
 
-  for (const att of attachments) {
+  for (const att of safeAttachments) {
     const assetId = att?.asset_id;
     const caption = typeof att?.caption === 'string' ? att.caption : '';
     if (!assetId) {
@@ -126,5 +156,5 @@ export async function sendMediciAttachments({
     }
   }
 
-  return { sent, failed };
+  return { sent, failed, dropped: droppedCount };
 }

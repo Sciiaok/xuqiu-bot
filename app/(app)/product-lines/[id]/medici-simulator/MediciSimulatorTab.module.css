@@ -459,3 +459,104 @@
   color: var(--red, #d93025);
   border-color: color-mix(in srgb, var(--red, #d93025) 22%, transparent);
 }
+
+/* ─── Route badge (trace summary) ───────────────────────── */
+
+.routeBadge {
+  display: inline-block;
+  padding: 0 6px;
+  border-radius: 3px;
+  font-weight: 600;
+  font-size: 10.5px;
+  letter-spacing: 0.3px;
+  background: var(--bg2, #e8e8e8);
+  color: var(--text2);
+}
+.routeBadge[data-route='HUMAN_NOW'] {
+  background: color-mix(in srgb, #ff8a00 22%, transparent);
+  color: #c25500;
+}
+.routeBadge[data-route='FAQ_END'] {
+  background: color-mix(in srgb, var(--text3) 22%, transparent);
+  color: var(--text3);
+}
+.routeBadge[data-route='CONTINUE'] {
+  background: color-mix(in srgb, var(--green, #3fb950) 22%, transparent);
+  color: var(--green, #2a8a3a);
+}
+
+/* ─── Takeover bubble (HUMAN_NOW / FAQ_END system message) ── */
+
+.takeoverBubble {
+  align-self: center;
+  max-width: 90%;
+  margin: 10px 8px;
+  padding: 12px 14px;
+  border-radius: 8px;
+  background: color-mix(in srgb, #ff8a00 14%, transparent);
+  border: 1px solid color-mix(in srgb, #ff8a00 38%, transparent);
+  color: #8a3d00;
+  text-align: center;
+}
+.takeoverBubble[data-variant='faq'] {
+  background: color-mix(in srgb, var(--text3) 14%, transparent);
+  border-color: color-mix(in srgb, var(--text3) 32%, transparent);
+  color: var(--text2);
+}
+
+.takeoverBubbleTitle {
+  font-size: 13px;
+  font-weight: 600;
+  margin-bottom: 4px;
+}
+
+.takeoverBubbleHint {
+  font-size: 11.5px;
+  opacity: 0.85;
+  margin-bottom: 8px;
+  line-height: 1.5;
+}
+
+.takeoverResumeBtn {
+  display: inline-block;
+  padding: 5px 12px;
+  border-radius: 4px;
+  font-size: 11.5px;
+  border: 1px solid currentColor;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+.takeoverResumeBtn:hover {
+  background: color-mix(in srgb, currentColor 8%, transparent);
+}
+
+/* ─── Handoff summary card (acceptance test case #12) ──── */
+
+.handoffCard {
+  margin: 0 14px 8px;
+  padding: 10px 12px;
+  border-radius: 6px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  font-size: 12px;
+}
+.handoffCard[data-variant='warn'] {
+  border-color: color-mix(in srgb, var(--red, #d93025) 40%, transparent);
+  background: color-mix(in srgb, var(--red, #d93025) 8%, transparent);
+}
+
+.handoffCardTitle {
+  font-size: 11px;
+  color: var(--text3);
+  letter-spacing: 0.3px;
+  text-transform: uppercase;
+  margin-bottom: 5px;
+}
+
+.handoffCardBody {
+  color: var(--text);
+  line-height: 1.55;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}

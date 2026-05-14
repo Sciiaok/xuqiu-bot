@@ -47,7 +47,7 @@ const TOOL_DEFS = {
   lookup_product: {
     name: 'lookup_product',
     description:
-      'Find products by SKU, model name, or attribute filters (e.g. horsepower, fuel type). Returns {found:true, products:[...]} with structured product data, or {found:false, suggestions?:[...], missing_fields?:[...]}. The tool tokenizes input automatically (whitespace, CJK/Latin transitions), so pass the keyword verbatim — do NOT insert or strip spaces yourself. **This is an internal signal — `found:false` does NOT mean you should tell the customer "we don\'t have X".** During `lead_collection`: record the customer\'s brand/SKU into `leads`, then keep collecting the configured qualify_fields. `suggestions` are NEVER proactively offered as cross-sell — only surface them when the customer explicitly asks for alternatives ("还有什么别的"/"recommend something else"). When `qualify_fields` are complete and the SKU is still not_found, route to HUMAN_NOW per handover-rules §1.4 (do not surface KB miss to the customer in next_message). **Price lock**: if the result includes `_price_locked` (leads not yet QUALIFY-complete), `fob_price_usd` is intentionally absent — do NOT quote any price (number, range, ballpark); see skill-host-patch §10.',
+      'Find products by SKU, model name, or attribute filters (e.g. horsepower, fuel type). Returns {found:true, products:[...]} with structured product data, or {found:false, suggestions?:[...], missing_fields?:[...]}. The tool tokenizes input automatically (whitespace, CJK/Latin transitions), so pass the keyword verbatim — do NOT insert or strip spaces yourself. **This is an internal signal — `found:false` does NOT mean you should tell the customer "we don\'t have X".** During `lead_collection`: record the customer\'s brand/SKU into `leads`, then keep collecting the configured qualify_fields. `suggestions` are NEVER proactively offered as cross-sell — only surface them when the customer explicitly asks for alternatives ("还有什么别的"/"recommend something else"). When `qualify_fields` are complete and the SKU is still not_found, route to HUMAN_NOW per handover-rules §1.4 (do not surface KB miss to the customer in next_message). **Price lock** — two flavors, both strip `fob_price_usd` from the response: (a) `_price_locked.reason="leads_incomplete"` → leads not QUALIFY-complete; (b) `_price_locked.reason="config_not_picked"` → the search returned >1 SKU and the customer hasn\'t narrowed to one config yet. In either case, do NOT quote any price (number, range, ballpark, "from $X to $Y"); list the configurations and ask which one. See skill-host-patch §10.',
     input_schema: {
       type: 'object',
       properties: {
@@ -246,6 +246,16 @@ function stripPriceKeys(obj) {
   return out;
 }
 
+function stripProductPrices(products) {
+  return products.map((p) => {
+    const stripped = stripPriceKeys(p);
+    if (p.specs && typeof p.specs === 'object') {
+      stripped.specs = stripPriceKeys(p.specs);
+    }
+    return stripped;
+  });
+}
+
 function applyPriceLock(toolName, result, missingLeads) {
   if (!Array.isArray(missingLeads) || missingLeads.length === 0) return result;
   if (!result || typeof result !== 'object') return result;
@@ -255,13 +265,7 @@ function applyPriceLock(toolName, result, missingLeads) {
     if (!result.found || !Array.isArray(result.products)) return result;
     return {
       ...result,
-      products: result.products.map((p) => {
-        const stripped = stripPriceKeys(p);
-        if (p.specs && typeof p.specs === 'object') {
-          stripped.specs = stripPriceKeys(p.specs);
-        }
-        return stripped;
-      }),
+      products: stripProductPrices(result.products),
       _price_locked: lock,
     };
   }
@@ -270,6 +274,29 @@ function applyPriceLock(toolName, result, missingLeads) {
     return { ...result, route: stripPriceKeys(result.route), _price_locked: lock };
   }
   return result;
+}
+
+/**
+ * 多 SKU 时再加一道闸：leads 已 QUALIFY-complete 但客户没把"配置"收敛到单
+ * 一型号（lookup_product 返回 >1 行），仍然不让 LLM 看价格——否则它会把所有
+ * fob_price_usd 合并成一个 "$8,800–$12,600" 区间报给客户。飞书验收标准把
+ * "配置" 列为最低必填字段，所以这里把"未锁定单一 SKU" 当成一种"未齐"。
+ *
+ * 字段补齐（客户确认了具体型号、下一次 lookup 只命中 1 条）后，价格自动恢复。
+ */
+function applyMultiSkuPriceLock(result) {
+  if (!result || typeof result !== 'object') return result;
+  if (!result.found || !Array.isArray(result.products)) return result;
+  if (result.products.length <= 1) return result;
+  if (result._price_locked) return result;  // leads_incomplete 已经盖过章了
+  return {
+    ...result,
+    products: stripProductPrices(result.products),
+    _price_locked: {
+      reason: 'config_not_picked',
+      products: result.products.length,
+    },
+  };
 }
 
 /**
@@ -287,6 +314,7 @@ export async function executeKbTool(toolName, input, ctx = {}) {
       case 'lookup_product':
         result = await lookupProduct({ ...base, sku: input.sku, model: input.model, attrs: input.attrs });
         result = applyPriceLock('lookup_product', result, missingLeads);
+        result = applyMultiSkuPriceLock(result);
         break;
       case 'quote_price':
         if (leadsLocked) {

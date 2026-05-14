@@ -28,6 +28,10 @@ export default function MediciSimulatorTab({ productLineSlug }) {
   const [sendError, setSendError] = useState('');
   const [turns, setTurns] = useState([]);
   const [pendingImage, setPendingImage] = useState(null);
+  // 模拟"人工放手"——HUMAN_NOW 锁住 composer 时，点 [模拟人工放手] 解锁，
+  // 让同一 session 里既能测"触发转人工"又能测"接管释放后继续聊"。下一条
+  // 客户消息发出后或清空对话后重置。
+  const [resumed, setResumed] = useState(false);
 
   const chatRef = useRef(null);
   const traceRef = useRef(null);
@@ -101,9 +105,20 @@ export default function MediciSimulatorTab({ productLineSlug }) {
   }, [history, turns]);
 
   const selectedAd = ads.find((a) => a.id === selectedAdId) || null;
+  const lastTurn = turns.length > 0 ? turns[turns.length - 1] : null;
+  const lastRoute = lastTurn?.summary?.route || null;
+  // 与生产侧 HUMAN_NOW → startHumanTakeover 行为对齐：锁住 composer，提示
+  // 销售已被通知。点"模拟人工放手"清掉本地锁，下条还能继续发。
+  const takeoverActive = lastRoute === 'HUMAN_NOW' && !resumed;
+  // FAQ_END 是硬结束（spam / C 端）——也锁，但提示文案不同。
+  const faqEnded = lastRoute === 'FAQ_END' && !resumed;
+  const locked = takeoverActive || faqEnded;
+  const handoffSummary = lastTurn?.summary?.handoff_summary || '';
+
   const canSend = selectedAd
     && (draft.trim().length > 0 || pendingImage)
-    && !sending;
+    && !sending
+    && !locked;
 
   function handleReset() {
     setHistory([]);
@@ -111,6 +126,11 @@ export default function MediciSimulatorTab({ productLineSlug }) {
     setSendError('');
     setDraft('');
     setPendingImage(null);
+    setResumed(false);
+  }
+
+  function handleResumeAfterTakeover() {
+    setResumed(true);
   }
 
   // Serialize the trace pane (all turns rendered on screen) as plain text and
@@ -224,6 +244,7 @@ export default function MediciSimulatorTab({ productLineSlug }) {
           value: data.response.business_value,
           route: data.response.route,
           leads: stampedLeads.length,
+          handoff_summary: data.response.handoff_summary || '',
         } : null,
         leads: stampedLeads,
         leadFields: Array.isArray(data.lead_fields) ? data.lead_fields : [],
@@ -329,7 +350,8 @@ export default function MediciSimulatorTab({ productLineSlug }) {
                       <div className={s.traceBody}>
                         <strong>result:</strong> intent={JSON.stringify(turn.summary.intent)},
                         quality={turn.summary.quality}, value={turn.summary.value},
-                        route={turn.summary.route}, leads={turn.summary.leads}
+                        route=<span className={s.routeBadge} data-route={turn.summary.route}>{turn.summary.route}</span>,
+                        leads={turn.summary.leads}
                       </div>
                     </div>
                   )}
@@ -408,7 +430,58 @@ export default function MediciSimulatorTab({ productLineSlug }) {
                 );
               })
             )}
+            {/* 系统气泡 — 转人工 / FAQ_END 触发后渲染在对话流末尾，模拟生产侧
+                "AI 已挂起，销售已被通知" 的视觉反馈。点 [模拟人工放手 → 继续测试]
+                清掉本地接管锁，下一条消息照常进 Medici。 */}
+            {takeoverActive && (
+              <div className={s.takeoverBubble}>
+                <div className={s.takeoverBubbleTitle}>🚨 已转人工 · 销售已被通知</div>
+                <div className={s.takeoverBubbleHint}>
+                  生产环境此时 AI 已挂起，后续客户消息不再回复，等销售接手。
+                </div>
+                <button
+                  type="button"
+                  className={s.takeoverResumeBtn}
+                  onClick={handleResumeAfterTakeover}
+                >
+                  模拟人工放手 → 继续测试
+                </button>
+              </div>
+            )}
+            {faqEnded && (
+              <div className={s.takeoverBubble} data-variant="faq">
+                <div className={s.takeoverBubbleTitle}>对话已结束 — FAQ_END</div>
+                <div className={s.takeoverBubbleHint}>
+                  spam / 个人消费 / 超过最大轮次等场景，AI 不再继续接待。如需继续调试请清空对话。
+                </div>
+                <button
+                  type="button"
+                  className={s.takeoverResumeBtn}
+                  onClick={handleResumeAfterTakeover}
+                >
+                  忽略 → 继续测试
+                </button>
+              </div>
+            )}
           </div>
+
+          {/* 转人工时把 handoff_summary 卡片化展示——飞书验收用例 12 的核
+              心检查项，让 reviewer 不用扒 trace 也能直接对照"客户诉求 / 已
+              确认信息 / 缺失字段 / 转人工原因"四要素是否齐。 */}
+          {takeoverActive && handoffSummary && (
+            <div className={s.handoffCard}>
+              <div className={s.handoffCardTitle}>转人工交接摘要（handoff_summary）</div>
+              <div className={s.handoffCardBody}>{handoffSummary}</div>
+            </div>
+          )}
+          {takeoverActive && !handoffSummary && (
+            <div className={s.handoffCard} data-variant="warn">
+              <div className={s.handoffCardTitle}>⚠️ handoff_summary 字段为空</div>
+              <div className={s.handoffCardBody}>
+                转人工时 Medici 应输出完整交接摘要——空字段意味着销售拿不到上下文。
+              </div>
+            </div>
+          )}
 
           {pendingImage && (
             <div className={s.pendingImage}>
@@ -439,14 +512,19 @@ export default function MediciSimulatorTab({ productLineSlug }) {
               type="button"
               className={s.attachBtn}
               onClick={() => fileInputRef.current?.click()}
-              disabled={!selectedAd || sending}
+              disabled={!selectedAd || sending || locked}
               title="附加图片（JPEG / PNG / WebP / GIF，≤5MB）"
             >
               📎
             </button>
             <textarea
               className={s.composerInput}
-              placeholder={selectedAd ? '模拟客户消息…' : '先选广告'}
+              placeholder={
+                takeoverActive ? 'AI 已挂起 — 点上方"模拟人工放手"继续'
+                : faqEnded     ? '对话已结束 — 点上方"忽略"继续或清空重来'
+                : selectedAd   ? '模拟客户消息…'
+                :                '先选广告'
+              }
               value={draft}
               onChange={(e) => setDraft(e.target.value)}
               onKeyDown={(e) => {
@@ -455,7 +533,7 @@ export default function MediciSimulatorTab({ productLineSlug }) {
                   handleSend();
                 }
               }}
-              disabled={!selectedAd || sending}
+              disabled={!selectedAd || sending || locked}
               rows={1}
             />
             <button type="button" className={s.sendBtn} onClick={handleSend} disabled={!canSend}>
