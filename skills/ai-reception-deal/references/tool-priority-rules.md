@@ -10,7 +10,7 @@
 
 - `lookup_product`：按 SKU / 型号 / 属性查产品
 - `quote_price`：精确报价（FOB / CIF / DDP，含边界检查）
-- `lookup_shipping`：目的港运费 / 船期
+- `lookup_freight`：目的港预录运费 / 船期数据（`found:false` 只表示"未预录运费"，**不代表"不能发"**——业务默认接受任何目的港）
 - `lookup_policy`：政策 / 资质 / 公司 / 销售话术；`free_text` 优先匹配销售 Q&A snippet，再走向量检索兜底
 - `find_asset`：找图（tag 优先，semantic 兜底）
 - `check_constraint`：议价 / 让步 / 非标付款边界检查
@@ -75,8 +75,9 @@
 
 默认建议：
 
-- 优先调 `lookup_shipping({destination_port, ...})`
+- 优先调 `lookup_freight({destination_port, ...})`
 - 与价格计算合一时，`quote_price` 在 CIF / DDP 模式下内部已经合并运费，无须再单独算
+- `lookup_freight` 返回 `found:false` 时：**不要**说"不能发"或"没有这条航线"；正确措辞是"可以发，具体运费和船期需运营同事核实"。同时**禁止**编造路线特性（频率 / 时效 / "稳定航线" / "定期班次"）
 
 ### 2.5 公司资质 / 出口能力 / 政策问题
 

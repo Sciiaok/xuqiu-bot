@@ -7,7 +7,7 @@
  *
  *   1. lookup_product
  *   2. quote_price
- *   3. lookup_shipping
+ *   3. lookup_freight
  *   4. lookup_policy        (also handles QA snippets via free_text)
  *   5. find_asset
  *   6. check_constraint
@@ -79,10 +79,15 @@ const TOOL_DEFS = {
     },
   },
 
-  lookup_shipping: {
-    name: 'lookup_shipping',
+  // Tool surface name is `lookup_freight` (not `lookup_shipping`) — we look up
+  // precomputed freight rate / transit data, not shipping capability. We can
+  // ship to any destination the customer requests; `found:false` only means
+  // "no rate data on file", NOT "cannot ship there". Underlying function and
+  // table keep the `shipping` name for back-compat.
+  lookup_freight: {
+    name: 'lookup_freight',
     description:
-      'Look up shipping route to a destination. Returns {found:true, route:{unit_cost, transit_days, ...}} or {found:false, alternatives:[...]} with same-country alternatives. **Price lock**: if `_price_locked` is present (leads not QUALIFY-complete), `unit_cost` is intentionally absent — do NOT quote shipping cost; see skill-host-patch §10.',
+      'Look up precomputed freight rate / transit time / origin port / shipping method for a destination. Returns {found:true, route:{unit_cost, transit_days, ...}} when we have prior data, or {found:false, alternatives:[...]} (same-country alternatives) when we don\'t. IMPORTANT: `found:false` means "no rate data on file", NOT "cannot ship there" — our default stance is we can ship to any destination the customer requests; ops will confirm specifics offline. **Price lock**: if `_price_locked` is present (leads not QUALIFY-complete), `unit_cost` is intentionally absent — do NOT quote shipping cost; see skill-host-patch §10.',
     input_schema: {
       type: 'object',
       properties: {
@@ -158,7 +163,7 @@ export async function buildKbTools({ tenantId, productLineId }) {
 const TOOL_TO_GAP_LAYER = {
   lookup_product: 'product',
   quote_price: 'product',
-  lookup_shipping: 'logistics',
+  lookup_freight: 'logistics',
   lookup_policy: null,
   find_asset: null,
   check_constraint: 'sales',
@@ -173,7 +178,7 @@ function gapTypeFromResult(toolName, result) {
 
   switch (toolName) {
     case 'lookup_product':
-    case 'lookup_shipping':
+    case 'lookup_freight':
       return result.found === false ? 'no_result' : null;
     case 'quote_price':
       if (result.ok === true) return null;
@@ -260,7 +265,7 @@ function applyPriceLock(toolName, result, missingLeads) {
       _price_locked: lock,
     };
   }
-  if (toolName === 'lookup_shipping') {
+  if (toolName === 'lookup_freight') {
     if (!result.found || !result.route) return result;
     return { ...result, route: stripPriceKeys(result.route), _price_locked: lock };
   }
@@ -302,14 +307,18 @@ export async function executeKbTool(toolName, input, ctx = {}) {
           paymentTerm: input.payment_term,
         });
         break;
-      case 'lookup_shipping':
+      case 'lookup_freight':
         result = await lookupShipping({
           ...base,
           destinationPort: input.destination_port,
           shippingMethod: input.shipping_method,
           originPort: input.origin_port,
         });
-        result = applyPriceLock('lookup_shipping', result, missingLeads);
+        result = applyPriceLock('lookup_freight', result, missingLeads);
+        if (result && result.found === false) {
+          result.hint =
+            'No freight rate data on file for this destination — does NOT mean we cannot ship there. Default reply: yes we can ship to this destination, ops will confirm rate and transit time. Do NOT invent specific route characteristics (cost, transit days, frequency, "stable route", "regular service").';
+        }
         break;
       case 'lookup_policy':
         result = await lookupPolicy({
