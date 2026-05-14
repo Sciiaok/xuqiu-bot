@@ -146,10 +146,36 @@ ${inj.business_value_guidance || '(no guidance configured)'}${assetsBlock}`;
 }
 
 /**
+ * Render the ATTACHMENTS ALREADY SENT block. Per-turn (not cached) because
+ * the list grows with the conversation. Empty → '' so the section disappears.
+ */
+function renderSentAssets(sentIds, availableAssets) {
+  if (!Array.isArray(sentIds) || sentIds.length === 0) return '';
+  const desc = new Map(
+    (availableAssets || []).map((a) => [
+      a.id,
+      (a.description || '').replace(/\s+/g, ' ').trim() || '(no description)',
+    ]),
+  );
+  const lines = sentIds.map(
+    (id) => `- asset_id=${id}  ${desc.get(id) || '(asset no longer in available list)'}`,
+  );
+  return `\n\n## ATTACHMENTS ALREADY SENT (this conversation)
+${lines.join('\n')}`;
+}
+
+/**
  * Per-turn / per-conversation state — varies each Medici call. Kept out of
  * the cached block so we don't bust the per-line cache on every reply.
  */
-export function buildPerTurnContext({ missing_fields, prior_state, car_recommendation, ad_referral } = {}) {
+export function buildPerTurnContext({
+  missing_fields,
+  prior_state,
+  car_recommendation,
+  ad_referral,
+  sent_assets,
+  available_assets,
+} = {}) {
   const missing = Array.isArray(missing_fields) && missing_fields.length > 0
     ? missing_fields.join(', ')
     : '(none)';
@@ -162,6 +188,7 @@ export function buildPerTurnContext({ missing_fields, prior_state, car_recommend
   const adBlock = ad_referral
     ? `\n\n## Ad the customer clicked to start this conversation\n${ad_referral}`
     : '';
+  const sentAssetsBlock = renderSentAssets(sent_assets, available_assets);
 
   return `## CURRENT MISSING FIELDS
 
@@ -169,7 +196,24 @@ ${missing}
 
 ## PRIOR STATE
 
-${priorBlock}${carRecBlock}${adBlock}`;
+${priorBlock}${carRecBlock}${adBlock}${sentAssetsBlock}`;
+}
+
+/**
+ * Extract assets that the assistant already sent on prior turns. send-attachments
+ * persists asset_id in message metadata; we just walk history. De-duplicated,
+ * preserving first-send order.
+ */
+export function extractSentAssetIds(history) {
+  const seen = new Set();
+  const out = [];
+  for (const m of Array.isArray(history) ? history : []) {
+    const id = m?.metadata?.kb_asset_id;
+    if (!id || seen.has(id)) continue;
+    seen.add(id);
+    out.push(id);
+  }
+  return out;
 }
 
 /**
@@ -586,11 +630,14 @@ export async function runMedici({
     injection: agentConfig.dynamic_injection,
     available_assets: availableAssets,
   });
+  const sentAssetIds = extractSentAssetIds(history);
   const perTurnContext = buildPerTurnContext({
     missing_fields: context.missing_fields,
     prior_state: context.prior_state,
     car_recommendation: context.car_recommendation,
     ad_referral: context.ad_referral,
+    sent_assets: sentAssetIds,
+    available_assets: availableAssets,
   });
   const systemBlocks = buildSystemBlocks(SYSTEM_STATIC, perLineContext, perTurnContext);
 
@@ -603,6 +650,7 @@ export async function runMedici({
     skill_sha: SKILL.source.sha256,
     context_info: buildTraceContextInfo(context),
     available_assets_count: availableAssets.length,
+    sent_assets_count: sentAssetIds.length,
   });
 
   // 4. Tool-use loop. Same-round tool_calls run in parallel (Ogilvy pattern);

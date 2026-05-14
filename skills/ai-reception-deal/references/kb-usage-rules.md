@@ -43,6 +43,12 @@
 
 ## 3. 知识库查不到时的处理
 
+工具失败语义区分（按结构判断，不做相似度评估）：
+
+- `missing_fields`：必填字段没传 → 反问客户补齐字段后重试，不算"查不到"
+- `not_found`：知识库真没有对应数据 → 按下方"允许的动作"处理；同会话同 SKU 连续两次 `not_found`，或客户在 `not_found` 后明确推回（"粗略"/"大概"/"先报个数"/"approximate"/"rough"/"ballpark"），按 `skill-host-patch §5` 转人工，不要继续追问相同字段
+- `needs_human` / `requires_approval` / `forbidden`：直接转人工
+
 允许的动作：
 
 - 明确告诉客户当前信息需要进一步确认
