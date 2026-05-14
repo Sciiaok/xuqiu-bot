@@ -51,9 +51,9 @@ const DETAIL_TABS = [
   { key: 'notes', label: '备注' },
 ];
 
-// Sentinel for "no supply-chain filter". Backend's inquiries route already
+// Sentinel for "no product-line filter". Backend's inquiries route already
 // accepts product_line slugs (not just UUIDs) as agentIds — see resolveAgentIdsFilter.
-const SUPPLY_CHAIN_ALL = '全部供应链';
+const SUPPLY_CHAIN_ALL = '全部产品线';
 const QUALITY_ALL = '全部质量';
 // Dropdown entries: value = enum sent to /api/inquiries, label = zh-CN from
 // INQUIRY_QUALITY_LABELS. BAD leads aren't listed here — they land in
@@ -760,7 +760,7 @@ export default function LeadHubPage() {
     const chips = [];
     if (supplyChain !== SUPPLY_CHAIN_ALL) {
       const opt = supplyChainOptions.find((o) => o.value === supplyChain);
-      chips.push({ key: 'chain', label: `供应链：${opt?.label || supplyChain}`, clear: () => setSupplyChain(SUPPLY_CHAIN_ALL) });
+      chips.push({ key: 'chain', label: `产品线：${opt?.label || supplyChain}`, clear: () => setSupplyChain(SUPPLY_CHAIN_ALL) });
     }
     if (quality !== QUALITY_ALL) {
       const opt = QUALITY_OPTIONS.find((o) => o.value === quality);
@@ -867,8 +867,8 @@ export default function LeadHubPage() {
           {/* Filters (counts moved up to header KPI strip) */}
           <div className={s.leftPanelControls}>
             <div className={s.leftPanelFilters}>
-              <select className={s.filterSelect} value={supplyChain} onChange={e => setSupplyChain(e.target.value)} title="供应链">
-                <option value={SUPPLY_CHAIN_ALL}>全部供应链</option>
+              <select className={s.filterSelect} value={supplyChain} onChange={e => setSupplyChain(e.target.value)} title="产品线">
+                <option value={SUPPLY_CHAIN_ALL}>全部产品线</option>
                 {supplyChainOptions.map(opt => (
                   <option key={opt.value} value={opt.value}>{opt.label}</option>
                 ))}
