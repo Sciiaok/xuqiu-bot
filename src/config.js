@@ -50,15 +50,6 @@ export const config = {
     baseURL: 'https://api.tavily.com',
   },
 
-  // AIGC — image generation knobs.
-  // Client (apiKey/baseURL) is owned by llm-client's openrouter.
-  aigc: {
-    imageModel: 'google/gemini-3.1-flash-image-preview',
-    storageBucket: 'aigc-assets',
-    bestOfN: parseInt(process.env.AIGC_BEST_OF_N, 10) || 1,
-    noFallback: Boolean(process.env.AIGC_NO_FALLBACK),
-  },
-
   // Message Queue (aggregation for rapid messages)
   // 注：进程级唯一的 queue instanceId 不在这里 —— `process.pid` 是 Node-only，
   // 写在 config.js 顶层会让 Edge Runtime（proxy.js）import 时直接 build fail。
