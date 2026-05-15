@@ -1,13 +1,13 @@
 # Tables · Actual Usage (hand-maintained)
 
-DB has 47 tables (see `schema.md`), but only **~33 are referenced by runtime code** (`app/`, `lib/`, `src/`, `scripts/`, `proxy.js`). The rest are orphaned by past pivots and kept for backward-compat / data preservation. **2 tables are referenced by code but do not exist in the DB** — those code paths are silently broken.
+DB has 49 tables (see `schema.md`), of which **~35 are referenced by runtime code** (`app/`, `lib/`, `src/`, `scripts/`, `proxy.js`). The remaining 14 are orphans from past pivots — kept for backward-compat / data preservation, and as of 2026-05-15 each carries a `COMMENT ON TABLE … 'DEPRECATED'` marker (see `2026-05-15-deprecate-orphan-tables-and-rpcs.sql`).
 
 Update this file when:
 - Adding a new table → list which columns the code actually touches
 - Dropping or renaming a code path → re-check the column list for affected tables
 - A "Used" or "Orphan" classification flips
 
-Last manually verified against live DB: **2026-05-14**.
+Last manually verified against live DB: **2026-05-15**.
 
 ---
 
@@ -24,6 +24,7 @@ For each table: which columns the runtime actually touches and which are dead we
 | `invitations` | id, email, token, status, expires_at, accepted_at, accepted_by_user_id, invited_by_user_id | — | Full lifecycle: admin issues → invitee accepts → revoked. |
 | `onboarding_progress` | all 9 cols | — | One row per tenant, write-once timestamps. Upsert by tenant_id. |
 | `notification_settings` | all 8 cols | — | One row per tenant. Feishu webhook (AES-256-GCM). |
+| `audit_log` | all 8 cols | — | Append-only audit trail for management actions. 8 write sites: `auth/signup`, `settings/notifications`, `admin/tenants/[id]`, `admin/invitations` (POST + DELETE), `cron/meta-health-check`, `meta/connect`, `meta/disconnect`. `recordAudit` is best-effort (try/catch + console.warn). No UI reads it yet — `listAuditByTenant` / `listAuditAll` exist in the repository but aren't wired to any page; designed for future admin audit viewer. |
 
 ### Conversation & messaging
 
@@ -76,6 +77,7 @@ For each table: which columns the runtime actually touches and which are dead we
 | `aigc_assets` | id, tenant_id, conversation_id, user_id, prompt, model, source_filename, product_info, storage_path, metadata, created_at | — | Generated ad images from Ogilvy. `conversation_id` written but always null today. |
 | `ai_reports` | all 14 cols | — | Daily / weekly / monthly rollup. |
 | `llm_usage_logs` | all 13 cols | — | Every LLM call writes a row (fire-and-forget) for cost dashboard. |
+| `inquiry_dashboard_summaries` | all 8 cols | — | LLM-generated markdown summary cache for `/api/inquiry-dashboard/summary`. Keyed by `(tenant_id, product_lines, period_key)`. 7-day TTL. Backs the AI summary panel on `/analytics`. |
 
 ### Legacy but kept on by health check
 
@@ -88,6 +90,8 @@ For each table: which columns the runtime actually touches and which are dead we
 ## B. Orphan tables (in DB, NOT referenced by code)
 
 These exist in the public schema but no `.from(...)` / `.rpc(...)` call in `app/`, `lib/`, `src/`, `scripts/`, or `proxy.js` mentions them. They're remnants of past iterations. Row counts at last check shown for forensic context — `0` means abandoned at design, non-zero means actually got used at some point.
+
+**All rows below carry `COMMENT ON TABLE … 'DEPRECATED 2026-05-15 …'`** (see `2026-05-15-deprecate-orphan-tables-and-rpcs.sql`). Visible in supabase dashboard and `pg_dump`.
 
 | Table | Rows | Replaced by / why orphaned |
 |---|---:|---|
@@ -113,16 +117,15 @@ These exist in the public schema but no `.from(...)` / `.rpc(...)` call in `app/
 
 ---
 
-## C. Broken references (code mentions, DB does NOT have)
+## C. Broken references (resolved 2026-05-15)
 
-| Table | Code path | What's broken |
-|---|---|---|
-| `audit_log` | [audit-log.repository.js](../../lib/repositories/audit-log.repository.js), [meta/connect/route.js](../../app/api/meta/connect/route.js), [meta/disconnect/route.js](../../app/api/meta/disconnect/route.js) | Migration `2026-04-26-phase3-audit-log.sql` exists but the table is not in the live DB. Calls to `insert / select from audit_log` silently fail. Either re-apply the migration or remove the repository. |
-| `inquiry_dashboard_summaries` | [inquiry-dashboard/summary/route.js](../../app/api/inquiry-dashboard/summary/route.js) | Migration `2026-04-01-inquiry-dashboard-summaries.sql` exists but the table is not in the live DB. The endpoint returns no data. Verify whether the inquiry-dashboard UI is actually wired to this endpoint or to the more recent `/api/inquiry-dashboard` (which queries `leads` directly). |
+Previously listed `audit_log` and `inquiry_dashboard_summaries` as code-references-but-no-DB-table. Both migrations existed in the repo but were never applied to live DB.
 
-Pick a resolution before the next dashboard rebuild:
-- **(a)** Re-apply the missing migrations and start using these tables, or
-- **(b)** Delete the orphan migrations + repository code so the index agrees with reality.
+Resolved by **applying** both migrations on 2026-05-15:
+- `2026-04-26-phase3-audit-log.sql` → table now exists; 8 `recordAudit` write sites are live
+- `2026-04-01-inquiry-dashboard-summaries.sql` → table now exists; `/api/inquiry-dashboard/summary` cache is functional
+
+Both rows now appear in section A above.
 
 ---
 
@@ -137,10 +140,11 @@ From grep of `supabase.rpc(...)` across `app/`, `lib/`, `src/`, `scripts/`:
 - `ad_conversation_stats` — ad dashboard
 - `dev_exec_sql` — read-only SQL for `scripts/build-index.mjs` and `/dev-tools/sql` (called from scripts, not from request handlers)
 
-**Defined in migrations but never invoked at runtime** (likely safe to drop in a future cleanup):
+**Defined in migrations but never invoked at runtime — marked `COMMENT ON FUNCTION … 'DEPRECATED'` 2026-05-15:**
 
-- `search_product_embeddings` — pointed at orphan `product_embeddings`
-- `query_product_specs` / `get_spec_fields` — pointed at orphan `product_specs`
+- `search_product_embeddings(uuid, vector, integer)` — points at orphan `product_embeddings`
+- `query_product_specs(uuid, text)` — points at orphan `product_specs`
+- `get_spec_fields(uuid)` — helper for `query_product_specs`
 
 ---
 

@@ -2,7 +2,7 @@
 
 Goal: when Claude Code picks up a task touching feature X, read this file first to know which directories/files to open. Saves 5–10 minutes of grepping per task.
 
-> **Before adding columns or trusting `schema.md`:** the DB has 14 orphan tables and 2 broken code-only references — see [`tables-actual-usage.md`](tables-actual-usage.md) for what's actually wired up vs. dead weight. Don't just pick a table out of `schema.md`; verify it appears in section A of that file.
+> **Before adding columns or trusting `schema.md`:** the DB has 14 orphan tables (each carries a `COMMENT ON TABLE … 'DEPRECATED 2026-05-15'` marker) — see [`tables-actual-usage.md`](tables-actual-usage.md) for what's actually wired up vs. dead weight. Don't just pick a table out of `schema.md`; verify it appears in section A of that file.
 
 **Update this file when:**
 - Adding a new top-level feature (new section)
@@ -98,18 +98,16 @@ Goal: when Claude Code picks up a task touching feature X, read this file first 
 - **API**: `/api/reports`, `/api/reports/[id]`, `/api/reports/export`, `/api/ai/report`, `/api/ai/report/stream`, `/api/inquiry-dashboard`, `/api/cron/generate-reports`
 - **Services**: `src/report-generator.service.js` (rollup), `src/llm-client.js` (LLM cost logging), `src/llm-pricing.js`
 - **Lib**: `lib/ai-summary.js`, `lib/sse.js` + `lib/consume-sse.js` (streaming reports)
-- **Tables**: `ai_reports`, `llm_usage_logs`
-- **Broken refs**: `inquiry_dashboard_summaries` is referenced by `/api/inquiry-dashboard/summary/route.js` but the table doesn't exist in the live DB — that endpoint is dead code. The live dashboard queries `leads` directly via `/api/inquiry-dashboard`. See `tables-actual-usage.md` §C.
-- **Notes**: AI report streams via SSE. LLM cost dashboard reads `llm_usage_logs`.
+- **Tables**: `ai_reports`, `llm_usage_logs`, `inquiry_dashboard_summaries` (LLM-summary cache for `/analytics`, 7-day TTL)
+- **Notes**: AI report streams via SSE. LLM cost dashboard reads `llm_usage_logs`. The inquiry-dashboard summary panel calls `/api/inquiry-dashboard/summary` which writes-through to `inquiry_dashboard_summaries`; raw dashboard data still comes from `/api/inquiry-dashboard` querying `leads` directly.
 
 ### Onboarding & Auth
 - **UI**: `app/(auth)/*` (login/signup pages), `app/(app)/admin/invitations/page.js`
 - **API**: `/api/auth/signup`, `/api/auth/invitation/[token]`, `/api/onboarding/progress`
 - **Lib**: `lib/session.js`, `lib/founder-id.js`, `lib/tenant-context.js` (and `meta-tenant-context.js` for webhook ingestion)
 - **Repositories**: `lib/repositories/onboarding.repository.js`, `lib/repositories/audit-log.repository.js`
-- **Tables**: `tenants`, `users`, `invitations`, `onboarding_progress`
-- **Broken refs**: `audit_log` is referenced from `lib/repositories/audit-log.repository.js` and the meta connect/disconnect routes, but the table doesn't exist in the live DB — those writes silently fail. The migration `2026-04-26-phase3-audit-log.sql` was never applied. See `tables-actual-usage.md` §C.
-- **Notes**: Single founder per tenant. `FOUNDER_TENANT_ID` constant gates admin routes. Onboarding progress tracks milestone timestamps (meta_connected_at, first_ai_reply_at, etc.).
+- **Tables**: `tenants`, `users`, `invitations`, `onboarding_progress`, `audit_log` (append-only, written by `recordAudit` from 8 sites: signup, settings/notifications, admin/tenants, admin/invitations POST+DELETE, cron/meta-health-check, meta/connect, meta/disconnect)
+- **Notes**: Single founder per tenant. `FOUNDER_TENANT_ID` constant gates admin routes. Onboarding progress tracks milestone timestamps (meta_connected_at, first_ai_reply_at, etc.). `audit_log` is best-effort (try/catch + console.warn); no UI reads it yet — `listAuditByTenant` / `listAuditAll` exist for a future admin viewer.
 
 ### Settings
 - **UI**: `app/(app)/settings/meta-connection/page.js`, `app/(app)/settings/notifications/page.js`

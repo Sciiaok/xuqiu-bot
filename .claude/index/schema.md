@@ -1,16 +1,17 @@
 # Schema Snapshot (auto-generated)
 
-Generated: 2026-05-14T04:11:48.770Z
+Generated: 2026-05-15T07:54:24.555Z
 
 Live snapshot of `public` schema from Supabase. **Do not edit by hand** — run `node scripts/build-index.mjs` to refresh.
 
-Tables: **47**. Listed alphabetically.
+Tables: **49**. Listed alphabetically.
 
 ## Tables
 
 - [`agents`](#agents)
 - [`ai_reports`](#ai-reports)
 - [`aigc_assets`](#aigc-assets)
+- [`audit_log`](#audit-log)
 - [`autopilot_messages`](#autopilot-messages)
 - [`autopilot_sessions`](#autopilot-sessions)
 - [`campaign_briefs`](#campaign-briefs)
@@ -19,6 +20,7 @@ Tables: **47**. Listed alphabetically.
 - [`contacts`](#contacts)
 - [`conversations`](#conversations)
 - [`fix_knowledge`](#fix-knowledge)
+- [`inquiry_dashboard_summaries`](#inquiry-dashboard-summaries)
 - [`invitations`](#invitations)
 - [`kb_assets`](#kb-assets)
 - [`kb_corrections`](#kb-corrections)
@@ -133,6 +135,27 @@ Tables: **47**. Listed alphabetically.
 - `idx_aigc_assets_conversation` USING btree (conversation_id) WHERE (conversation_id IS NOT NULL)
 - `idx_aigc_assets_tenant` USING btree (tenant_id)
 - `idx_aigc_assets_user` USING btree (user_id) WHERE (user_id IS NOT NULL)
+
+### `audit_log`
+
+| Column | Type | Nullable | Default |
+| --- | --- | --- | --- |
+| `id` | uuid | N | `gen_random_uuid()` |
+| `tenant_id` | uuid | Y |  |
+| `actor_user_id` | uuid | Y |  |
+| `actor_email` | text | Y |  |
+| `action` | text | N |  |
+| `details` | jsonb | N | `'{}'::jsonb` |
+| `ip_address` | text | Y |  |
+| `created_at` | timestamp with time zone | N | `now()` |
+
+**Foreign keys:**
+- `actor_user_id` → `users.id`
+- `tenant_id` → `tenants.id`
+
+**Indexes:**
+- `idx_audit_action` USING btree (action, created_at DESC)
+- `idx_audit_tenant` USING btree (tenant_id, created_at DESC)
 
 ### `autopilot_messages`
 
@@ -334,6 +357,22 @@ Tables: **47**. Listed alphabetically.
 **Indexes:**
 - `idx_fix_knowledge_embedding` USING ivfflat (embedding vector_cosine_ops) WITH (lists='10')
 - `idx_fix_knowledge_tenant` USING btree (tenant_id)
+
+### `inquiry_dashboard_summaries`
+
+| Column | Type | Nullable | Default |
+| --- | --- | --- | --- |
+| `id` | uuid | N | `gen_random_uuid()` |
+| `product_lines` | text | N |  |
+| `period_key` | text | N |  |
+| `date_from` | date | N |  |
+| `date_to` | date | N |  |
+| `content` | text | N |  |
+| `generated_at` | timestamp with time zone | N | `now()` |
+| `created_at` | timestamp with time zone | Y | `now()` |
+
+**Indexes:**
+- `idx_inquiry_summary_lookup` USING btree (product_lines, period_key)
 
 ### `invitations`
 
@@ -826,7 +865,6 @@ Tables: **47**. Listed alphabetically.
 | `id` | uuid | N | `gen_random_uuid()` |
 | `conversation_id` | uuid | N |  |
 | `contact_id` | uuid | N |  |
-| `stage` | text | Y | `'GREET'::text` |
 | `score` | integer | Y | `0` |
 | `route` | text | Y |  |
 | `destination_country` | text | Y |  |
@@ -880,7 +918,6 @@ Tables: **47**. Listed alphabetically.
 - `idx_leads_meta_ad_id` USING btree (meta_ad_id) WHERE (meta_ad_id IS NOT NULL)
 - `idx_leads_product_line` USING btree (product_line)
 - `idx_leads_score` USING btree (score)
-- `idx_leads_stage` USING btree (stage)
 - `idx_leads_tenant` USING btree (tenant_id)
 - `idx_unique_lead_key` USING btree (conversation_id, lead_key) WHERE ((route = 'CONTINUE'::text) AND (lead_key IS NOT NULL))
 

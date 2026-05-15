@@ -34,7 +34,7 @@ Words that appear repeatedly across code, schema, and UI. Many are not self-expl
 - **Lead-extractor** — `lib/lead-extractor.js` — LLM logic that parses conversation history → structured lead. Triggered by inbound messages and by `sync-leads` cron.
 - **Approval** — A lead can be manually `approved` (boolean), capturing the founder's confirmation; tracked with `approved_at`, `approved_by`.
 - **lead_key** — Dedup key (contact + brand + product, roughly) so re-extractions update the same row instead of creating duplicates.
-- **Inquiry dashboard** — Pre-computed daily rollup table `inquiry_dashboard_summaries`. Used by Reports/Analytics for fast loads.
+- **Inquiry dashboard** — `/api/inquiry-dashboard` queries `leads` directly for the dashboard data. `/api/inquiry-dashboard/summary` writes LLM-generated markdown summaries to `inquiry_dashboard_summaries` (7-day TTL, keyed by tenant + product_lines + period).
 
 ## Product lines
 

@@ -181,7 +181,7 @@ export async function POST(request) {
 
 > 仅列出 application code（`app/` `lib/` `src/` `scripts/` `proxy.js`）里 `.from(...)` / `.rpc(...)` 真实用到的表。**列级**的"哪几个字段在用"详见 [`.claude/index/tables-actual-usage.md`](.claude/index/tables-actual-usage.md)（含 schema 中存在但代码已不再读写的"死字段"清单）。
 >
-> DB 实有 47 张表（`.claude/index/schema.md`）；下表为**实际接线**的 ~33 张。其余 14 张为遗留孤儿表（`campaign_briefs` / `orchestrator_*` / `kb_test_*` / `kb_glossary` / `kb_product_assets` / `fix_knowledge` / `product_documents` / `product_specs` / `product_embeddings` / `product_assets` / `product_doc_operations`），保留旧数据但代码不再引用，详见 tables-actual-usage.md §B。
+> DB 实有 49 张表（`.claude/index/schema.md`）；下表为**实际接线**的 ~35 张。其余 14 张为遗留孤儿表（`campaign_briefs` / `orchestrator_*` / `kb_test_*` / `kb_glossary` / `kb_product_assets` / `fix_knowledge` / `product_documents` / `product_specs` / `product_embeddings` / `product_assets` / `product_doc_operations`），保留旧数据但代码不再引用 —— 2026-05-15 起每张都带上了 `COMMENT ON TABLE … 'DEPRECATED'` 标注，详见 tables-actual-usage.md §B。
 
 | 域 | 表 | 用途 | 关键引用 |
 |---|---|---|---|
@@ -216,17 +216,15 @@ export async function POST(request) {
 | | `autopilot_messages` | Ogilvy 单条消息 / tool I/O（表名同上） | 同上 |
 | | `aigc_assets` | Ogilvy 生成的广告图（storage path 指向 `aigc-assets` bucket） | [creative.service.js](src/agents/ogilvy/creative.service.js) |
 | | `ai_reports` | 日 / 周 / 月报 | [report-generator.service.js](src/report-generator.service.js) |
+| | `inquiry_dashboard_summaries` | LLM 询盘看板总结缓存（7 天 TTL，按 tenant + product_lines + period 去重） | [inquiry-dashboard/summary/route.js](app/api/inquiry-dashboard/summary/route.js) |
 | **平台运维** | `llm_usage_logs` | 每次 LLM 调用一行（tokens + 计价 + tenant + callSite + 模型）；fire-and-forget 落表 | [llm-client.js](src/llm-client.js) 写入 · [admin/llm-usage/route.js](app/api/admin/llm-usage/route.js) 聚合 |
+| | `audit_log` | 管理操作审计（signup / settings / admin tenants / invitations / meta connect/disconnect / cron health-check 共 8 处写入） | [audit-log.repository.js](lib/repositories/audit-log.repository.js) 写入 · 暂无 UI 读取 |
 
-**RPC 函数**（`supabase.rpc(...)` 运行时真正调用的）：`acquire_queue_messages` · `release_stale_queue_locks` · `search_kb_knowledge_en` · `search_kb_qa_snippets` · `ad_conversation_stats` · `dev_exec_sql`（仅 scripts / admin SQL 面板）。`search_product_embeddings` / `query_product_specs` / `get_spec_fields` 等老 RPC 仍存在于 migration 里，但应用代码已不再调用，可在后续清理中下线。
+**RPC 函数**（`supabase.rpc(...)` 运行时真正调用的）：`acquire_queue_messages` · `release_stale_queue_locks` · `search_kb_knowledge_en` · `search_kb_qa_snippets` · `ad_conversation_stats` · `dev_exec_sql`（仅 scripts / admin SQL 面板）。`search_product_embeddings` / `query_product_specs` / `get_spec_fields` 三个无调用方 RPC 自 2026-05-15 起带 `COMMENT ON FUNCTION … 'DEPRECATED'` 标注，未来可清理。
 
 **Storage buckets**：`kb-assets`（KB 文件）· `kb_assets`（兼容路径）· `chat-uploads`（Ogilvy 上传）· `chat-media`（聊天媒体）· `aigc-assets`（AI 生成的广告图）。
 
-**断链引用（代码引用但 DB 不存在 → 静默失败，需修复或下线）：**
-- `audit_log` — [audit-log.repository.js](lib/repositories/audit-log.repository.js)、meta/connect、meta/disconnect 三处写入；migration `2026-04-26-phase3-audit-log.sql` 未真正生效。
-- `inquiry_dashboard_summaries` — [inquiry-dashboard/summary/route.js](app/api/inquiry-dashboard/summary/route.js)；migration `2026-04-01-inquiry-dashboard-summaries.sql` 未生效。当前看板由 `/api/inquiry-dashboard` 直接查 `leads` 兜底。
-
-详见 [`.claude/index/tables-actual-usage.md`](.claude/index/tables-actual-usage.md) §C。
+详见 [`.claude/index/tables-actual-usage.md`](.claude/index/tables-actual-usage.md)。
 
 ---
 
