@@ -209,7 +209,7 @@
 | `creative.link_data.description` | 否 | Meta Description(≤30) | 阶段四产出 |
 | `creative.link_data.call_to_action.type` | 是 | **`WHATSAPP_MESSAGE`** | 契约锁定 |
 | `creative.link_data.call_to_action.value.app_destination` | 是 | **`WHATSAPP`** | 契约锁定 |
-| `welcome_message` | 是 | 本地化纯文本,含产品名 + 开放式问题 | **契约 6.4 必填** |
+| `welcome_message` | 是 | 本地化纯文本,含产品名 + 开放式问题;**字符数 ≤ §4.C 锁定的平台规则**(v2.0 动态,不写死 300) | **契约 6.4 必填** |
 
 ### 4.2 禁用字段
 
@@ -507,12 +507,25 @@
 
 ### 7.3 必填字段校验
 
-- [ ] `whatsapp.phone_number_id` 已填
+- [ ] `whatsapp.phone_number_id` 已填(宿主自动注入)
 - [ ] `summary` 已填
 - [ ] `estimated_metrics` 已填且引用 data-sources.md
 - [ ] **每条 ad** 的 `welcome_message` 字段已填(契约 6.4)
 - [ ] welcome_message 含产品名 + 开放式问题
 - [ ] welcome_message 已本地化到 ad_set 的 country 对应语言
+- [ ] **(v2.0)welcome_message 字符数 ≤ §4.C 锁定的平台规则**(动态,不写死 300)
+- [ ] **(v2.0)welcome_message 口吻符合阶段 1.0 锁定的业务模式**(B2C → 终端消费者口吻;B2B → 经销商口吻)
+
+### 7.3a 全链路结论一致性校验(v2.0 关键新增,对应 MOD-14)
+
+阶段 5 输出前,AI 内部最后一次审查全链路结论一致性,任一不一致必须先调整再输出 plan_json:
+
+- [ ] 目标市场 / 车型 / 国家 = 阶段 1.0 + 1.5 锁定结论
+- [ ] 受众 / 漏斗 / 创意方向 = 阶段 3 锁定结论
+- [ ] 素材内容(图片 + 文案 + welcome_message) = 阶段 4 锁定结论
+- [ ] 预算与周期 = 阶段 1.0 输入
+- [ ] 所有合规约束 = §4.C 锁定的平台 + 国家规则
+- [ ] 业务模式倾向贯穿全链路一致(没有 B2C 模式出现 FOB 之类的术语错位)
 
 ### 7.4 命名与状态校验
 

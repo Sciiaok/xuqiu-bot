@@ -67,7 +67,7 @@ function parseSSELine(line) {
 function logLlmCall({
   method, provider, models, responseModel, tools, toolChoice, finishReason,
   promptTokens, completionTokens, cacheCreationInputTokens, cacheReadInputTokens,
-  durationMs, tenantId, callSite,
+  durationMs, tenantId, callSite, sessionId,
 }) {
   const model = responseModel || models?.[0];
   const costUsd = calcCostUsd({
@@ -99,13 +99,15 @@ function logLlmCall({
     duration_ms: durationMs,
     tenant_id: tenantId || null,
     call_site: callSite || null,
+    session_id: sessionId || null,
   }));
 
   // Fire-and-forget 落表，不 await、不抛错 —— 写不进去也不应该影响 LLM 返回。
   // callSite 缺失时仍记一行，便于发现哪些调用点没埋点。
   //
-  // 兼容性：cache_*_tokens 列在 2026-05-13 migration 才加上。migration 还没 apply
-  // 的环境，PostgREST 会回 42703 undefined_column；这时退回到只写老列，不丢日志。
+  // 兼容性：cache_*_tokens 列在 2026-05-13 migration 才加上、session_id 在
+  // 2026-05-15 migration 才加上。任一 migration 没 apply 的环境，PostgREST 会
+  // 回 42703 undefined_column；这时退回到 baseRow 老 schema，不丢日志。
   try {
     const baseRow = {
       tenant_id: tenantId || null,
@@ -118,13 +120,14 @@ function logLlmCall({
       duration_ms: durationMs ?? null,
       finish_reason: finishReason || null,
     };
-    const rowWithCache = {
+    const rowWithExtras = {
       ...baseRow,
       cache_creation_input_tokens: cacheCreationInputTokens || 0,
       cache_read_input_tokens: cacheReadInputTokens || 0,
+      session_id: sessionId || null,
     };
     const admin = getSupabaseAdmin();
-    admin.from('llm_usage_logs').insert(rowWithCache).then(({ error }) => {
+    admin.from('llm_usage_logs').insert(rowWithExtras).then(({ error }) => {
       if (!error) return;
       // 42703 = undefined_column —— migration 没 apply，退回老 schema 重试。
       if (error.code === '42703' || /column .* does not exist/i.test(error.message || '')) {
@@ -326,8 +329,9 @@ function createStream(params) {
 
 const openrouter = {
   messages: {
-    // meta = { tenantId, callSite } —— 用于成本统计落表。callSite 是文本枚举
-    // （形如 'medici.qualify' / 'kb.search.embed'），调用方自定。
+    // meta = { tenantId, callSite, sessionId? } —— 用于成本统计落表。callSite
+    // 是文本枚举（形如 'medici.qualify' / 'kb.search.embed'），调用方自定。
+    // sessionId 可选，传了才能在 per-session 用量看板里聚合（ogilvy/medici 都用 uuid）。
     async create(params, meta = {}) {
       if (!config.openrouter.baseURL || !config.openrouter.apiKey) {
         throw new Error('[llm-client] OPENROUTER_API_KEY required');
@@ -342,6 +346,7 @@ const openrouter = {
         toolChoice: typeof params.tool_choice === 'string' ? params.tool_choice : params.tool_choice?.function?.name || null,
         tenantId: meta.tenantId,
         callSite: meta.callSite,
+        sessionId: meta.sessionId,
       };
 
       const response = await fetchWithTimeout(
@@ -387,6 +392,7 @@ const openrouter = {
         toolChoice: typeof params.tool_choice === 'string' ? params.tool_choice : params.tool_choice?.function?.name || null,
         tenantId: meta.tenantId,
         callSite: meta.callSite,
+        sessionId: meta.sessionId,
       };
 
       const streamObj = createStream(params);

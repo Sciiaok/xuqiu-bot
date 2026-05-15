@@ -1,12 +1,12 @@
 # Routes (auto-generated)
 
-Generated: 2026-05-13T16:00:15.794Z
+Generated: 2026-05-15T09:46:40.629Z
 
 Filesystem-derived list of API endpoints and UI pages. **Do not edit** — run `node scripts/build-index.mjs` to refresh.
 
 ## API Endpoints
 
-Total: **72**
+Total: **73**
 
 | Path | Methods | File |
 | --- | --- | --- |
@@ -70,6 +70,7 @@ Total: **72**
 | `/api/ogilvy/conversations/[id]` | GET, DELETE | [app/api/ogilvy/conversations/[id]/route.js](../../app/api/ogilvy/conversations/[id]/route.js) |
 | `/api/ogilvy/conversations/[id]/launch` | POST | [app/api/ogilvy/conversations/[id]/launch/route.js](../../app/api/ogilvy/conversations/[id]/launch/route.js) |
 | `/api/ogilvy/conversations/[id]/messages` | POST | [app/api/ogilvy/conversations/[id]/messages/route.js](../../app/api/ogilvy/conversations/[id]/messages/route.js) |
+| `/api/ogilvy/conversations/[id]/usage` | GET | [app/api/ogilvy/conversations/[id]/usage/route.js](../../app/api/ogilvy/conversations/[id]/usage/route.js) |
 | `/api/ogilvy/upload` | POST | [app/api/ogilvy/upload/route.js](../../app/api/ogilvy/upload/route.js) |
 | `/api/ogilvy/whatsapp-accounts` | GET | [app/api/ogilvy/whatsapp-accounts/route.js](../../app/api/ogilvy/whatsapp-accounts/route.js) |
 | `/api/onboarding/progress` | GET, POST | [app/api/onboarding/progress/route.js](../../app/api/onboarding/progress/route.js) |

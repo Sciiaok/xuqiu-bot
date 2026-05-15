@@ -9,11 +9,11 @@
  * One LLM call per turn, one tool-use loop, streaming back to the browser
  * as SSE. New tools register here; the loop structure stays stable.
  *
- * 2026-04 魔改：agent prompt 来源切换为 overseas-ad-planning skill
- * (`skills/overseas-ad-planning/`)，五阶段 SOP 由 skill 主导。
- * Click-to-WhatsApp 收口约束写在 `skill-host-patch.md` 里追加到
- * skill prompt 之后。skill 内容可直接编辑文件热替换，宿主代码改动只在
- * SYSTEM_STATIC、TOOLS 数组、dispatcher 三处。
+ * Agent prompt 来源是 overseas-ad-planning skill (`skills/overseas-ad-planning/`)；
+ * skill 内部分子阶段(1.0 / 1.5 / §4.C / 2 / 3 / 4 / 5)由 skill 自洽。
+ * Click-to-WhatsApp 收口约束写在 `skill-host-patch.md` 里追加到 skill prompt
+ * 之后。skill 内容可直接编辑文件热替换，宿主代码改动只在 SYSTEM_STATIC、
+ * TOOLS 数组、dispatcher 三处。
  */
 import fs from 'node:fs';
 import path from 'node:path';
@@ -29,7 +29,7 @@ import {
   getMessages,
 } from '../../../lib/repositories/ogilvy.repository.js';
 import { loadSkill } from '../skills-runtime/index.js';
-import { listWhatsAppAccountsForUser } from './whatsapp-accounts.service.js';
+import { getMetaAccountForUser, listWhatsAppAccountsForUser } from './whatsapp-accounts.service.js';
 import { webSearch, readWebpage } from './tools.service.js';
 import { generateAdCreative, isAllowedCreativeUrl } from './creative.service.js';
 
@@ -60,7 +60,14 @@ const HOST_PATCH = fs.readFileSync(
 // window (5min) at 0.1× input price on cache reads, and removes the per-call
 // tool round-trip entirely.
 const REFERENCES_INLINED = (() => {
-  const order = ['data-sources', 'strategy-template', 'meta-creative-specs', 'meta-api-template'];
+  const order = [
+    'data-sources',
+    'strategy-template',
+    'meta-creative-specs',
+    'meta-api-template',
+    'compliance-blacklist',
+    'creative-prompt-patterns',
+  ];
   const parts = ['## 附录 · 参考资料（已内联，无需调用工具）\n'];
   for (const key of order) {
     const content = SKILL.references.get(key);
@@ -305,15 +312,19 @@ async function collectSessionUploadUrls(sessionId) {
  * Build the DYNAMIC system prompt (per-session facts — can't be cached).
  * Kept terse so we don't blow the per-turn input budget.
  */
-function buildDynamicSystemPrompt(waNumbers, uploadedImageUrls = []) {
+function buildDynamicSystemPrompt(waNumbers, uploadedImageUrls = [], pageId = null) {
   const numbersBlock = waNumbers.length
     ? waNumbers
         .map(
           (n, i) =>
-            `  ${i + 1}. phone_number_id="${n.phone_number_id}" · ${n.display_number} · ${n.verified_name} · 质量=${n.quality_rating}`,
+            `  ${i + 1}. phone_number_id="${n.phone_number_id}" · ${n.display_number} · ${n.verified_name} · waba_id="${n.waba_id || ''}" · 质量=${n.quality_rating}`,
         )
         .join('\n')
     : '  (无可用号码)';
+
+  const pageLine = pageId
+    ? `## 当前账户 Meta Page ID\n  page_id="${pageId}"（由宿主自动注入，所有 ad_set 共用）\n\n`
+    : '## 当前账户 Meta Page ID\n  (未配置)\n\n';
 
   const uploadsBlock = uploadedImageUrls.length
     ? uploadedImageUrls.map((_, i) => `  ${i + 1}. [image ${i + 1}]`).join('\n')
@@ -322,7 +333,7 @@ function buildDynamicSystemPrompt(waNumbers, uploadedImageUrls = []) {
   return `## 当前账户可用 WhatsApp 号码
 ${numbersBlock}
 
-## 用户已上传的产品图（用序号引用，不要复制 URL）
+${pageLine}## 用户已上传的产品图（用序号引用，不要复制 URL）
 ${uploadsBlock}
 
 调 generate_ad_creative 时，reference_image_ids 必须是上面列表的 1-based 序号子集（例 [1,2]）。dispatcher 会把序号映射到真实 URL。列表为空时不要调该工具。`;
@@ -410,11 +421,12 @@ function buildMessagesWithCache(staticPrompt, dynamicPrompt, history) {
 // few dollars than to produce a thin 10-章 策划案.
 
 // Stage-3 / Stage-5 / 蒸馏 triggers. Lowercased; matched as substring.
-// Order doesn't matter — first hit wins.
+// Order doesn't matter — first hit wins. skill 内文用阿拉伯数字命名阶段（"阶段 3" / "阶段 5"），
+// 也保留汉字版本以兼容用户用旧措辞复述。
 const SONNET_STAGE_TRIGGERS = [
-  '阶段三', '阶段五',
+  '阶段 3', '阶段 5', '阶段3', '阶段5', '阶段三', '阶段五',
   '策划案', '10 章', '10章', '十章',
-  'plan_json', '投放方案', '后台操作手册',
+  'plan_json', '投放方案', '后台操作手册', '执行方案',
   '蒸馏', 'draft_ad_plan',
   '完整方案', '出方案', '出策划', '生成方案', '输出方案', '正式输出',
 ];
@@ -489,9 +501,16 @@ export async function* runOgilvy(sessionId, userText, attachments = [], userId =
   // 2. Fetch the available WhatsApp numbers + uploaded reference images. We
   //    pass image indices (not URLs) to the Agent to keep tool args short,
   //    and the dispatcher maps indices back to URLs before calling generate.
-  const waGate = await listWhatsAppAccountsForUser(userId);
-  const uploadedImageUrls = await collectSessionUploadUrls(sessionId);
-  const dynamicPrompt = buildDynamicSystemPrompt(waGate.numbers || [], uploadedImageUrls);
+  const [waGate, metaAccount, uploadedImageUrls] = await Promise.all([
+    listWhatsAppAccountsForUser(userId),
+    getMetaAccountForUser(userId),
+    collectSessionUploadUrls(sessionId),
+  ]);
+  const dynamicPrompt = buildDynamicSystemPrompt(
+    waGate.numbers || [],
+    uploadedImageUrls,
+    metaAccount?.page_id || null,
+  );
 
   // 3. Rebuild the OpenAI message list from DB.
   const history = await getMessagesForLLM(sessionId);
@@ -534,7 +553,7 @@ export async function* runOgilvy(sessionId, userText, attachments = [], userId =
         // Pin to Anthropic direct — keeps cache_control semantics consistent
         // (Bedrock strips it) and reduces provider-variance latency spikes.
         provider: { order: ['anthropic'], allow_fallbacks: false },
-      }, { tenantId: session?.tenant_id || null, callSite: 'ogilvy.turn' });
+      }, { tenantId: session?.tenant_id || null, callSite: 'ogilvy.turn', sessionId });
 
       // Track which tool-call indices have already signaled 'tool_call_start'
       // — we emit it the moment the tool name is known, long before args
@@ -723,7 +742,7 @@ async function executeTool(name, input, ctx) {
     case 'web_search':
       return webSearch(input, { tenantId: ctx.tenantId, sessionId: ctx.sessionId });
     case 'read_webpage':
-      return readWebpage(input, { tenantId: ctx.tenantId });
+      return readWebpage(input, { tenantId: ctx.tenantId, sessionId: ctx.sessionId });
     case 'generate_ad_creative': {
       // Translate 1-based index references into real Supabase URLs. Keeping
       // URLs out of tool args saves ~200-600 tokens per call (Supabase URLs
@@ -796,9 +815,9 @@ async function executeTool(name, input, ctx) {
 async function draftAdPlan(input, { sessionId, waNumbers }) {
   // Skill-driven flow guard: refuse plan submission if the agent has not yet
   // produced any ad creative this session. Cheaper than parsing the full
-  // 5-stage skill output for completion markers — if there's no creative,
-  // there's no plan worth committing. Stops the model from shortcutting
-  // straight to draft_ad_plan without running the SOP.
+  // skill output for completion markers — if there's no creative, there's no
+  // plan worth committing. Stops the model from shortcutting straight to
+  // draft_ad_plan without running the SOP.
   const history = await getMessages(sessionId);
   const hasCreative = history.some(m =>
     m.role === 'tool' && m.tool_name === 'generate_ad_creative' && !m.tool_result?.error
@@ -807,9 +826,9 @@ async function draftAdPlan(input, { sessionId, waNumbers }) {
     return {
       error: 'skill_stages_incomplete',
       message:
-        '本会话尚未生成任何广告素材，无法提交方案。请按 skill 五阶段流程执行：' +
-        '完成阶段一到三的对话内输出 → 阶段四调用 generate_ad_creative 为每条 ad 生成素材 → ' +
-        '阶段五输出双文档 → 用户确认后再调 draft_ad_plan 提交。',
+        '本会话尚未生成任何广告素材，无法提交方案。请按 skill 流程执行：' +
+        '完成阶段 1.0 → §4.C → 2 → 3 的对话内输出 → 阶段 4 调用 generate_ad_creative ' +
+        '为每条 ad 生成素材 → 阶段 5 输出执行方案 → 用户确认后再调 draft_ad_plan 提交。',
     };
   }
 

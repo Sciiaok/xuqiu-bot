@@ -113,7 +113,7 @@ The car looks premium...
 
 ## 2. welcome_message 设计模板
 
-### 2.1 必填规则(契约 6.4)
+### 2.1 必填规则(v2.0:字符动态化 + 业务模式倾向)
 
 每条 ad 必须有 welcome_message,作为用户点击广告进入 WhatsApp 后看到的第一句话。
 
@@ -125,6 +125,12 @@ The car looks premium...
 - **必须含一个开放式问题**(引导用户回复)
 - **本地化**(目标市场语言)
 - **经过母语者审核**(产出物附 ⚠️ 提示)
+- **(v2.0)字符上限按 SKILL.md §4.C 锁定的平台规则**(每次执行时由 web_search 拉取最新,不写死 300)
+- **(v2.0)按业务模式倾向调整口吻**:
+  - B2C 终端零售:终端消费者口吻,提试驾 / 到店
+  - B2B 跨境批发:经销商口吻,提 MOQ / FOB / OEM 支持 / 进口条件
+  - 品牌官方混合:综合口吻,先做询盘资质判定
+  - 自定义模式:按 SKILL.md §4.A.2 用户描述自定义
 
 ### 2.2 结构骨架
 
@@ -132,32 +138,49 @@ The car looks premium...
 [问候] + [我是谁 / 看到您对 X 感兴趣] + [开放式问题]
 ```
 
-### 2.3 各市场示例
+### 2.3 各市场示例(按业务模式倾向)
 
-**德语(BYD Seal)**:
+#### B2C 终端零售示例
+
+**德语(BYD Seal,B2C 模式)**:
 
 > Hallo! Ich freue mich, dass Sie sich für den BYD Seal interessieren.
 > Welche Funktion ist Ihnen am wichtigsten – Reichweite, Innenraum oder Preis?
 
-**法语(BYD Seal)**:
+**法语(BYD Seal,B2C 模式)**:
 
 > Bonjour ! Je suis ravi que vous vous intéressiez à la BYD Seal.
 > Qu'est-ce qui compte le plus pour vous : l'autonomie, l'intérieur ou le prix ?
 
-**英语(英国 / 中东英语市场)**:
+**英语(英国 / 中东英语市场,B2C 模式)**:
 
 > Hi there! I'm glad you're interested in the BYD Seal.
 > What matters most to you — range, interior space or price?
 
-**西班牙语**:
+**西班牙语(B2C 模式)**:
 
 > ¡Hola! Me alegra mucho que estés interesado en el BYD Seal.
 > ¿Qué es más importante para ti: autonomía, interior o precio?
 
-**阿拉伯语(中东)**:
+**阿拉伯语(中东,B2C 模式)**:
 
 > مرحباً! يسعدنا اهتمامك بسيارة BYD Seal.
 > ما الأهم بالنسبة لك: المدى، المقصورة الداخلية، أم السعر؟
+
+#### B2B 跨境批发示例(v2.0 新增)
+
+**英语(Foton Tornado,B2B 模式,菲律宾经销商)**:
+
+> Hi! We're Foton's authorized export team for Tornado M2.6C Dropside.
+> Looking forward to your wholesale inquiry — could you share your target market and expected MOQ?
+
+**英语(吉利星耀 6 PHEV,B2B 模式,阿联酋经销商)**:
+
+> Hi! Greetings from Geely's authorized exporter.
+> Interested in distributing the Xingyao 6 PHEV in your market?
+> Share your country and target volume, our team will support with technical specs.
+
+> **v2.0 收紧**:B2B 示例中**严禁出现具体 FOB 价格**(让客服在对话中沟通)。
 
 ### 2.4 反面示例(不要这样写)
 
@@ -168,6 +191,14 @@ The car looks premium...
 ❌ "Buy now and get 30% off."(强销售感,WhatsApp 政策不喜欢)
 
 ❌ Headline 直接复制为 welcome_message(冗余)
+
+❌ **超过平台字符上限**(v2.0:Meta API 会以 `(#100) Welcome message should not exceed N characters` 拒绝;实测中已经发生过):
+
+> 反例:"Hello! Thank you so much for your interest in our brand new flagship electric vehicle XYZ Pro Max 2026 Limited Edition with extended range battery and premium interior package and advanced driving assistance features..."(过长,会被拒)
+
+❌ **B2B 模式出现具体 FOB 价格**(v2.0 收紧):
+
+> 反例:"FOB Tianjin starts at $12,500 (MOQ ≥10 units). Contact for bulk pricing."(违反 v2.0 价格规则,FOB 价格应该交给客服在对话中沟通,不进广告内容)
 
 ---
 

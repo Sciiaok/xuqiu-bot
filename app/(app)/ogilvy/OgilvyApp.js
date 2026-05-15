@@ -6,6 +6,7 @@ import s from './ogilvy.module.css';
 import Markdown from '../../components/Markdown/Markdown';
 import WhatsAppGateCard from './components/WhatsAppGateCard';
 import AdPlanCard from './components/AdPlanCard';
+import UsageBadge from './components/UsageBadge';
 import Skeleton, { SkeletonStack } from '../../components/Skeleton/Skeleton';
 import { useMessageStream } from './hooks/useMessageStream';
 
@@ -152,6 +153,10 @@ export default function OgilvyApp() {
   // stream start / finish — the confirmed plan comes from session.plan_json.
   const [streamingPlan, setStreamingPlan] = useState(null);
 
+  // Bumped after each turn completes; UsageBadge re-fetches on change.
+  const [usageRefreshKey, setUsageRefreshKey] = useState(0);
+  const prevStreamingRef = useRef(false);
+
   // ── SSE streaming hook ───────────────────────────────────────
   const { send, stop, streamingText, toolStatus, isStreaming } = useMessageStream({
     onUserSaved: () => { /* persisted server-side — refetch next turn */ },
@@ -173,6 +178,14 @@ export default function OgilvyApp() {
       }]);
     },
   });
+
+  // Trigger usage badge refresh on streaming finish (true → false transition).
+  useEffect(() => {
+    if (prevStreamingRef.current && !isStreaming) {
+      setUsageRefreshKey(k => k + 1);
+    }
+    prevStreamingRef.current = isStreaming;
+  }, [isStreaming]);
 
   const refreshSelected = useCallback(async () => {
     if (!selectedId) return;
@@ -482,6 +495,9 @@ export default function OgilvyApp() {
           <WhatsAppGateCard gate={gate} onRecheck={recheckGate} />
         ) : (
           <>
+            {selectedId && (
+              <UsageBadge sessionId={selectedId} refreshKey={usageRefreshKey} />
+            )}
             {selectedId && messages.length > 0 && (
               <button
                 type="button"
