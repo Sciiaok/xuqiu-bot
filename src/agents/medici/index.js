@@ -386,14 +386,13 @@ async function loadAgentTools({ tenantId, productLineId }, logger) {
  * that buildDynamicContext renders into the AVAILABLE ASSETS block; the LLM
  * references them by id via the `attachments` envelope field. Failures
  * downgrade to an empty list — Medici keeps replying without images.
+ *
+ * 不做 cap：每张 asset 在 prompt 里 30-60 tokens，进的是 per-line cache
+ * （system[1]，ephemeral cache_control）—— 一次 cache write、N 次 cache read
+ * 摊销下来单会话 < 1 美分。如果未来某个产品线把 sendable 资产堆到几千张
+ * 让 cache 段过大，再回来考虑按"linked_skus 覆盖度 + recency"排序的 cap，
+ * 而不是粗糙的 newest-N。
  */
-// Cap on assets injected into Medici's prompt block. Each asset costs
-// ~30–60 tokens (caption + linked_skus). Newest 150 keeps a recent catalog
-// fully addressable while bounding prompt size — once a tenant accumulates
-// hundreds of assets, older ones still live in DB and find_asset tool can
-// still reach them by semantic search; they're just not in the inline list.
-const MAX_AVAILABLE_ASSETS = 150;
-
 async function loadAvailableAssets({ tenantId, productLineId }, logger) {
   if (!tenantId || !productLineId) return [];
   try {
@@ -403,8 +402,7 @@ async function loadAvailableAssets({ tenantId, productLineId }, logger) {
       .eq('tenant_id', tenantId)
       .eq('product_line_id', productLineId)
       .eq('is_sendable', true)
-      .order('created_at', { ascending: false })
-      .limit(MAX_AVAILABLE_ASSETS);
+      .order('created_at', { ascending: false });
     if (error) throw error;
     return data || [];
   } catch (e) {

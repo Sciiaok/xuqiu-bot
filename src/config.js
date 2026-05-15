@@ -66,7 +66,11 @@ export const config = {
   queue: {
     aggregationWindowMs: 2000,
     maxRetries: 3,
-    lockTimeoutMs: 30000,
+    // 90s = medici 单次调用的隐式上限。锁超时后 release_stale_queue_locks 会
+    // 把行释放回 pending，另一个 worker 可能抢同一会话并发跑 —— 所以
+    // lockTimeoutMs 必须 ≥ medici 最慢路径耗时（5 轮 KB tool use + 慢 API），
+    // 否则就是制造并发竞态。30s 不够，90s 给够 buffer。
+    lockTimeoutMs: 90000,
   },
 
   // Campaign orchestration tuning knobs

@@ -31,9 +31,6 @@ export async function POST(request) {
         .select(`*, contact:contacts(wa_id, company_name, name)`)
         .eq('tenant_id', ctx.tenantId);
 
-      if (filters.stage && filters.stage !== 'all') {
-        query = query.eq('stage', filters.stage);
-      }
       if (filters.scoreMin !== undefined) {
         query = query.gte('score', filters.scoreMin);
       }

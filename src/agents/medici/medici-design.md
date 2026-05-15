@@ -131,9 +131,11 @@ SYSTEM_STATIC = SKILL.systemPrompt      ← skills/ai-reception-deal/ bundle
 
 SYSTEM_DYNAMIC = buildDynamicContext({
    injection: agentConfig.dynamic_injection   ← 由 product_lines 行装配
-              · LINE_NAME / CATALOG_DESCRIPTION / DOMAIN_GLOSSARY
-              · BUSINESS_VALUE_GUIDANCE / MESSAGE_STYLE_EXAMPLES
+              · LINE_NAME / BUSINESS_VALUE_GUIDANCE
               · LEAD_FIELDS_HINTS / GOOD/QUALIFY/PROOF_FIELDS
+              （catalog_description / domain_glossary / message_style_examples
+                这几列从注入中下掉了，详见 src/agents/medici/config.js
+                里 assembleDynamicInjection 的注释）
    missing_fields, prior_state            ← 当前会话上下文
    ad_referral                            ← 客户点的 Meta 广告
    available_assets                       ← kb_assets is_sendable=true 的图
@@ -191,7 +193,7 @@ callClaude(tools, tool_choice: auto)
   │         → dispatchTool(name, input, ctx)
   │         · read_skill_reference → SKILL.references.get(name)
   │         · 6 个 KB typed tools (lookup_product / quote_price /
-  │           lookup_shipping / lookup_policy / find_asset / check_constraint)
+  │           lookup_freight / lookup_policy / find_asset / check_constraint)
   │           → executeKbTool(...)（带 gap-capture 包装）
   │         每次触发 onToolEvent({type:'tool_call' / 'tool_result', ...})
   │         结果按调用顺序拼到 messages
@@ -208,10 +210,10 @@ callClaude(tools, tool_choice: auto)
 | # | 工具 | 注册条件 | 职责 |
 |---|---|---|---|
 | 1 | `submit_response`     | 永远 | 产出最终结构化 JSON（envelope） |
-| 2 | `read_skill_reference`| 永远 | 按需读 skill 的 references/*.md（stages-definition 等 8 份） |
+| 2 | `read_skill_reference`| 永远 | 按需读 skill 的 references/*.md（stages-definition / kb-usage-rules / tool-priority-rules / handover-rules / response-style 共 5 份） |
 | 3 | `lookup_product`     | KB 有任意活跃数据 | 按 SKU / 型号 / 属性查产品 |
 | 4 | `quote_price`        | 同上 | 精确报价（FOB / CIF / DDP，含边界检查）|
-| 5 | `lookup_shipping`    | 同上 | 目的港运费 / 船期 |
+| 5 | `lookup_freight`     | 同上 | 目的港运费 / 船期（`found:false` 只代表"无预录运费"，**非**"不能发"） |
 | 6 | `lookup_policy`      | 同上 | 政策 / 资质 / 公司 / 销售话术；free_text 触发 Q&A snippet |
 | 7 | `find_asset`         | 同上 | 找图（tag 优先 + caption 语义兜底）|
 | 8 | `check_constraint`   | 同上 | 议价 / 让步 / 非标付款边界检查 |
@@ -285,7 +287,7 @@ Medici 的 6 个 KB typed tools 吃的就是这里的数据。KB 是 **(tenant_i
 
 2026-05-06 把"录入"从 5 卡瘦到 3 卡：删了独立的 Q&A 直填卡（改在"内容 → Q&A"里直接编辑）和独立的 Excel 模板卡（合并进文件上传）。对话式录入拆成 `/api/knowledge/teach`（LLM 抽取，不落库）+ `/api/knowledge/teach/commit`（用户确认后落库），让运营在按下入库前能看到要写哪些条目。
 
-2026-05-08 进一步放宽录入：不再要求严格 Excel 模板（已删 `/api/knowledge/import-template`、`/api/knowledge/template/[kind]`、`kb-excel-template.service.js`）。所有上传统一走 LLM 抽取——产品 / 物流层会同时跑一遍结构化抽取塞 `kb_products` / `kb_shipping_routes`，但任意列名 / 缺字段 / 自然语言文本都接受，缺信息时字段保持 NULL，不会拒收行。同步把分类学从 6 层（company / product / logistics / compliance / sales / competitive）合并为 4 层（company / product / logistics / sales）：旧的「合规与认证」归到 company，「竞品情报」归到 sales。`kb_documents.layer` / `kb_knowledge_points.layer` 的 CHECK 约束沿用旧六值不动以兼容历史数据，应用层只放行四层；存量行用 [migrations/2026-05-08-kb-collapse-to-four-layers.sql](../../../supabase/migrations/2026-05-08-kb-collapse-to-four-layers.sql) relabel 一次。
+2026-05-08 进一步放宽录入：不再要求严格 Excel 模板（已删 `/api/knowledge/import-template`、`/api/knowledge/template/[kind]`、`kb-excel-template.service.js`）。所有上传统一走 LLM 抽取——产品 / 物流层会同时跑一遍结构化抽取塞 `kb_products` / `kb_shipping_routes`，但任意列名 / 缺字段 / 自然语言文本都接受，缺信息时字段保持 NULL，不会拒收行。同步把分类学从 6 层（company / product / logistics / compliance / sales / competitive）合并为 4 层（company / product / logistics / sales）：旧的「合规与认证」归到 company，「竞品情报」归到 sales。存量行用 [migrations/2026-05-08-kb-collapse-to-four-layers.sql](../../../supabase/migrations/2026-05-08-kb-collapse-to-four-layers.sql) relabel 一次；`kb_documents.layer` / `kb_knowledge_points.layer` 的 CHECK 约束同步收紧到 4 值，参见 [migrations/2026-05-15-kb-layer-check-tighten.sql](../../../supabase/migrations/2026-05-15-kb-layer-check-tighten.sql)。
 
 ### 6.1 数据模型
 
@@ -294,7 +296,7 @@ Medici 的 6 个 KB typed tools 吃的就是这里的数据。KB 是 **(tenant_i
 | `kb_documents` | 上传的源文件元数据（filename、layer、status、storage_path） | `/api/knowledge/upload` | 总览 health + 内容 → 已有文档 |
 | `kb_knowledge_points` | 文档切块后的双语文本 + 两条 embedding；带 `confidence`（verified / extracted_high / extracted_low） | upload + teach/commit | `lookup_policy` 兜底向量检索 + 总览分层统计 |
 | `kb_products` | 结构化商品行；带 `effective_date / expiry_date / confidence / source_doc_id` | LLM 抽取（任意上传文件，宽松 schema） | `lookup_product` / `quote_price` |
-| `kb_shipping_routes` | 结构化运费路由；同样的 validity/confidence 列 | LLM 抽取（任意上传文件，宽松 schema） | `lookup_shipping` / `quote_price` CIF/DDP 分支 |
+| `kb_shipping_routes` | 结构化运费路由；同样的 validity/confidence 列 | LLM 抽取（任意上传文件，宽松 schema） | `lookup_freight` / `quote_price` CIF/DDP 分支 |
 | `kb_pricing_rules` | 议价 / 折扣 / 付款条款规则 | 当前没 UI 直填，可由 SQL 维护 | `check_constraint` |
 | `kb_qa_snippets` | 销售自填 Q&A（多种问法 + 标准答 + 适用条件） | 内容 → Q&A 列表内联编辑 | `lookup_policy({free_text})` 命中阈值 0.75 |
 | `kb_assets` | 可对外发送的图片 + 结构化标签（type / view / color / scenario / linked_skus） + caption_embedding | 录入 → 单独图片上传 + 文件上传时从 PDF/docx 自动抽取嵌入图（vision caption） | `find_asset` (tag 优先，semantic 兜底) |
@@ -302,7 +304,7 @@ Medici 的 6 个 KB typed tools 吃的就是这里的数据。KB 是 **(tenant_i
 | `kb_knowledge_gaps` | medici 答不上的问题，按 question_signature 聚合 | `executeKbTool` 自动回写（gap-capture）| 总览盲区 chip + `/api/knowledge/gaps` |
 | `kb_corrections` | 销售改写过的 medici 回复 → 建议采纳为 Q&A | `/api/knowledge/corrections` POST | 总览纠正入口 |
 
-**四层分类学**：`company / product / logistics / sales`。旧的 `compliance` / `competitive` 已合并到 company / sales（详见 [migrations/2026-05-08-kb-collapse-to-four-layers.sql](../../../supabase/migrations/2026-05-08-kb-collapse-to-four-layers.sql)）。
+**四层分类学**：`company / product / logistics / sales`。旧的 `compliance` / `competitive` 已合并到 company / sales（详见 [migrations/2026-05-08-kb-collapse-to-four-layers.sql](../../../supabase/migrations/2026-05-08-kb-collapse-to-four-layers.sql) + [migrations/2026-05-15-kb-layer-check-tighten.sql](../../../supabase/migrations/2026-05-15-kb-layer-check-tighten.sql)）。
 
 ### 6.2 增 / 删 / 查
 

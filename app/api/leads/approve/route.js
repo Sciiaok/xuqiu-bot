@@ -23,9 +23,6 @@ export async function POST(request) {
         .eq('tenant_id', ctx.tenantId)
         .eq('approved', false);
 
-      if (filters?.stage) {
-        query = query.eq('stage', filters.stage);
-      }
       if (filters?.scoreMin !== undefined) {
         query = query.gte('score', filters.scoreMin);
       }

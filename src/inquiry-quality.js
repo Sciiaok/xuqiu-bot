@@ -171,25 +171,9 @@ export function getGlobalMaxTurns() {
   return GLOBAL_MAX_TURNS;
 }
 
-/**
- * Map inquiry_quality to legacy stage for backward compatibility
- * @param {string} inquiryQuality - BAD | GOOD | QUALIFY | PROOF
- * @returns {string} - GREET | QUALIFY | PROOF
- */
-export function mapInquiryQualityToStage(inquiryQuality) {
-  const mapping = {
-    BAD: 'GREET',
-    GOOD: 'GREET',
-    QUALIFY: 'QUALIFY',
-    PROOF: 'PROOF',
-  };
-  return mapping[inquiryQuality] || 'GREET';
-}
-
 export default {
   GLOBAL_MAX_TURNS,
   getMissingFields,
   hasReachedGlobalMaxTurns,
   getGlobalMaxTurns,
-  mapInquiryQualityToStage,
 };
