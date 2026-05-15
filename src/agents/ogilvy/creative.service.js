@@ -1,10 +1,10 @@
 /**
  * Ogilvy creative service — single-image ad creative generation.
  *
- * Self-contained: all OpenRouter image-gen + Supabase persistence lives here.
+ * Self-contained: all OpenAI Images API + Supabase persistence lives here.
  *
  * Scope for MVP:
- *   - Square 1080×1080 image for Meta feed
+ *   - Square 1024×1024 image for Meta feed
  *   - Uses user-uploaded product images as reference (mandatory — Meta CTWA needs fidelity)
  *   - No best-of-N scoring, no language routing logic, no PDF parsing
  *   - Returns { url, storage_path, model } on success, { error } on failure
@@ -28,22 +28,21 @@ export function isAllowedCreativeUrl(url) {
   return typeof url === 'string' && url.startsWith(ALLOWED_CREATIVE_URL_PREFIX);
 }
 
-// Fallback chain — we try models in order; the first that returns an image wins.
-const IMAGE_MODELS = [
-  'google/gemini-3.1-flash-image-preview',
-  'google/gemini-2.5-flash-image',
-  'openai/gpt-5-image-mini',
-];
+const PRIMARY_MODEL = 'gpt-image-1';
+const FALLBACK_MODEL = 'google/gemini-3.1-flash-image-preview';
+const OPENAI_IMAGES_EDITS_URL = 'https://api.openai.com/v1/images/edits';
 
-// OpenRouter vision/image models reject some formats (e.g. avif).
-const SUPPORTED_REF_EXTS = new Set(['.png', '.jpg', '.jpeg', '.webp', '.gif']);
+// OpenAI Images API only accepts png / jpg / webp for reference uploads.
+// Stricter set wins (the fallback path could take .gif via OpenRouter, but
+// we keep one filter to avoid asymmetric refs between primary and fallback).
+const SUPPORTED_REF_EXTS = new Set(['.png', '.jpg', '.jpeg', '.webp']);
 
 // ── Prompt builder ──────────────────────────────────────────────────────
 
 function buildCreativePrompt({ productName, productDescription, headline, targetCountries, language }) {
   const lang = language || 'English';
   const sceneBrief = (productDescription || '').trim();
-  return `Generate a professional advertising image (1080x1080 square, exactly 1080 pixels wide and 1080 pixels tall) for a B2B WhatsApp-conversion ad.
+  return `Generate a professional advertising image (1024x1024 square, exactly 1024 pixels wide and 1024 pixels tall) for a B2B WhatsApp-conversion ad.
 
 ## Scene & composition (FOLLOW EXACTLY — this is the creative brief)
 ${sceneBrief || '(no scene brief provided — fall back to a clean studio shot of the product)'}
@@ -80,10 +79,54 @@ Do NOT invent product features not shown in the reference.
 - The ONLY text on the image is the headline above + the WhatsApp CTA — do not add taglines, sub-headers, or feature callouts unless the scene brief explicitly asks for them`;
 }
 
-// ── OpenRouter image model caller ───────────────────────────────────────
+// ── Primary: OpenAI Images API ──────────────────────────────────────────
 
-async function callImageModel(model, promptContent) {
+async function callOpenAIImages(model, prompt, refUrls) {
+  // Fetch reference images as Blobs for multipart upload.
+  const refBlobs = await Promise.all(
+    refUrls.map(async (url, i) => {
+      const r = await fetch(url, { signal: AbortSignal.timeout(FETCH_TIMEOUT) });
+      if (!r.ok) throw new Error(`Failed to fetch reference image ${url}: HTTP ${r.status}`);
+      const buf = Buffer.from(await r.arrayBuffer());
+      const ext = new URL(url, 'http://x').pathname.match(/\.(\w+)$/)?.[1]?.toLowerCase() || 'png';
+      const mime = ext === 'jpg' ? 'image/jpeg' : `image/${ext}`;
+      return { blob: new Blob([buf], { type: mime }), filename: `ref_${i}.${ext}` };
+    }),
+  );
+
+  const form = new FormData();
+  form.append('model', model);
+  form.append('prompt', prompt);
+  form.append('n', '1');
+  form.append('size', '1024x1024');
+  form.append('quality', 'high');
+  for (const { blob, filename } of refBlobs) {
+    form.append('image', blob, filename);
+  }
+
+  const res = await fetch(OPENAI_IMAGES_EDITS_URL, {
+    method: 'POST',
+    headers: { 'Authorization': `Bearer ${config.openai.apiKey}` },
+    body: form,
+    signal: AbortSignal.timeout(FETCH_TIMEOUT),
+  });
+  const data = await res.json();
+  if (data.error) throw new Error(data.error.message || 'Image generation failed');
+
+  const b64 = data.data?.[0]?.b64_json;
+  if (!b64) throw new Error('No image returned by model');
+
+  return { imageBuffer: Buffer.from(b64, 'base64'), model };
+}
+
+// ── Fallback: Gemini via OpenRouter chat/completions ────────────────────
+
+async function callOpenRouterFallback(model, prompt, refUrls) {
   const url = `${config.openrouter.baseURL.replace(/\/$/, '')}/chat/completions`;
+  const promptContent = [
+    ...refUrls.map(u => ({ type: 'image_url', image_url: { url: u } })),
+    { type: 'text', text: prompt },
+  ];
   const res = await fetch(url, {
     method: 'POST',
     headers: {
@@ -102,45 +145,21 @@ async function callImageModel(model, promptContent) {
   const message = data.choices?.[0]?.message;
   if (!message) throw new Error('No message in response');
 
-  const b64 = extractBase64Image(message);
-  if (!b64) throw new Error('No image returned by model');
-
-  return {
-    imageBuffer: Buffer.from(b64, 'base64'),
-    model: data.model || model,
-  };
-}
-
-// Image models return base64 in three different shapes depending on provider.
-function extractBase64Image(message) {
-  // Format 1: message.images[] (GPT-5-image)
-  if (message.images?.length) {
-    const img = message.images[0];
-    const url = typeof img === 'string' ? img : img?.image_url?.url;
-    if (url?.includes(',')) return url.split(',')[1];
-    return url;
-  }
-  // Format 2: message.content[] with type=image_url (Gemini via OpenRouter)
+  // Gemini via OpenRouter returns message.content[] with type=image_url and
+  // a data: URL whose payload is the base64 image.
+  let b64 = null;
   if (Array.isArray(message.content)) {
     for (const part of message.content) {
       if (part.type === 'image_url') {
-        const url = part.image_url?.url;
-        if (url?.includes(',')) return url.split(',')[1];
-        return url;
+        const u = part.image_url?.url;
+        b64 = u?.includes(',') ? u.split(',')[1] : u;
+        break;
       }
     }
   }
-  // Format 3: markdown ![](data:...) inside a text block
-  const text = typeof message.content === 'string'
-    ? message.content
-    : Array.isArray(message.content)
-      ? message.content.filter(p => p.type === 'text').map(p => p.text).join('')
-      : '';
-  if (text) {
-    const match = text.match(/!\[.*?\]\((data:image\/[^;]+;base64,([A-Za-z0-9+/=\s]+))\)/);
-    if (match?.[2]) return match[2].replace(/\s/g, '');
-  }
-  return null;
+  if (!b64) throw new Error('No image returned by model');
+
+  return { imageBuffer: Buffer.from(b64, 'base64'), model: data.model || model };
 }
 
 // Filter reference URLs by supported extensions so the model doesn't reject the request.
@@ -205,8 +224,9 @@ async function saveAssetToStorage({ imageBuffer, prompt, model, productInfo, use
 /**
  * Generate one ad image from product info + reference images.
  *
- * Falls back through IMAGE_MODELS in order; returns the first success.
- * Returns { url, storage_path, model } on success, { error, message } on failure.
+ * Primary path: OpenAI Images API (gpt-image-1). On failure, falls back once
+ * to Gemini via OpenRouter. Returns { url, storage_path, model } on success,
+ * { error, message } on failure.
  */
 export async function generateAdCreative({
   productName,
@@ -223,11 +243,14 @@ export async function generateAdCreative({
   if (!tenantId) {
     return { error: 'tenant_required', message: 'tenantId is required' };
   }
+  if (!config.openai.apiKey) {
+    return { error: 'config_missing', message: 'OPENAI_API_KEY is not configured' };
+  }
   if (!config.openrouter.apiKey) {
-    return { error: 'config_missing', message: 'OPENROUTER_API_KEY is not configured' };
+    return { error: 'config_missing', message: 'OPENROUTER_API_KEY is not configured (needed for fallback)' };
   }
   // CTWA ads need photorealistic product fidelity — reference images are mandatory.
-  const refs = filterSupportedRefs(referenceImageUrls);
+  const refs = filterSupportedRefs(referenceImageUrls).slice(0, 3);
   if (!refs.length) {
     return {
       error: 'no_reference_images',
@@ -236,17 +259,18 @@ export async function generateAdCreative({
   }
 
   const prompt = buildCreativePrompt({ productName, productDescription, headline, targetCountries, language });
-  const promptContent = [
-    ...refs.slice(0, 3).map(url => ({ type: 'image_url', image_url: { url } })),
-    { type: 'text', text: prompt },
+
+  // Primary → fallback. We log each failure to stderr but return the
+  // aggregate error only after both paths fail.
+  const attempts = [
+    { label: 'primary',  caller: callOpenAIImages,       model: PRIMARY_MODEL  },
+    { label: 'fallback', caller: callOpenRouterFallback, model: FALLBACK_MODEL },
   ];
 
-  // Try models in sequence. We log each failure to stderr but return the
-  // aggregate error only if every model fails.
   let lastErr;
-  for (const model of IMAGE_MODELS) {
+  for (const { label, caller, model } of attempts) {
     try {
-      const generated = await callImageModel(model, promptContent);
+      const generated = await caller(model, prompt, refs);
       const asset = await saveAssetToStorage({
         imageBuffer: generated.imageBuffer,
         prompt,
@@ -267,9 +291,9 @@ export async function generateAdCreative({
         product_name: productName || null,
       };
     } catch (err) {
-      console.warn(`[ogilvy/creative] ${model} failed: ${err.message}`);
+      console.warn(`[ogilvy/creative] ${label} (${model}) failed: ${err.message}`);
       lastErr = err;
     }
   }
-  return { error: 'image_generation_failed', message: lastErr?.message || 'All image models failed' };
+  return { error: 'image_generation_failed', message: lastErr?.message || 'All paths failed' };
 }
