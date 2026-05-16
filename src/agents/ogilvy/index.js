@@ -22,6 +22,7 @@ import { openrouter, MODELS } from '../../llm-client.js';
 import {
   addMessage,
   addMessages,
+  appendStageOutput,
   getMessagesForLLM,
   getNextMessageIndex,
   getSession,
@@ -181,6 +182,42 @@ const TOOLS = [
               },
             },
           },
+        },
+      },
+    },
+  },
+  {
+    name: 'persist_stage_output',
+    description:
+      '把刚刚产出的一段长内容归档到会话存档，并在后续对话历史里以 200 字摘要替代原文，' +
+      '避免 context window 被反复堆叠的长方案撑爆（200K 上限）。' +
+      '何时调：你刚输出了一段超过 3000 字 / token 的方案、报告、策划案、操作手册等' +
+      '"成形可独立交付"的产出，且预期不会立即被用户大改时。如果用户在下一轮请求修改这段，' +
+      '你基于上次结论生成新版后再次调用此工具（同一 label 多版本是允许的）。' +
+      '不要拿这个工具压缩短消息、对话片段或临时澄清——这是为"完整产出"准备的。',
+    input_schema: {
+      type: 'object',
+      required: ['label', 'summary', 'markdown'],
+      properties: {
+        label: {
+          type: 'string',
+          description:
+            '1 句中文标识，让用户和未来的你能从存档列表里识别这段。' +
+            '例："阶段 3 · 10 章 CTW 策划案" / "市场分析报告 · 北美" / "执行方案 V2 (调整 05 章受众)"。' +
+            '同一段产出多版本时在 label 后加 V1/V2/(调整 X) 后缀。',
+        },
+        summary: {
+          type: 'string',
+          description:
+            '200 字内的关键结论，**用第三人称概括**这段产出最重要的决策点 / 数字 / 结构。' +
+            '会替换掉原文出现在对话历史里，未来的对话只能看到这个 summary 不能看到原文。' +
+            '所以这里要写够你未来重新调用 / 修改时所需的最低信息。',
+        },
+        markdown: {
+          type: 'string',
+          description:
+            '你刚才输出的完整 markdown 原文，**逐字复制**，不要重写或精简。' +
+            '原文会存进数据库，用户在 UI "已存档产出" 时间线上能完整回看。',
         },
       },
     },
@@ -739,6 +776,8 @@ async function executeTool(name, input, ctx) {
   switch (name) {
     case 'draft_ad_plan':
       return draftAdPlan(input, ctx);
+    case 'persist_stage_output':
+      return persistStageOutput(input, ctx);
     case 'web_search':
       return webSearch(input, { tenantId: ctx.tenantId, sessionId: ctx.sessionId });
     case 'read_webpage':
@@ -802,6 +841,55 @@ async function executeTool(name, input, ctx) {
     }
     default:
       return { error: `Unknown tool: ${name}` };
+  }
+}
+
+/**
+ * persist_stage_output — archive a long-form assistant output (10-章 strategy
+ * doc, market analysis report, plan_json prose, etc.) so getMessagesForLLM can
+ * compress it out of future LLM-facing history. The full markdown stays in DB
+ * under autopilot_sessions.stage_outputs; the user can recall it in the UI's
+ * stage-archive panel without spending tokens.
+ *
+ * Pairing semantics: the compression in getMessagesForLLM walks message rows
+ * and, when it sees an assistant text row immediately followed (in order) by
+ * a successful persist_stage_output tool_result, replaces that assistant text
+ * with `[已存档:{label}] {summary}`. The pairing key is "this assistant turn
+ * → its very next persist tool call in the same dispatch batch", so the model
+ * has to call persist_stage_output in the same turn as it produces the output.
+ *
+ * Schema is intentionally label/summary/markdown only — no enum, no stage
+ * field. The skill body owns "what an output looks like"; this layer just
+ * stores and compresses.
+ */
+async function persistStageOutput(input, { sessionId }) {
+  const { label, summary, markdown } = input || {};
+  if (!label || typeof label !== 'string') {
+    return { error: 'label_required', message: 'label 必填，1 句中文标识。' };
+  }
+  if (!summary || typeof summary !== 'string') {
+    return { error: 'summary_required', message: 'summary 必填，200 字内关键结论。' };
+  }
+  if (!markdown || typeof markdown !== 'string' || markdown.length < 200) {
+    return {
+      error: 'markdown_too_short',
+      message: '只有超过 ~3000 字的成形产出才值得归档；短消息不要走这个工具。',
+    };
+  }
+  try {
+    const record = await appendStageOutput(sessionId, { label, summary, markdown });
+    return {
+      ok: true,
+      archived_id: record.id,
+      label: record.label,
+      summary: record.summary,
+      // compressed_text 是 getMessagesForLLM 在未来 turn 里用来替换原 assistant
+      // text 的字符串。把它放在 tool_result 里，压缩逻辑只需一字段就能搬运。
+      compressed_text: `[已存档:${record.label}]\n\n${record.summary}`,
+      message: '已归档。后续 turn 中这段会以 compressed_text 替换原文进入 LLM 历史，用户在 UI "已存档产出" 时间线上仍可回看完整 markdown。',
+    };
+  } catch (err) {
+    return { error: 'persist_failed', message: err.message };
   }
 }
 

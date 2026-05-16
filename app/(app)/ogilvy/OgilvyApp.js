@@ -7,6 +7,7 @@ import Markdown from '../../components/Markdown/Markdown';
 import WhatsAppGateCard from './components/WhatsAppGateCard';
 import AdPlanCard from './components/AdPlanCard';
 import UsageBadge from './components/UsageBadge';
+import StageArchive from './components/StageArchive';
 import Skeleton, { SkeletonStack } from '../../components/Skeleton/Skeleton';
 import { useMessageStream } from './hooks/useMessageStream';
 
@@ -55,6 +56,7 @@ export default function OgilvyApp() {
   const [selectedId, setSelectedId] = useState(null);
   const [messages, setMessages] = useState([]);
   const [plan, setPlan] = useState(null);               // latest plan_json for active session
+  const [archives, setArchives] = useState([]);          // session.stage_outputs（已存档产出）
   const [loadingMessages, setLoadingMessages] = useState(false);
   const [creating, setCreating] = useState(false);
   const [inputVal, setInputVal] = useState('');
@@ -131,7 +133,7 @@ export default function OgilvyApp() {
 
   // ── Load messages when a session is selected ─────────────────
   useEffect(() => {
-    if (!selectedId) { setMessages([]); setPlan(null); return; }
+    if (!selectedId) { setMessages([]); setPlan(null); setArchives([]); return; }
     let cancel = false;
     (async () => {
       setLoadingMessages(true);
@@ -140,6 +142,7 @@ export default function OgilvyApp() {
         if (cancel) return;
         setMessages(r.messages || []);
         setPlan(r.session?.plan_json || null);
+        setArchives(Array.isArray(r.session?.stage_outputs) ? r.session.stage_outputs : []);
       } catch (err) {
         if (!cancel) console.error('[OgilvyApp] load messages failed:', err);
       } finally {
@@ -168,6 +171,14 @@ export default function OgilvyApp() {
         setStreamingPlan(null);
         const r = await fetch(`/api/ogilvy/conversations/${selectedId}`).then(r => r.json());
         setPlan(r.session?.plan_json || null);
+        setArchives(Array.isArray(r.session?.stage_outputs) ? r.session.stage_outputs : []);
+      }
+      // When persist_stage_output succeeds, refetch session to pick up the new
+      // stage_outputs row so StageArchive renders it immediately (rather than
+      // waiting for the next session reload).
+      if (data.tool === 'persist_stage_output' && data.result?.ok) {
+        const r = await fetch(`/api/ogilvy/conversations/${selectedId}`).then(r => r.json());
+        setArchives(Array.isArray(r.session?.stage_outputs) ? r.session.stage_outputs : []);
       }
     },
     onAssistantFinal: () => { /* rely on the post-stream refetch to merge */ },
@@ -192,6 +203,7 @@ export default function OgilvyApp() {
     const r = await fetch(`/api/ogilvy/conversations/${selectedId}`).then(r => r.json());
     setMessages(r.messages || []);
     setPlan(r.session?.plan_json || null);
+    setArchives(Array.isArray(r.session?.stage_outputs) ? r.session.stage_outputs : []);
   }, [selectedId]);
 
   // ── Actions ─────────────────────────────────────────────────
@@ -651,6 +663,7 @@ export default function OgilvyApp() {
        */}
       {!gateBlocked && (
         <aside className={s.planPanel}>
+          <StageArchive archives={archives} />
           {(streamingPlan || plan) ? (
             <AdPlanCard
               plan={streamingPlan || plan}

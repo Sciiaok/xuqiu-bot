@@ -14,7 +14,8 @@ const CONTEXT_WINDOW_TOKENS = 200_000;
  *
  * Shape:
  *   {
- *     totals: { prompt, completion, cache_read, cache_create, total_input, cost_usd },
+ *     totals:  { prompt, completion, cache_read, cache_create, total_input, cost_usd },
+ *     latest:  { prompt, cache_read, cache_create, total_input, completion, model },
  *     by_call_site: { [callSite]: { prompt, completion, ... } },
  *     by_model:     { [model]:    { prompt, completion, ... } },
  *     context_window_tokens: 200000,
@@ -22,11 +23,12 @@ const CONTEXT_WINDOW_TOKENS = 200_000;
  *   }
  *
  * Notes:
- * - "total_input" sums prompt + cache_read + cache_create — this is what
- *   actually occupies the context window. Display this against context_window.
- * - We sum on the API side (no client-side aggregation) so the badge can
- *   render the moment data arrives.
- * - Empty-session response: zeroed-out totals + empty maps + turn_count: 0.
+ * - "totals" 是累计值（成本、调用次数视角）—— 显示历史投入。
+ * - "latest" 是最近一次调用的 input 分量 —— 这个是当前 context window 实际
+ *   占用的 proxy（下一次调用会带上历史，所以 latest.total_input ≈ 这一刻
+ *   context 已经填到多少）。把这个跟 context_window_tokens 比才有意义；
+ *   早期实现把 totals.total_input 跟它比会算出超 1000% 的滑稽数字。
+ * - Empty-session response: zeroed-out totals + null latest + empty maps + turn_count: 0.
  */
 export async function GET(_request, { params }) {
   const ctx = await getTenantContext();
@@ -44,8 +46,9 @@ export async function GET(_request, { params }) {
     const admin = getSupabaseAdmin();
     const { data, error } = await admin
       .from('llm_usage_logs')
-      .select('call_site, model, prompt_tokens, completion_tokens, cache_creation_input_tokens, cache_read_input_tokens, cost_usd')
-      .eq('session_id', id);
+      .select('call_site, model, prompt_tokens, completion_tokens, cache_creation_input_tokens, cache_read_input_tokens, cost_usd, created_at')
+      .eq('session_id', id)
+      .order('created_at', { ascending: true });
 
     if (error) throw new Error(error.message);
 
@@ -56,7 +59,13 @@ export async function GET(_request, { params }) {
     const byCallSite = {};
     const byModel = {};
 
+    // latest = 最近一次主对话调用（ogilvy.turn）。工具调用（web_search /
+    // read_webpage）走 Haiku 各自独立 prompt，input 跟主对话历史不相关，
+    // 不能拿来当 context 占用 proxy。
+    let latestTurnRow = null;
+
     for (const row of data || []) {
+      if (row.call_site === 'ogilvy.turn') latestTurnRow = row;
       const prompt = row.prompt_tokens || 0;
       const completion = row.completion_tokens || 0;
       const cacheRead = row.cache_read_input_tokens || 0;
@@ -89,8 +98,23 @@ export async function GET(_request, { params }) {
       byModel[m].count += 1;
     }
 
+    const latest = latestTurnRow
+      ? {
+          prompt: latestTurnRow.prompt_tokens || 0,
+          cache_read: latestTurnRow.cache_read_input_tokens || 0,
+          cache_create: latestTurnRow.cache_creation_input_tokens || 0,
+          total_input:
+            (latestTurnRow.prompt_tokens || 0) +
+            (latestTurnRow.cache_read_input_tokens || 0) +
+            (latestTurnRow.cache_creation_input_tokens || 0),
+          completion: latestTurnRow.completion_tokens || 0,
+          model: latestTurnRow.model || null,
+        }
+      : null;
+
     return Response.json({
       totals,
+      latest,
       by_call_site: byCallSite,
       by_model: byModel,
       context_window_tokens: CONTEXT_WINDOW_TOKENS,

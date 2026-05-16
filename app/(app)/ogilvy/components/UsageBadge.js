@@ -44,7 +44,10 @@ export default function UsageBadge({ sessionId, refreshKey = 0 }) {
 
   if (!usage) return null;
 
-  const used = usage.totals.total_input;
+  // 当前 context 占用 = 最近一次主对话调用的 input(prompt + cache_*)
+  // 工具调用（web_search / read_webpage）走独立短 prompt，跟主对话 history
+  // 无关，不算 context 占用。无 ogilvy.turn 历史时按 0 显示。
+  const used = usage.latest?.total_input || 0;
   const ctx = usage.context_window_tokens;
   const pct = ctx ? Math.round((used / ctx) * 100) : 0;
   const tone = pct < 50 ? 'ok' : pct < 80 ? 'warn' : 'danger';
@@ -55,7 +58,7 @@ export default function UsageBadge({ sessionId, refreshKey = 0 }) {
       data-tone={tone}
       onMouseEnter={() => setOpen(true)}
       onMouseLeave={() => setOpen(false)}
-      aria-label={`Token 用量 ${fmtTokens(used)} / ${fmtTokens(ctx)} (${pct}%)`}
+      aria-label={`当前上下文 ${fmtTokens(used)} / ${fmtTokens(ctx)} (${pct}%)`}
     >
       <span className={s.usageBadgeNums}>
         {fmtTokens(used)} / {fmtTokens(ctx)}
@@ -72,16 +75,37 @@ export default function UsageBadge({ sessionId, refreshKey = 0 }) {
 }
 
 function UsagePopover({ usage }) {
-  const { totals, by_model: byModel, by_call_site: byCallSite, turn_count: turnCount } = usage;
+  const { totals, latest, by_model: byModel, by_call_site: byCallSite, turn_count: turnCount, context_window_tokens: ctxTokens } = usage;
   return (
     <>
       <div className={s.usagePopoverHead}>本会话 Token 用量</div>
 
-      <div className={s.usageRow}><span>输入(未缓存)</span><span>{fmtTokens(totals.prompt)}</span></div>
-      <div className={s.usageRow}><span>缓存写入</span><span>{fmtTokens(totals.cache_create)}</span></div>
-      <div className={s.usageRow}><span>缓存读取</span><span>{fmtTokens(totals.cache_read)}</span></div>
-      <div className={s.usageRow}><span>输出</span><span>{fmtTokens(totals.completion)}</span></div>
-      <div className={s.usageDivider} />
+      {latest ? (
+        <>
+          <div className={s.usageRowEm}>
+            <span>当前上下文</span>
+            <span>{fmtTokens(latest.total_input)} / {fmtTokens(ctxTokens)}</span>
+          </div>
+          <div className={s.usageRow}>
+            <span className={s.usageMuted}>　输入(未缓存)</span>
+            <span>{fmtTokens(latest.prompt)}</span>
+          </div>
+          <div className={s.usageRow}>
+            <span className={s.usageMuted}>　缓存写入</span>
+            <span>{fmtTokens(latest.cache_create)}</span>
+          </div>
+          <div className={s.usageRow}>
+            <span className={s.usageMuted}>　缓存读取</span>
+            <span>{fmtTokens(latest.cache_read)}</span>
+          </div>
+          <div className={s.usageRow}>
+            <span className={s.usageMuted}>　上轮输出</span>
+            <span>{fmtTokens(latest.completion)}</span>
+          </div>
+          <div className={s.usageDivider} />
+        </>
+      ) : null}
+
       <div className={s.usageRowEm}><span>累计成本</span><span>{fmtCost(totals.cost_usd)}</span></div>
       <div className={s.usageRowEm}><span>LLM 调用次数</span><span>{turnCount}</span></div>
 
