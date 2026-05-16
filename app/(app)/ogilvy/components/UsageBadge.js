@@ -6,8 +6,13 @@ import s from '../ogilvy.module.css';
 /**
  * UsageBadge — Claude Code statusline 风格的小 pill，浮在 chat 区左上角。
  *
- * 显示当前 session 累计 token 用量（含 cache）对 200K context window 的占比；
+ * 显示最近一次主对话调用 (ogilvy.turn) 的 input token (prompt + cache_*)
+ * 对 1M context window 的占比 —— 这是当前 context 实际填到多少的 proxy。
  * hover 弹面板看 input / output / cache / cost / by_call_site / by_model。
+ *
+ * 1M 是 Sonnet 4.6 的 context window（ogilvy 主对话锁定 Sonnet）。工具
+ * 调用 (web_search / read_webpage) 走 Haiku 4.5 (200K) 但 prompt 是 short
+ * synthesis，不会接近上限，不算入此 badge。
  *
  * 触发刷新的两个时机：
  *   1. sessionId 变化（切换会话）

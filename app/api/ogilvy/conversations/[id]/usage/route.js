@@ -2,9 +2,13 @@ import { getTenantContext } from '../../../../../../lib/tenant-context.js';
 import { getSession } from '../../../../../../lib/repositories/ogilvy.repository.js';
 import { getSupabaseAdmin } from '../../../../../../lib/supabase-admin.js';
 
-// Context window for the models ogilvy uses (Sonnet 4.6 / Haiku 4.5 both 200K).
-// Hard-coded rather than queried per-call — it's a model property, not a per-row fact.
-const CONTEXT_WINDOW_TOKENS = 200_000;
+// Context window for ogilvy's main turn — Sonnet 4.6 is 1M tokens
+// (https://platform.claude.com/docs/en/about-claude/models/whats-new-claude-4-5).
+// 工具调用 (web_search / read_webpage) 走 Haiku 4.5 (200K)，但它们是 short
+// single-turn synthesis (prompt < 20K)，不可能接近上限，无需为它单独 surface
+// context 用量。主对话 (ogilvy.turn) 锁定 Sonnet 后，UsageBadge 显示的
+// "当前上下文" 就是 latest ogilvy.turn 的 total_input 对 1M 的占比。
+const CONTEXT_WINDOW_TOKENS = 1_000_000;
 
 /**
  * GET /api/ogilvy/conversations/[id]/usage

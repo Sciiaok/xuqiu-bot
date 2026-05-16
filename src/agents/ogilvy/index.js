@@ -444,67 +444,25 @@ function buildMessagesWithCache(staticPrompt, dynamicPrompt, history) {
   return messages;
 }
 
-// ── Model routing ──────────────────────────────────────────────────────
+// ── Model selection ────────────────────────────────────────────────────
 //
-// Stage-aware model picker. Reads the recent conversation and routes
-// Stage-3 / Stage-5 turns to Sonnet (chain-of-reasoning matters there) and
-// everything else to Haiku. Synthesis iterations after a tool result are
-// always Haiku — they're small structured outputs Haiku does well.
+// 主对话 (ogilvy.turn) 锁定 Claude Sonnet 4.6（1M context window）。
 //
-// Keyword list is hand-tuned against the skill body + host patch. Bias is
-// conservative: when a Stage 3/5 marker shows up *anywhere* in the last 4
-// messages, we stay on Sonnet for the entire turn (and all its tool-use
-// iterations, since the keyword stays in history). Better to over-spend a
-// few dollars than to produce a thin 10-章 策划案.
-
-// Stage-3 / Stage-5 / 蒸馏 triggers. Lowercased; matched as substring.
-// Order doesn't matter — first hit wins. skill 内文用阿拉伯数字命名阶段（"阶段 3" / "阶段 5"），
-// 也保留汉字版本以兼容用户用旧措辞复述。
-const SONNET_STAGE_TRIGGERS = [
-  '阶段 3', '阶段 5', '阶段3', '阶段5', '阶段三', '阶段五',
-  '策划案', '10 章', '10章', '十章',
-  'plan_json', '投放方案', '后台操作手册', '执行方案',
-  '蒸馏', 'draft_ad_plan',
-  '完整方案', '出方案', '出策划', '生成方案', '输出方案', '正式输出',
-];
-
-function extractText(content) {
-  if (typeof content === 'string') return content;
-  if (Array.isArray(content)) {
-    return content
-      .filter(b => b?.type === 'text' && typeof b.text === 'string')
-      .map(b => b.text)
-      .join(' ');
-  }
-  return '';
-}
-
-export function pickModelForOgilvyTurn(history) {
-  // Synthesis after tool result: Haiku is strictly better — fast, cheap,
-  // structured-output strong. Long reasoning doesn't help here.
-  const last = history[history.length - 1];
-  if (last?.role === 'tool') return MODELS.HAIKU;
-
-  // Scan the last 4 messages (user + assistant prose) for stage triggers.
-  // Why a window: a Stage-3 trigger can sit in the assistant's prior message
-  // ("即将输出 10 章策划案") and the user's reply might just be "好的，继续";
-  // we still want Sonnet on this turn.
-  const recentText = history
-    .slice(-4)
-    .map(m => extractText(m.content))
-    .join(' ')
-    .toLowerCase();
-  if (SONNET_STAGE_TRIGGERS.some(k => recentText.includes(k))) return MODELS.SONNET;
-
-  // First user message of the session: the intake dialog quality (asking
-  // smart clarifying questions, role identification) benefits from Sonnet.
-  // `history` here always includes the just-added user message, so "no prior
-  // assistant" means this is iteration 1 of the first turn.
-  const hasAssistantPrior = history.slice(0, -1).some(m => m.role === 'assistant');
-  if (!hasAssistantPrior) return MODELS.SONNET;
-
-  return MODELS.HAIKU;
-}
+// 历史上 ogilvy 用过 "stage-aware" 路由——按上一条是否 tool result / 是否
+// 含 stage 3/5 关键词在 Sonnet 与 Haiku 间切换。数据上两个问题：
+//
+// 1. Haiku 4.5 名义 context window 200K，session 反复返工时主对话 history
+//    实测触达 300K+ 灰区（Anthropic 4.5+ API 不报错但模型 working memory
+//    超训练长度，输出质量未保证）。
+// 2. Sonnet / Haiku 各维护一套 prompt cache，每次切换对方 cache 都要从头
+//    建立；省下的单价被 cache write 吃掉一半。
+//
+// 改为统一 Sonnet 后：① 主对话 input 走真实 1M context；② 单 prompt cache
+// 命中率高；③ 路由代码消失。代价是单 turn 单价 ×3.75（input $0.003 vs
+// $0.0008），用 stage_outputs 历史压缩协议 (host-patch §5) 控总成本。
+//
+// 工具调用 (web_search Anthropic fallback / read_webpage) 保留 Haiku —— short
+// prompt synthesis Sonnet 不增值（见 tools.service.js）。
 
 // ── Main generator ─────────────────────────────────────────────────────
 
@@ -568,13 +526,10 @@ export async function* runOgilvy(sessionId, userText, attachments = [], userId =
     const accToolCalls = {};
     let finishReason = null;
 
-    // Model routing — stage-aware. The previous "first-turn Sonnet, else Haiku"
-    // rule was too crude: Stage 3 (10-章策划案) and Stage 5 (双文档 + plan_json
-    // 蒸馏) are exactly the turns where chain-of-reasoning quality matters, and
-    // Haiku produces visibly weaker 章节连贯性 there. pickModelForOgilvyTurn
-    // scans recent messages for canonical stage markers and routes those turns
-    // back to Sonnet while keeping the cheap default for everything else.
-    const model = pickModelForOgilvyTurn(history);
+    // 主对话锁定 Sonnet 4.6（1M context window）。详见上方 Model selection
+    // 注释 — 历史的 stage-aware 路由在数据上暴露了 Haiku 200K 灰区 + 双
+    // prompt cache 浪费两个问题。
+    const model = MODELS.SONNET;
 
     try {
       const stream = openrouter.messages.stream({
