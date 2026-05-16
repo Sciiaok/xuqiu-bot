@@ -14,9 +14,9 @@ import s from './CostStatsTab.module.css';
  * 暂不可用"(通常是 Meta 未连接或 token 过期),不影响 LLM 区域。
  */
 const RANGE_OPTIONS = [
-  { key: '7d',  label: '近 7 天'  },
-  { key: '30d', label: '近 30 天' },
-  { key: '90d', label: '近 90 天' },
+  { key: '7d',  label: '近 7 天',  days: 7  },
+  { key: '30d', label: '近 30 天', days: 30 },
+  { key: '90d', label: '近 90 天', days: 90 },
 ];
 
 export default function CostStatsTab({ productLineId }) {
@@ -39,7 +39,11 @@ export default function CostStatsTab({ productLineId }) {
         return r.json();
       });
 
-    const adsPromise = fetch(`/api/ads/dashboard?productLine=${productLineId}&range=${rangeKey}`)
+    // ads/dashboard 不接受 `range=`,要么 preset=7d|30d 要么 days=N。90d 不是
+    // 已知 preset,所以两个端点的参数名故意分开:cost-stats 用 range,ads 用
+    // days(走 default 分支自动构造 ${days}d preset)。
+    const days = RANGE_OPTIONS.find(o => o.key === rangeKey)?.days || 30;
+    const adsPromise = fetch(`/api/ads/dashboard?productLine=${productLineId}&days=${days}`)
       .then(async r => {
         if (!r.ok) throw new Error((await r.json()).error || `HTTP ${r.status}`);
         return r.json();
@@ -82,7 +86,7 @@ export default function CostStatsTab({ productLineId }) {
   const llmDelta = computeDelta(llmCost, llmCostPrev);
 
   return (
-    <div className={s.root}>
+    <div className={`${s.root} ${loading ? s.refreshing : ''}`}>
       {/* ── Range selector ─────────────────────────────────────────── */}
       <div className={s.rangeBar}>
         <span className={s.rangeLabel}>时间范围 · 当期 vs 上一周期对比</span>
@@ -119,7 +123,12 @@ export default function CostStatsTab({ productLineId }) {
         <KpiCard
           label="Ogilvy 工作台(租户级)"
           value={fmtUsd(stats.ogilvy_tenant.total_usd)}
-          sub={`${stats.ogilvy_tenant.image_count} 张图 · 跨产品线`}
+          sub={
+            <>
+              推理 {fmtUsd(stats.ogilvy_tenant.reasoning_usd)} · 图 {stats.ogilvy_tenant.image_count}张 {fmtUsd(stats.ogilvy_tenant.image_usd)}
+              <br />跨产品线
+            </>
+          }
           info
         />
       </div>
@@ -137,9 +146,12 @@ export default function CostStatsTab({ productLineId }) {
       <VolumeSection volume={stats.volume} llmCost={llmCost} adSpend={adSpend} />
 
       <p className={s.notice}>
-        说明: LLM 成本只统计能归属到本产品线的调用 (medici 应答、KB 搜索/上传抽取、知识教学、画像总结、单产品线日报)。
+        说明: LLM 成本只统计能归属到本产品线的调用 (medici 应答、KB 搜索/上传抽取/视觉理解、知识教学、画像总结、单产品线日报)。
         Ogilvy 工作台 (会话推理 / 网页搜索 / 图片生成) 跨产品线共用,作为租户级数据单独展示。
         历史数据 (本功能上线前) 在按时间窗反推回填后才会出现在表中,详见 supabase/operations/2026-05-16-backfill-llm-usage-product-line.sql。
+        <br />
+        时区: LLM 成本按 UTC 日历切窗 (近 N 天 = 今天 UTC 整天 + 之前 N-1 天)。
+        广告花费按 Asia/Shanghai 昨日截止取数 (Meta cache 策略,避开今日未稳数据),所以两边窗口可能差约 1 天 —— 30/90 天窗口里影响在 1-3% 量级。
       </p>
     </div>
   );
@@ -311,12 +323,12 @@ function VolumeSection({ volume, llmCost, adSpend }) {
     <div className={s.section}>
       <h3 className={s.sectionTitle}>量化指标 · 单位成本</h3>
       <div className={s.volumeGrid}>
-        <Cell label="对话数" value={volume.conversations} />
-        <Cell label="入站消息" value={volume.msgs_in} />
-        <Cell label="出站消息" value={volume.msgs_out} />
-        <Cell label="合格线索 (GOOD+)" value={volume.leads_qualified} />
-        <Cell label="知识库新增文档" value={volume.kb_docs} />
-        <Cell label="单对话总成本" value={fmtUsd(costPerConv)} />
+        <Cell label="本期新开对话" value={volume.conversations} />
+        <Cell label="本期入站消息" value={volume.msgs_in} />
+        <Cell label="本期出站消息" value={volume.msgs_out} />
+        <Cell label="本期合格线索 GOOD+" value={volume.leads_qualified} />
+        <Cell label="本期 KB 新增文档" value={volume.kb_docs} />
+        <Cell label="单新开对话成本" value={fmtUsd(costPerConv)} />
         <Cell label="单合格线索成本" value={fmtUsd(costPerLead)} />
         <Cell label="单入站消息 LLM 成本" value={fmtUsd(llmPerInbound)} />
       </div>

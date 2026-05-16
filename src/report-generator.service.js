@@ -329,11 +329,16 @@ async function collectReportInput(tenantId, type, periodStart, periodEnd, agentI
 }
 
 // 报表挂哪个产品线:单 agent 时取该 agent.product_line;0 或 多 agent 视为不归属。
-async function resolveSingleAgentProductLine(agentIds) {
+// 加 tenant_id 过滤是 belt-and-suspenders —— 调用方 generateReport/retryReport
+// 已经校验过 tenantId,但万一未来某个 caller 传了别家的 agentId 进来,这里
+// 也不会泄露其他租户的 product_line。
+async function resolveSingleAgentProductLine(tenantId, agentIds) {
+  if (!tenantId) return null;
   if (!Array.isArray(agentIds) || agentIds.length !== 1) return null;
   const { data, error } = await supabase
     .from('agents')
     .select('product_line')
+    .eq('tenant_id', tenantId)
     .eq('id', agentIds[0])
     .single();
   if (error || !data) return null;
@@ -396,7 +401,7 @@ export async function generateReport({ tenantId, type, periodStart, periodEnd, a
   try {
     const { input, kpi } = await collectReportInput(tenantId, type, periodStart, periodEnd, agentIds);
     // 单 agent 报表才挂 product_line;多 agent / 全租户报表归 NULL
-    const productLine = await resolveSingleAgentProductLine(agentIds);
+    const productLine = await resolveSingleAgentProductLine(tenantId, agentIds);
     const content = await callLLM(type, input, tenantId, productLine);
 
     // Build appendix for full reports
@@ -463,7 +468,7 @@ export async function retryReport(reportId) {
     const { input, kpi } = await collectReportInput(
       report.tenant_id, report.type, report.period_start, report.period_end, report.agent_ids
     );
-    const productLine = await resolveSingleAgentProductLine(report.agent_ids);
+    const productLine = await resolveSingleAgentProductLine(report.tenant_id, report.agent_ids);
     const content = await callLLM(report.type, input, report.tenant_id, productLine);
 
     if (report.type !== 'daily') {

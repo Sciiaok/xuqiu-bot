@@ -4,6 +4,13 @@
   gap: 16px;
 }
 
+/* 切 range 时展示 in-place 刷新指示而非冷启动 spinner。 */
+.refreshing {
+  opacity: 0.55;
+  pointer-events: none;
+  transition: opacity 0.15s;
+}
+
 /* ── Range pills ──────────────────────────────────────────────────── */
 .rangeBar {
   display: flex;
@@ -54,7 +61,7 @@
 /* ── KPI strip ────────────────────────────────────────────────────── */
 .kpiGrid {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
   gap: 12px;
 }
 

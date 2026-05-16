@@ -27,17 +27,24 @@ const RANGE_DAYS = { '7d': 7, '30d': 30, '90d': 90 };
 function parseRange(searchParams) {
   const key = String(searchParams.get('range') || '30d');
   const days = RANGE_DAYS[key] || 30;
-  const to = new Date();
-  const from = new Date(to.getTime() - days * 24 * 60 * 60 * 1000);
-  const prevTo = new Date(from.getTime());
-  const prevFrom = new Date(prevTo.getTime() - days * 24 * 60 * 60 * 1000);
+  // 对齐 UTC 整天边界:to = 明天 UTC 00:00 (exclusive 上限,覆盖今天到 24:00),
+  // from = to - days*86400000。这样和 dayBucket()(取 ISO yyyy-mm-dd UTC)
+  // / UI 的 fillMissingDays(按 UTC 日历日填充)三者口径一致,KPI 总和不会和
+  // 柱图各天加总对不上。
+  const now = new Date();
+  const todayMidnightUtc = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
+  const DAY_MS = 24 * 60 * 60 * 1000;
+  const toMs = todayMidnightUtc + DAY_MS;
+  const fromMs = toMs - days * DAY_MS;
+  const prevToMs = fromMs;
+  const prevFromMs = prevToMs - days * DAY_MS;
   return {
     range_key: RANGE_DAYS[key] ? key : '30d',
     days,
-    from: from.toISOString(),
-    to: to.toISOString(),
-    prev_from: prevFrom.toISOString(),
-    prev_to: prevTo.toISOString(),
+    from: new Date(fromMs).toISOString(),
+    to: new Date(toMs).toISOString(),
+    prev_from: new Date(prevFromMs).toISOString(),
+    prev_to: new Date(prevToMs).toISOString(),
   };
 }
 
@@ -59,23 +66,40 @@ function dayBucket(createdAt) {
   return String(createdAt || '').slice(0, 10);
 }
 
+// PostgREST 默认 max_rows=1000;30 天产品线 LLM 调用动辄上千行,要翻页。
+const LLM_PAGE = 1000;
+
+async function* streamLlmRows(builder) {
+  let offset = 0;
+  while (true) {
+    const { data, error } = await builder().range(offset, offset + LLM_PAGE - 1);
+    if (error) throw new Error(error.message);
+    if (!data || data.length === 0) return;
+    for (const row of data) yield row;
+    if (data.length < LLM_PAGE) return;
+    offset += LLM_PAGE;
+  }
+}
+
 async function aggregateLlm({ admin, tenantId, productLine, fromISO, toISO }) {
-  const { data, error } = await admin
-    .from('llm_usage_logs')
-    .select('call_site, model, prompt_tokens, completion_tokens, cache_creation_input_tokens, cache_read_input_tokens, cost_usd, created_at')
-    .eq('tenant_id', tenantId)
-    .eq('product_line', productLine)
-    .gte('created_at', fromISO)
-    .lt('created_at', toISO);
-
-  if (error) throw new Error(error.message);
-
   const totals = emptyTotals();
   const byCallSite = {};
   const byModel = {};
   const byDay = {};
 
-  for (const row of data || []) {
+  // tie-breaker by id 保证两条 created_at 完全相同的行不会跨页错位
+  // (高并发写入下 microsecond 时间戳偶尔会撞)。
+  const builder = () => admin
+    .from('llm_usage_logs')
+    .select('call_site, model, prompt_tokens, completion_tokens, cache_creation_input_tokens, cache_read_input_tokens, cost_usd, created_at')
+    .eq('tenant_id', tenantId)
+    .eq('product_line', productLine)
+    .gte('created_at', fromISO)
+    .lt('created_at', toISO)
+    .order('created_at', { ascending: true })
+    .order('id', { ascending: true });
+
+  for await (const row of streamLlmRows(builder)) {
     bumpBucket(totals, row);
     const cs = row.call_site || 'unknown';
     if (!byCallSite[cs]) byCallSite[cs] = emptyTotals();
@@ -102,98 +126,106 @@ async function aggregateLlm({ admin, tenantId, productLine, fromISO, toISO }) {
 // Ogilvy + image-gen 是 tenant 级、不挂产品线。但用户问"本期 Ogilvy 用了多少"
 // 仍然有意义,所以 dashboard 顶部会显示一个 informational 数字。
 async function aggregateTenantOgilvy({ admin, tenantId, fromISO, toISO }) {
-  const { data, error } = await admin
+  const builder = () => admin
     .from('llm_usage_logs')
     .select('call_site, cost_usd')
     .eq('tenant_id', tenantId)
     .is('product_line', null)
     .gte('created_at', fromISO)
     .lt('created_at', toISO)
-    .in('call_site', ['ogilvy.turn', 'ogilvy.web_search', 'ogilvy.read_webpage', 'ogilvy.image-gen']);
+    .in('call_site', ['ogilvy.turn', 'ogilvy.web_search', 'ogilvy.read_webpage', 'ogilvy.image-gen'])
+    .order('created_at', { ascending: true })
+    .order('id', { ascending: true });
 
-  if (error) throw new Error(error.message);
-
-  const buckets = { 'ogilvy.turn': 0, 'ogilvy.web_search': 0, 'ogilvy.read_webpage': 0, 'ogilvy.image-gen': 0 };
-  let total = 0;
+  let reasoningUsd = 0;
+  let imageUsd = 0;
+  let reasoningCount = 0;
   let imageCount = 0;
-  for (const row of data || []) {
+  for await (const row of streamLlmRows(builder)) {
     const v = Number(row.cost_usd) || 0;
-    buckets[row.call_site] = (buckets[row.call_site] || 0) + v;
-    total += v;
-    if (row.call_site === 'ogilvy.image-gen') imageCount += 1;
+    if (row.call_site === 'ogilvy.image-gen') {
+      imageUsd += v;
+      imageCount += 1;
+    } else {
+      // ogilvy.turn / ogilvy.web_search / ogilvy.read_webpage 都是 LLM 推理
+      reasoningUsd += v;
+      reasoningCount += 1;
+    }
   }
   return {
-    total_usd: total,
-    by_call_site: buckets,
+    total_usd: reasoningUsd + imageUsd,
+    reasoning_usd: reasoningUsd,
+    reasoning_count: reasoningCount,
+    image_usd: imageUsd,
     image_count: imageCount,
   };
 }
 
-async function aggregateVolume({ admin, tenantId, productLine, fromISO, toISO }) {
-  // 1) conversations 通过 product_line 直查
-  const { data: convRows, error: convErr } = await admin
+// "合格线索" = inquiry_quality 在 GOOD / QUALIFY / PROOF 中(详见 medici
+// skill host §1-3:BAD < GOOD < QUALIFY < PROOF)。EXCELLENT 不是有效值;
+// 早期实现写成 GOOD+EXCELLENT 会漏掉真正高质量的 PROOF/QUALIFY 行。
+const QUALIFIED_LEADS = ['GOOD', 'QUALIFY', 'PROOF'];
+
+// 用 PostgREST 的 !inner 嵌入资源过滤直接按 conversations.product_line = X
+// 单次 count,免去把上千个 conv_id 拼进 .in() 撑爆 URL,数据库一次 join 完事。
+// 关键:metrics 的时间口径必须跟 llm.totals 一致 —— 都是"本期发生 sent_at /
+// created_at",不能只看"本期新开会话",否则单消息 LLM 成本这种比值的分子分母
+// 会错位。
+async function countMessagesByRole({ admin, tenantId, productLine, role, fromISO, toISO }) {
+  const { count, error } = await admin
+    .from('messages')
+    .select('id, conversations!inner(product_line)', { count: 'exact', head: true })
+    .eq('tenant_id', tenantId)
+    .eq('conversations.product_line', productLine)
+    .eq('role', role)
+    .gte('sent_at', fromISO)
+    .lt('sent_at', toISO);
+  if (error) throw new Error(error.message);
+  return count || 0;
+}
+
+async function countQualifiedLeads({ admin, tenantId, productLine, fromISO, toISO }) {
+  const { count, error } = await admin
+    .from('leads')
+    .select('id, conversations!inner(product_line)', { count: 'exact', head: true })
+    .eq('tenant_id', tenantId)
+    .eq('conversations.product_line', productLine)
+    .in('inquiry_quality', QUALIFIED_LEADS)
+    .gte('created_at', fromISO)
+    .lt('created_at', toISO);
+  if (error) throw new Error(error.message);
+  return count || 0;
+}
+
+async function countNewConversations({ admin, tenantId, productLine, fromISO, toISO }) {
+  const { count, error } = await admin
     .from('conversations')
-    .select('id, started_at')
+    .select('id', { count: 'exact', head: true })
     .eq('tenant_id', tenantId)
     .eq('product_line', productLine)
     .gte('started_at', fromISO)
     .lt('started_at', toISO);
-  if (convErr) throw new Error(convErr.message);
+  if (error) throw new Error(error.message);
+  return count || 0;
+}
 
-  const conversations = convRows?.length || 0;
-  const convIds = (convRows || []).map(r => r.id);
-
-  // 2) messages: 区分 inbound / outbound (role = 'user' / 'assistant')
-  let msgsIn = 0;
-  let msgsOut = 0;
-  if (convIds.length > 0) {
-    // 大产品线 conv 数会上千,select count + filter by conversation_id IN 太慢,
-    // 拆 head=true count 跑两次更稳。
-    const [{ count: inCount, error: e1 }, { count: outCount, error: e2 }] = await Promise.all([
-      admin
-        .from('messages')
-        .select('id', { count: 'exact', head: true })
-        .eq('tenant_id', tenantId)
-        .in('conversation_id', convIds)
-        .eq('role', 'user')
-        .gte('sent_at', fromISO)
-        .lt('sent_at', toISO),
-      admin
-        .from('messages')
-        .select('id', { count: 'exact', head: true })
-        .eq('tenant_id', tenantId)
-        .in('conversation_id', convIds)
-        .eq('role', 'assistant')
-        .gte('sent_at', fromISO)
-        .lt('sent_at', toISO),
-    ]);
-    if (e1) throw new Error(e1.message);
-    if (e2) throw new Error(e2.message);
-    msgsIn = inCount || 0;
-    msgsOut = outCount || 0;
-  }
-
-  // 3) qualified leads
-  let leadsQualified = 0;
-  if (convIds.length > 0) {
-    const { count, error } = await admin
-      .from('leads')
+async function aggregateVolume({ admin, tenantId, productLine, fromISO, toISO }) {
+  // 四个 count 全部用 head=true,各自一次查询,彼此独立、并行。
+  // 「对话数」= 本期新开 conv;其余三个 = 本期发生的入/出消息 + 合格线索,
+  // 跟 llm.totals 的"本期发生"口径对齐。
+  const [conversations, msgsIn, msgsOut, leadsQualified, { count: kbDocs, error: kbErr }] = await Promise.all([
+    countNewConversations({ admin, tenantId, productLine, fromISO, toISO }),
+    countMessagesByRole({ admin, tenantId, productLine, role: 'user', fromISO, toISO }),
+    countMessagesByRole({ admin, tenantId, productLine, role: 'assistant', fromISO, toISO }),
+    countQualifiedLeads({ admin, tenantId, productLine, fromISO, toISO }),
+    admin
+      .from('kb_documents')
       .select('id', { count: 'exact', head: true })
       .eq('tenant_id', tenantId)
-      .in('conversation_id', convIds)
-      .in('inquiry_quality', ['GOOD', 'EXCELLENT']);
-    if (error) throw new Error(error.message);
-    leadsQualified = count || 0;
-  }
-
-  // 4) KB documents processed in period
-  const { count: kbDocs, error: kbErr } = await admin
-    .from('kb_documents')
-    .select('id', { count: 'exact', head: true })
-    .eq('tenant_id', tenantId)
-    .eq('product_line_id', productLine)
-    .gte('created_at', fromISO)
-    .lt('created_at', toISO);
+      .eq('product_line_id', productLine)
+      .gte('created_at', fromISO)
+      .lt('created_at', toISO),
+  ]);
   if (kbErr) throw new Error(kbErr.message);
 
   return {

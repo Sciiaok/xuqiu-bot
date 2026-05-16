@@ -249,7 +249,7 @@ async function processOneImage(ctx, img, idx) {
     admin.storage.from(STORAGE_BUCKET).upload(storagePath, jpegBuffer, {
       contentType: 'image/jpeg', upsert: true,
     }),
-    captionAndJudge(jpegBuffer),
+    captionAndJudge(jpegBuffer, { tenantId, productLineId }),
   ]);
   if (uploadResult.error) throw new Error(`storage upload: ${uploadResult.error.message}`);
 
@@ -722,7 +722,7 @@ Set is_sendable=false ONLY if the image is clearly internal/unsuitable to send t
 
 If the image is a logo, decorative element, or page header (no product/info content), set asset_type="other" and is_sendable=false.`;
 
-async function captionAndJudge(jpegBuffer) {
+async function captionAndJudge(jpegBuffer, meta = {}) {
   const base64 = jpegBuffer.toString('base64');
   try {
     const response = await openrouter.messages.create({
@@ -735,7 +735,7 @@ async function captionAndJudge(jpegBuffer) {
           { type: 'text', text: VISION_PROMPT },
         ],
       }],
-    });
+    }, { tenantId: meta.tenantId, callSite: 'kb.image-extract.caption', productLine: meta.productLineId });
     const text = response.choices?.[0]?.message?.content?.trim() || '{}';
     const jsonMatch = text.match(/```(?:json)?\s*([\s\S]*?)```/) || [null, text];
     const parsed = JSON.parse(jsonMatch[1].trim());

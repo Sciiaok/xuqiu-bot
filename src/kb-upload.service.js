@@ -480,7 +480,7 @@ async function processKnowledgePoint(ctx, docId, layer, point) {
   // Translate to English if not already English
   let englishContent = originalContent;
   if (sourceLang !== 'en') {
-    englishContent = await translateToEnglish(originalContent, tenantId);
+    englishContent = await translateToEnglish(originalContent, tenantId, productLineId);
   }
 
   // Generate embeddings for both versions
