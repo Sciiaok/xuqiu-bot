@@ -524,19 +524,17 @@ export function stripEmptyStringFields(obj) {
 }
 
 /**
- * Normalize non-standard agent responses to canonical leads[].
+ * Normalize agent responses to canonical leads[].
  *
- * 把任何非 STANDARD_DB_FIELDS 的字段移进 details JSONB —— 这是 product_line
- * 自定义 lead_fields 落库的兜底。少了这个，custom 字段会让 DB insert 失败。
+ * 双写阶段：无条件把所有非空字段都拷进 details，让硬编码列与 details 同源。
+ * 阶段 3 drop 列后，details 就是唯一数据源。
+ *
+ * 同时处理两个旧别名（car_brand→brand、part_name→product_name、quantity→qty_bucket）
+ * 以兼容老 agent 输出。
  */
 export function normalizeAgentResponse(parsed) {
-  // Move non-canonical fields into details JSONB. Also applies a couple of
-  // hardcoded aliases for legacy agents (car_brand/part_name/quantity).
   if (parsed.leads) {
     parsed.leads = parsed.leads.map((lead) => {
-      const hasExtraFields = Object.keys(lead).some((k) => !STANDARD_DB_FIELDS.has(k));
-      if (!hasExtraFields) return lead;
-
       const mapped = { ...lead };
       if (lead.car_brand && !lead.brand) mapped.brand = lead.car_brand;
       if (lead.part_name && !lead.product_name) mapped.product_name = lead.part_name;
