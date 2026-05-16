@@ -14,7 +14,8 @@ import supabase from '../../../lib/supabase.js';
 import { logLlmCall } from '../../llm-client.js';
 import { calcImageCostUsd } from '../../llm-pricing.js';
 
-const FETCH_TIMEOUT = 120_000;
+// gpt-image-2 + quality=high + 1024×1024 经常 >2min,120s 不够会兜到 Gemini。
+const FETCH_TIMEOUT = 300_000;
 const STORAGE_BUCKET = 'aigc-assets';
 
 // Prefix every legitimate creative URL produced by saveAssetToStorage starts
@@ -102,8 +103,9 @@ async function callOpenAIImages(model, prompt, refUrls) {
   form.append('n', '1');
   form.append('size', '1024x1024');
   form.append('quality', 'high');
+  // gpt-image-2 要求多参考图用 image[] 数组语法;单图也兼容。
   for (const { blob, filename } of refBlobs) {
-    form.append('image', blob, filename);
+    form.append('image[]', blob, filename);
   }
 
   const res = await fetch(OPENAI_IMAGES_EDITS_URL, {
