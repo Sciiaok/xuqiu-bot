@@ -656,11 +656,11 @@
 }
 .exportBtn svg { flex-shrink: 0; }
 
-/* ─── Usage badge (top-left of chat column, Claude Code statusline 风格) ─── */
+/* ─── Usage badge (bottom-right of chat column, Claude Code statusline 风格) ─── */
 .usageBadge {
   position: absolute;
-  top: 14px;
-  left: 18px;
+  bottom: 56px;
+  right: 18px;
   z-index: 2;
   display: inline-flex;
   align-items: center;
@@ -686,8 +686,8 @@
 
 .usagePopover {
   position: absolute;
-  top: calc(100% + 8px);
-  left: 0;
+  bottom: calc(100% + 8px);
+  right: 0;
   min-width: 260px;
   padding: 12px 14px;
   background: var(--bg);

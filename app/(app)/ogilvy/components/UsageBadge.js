@@ -4,7 +4,7 @@ import { useEffect, useState } from 'react';
 import s from '../ogilvy.module.css';
 
 /**
- * UsageBadge — Claude Code statusline 风格的小 pill，浮在 chat 区左上角。
+ * UsageBadge — Claude Code statusline 风格的小 pill，浮在 chat 区右下角（composer 旁）。
  *
  * 显示最近一次主对话调用 (ogilvy.turn) 的 input token (prompt + cache_*)
  * 对 1M context window 的占比 —— 这是当前 context 实际填到多少的 proxy。
