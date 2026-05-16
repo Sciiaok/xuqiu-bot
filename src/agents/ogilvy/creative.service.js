@@ -30,7 +30,7 @@ export function isAllowedCreativeUrl(url) {
   return typeof url === 'string' && url.startsWith(ALLOWED_CREATIVE_URL_PREFIX);
 }
 
-const PRIMARY_MODEL = 'gpt-image-1';
+const PRIMARY_MODEL = 'gpt-image-2';
 const FALLBACK_MODEL = 'google/gemini-3.1-flash-image-preview';
 const OPENAI_IMAGES_EDITS_URL = 'https://api.openai.com/v1/images/edits';
 
@@ -225,7 +225,7 @@ async function saveAssetToStorage({ imageBuffer, prompt, model, productInfo, use
 /**
  * Generate one ad image from product info + reference images.
  *
- * Primary path: OpenAI Images API (gpt-image-1). On failure, falls back once
+ * Primary path: OpenAI Images API (gpt-image-2). On failure, falls back once
  * to Gemini via OpenRouter. Returns { url, storage_path, model } on success,
  * { error, message } on failure.
  */

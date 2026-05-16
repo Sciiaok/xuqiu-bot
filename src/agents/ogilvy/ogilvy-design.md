@@ -6,7 +6,7 @@
 > - **产品层 / UI 层** 与 **工程层** 都叫「**Ogilvy**」——`/ogilvy` 路由、sidebar 菜单、`src/agents/ogilvy/`、`runOgilvy()` 一致。取自 David Ogilvy（现代广告教父），他一个人把产品洞察 → 文案 → 视觉 → 媒介购买打通成一条完整手艺；Agent 做的就是同一件事。
 > - **历史名「Autopilot」** 已弃用（2026-05-07 重命名）；DB 表名 `autopilot_sessions` / `autopilot_messages` 沿用旧名以保持向前兼容。
 >
-> 文档版本：2026-05-16（项目强绑产品线 + WhatsApp 号码改成产品线自动注入；模型路由从 stage-aware 改为 Sonnet 4.6 锁定；`read_skill_reference` 工具下线，6 份 references 全量内联；新增 `persist_stage_output` 历史压缩工具；图模型链改为 OpenAI `gpt-image-1` + Gemini Flash Image fallback 两段；`web_search` 走 Tavily 主路径 + Anthropic Haiku fallback；UsageBadge / StageArchive / AdCreativePreview / ProductLinePicker 上线；MAX_ITERATIONS 20 → 10；`/product-lines/[id]/cost-stats` 把 Medici / Ogilvy 平级展示 + leadhub 风格时间窗口；保留 2026-05-07 之前 PR 1–4 / 长输出续写 / Autopilot → Ogilvy 重命名等节流性改动）
+> 文档版本：2026-05-16（项目强绑产品线 + WhatsApp 号码改成产品线自动注入；模型路由从 stage-aware 改为 Sonnet 4.6 锁定；`read_skill_reference` 工具下线，6 份 references 全量内联；新增 `persist_stage_output` 历史压缩工具；图模型链改为 OpenAI `gpt-image-2` + Gemini Flash Image fallback 两段；`web_search` 走 Tavily 主路径 + Anthropic Haiku fallback；UsageBadge / StageArchive / AdCreativePreview / ProductLinePicker 上线；MAX_ITERATIONS 20 → 10；`/product-lines/[id]/cost-stats` 把 Medici / Ogilvy 平级展示 + leadhub 风格时间窗口；保留 2026-05-07 之前 PR 1–4 / 长输出续写 / Autopilot → Ogilvy 重命名等节流性改动）
 
 ---
 
@@ -56,7 +56,7 @@
 | 后端路由 | Next.js Route Handlers |
 | 主 LLM | OpenRouter → Anthropic Claude **Sonnet 4.6 锁定**（1M context window）。工具子调用 web_search / read_webpage 走 Haiku 4.5 |
 | Web 搜索 | **Tavily REST 主路径**（advanced + include_answer，~$0.005/q）+ Anthropic native `web_search_20250305` via Haiku fallback。Session-scope 3h 缓存按归一化 query 去重 |
-| 图生成 | **OpenAI Images API `gpt-image-1` 主路径 + OpenRouter `google/gemini-3.1-flash-image-preview` fallback**（两段链，老 doc 提到的 Gemini 2.5 / GPT-5 Image 已下掉） |
+| 图生成 | **OpenAI Images API `gpt-image-2` 主路径 + OpenRouter `google/gemini-3.1-flash-image-preview` fallback**（两段链，老 doc 提到的 Gemini 2.5 / GPT-5 Image / gpt-image-1 已下掉） |
 | 数据库 | Supabase（PostgreSQL + Storage）RLS 开启，anon-all 策略（单租） |
 | Meta 集成 | Graph API v21 直连，`provider: { order: ['anthropic'] }` 固化路由 |
 | 品牌 | Prome Engine（2026-04 refresh，logo 在 `public/brand/`） |
@@ -189,7 +189,7 @@ dispatcher 在同一文件的 `executeTool(name, input, ctx)` 里分发。工具
 |---|---|---|---|
 | 1 | `web_search`            | Tavily REST 主路径 + Anthropic-Haiku fallback（skill 阶段二调研） | 关键 |
 | 2 | `read_webpage`          | Anthropic web_fetch via Haiku，抓取指定 URL 正文（配合 web_search） | 可选 |
-| 3 | `generate_ad_creative`  | 生成 1024×1024 广告图（OpenAI gpt-image-1 + Gemini fallback） | 关键 |
+| 3 | `generate_ad_creative`  | 生成 1024×1024 广告图（OpenAI gpt-image-2 + Gemini fallback） | 关键 |
 | 4 | `draft_ad_plan`         | 阶段六：CTW 蒸馏后的方案落库（覆盖式更新 `plan_json`） | 关键 |
 | 5 | `persist_stage_output`  | 把刚产出的长 markdown 归档到 `stage_outputs`，并在后续 history 里用 200 字 summary 替换原文（控 context window） | 关键 |
 
@@ -229,7 +229,7 @@ dispatcher 在同一文件的 `executeTool(name, input, ctx)` 里分发。工具
   { error: 'reference_image_ids_required' | 'reference_image_ids_invalid',
     message: '...', available_indices: [1, 2, ...] }
   ```
-- **实现**（[creative.service.js](./creative.service.js)）：**两段降级链**。主路径调 OpenAI Images API 的 `gpt-image-1`（multipart POST 上传引用图，`size=1024x1024 quality=high`，~$0.17/image），失败降级到 OpenRouter `google/gemini-3.1-flash-image-preview`（chat completions 路径，把引用图当 image_url 嵌入 content，~$0.03/image）。老 doc 提到的 Gemini 2.5 / GPT-5 Image 节点已删；2 段链覆盖率足够，调用方拿到 `{error}` 时建议重试或让用户换图。
+- **实现**（[creative.service.js](./creative.service.js)）：**两段降级链**。主路径调 OpenAI Images API 的 `gpt-image-2`（multipart POST 上传引用图，`size=1024x1024 quality=high`，~$0.21/image），失败降级到 OpenRouter `google/gemini-3.1-flash-image-preview`（chat completions 路径，把引用图当 image_url 嵌入 content，~$0.03/image）。老 doc 提到的 Gemini 2.5 / GPT-5 Image / gpt-image-1 节点已删；2 段链覆盖率足够，调用方拿到 `{error}` 时建议重试或让用户换图。
 - **成本归属**：每次成功调用 `logLlmCall({method:'image.edit', ..., callSite:'ogilvy.image-gen', sessionId, productLine, costUsdOverride: calcImageCostUsd(...)})`，所以 `/product-lines/[id]/cost-stats` 能把图片生成开销单独切到一行。
 - **URL 防注入**：`ALLOWED_CREATIVE_URL_PREFIX` = `${supabase.url}/storage/v1/object/public/aigc-assets/`，导出 `isAllowedCreativeUrl()` 供 launch path 校验 plan_json 里的 image_url 必须来自本系统的存储桶，挡住通过 `web_search` / `read_webpage` 注入伪造 URL 的提示攻击。
 - **产物**：落 `aigc-assets` Supabase bucket + `aigc_assets` 表，session 关联放 `metadata.autopilot_session_id`（字段名沿用旧名）。返回 `{url, storage_path, model, headline, product_name}` 成功 / `{error, message}` 失败；模型再把 `url` 逐字写进 `draft_ad_plan` 的 `creative.image_url`。前端只把 `generate_ad_creative` 的成功 `tool_result` 作为图片消息渲染进对话流（headline 作图说），其它工具仍隐藏。
@@ -531,7 +531,7 @@ LLM 用量埋点透过 [src/llm-client.js](../../llm-client.js) 的 `logLlmCall`
 | `ogilvy.turn`        | 主对话（Sonnet 4.6）          | $0.003/K input × prompt + cache write/read，~$0.005-0.02/turn 稳态 |
 | `ogilvy.web_search`  | Anthropic-Haiku fallback（仅当 Tavily 失败/未配置） | ~$0.02/q（Tavily 主路径不进表，直接走 Tavily 计费） |
 | `ogilvy.read_webpage`| Anthropic-Haiku via OpenRouter | ~$0.01/url |
-| `ogilvy.image-gen`   | OpenAI Images / Gemini fallback | $0.17 (gpt-image-1) / $0.03 (gemini)，用 `costUsdOverride` 灌进 cost_usd 列 |
+| `ogilvy.image-gen`   | OpenAI Images / Gemini fallback | $0.21 (gpt-image-2) / $0.03 (gemini)，用 `costUsdOverride` 灌进 cost_usd 列 |
 
 两个聚合视图：
 
@@ -567,7 +567,7 @@ Founder 视图 **`/admin/llm-usage`** 是全租户聚合（按 model / callSite 
    - `META_SYSTEM_TOKEN`（需 `whatsapp_business_management` + `ads_management` + `business_management`）
    - `META_AD_ACCOUNT_ID`、`META_PAGE_ID`
    - `OPENROUTER_API_KEY`
-   - `OPENAI_API_KEY`（gpt-image-1 主路径，缺了 Ogilvy 会直接 `config_missing` 拒绝出图）
+   - `OPENAI_API_KEY`（gpt-image-2 主路径，缺了 Ogilvy 会直接 `config_missing` 拒绝出图）
    - `TAVILY_API_KEY`（强烈建议，web_search 主路径；缺了会自动回退到 Anthropic Haiku 5× 价格）
 4. **首访 `/ogilvy`**：
    - 点"新项目" → ProductLinePicker 弹出，已绑 WA 号码的产品线可选
@@ -581,7 +581,7 @@ Founder 视图 **`/admin/llm-usage`** 是全租户聚合（按 model / callSite 
 | 项 | 说明 | 处理 |
 |---|---|---|
 | SSE 不支持续传 | 刷新中断后，已持久化消息不丢；in-flight delta 丢失 | 可接受；未来加 Redis Stream + lastEventId |
-| 素材生成失败 | 两段降级链（OpenAI gpt-image-1 → Gemini Flash Image）仍可能全败 | 错误透传，Agent 会建议重试或让用户手动上传产品图 |
+| 素材生成失败 | 两段降级链（OpenAI gpt-image-2 → Gemini Flash Image）仍可能全败 | 错误透传，Agent 会建议重试或让用户手动上传产品图 |
 | stage 部分失败 | 中途失败留下 orphan PAUSED 资源 | 目前透传错误让用户手动清理；未来加 rollback tool |
 | 单租户 | env token 共享，多用户共用同一 Meta 账户 | 多租户接口已抽象 `getMetaAccountForUser(userId)`，未来换 OAuth + `user_meta_accounts` 表 |
 | OpenRouter 路由抖动 | 偶尔路由到慢通道（曾见 15 tok/s） | 已 pin `provider: ['anthropic']`；再有问题 watchdog 30s idle 超时兜底 |
