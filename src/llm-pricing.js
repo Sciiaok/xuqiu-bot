@@ -38,11 +38,14 @@ const PRICES = {
 const UNKNOWN = { input: 0, output: 0 };
 
 // 图片生成模型按 "每张" 计费，跟 token 表分开。Ogilvy 创意生成走的两条路径:
-//   - gpt-image-1 1024×1024 standard:OpenAI 实际单价 ~$0.04/张
-//   - google/gemini-3.1-flash-image-preview:OpenRouter 单价 ~$0.03/张
+//   - gpt-image-1 1024×1024 high quality:OpenAI 已转 token 计费 (text input
+//     $5/M + image input $10/M + image output $40/M)。high 档单图 image
+//     output ~4160 tokens，加 prompt + 2-3 张参考图 ≈ $0.17/张。这里用 flat
+//     fee 近似落表（精确值要从 response.usage 推，目前未接）。
+//   - google/gemini-3.1-flash-image-preview:OpenRouter per-image flat ~$0.03。
 // 跟 token 表一样,模型版本/计费档变了直接改这里。
 const IMAGE_PRICES_PER_CALL = {
-  'gpt-image-1': 0.04,
+  'gpt-image-1': 0.17,
   'google/gemini-3.1-flash-image-preview': 0.03,
 };
 
@@ -93,6 +96,18 @@ export function calcCostUsd({
   return Math.round(cost * 1_000_000) / 1_000_000;
 }
 
+// 同 lookupPrice：OpenRouter 返回的 model 字段常带日期后缀（如
+// 'google/gemini-3.1-flash-image-preview-20260226'），精确匹配会落空，
+// 走 startsWith 兜底。命中不到走 0。
+function lookupImagePrice(model) {
+  if (!model) return 0;
+  if (IMAGE_PRICES_PER_CALL[model] != null) return IMAGE_PRICES_PER_CALL[model];
+  for (const key of Object.keys(IMAGE_PRICES_PER_CALL)) {
+    if (model.startsWith(key)) return IMAGE_PRICES_PER_CALL[key];
+  }
+  return 0;
+}
+
 /**
  * 图片生成单次成本。命中不到表的模型走 0(同 calcCostUsd 兜底语义)。
  *
@@ -101,6 +116,5 @@ export function calcCostUsd({
  * @param {number} [p.count=1] 单次调用返回的图片数(OpenAI /images/edits 的 n 参数)
  */
 export function calcImageCostUsd({ model, count = 1 }) {
-  const per = IMAGE_PRICES_PER_CALL[model] ?? 0;
-  return Math.round(per * count * 1_000_000) / 1_000_000;
+  return Math.round(lookupImagePrice(model) * count * 1_000_000) / 1_000_000;
 }
