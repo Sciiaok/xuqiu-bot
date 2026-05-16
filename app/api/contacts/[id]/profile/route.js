@@ -102,6 +102,9 @@ export async function GET(request, { params }) {
     };
 
     if (withAiSummary) {
+      // 联系人通常只跟单一产品线对话 —— 取最近一条对话的 product_line 归属;
+      // 多产品线场景下会偏向最近的那条,可接受。
+      const mostRecentProductLine = conversations?.[0]?.agents?.product_line || null;
       try {
         responseBody.aiSummary = await generateSummaryWithFallback({
           system: AI_SYSTEM_PROMPT,
@@ -110,6 +113,7 @@ export async function GET(request, { params }) {
           logTag: 'contacts/profile',
           tenantId: ctx.tenantId,
           callSite: 'contacts.profile.summary',
+          productLine: mostRecentProductLine,
         });
       } catch (aiError) {
         console.error('[contacts/profile] Failed to generate AI summary:', aiError);

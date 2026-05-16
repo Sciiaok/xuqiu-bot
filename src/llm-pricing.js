@@ -37,6 +37,15 @@ const PRICES = {
 
 const UNKNOWN = { input: 0, output: 0 };
 
+// 图片生成模型按 "每张" 计费，跟 token 表分开。Ogilvy 创意生成走的两条路径:
+//   - gpt-image-1 1024×1024 standard:OpenAI 实际单价 ~$0.04/张
+//   - google/gemini-3.1-flash-image-preview:OpenRouter 单价 ~$0.03/张
+// 跟 token 表一样,模型版本/计费档变了直接改这里。
+const IMAGE_PRICES_PER_CALL = {
+  'gpt-image-1': 0.04,
+  'google/gemini-3.1-flash-image-preview': 0.03,
+};
+
 // Anthropic prompt cache 折扣系数（相对 input 价）。
 // 文档值：写入 1.25×，命中读取 0.1×。
 const CACHE_WRITE_MULT = 1.25;
@@ -82,4 +91,16 @@ export function calcCostUsd({
     (cacheReadInputTokens / 1000) * p.input * CACHE_READ_MULT;
   // 6 位小数，跟 DB 列一致
   return Math.round(cost * 1_000_000) / 1_000_000;
+}
+
+/**
+ * 图片生成单次成本。命中不到表的模型走 0(同 calcCostUsd 兜底语义)。
+ *
+ * @param {object} p
+ * @param {string} p.model
+ * @param {number} [p.count=1] 单次调用返回的图片数(OpenAI /images/edits 的 n 参数)
+ */
+export function calcImageCostUsd({ model, count = 1 }) {
+  const per = IMAGE_PRICES_PER_CALL[model] ?? 0;
+  return Math.round(per * count * 1_000_000) / 1_000_000;
 }

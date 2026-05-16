@@ -457,7 +457,7 @@ function markLastToolForCache(tools) {
 
 // ─── LLM transport (OpenRouter → Anthropic) ──────────────────────────
 
-function callClaude({ systemBlocks, messages, tools, toolChoice, tenantId }) {
+function callClaude({ systemBlocks, messages, tools, toolChoice, tenantId, productLine }) {
   // Pass system as a structured content array so `cache_control` markers
   // reach Anthropic via OpenRouter. Flattening to a single string strips
   // them and forces OpenRouter's auto-prefix-cache, which only gives us
@@ -491,7 +491,7 @@ function callClaude({ systemBlocks, messages, tools, toolChoice, tenantId }) {
   } else if (toolChoice) {
     payload.tool_choice = toolChoice;
   }
-  return openrouter.messages.create(payload, { tenantId, callSite: 'medici.qualify' });
+  return openrouter.messages.create(payload, { tenantId, callSite: 'medici.qualify', productLine });
 }
 
 function safeParseJson(s) {
@@ -653,7 +653,7 @@ export async function runMedici({
   //    turn ultimately ends with submit_response — if the model won't emit it,
   //    we pin one final forced turn after the loop.
   let parsed = null;
-  let response = await callClaude({ systemBlocks, messages, tools: toolsWithCache, toolChoice: { type: 'auto' }, tenantId });
+  let response = await callClaude({ systemBlocks, messages, tools: toolsWithCache, toolChoice: { type: 'auto' }, tenantId, productLine: productLineId });
   let iterations = 0;
 
   while (
@@ -698,7 +698,7 @@ export async function runMedici({
       });
     }
 
-    response = await callClaude({ systemBlocks, messages, tools: toolsWithCache, tenantId });
+    response = await callClaude({ systemBlocks, messages, tools: toolsWithCache, tenantId, productLine: productLineId });
   }
 
   // 5. Force-submit fallback: loop exited without submit_response (hit
@@ -727,6 +727,7 @@ export async function runMedici({
       tools: toolsWithCache,
       toolChoice: { type: 'tool', name: 'submit_response' },
       tenantId,
+      productLine: productLineId,
     });
     const submitTool = (response.choices[0].message.tool_calls || []).find(
       (tc) => tc.function.name === 'submit_response',

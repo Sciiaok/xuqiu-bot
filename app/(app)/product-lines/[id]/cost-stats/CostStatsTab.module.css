@@ -1,0 +1,346 @@
+.root {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+/* ── Range pills ──────────────────────────────────────────────────── */
+.rangeBar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.rangeLabel {
+  font-size: 12px;
+  color: var(--text3);
+}
+
+.rangePills {
+  display: inline-flex;
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 3px;
+  gap: 2px;
+}
+
+.rangePill {
+  padding: 5px 14px;
+  border: none;
+  background: transparent;
+  color: var(--text2);
+  font-size: 12.5px;
+  font-weight: 500;
+  border-radius: 999px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.rangePill:hover {
+  color: var(--text);
+}
+
+.rangePillActive {
+  background: var(--accent);
+  color: white;
+}
+
+.rangePillActive:hover {
+  color: white;
+}
+
+/* ── KPI strip ────────────────────────────────────────────────────── */
+.kpiGrid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.kpiCard {
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  border-radius: var(--rxl);
+  padding: 16px 18px;
+  box-shadow: var(--shadow);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-height: 90px;
+}
+
+.kpiCardInfo {
+  background: var(--bg);
+  border-style: dashed;
+  box-shadow: none;
+}
+
+.kpiLabel {
+  font-size: 11.5px;
+  color: var(--text3);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  font-weight: 500;
+}
+
+.kpiValue {
+  font-size: 24px;
+  font-weight: 600;
+  color: var(--text);
+  font-family: var(--font-mono);
+  line-height: 1.2;
+}
+
+.kpiValueSmall {
+  font-size: 18px;
+}
+
+.kpiSub {
+  font-size: 11.5px;
+  color: var(--text3);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.deltaUp {
+  color: var(--red);
+  font-weight: 500;
+}
+
+.deltaDown {
+  color: var(--green);
+  font-weight: 500;
+}
+
+.deltaFlat {
+  color: var(--text3);
+}
+
+/* ── Section ──────────────────────────────────────────────────────── */
+.section {
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  border-radius: var(--rxl);
+  padding: 18px 20px;
+  box-shadow: var(--shadow);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.sectionTitle {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text);
+  margin: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.sectionTitle::before {
+  content: '';
+  width: 3px;
+  height: 13px;
+  border-radius: 2px;
+  background: var(--accent);
+}
+
+.sectionHint {
+  font-size: 12px;
+  color: var(--text3);
+  margin: -6px 0 0 0;
+}
+
+/* ── Table ────────────────────────────────────────────────────────── */
+.table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12.5px;
+}
+
+.table th {
+  text-align: left;
+  font-weight: 500;
+  color: var(--text3);
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border);
+  font-size: 11.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.table td {
+  padding: 9px 10px;
+  border-bottom: 1px solid var(--border);
+  color: var(--text);
+  font-family: var(--font-mono);
+}
+
+.table tr:last-child td {
+  border-bottom: none;
+}
+
+.table tbody tr:hover {
+  background: var(--bg3);
+}
+
+.callSite {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--text);
+}
+
+.cellRight {
+  text-align: right;
+}
+
+.cellMuted {
+  color: var(--text3);
+}
+
+.barCell {
+  position: relative;
+  min-width: 80px;
+}
+
+.barFill {
+  position: absolute;
+  left: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  height: 4px;
+  background: var(--accent);
+  border-radius: 2px;
+  opacity: 0.4;
+}
+
+/* ── Daily trend (simple SVG) ─────────────────────────────────────── */
+.trendWrap {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.trendBars {
+  display: flex;
+  align-items: flex-end;
+  gap: 3px;
+  height: 110px;
+  padding: 4px 0;
+}
+
+.trendBarCol {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 1px;
+  height: 100%;
+  justify-content: flex-end;
+  min-width: 0;
+}
+
+.trendBar {
+  background: var(--accent);
+  border-radius: 2px 2px 0 0;
+  min-height: 1px;
+  transition: opacity 0.15s;
+}
+
+.trendBarCol:hover .trendBar {
+  opacity: 0.75;
+}
+
+.trendAxis {
+  display: flex;
+  gap: 3px;
+  font-size: 10px;
+  color: var(--text3);
+  font-family: var(--font-mono);
+}
+
+.trendAxisLabel {
+  flex: 1;
+  text-align: center;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+/* ── Volume KPI sub-grid ──────────────────────────────────────────── */
+.volumeGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 10px;
+}
+
+.volumeCell {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 10px 12px;
+  background: var(--bg);
+  border-radius: var(--rl);
+}
+
+.volumeLabel {
+  font-size: 11px;
+  color: var(--text3);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.volumeValue {
+  font-size: 18px;
+  font-weight: 600;
+  font-family: var(--font-mono);
+  color: var(--text);
+}
+
+/* ── States ───────────────────────────────────────────────────────── */
+.loading,
+.errorBox,
+.emptyBox {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 40px 20px;
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  border-radius: var(--rxl);
+  color: var(--text3);
+  font-size: 13px;
+}
+
+.errorBox {
+  border-color: var(--red);
+  background: var(--red-dim);
+  color: var(--red);
+}
+
+.notice {
+  font-size: 11.5px;
+  color: var(--text3);
+  padding: 10px 14px;
+  background: var(--bg3);
+  border: 1px solid var(--border);
+  border-radius: var(--rl);
+  line-height: 1.6;
+}
+
+.spinner {
+  width: 14px;
+  height: 14px;
+  border: 2px solid var(--border);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 0.7s linear infinite;
+  margin-right: 8px;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}

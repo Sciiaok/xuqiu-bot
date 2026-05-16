@@ -79,7 +79,7 @@ export async function linkAssetsToProducts({ tenantId, productLineId, docId, log
   const errors = [];
   for (const chunk of chunks) {
     try {
-      const mappings = await callMatcher({ tenantId, products, assets: chunk });
+      const mappings = await callMatcher({ tenantId, productLineId, products, assets: chunk });
       const updates = [];
       for (const m of mappings) {
         if (!m.asset_id || !Array.isArray(m.skus) || m.skus.length === 0) continue;
@@ -129,7 +129,7 @@ export async function linkAssetsToProducts({ tenantId, productLineId, docId, log
   };
 }
 
-async function callMatcher({ tenantId, products, assets }) {
+async function callMatcher({ tenantId, productLineId, products, assets }) {
   const productLines = products.map((p) => {
     const parts = [`SKU: ${p.sku || '(no-sku)'}`, `Name: ${p.product_name || ''}`];
     if (p.model) parts.push(`Model: ${p.model}`);
@@ -168,7 +168,7 @@ Respond with ONLY valid JSON in this exact shape:
       max_tokens: 2000,
       messages: [{ role: 'user', content: prompt }],
     },
-    { tenantId, callSite: 'kb_asset_linker.match' },
+    { tenantId, callSite: 'kb_asset_linker.match', productLine: productLineId },
   );
 
   const text = response.choices?.[0]?.message?.content?.trim() || '{}';

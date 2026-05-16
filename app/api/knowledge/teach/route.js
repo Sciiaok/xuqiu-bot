@@ -58,7 +58,7 @@ Output as JSON:
         },
         { role: 'user', content: message },
       ],
-    }, { tenantId: ctx.tenantId, callSite: 'knowledge.teach.extract' });
+    }, { tenantId: ctx.tenantId, callSite: 'knowledge.teach.extract', productLine: agent.product_line });
 
     const text = response.choices[0].message.content || '{}';
     let parsed;

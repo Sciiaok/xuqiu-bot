@@ -1,10 +1,10 @@
 # Schema Snapshot (auto-generated)
 
-Generated: 2026-05-15T07:54:24.555Z
+Generated: 2026-05-16T08:56:09.569Z
 
 Live snapshot of `public` schema from Supabase. **Do not edit by hand** — run `node scripts/build-index.mjs` to refresh.
 
-Tables: **49**. Listed alphabetically.
+Tables: **50**. Listed alphabetically.
 
 ## Tables
 
@@ -19,6 +19,7 @@ Tables: **49**. Listed alphabetically.
 - [`contact_notes`](#contact-notes)
 - [`contacts`](#contacts)
 - [`conversations`](#conversations)
+- [`conversations_with_resolved_route`](#conversations-with-resolved-route)
 - [`fix_knowledge`](#fix-knowledge)
 - [`inquiry_dashboard_summaries`](#inquiry-dashboard-summaries)
 - [`invitations`](#invitations)
@@ -196,6 +197,7 @@ Tables: **49**. Listed alphabetically.
 | `updated_at` | timestamp with time zone | Y | `now()` |
 | `tenant_id` | uuid | N | `'00000000-0000-0000-0000-000000000001':…` |
 | `deleted_at` | timestamp with time zone | Y |  |
+| `stage_outputs` | jsonb | N | `'[]'::jsonb` |
 
 **Foreign keys:**
 - `tenant_id` → `tenants.id`
@@ -333,6 +335,29 @@ Tables: **49**. Listed alphabetically.
 - `idx_conversations_tenant` USING btree (tenant_id)
 - `idx_conversations_wa_phone_number_id` USING btree (wa_phone_number_id) WHERE (wa_phone_number_id IS NOT NULL)
 - `idx_unique_active_conversation` USING btree (contact_id, COALESCE(agent_id, '00000000-0000-0000-0000-000000000000'::uuid)) WHERE (status = 'active'::text)
+
+### `conversations_with_resolved_route`
+
+| Column | Type | Nullable | Default |
+| --- | --- | --- | --- |
+| `id` | uuid | Y |  |
+| `contact_id` | uuid | Y |  |
+| `status` | text | Y |  |
+| `started_at` | timestamp with time zone | Y |  |
+| `ended_at` | timestamp with time zone | Y |  |
+| `last_message_at` | timestamp with time zone | Y |  |
+| `message_count` | integer | Y |  |
+| `closed_reason` | text | Y |  |
+| `created_at` | timestamp with time zone | Y |  |
+| `is_human_takeover` | boolean | Y |  |
+| `human_takeover_at` | timestamp with time zone | Y |  |
+| `agent_id` | uuid | Y |  |
+| `wa_phone_number_id` | text | Y |  |
+| `meta_ad_id` | text | Y |  |
+| `product_line` | text | Y |  |
+| `tenant_id` | uuid | Y |  |
+| `feishu_notified_at` | timestamp with time zone | Y |  |
+| `resolved_route` | text | Y |  |
 
 ### `fix_knowledge`
 
@@ -912,6 +937,7 @@ Tables: **49**. Listed alphabetically.
 - `idx_leads_business_value` USING btree (business_value)
 - `idx_leads_car_model` USING btree (car_model)
 - `idx_leads_contact_id` USING btree (contact_id)
+- `idx_leads_conv_updated` USING btree (conversation_id, updated_at DESC NULLS LAST)
 - `idx_leads_conversation_id` USING btree (conversation_id)
 - `idx_leads_destination` USING btree (destination_country)
 - `idx_leads_inquiry_quality` USING btree (inquiry_quality)
@@ -938,6 +964,8 @@ Tables: **49**. Listed alphabetically.
 | `created_at` | timestamp with time zone | N | `now()` |
 | `cache_creation_input_tokens` | integer | N | `0` |
 | `cache_read_input_tokens` | integer | N | `0` |
+| `session_id` | uuid | Y |  |
+| `product_line` | text | Y |  |
 
 **Foreign keys:**
 - `tenant_id` → `tenants.id`
@@ -945,6 +973,8 @@ Tables: **49**. Listed alphabetically.
 **Indexes:**
 - `idx_llm_usage_callsite_created` USING btree (call_site, created_at DESC)
 - `idx_llm_usage_created` USING btree (created_at DESC)
+- `idx_llm_usage_product_line_created` USING btree (tenant_id, product_line, created_at DESC) WHERE (product_line IS NOT NULL)
+- `idx_llm_usage_session_created` USING btree (session_id, created_at DESC) WHERE (session_id IS NOT NULL)
 - `idx_llm_usage_tenant_created` USING btree (tenant_id, created_at DESC)
 
 ### `message_queue`

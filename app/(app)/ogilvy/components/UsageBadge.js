@@ -69,6 +69,7 @@ export default function UsageBadge({ sessionId, refreshKey = 0 }) {
         {fmtTokens(used)} / {fmtTokens(ctx)}
       </span>
       <span className={s.usageBadgePct}>· {pct}%</span>
+      <span className={s.usageBadgePct}>· {fmtCost(usage.totals.cost_usd)}</span>
 
       {open && (
         <div className={s.usagePopover} role="tooltip">
@@ -107,6 +108,10 @@ function UsagePopover({ usage }) {
             <span className={s.usageMuted}>　上轮输出</span>
             <span>{fmtTokens(latest.completion)}</span>
           </div>
+          <div className={s.usageRow}>
+            <span className={s.usageMuted}>　上轮成本</span>
+            <span>{fmtCost(latest.cost_usd)}</span>
+          </div>
           <div className={s.usageDivider} />
         </>
       ) : null}
@@ -132,11 +137,11 @@ function UsagePopover({ usage }) {
         <>
           <div className={s.usageSep}>按调用点</div>
           {Object.entries(byCallSite)
-            .sort(([, a], [, b]) => b.count - a.count)
+            .sort(([, a], [, b]) => b.cost_usd - a.cost_usd)
             .map(([cs, v]) => (
               <div key={cs} className={s.usageRow}>
                 <span className={s.usageMuted}>{cs}</span>
-                <span>×{v.count}</span>
+                <span>×{v.count} · {fmtCost(v.cost_usd)}</span>
               </div>
             ))}
         </>

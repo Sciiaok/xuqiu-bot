@@ -42,7 +42,7 @@ function detectLanguage(text) {
  * Rewrites a query using conversation context so it can be searched independently.
  * Only called when conversation_context is provided and non-empty.
  */
-async function rewriteQuery(query, conversationContext, tenantId = null) {
+async function rewriteQuery(query, conversationContext, tenantId = null, productLineId = null) {
   if (!conversationContext || conversationContext.length === 0) return query;
 
   const contextStr = conversationContext
@@ -66,7 +66,7 @@ async function rewriteQuery(query, conversationContext, tenantId = null) {
         content: `Conversation history:\n${contextStr}\n\nLatest message to rewrite: ${query}`,
       },
     ],
-  }, { tenantId, callSite: 'kb.search.rewrite-query' });
+  }, { tenantId, callSite: 'kb.search.rewrite-query', productLine: productLineId });
 
   return response.choices[0].message.content?.trim() || query;
 }
@@ -82,7 +82,7 @@ async function vectorSearch({ tenantId, productLineId, query, layers = null, top
   // For non-English queries, translate to English for search
   let searchQuery = query;
   if (queryLang !== 'en') {
-    searchQuery = await translateToEnglish(query, tenantId);
+    searchQuery = await translateToEnglish(query, tenantId, productLineId);
   }
 
   const embedding = await generateEmbedding(searchQuery);
@@ -162,7 +162,7 @@ async function structuredProductSearch({ tenantId, productLineId, filters = {}, 
  * Translate arbitrary text to English via Haiku. Preserves product names,
  * model numbers, and technical terms.
  */
-async function translateToEnglish(text, tenantId = null) {
+async function translateToEnglish(text, tenantId = null, productLineId = null) {
   const response = await openrouter.messages.create({
     models: [MODELS.HAIKU],
     max_tokens: 4000,
@@ -170,7 +170,7 @@ async function translateToEnglish(text, tenantId = null) {
       { role: 'system', content: 'Translate the following text to English. Keep product names, model numbers, and technical terms accurate. Output ONLY the translation.' },
       { role: 'user', content: text },
     ],
-  }, { tenantId, callSite: 'kb.search.translate' });
+  }, { tenantId, callSite: 'kb.search.translate', productLine: productLineId });
   return response.choices[0].message.content?.trim() || text;
 }
 
@@ -250,7 +250,7 @@ Rules:
       },
       { role: 'user', content: query },
     ],
-  }, { tenantId, callSite: 'kb.search.intent' });
+  }, { tenantId, callSite: 'kb.search.intent', productLine: productLineId });
 
   const text = response.choices[0].message.content?.trim() || '{}';
   try {
@@ -295,7 +295,7 @@ export async function searchKnowledge({
   // Step 1: Query rewrite if conversation context provided
   let effectiveQuery = query;
   if (conversationContext && conversationContext.length > 0) {
-    effectiveQuery = await rewriteQuery(query, conversationContext, tenantId);
+    effectiveQuery = await rewriteQuery(query, conversationContext, tenantId, productLineId);
   }
 
   // Step 2: Intent routing — auto-detect search mode and extract filters

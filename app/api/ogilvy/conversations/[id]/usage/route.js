@@ -112,6 +112,7 @@ export async function GET(_request, { params }) {
             (latestTurnRow.cache_read_input_tokens || 0) +
             (latestTurnRow.cache_creation_input_tokens || 0),
           completion: latestTurnRow.completion_tokens || 0,
+          cost_usd: Number(latestTurnRow.cost_usd) || 0,
           model: latestTurnRow.model || null,
         }
       : null;

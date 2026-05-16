@@ -15,11 +15,13 @@ import { lineKeys, buildLineDetailFetcher } from '../../../../lib/prefetch-keys'
 import KnowledgeBaseTab from './knowledge-base/KnowledgeBaseTab.js';
 import LeadFieldsEditor, { normalizeLeadFields } from './LeadFieldsEditor.js';
 import MediciSimulatorTab from './medici-simulator/MediciSimulatorTab.js';
+import CostStatsTab from './cost-stats/CostStatsTab.js';
 
 const TABS = [
   { key: 'config',     label: '基本配置' },
   { key: 'knowledge',  label: '知识库' },
   { key: 'simulator',  label: 'Medici 调试台' },
+  { key: 'cost',       label: '成本分析' },
 ];
 
 /**
@@ -240,6 +242,10 @@ export default function ProductLineEditPage() {
 
       {activeTab === 'simulator' && (
         <MediciSimulatorTab productLineSlug={line.id} />
+      )}
+
+      {activeTab === 'cost' && (
+        <CostStatsTab productLineId={line.id} />
       )}
     </div>
   );

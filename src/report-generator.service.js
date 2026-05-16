@@ -328,7 +328,19 @@ async function collectReportInput(tenantId, type, periodStart, periodEnd, agentI
   return { input, kpi };
 }
 
-async function callLLM(type, input, tenantId) {
+// 报表挂哪个产品线:单 agent 时取该 agent.product_line;0 或 多 agent 视为不归属。
+async function resolveSingleAgentProductLine(agentIds) {
+  if (!Array.isArray(agentIds) || agentIds.length !== 1) return null;
+  const { data, error } = await supabase
+    .from('agents')
+    .select('product_line')
+    .eq('id', agentIds[0])
+    .single();
+  if (error || !data) return null;
+  return data.product_line || null;
+}
+
+async function callLLM(type, input, tenantId, productLine = null) {
   const systemPrompt = type === 'daily' ? DAILY_PROMPT : FULL_PROMPT;
   const dataStr = JSON.stringify(input, null, 2);
   const truncated = dataStr.length > 50000 ? dataStr.slice(0, 50000) + '\n...(数据已截断)' : dataStr;
@@ -343,7 +355,7 @@ async function callLLM(type, input, tenantId) {
       },
     ],
     max_tokens: 4000,
-  }, { tenantId, callSite: `report-generator.${type}` });
+  }, { tenantId, callSite: `report-generator.${type}`, productLine });
 
   const text = result.choices[0].message.content?.trim();
   if (!text) throw new Error('LLM returned empty response');
@@ -383,7 +395,9 @@ export async function generateReport({ tenantId, type, periodStart, periodEnd, a
 
   try {
     const { input, kpi } = await collectReportInput(tenantId, type, periodStart, periodEnd, agentIds);
-    const content = await callLLM(type, input, tenantId);
+    // 单 agent 报表才挂 product_line;多 agent / 全租户报表归 NULL
+    const productLine = await resolveSingleAgentProductLine(agentIds);
+    const content = await callLLM(type, input, tenantId, productLine);
 
     // Build appendix for full reports
     if (type !== 'daily') {
@@ -449,7 +463,8 @@ export async function retryReport(reportId) {
     const { input, kpi } = await collectReportInput(
       report.tenant_id, report.type, report.period_start, report.period_end, report.agent_ids
     );
-    const content = await callLLM(report.type, input, report.tenant_id);
+    const productLine = await resolveSingleAgentProductLine(report.agent_ids);
+    const content = await callLLM(report.type, input, report.tenant_id, productLine);
 
     if (report.type !== 'daily') {
       content.appendix = {

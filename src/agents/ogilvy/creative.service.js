@@ -11,6 +11,8 @@
  */
 import { config } from '../../config.js';
 import supabase from '../../../lib/supabase.js';
+import { logLlmCall } from '../../llm-client.js';
+import { calcImageCostUsd } from '../../llm-pricing.js';
 
 const FETCH_TIMEOUT = 120_000;
 const STORAGE_BUCKET = 'aigc-assets';
@@ -268,8 +270,29 @@ export async function generateAdCreative({
 
   let lastErr;
   for (const { label, caller, model } of attempts) {
+    const t0 = Date.now();
     try {
       const generated = await caller(model, prompt, refs);
+      // 图片成本落表 —— 单价表见 llm-pricing.js#IMAGE_PRICES_PER_CALL。
+      // ogilvy session 不归属到具体 product_line(一次会话可能聊多个产品),
+      // 跟 ogilvy.turn 一样 productLine 留 null。
+      logLlmCall({
+        method: 'image.edit',
+        provider: label === 'primary' ? 'openai' : 'openrouter',
+        models: [generated.model],
+        responseModel: generated.model,
+        finishReason: 'image_returned',
+        promptTokens: 0,
+        completionTokens: 0,
+        cacheCreationInputTokens: 0,
+        cacheReadInputTokens: 0,
+        durationMs: Date.now() - t0,
+        tenantId,
+        callSite: 'ogilvy.image-gen',
+        sessionId,
+        productLine: null,
+        costUsdOverride: calcImageCostUsd({ model: generated.model, count: 1 }),
+      });
       const asset = await saveAssetToStorage({
         imageBuffer: generated.imageBuffer,
         prompt,

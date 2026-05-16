@@ -335,7 +335,7 @@ export async function cleanupExtractedAssets(docId) {
 // ── Knowledge Point Extraction ───────────────────────────────────────
 
 async function extractKnowledgePoints({ ctx, docId, content, layer, fileType, chunkLabel }) {
-  const { tenantId } = ctx;
+  const { tenantId, productLineId } = ctx;
   const layerLabel = LAYER_LABELS[layer] || layer;
 
   const systemPrompt = `You are a knowledge extraction assistant for a B2B export trading company.
@@ -381,7 +381,7 @@ Output as JSON:
       { role: 'system', content: systemPrompt },
       { role: 'user', content: `File type: ${fileType}\n${chunkLabel ? `Chunk: ${chunkLabel}\n` : ''}\nDocument content:\n${capped.content}` },
     ],
-  }, { tenantId, callSite });
+  }, { tenantId, callSite, productLine: productLineId });
 
   const text = response.choices[0].message.content || '{}';
   const finishReason = response.choices[0].finish_reason;
@@ -515,7 +515,7 @@ async function processKnowledgePoint(ctx, docId, layer, point) {
 // ── Structured Product Extraction ────────────────────────────────────
 
 async function extractStructuredProducts({ ctx, docId, content, fileType, chunkLabel }) {
-  const { tenantId } = ctx;
+  const { tenantId, productLineId } = ctx;
   const systemPrompt = `Extract structured product data from this document. Be permissive: the
 source can be an Excel sheet with arbitrary columns, a price-list PDF, a Word
 catalog, a markdown table, or even free-form text describing models. Column /
@@ -560,7 +560,7 @@ the whole thing in a single object: { "products": [...] }`;
       { role: 'system', content: systemPrompt },
       { role: 'user', content: `File type: ${fileType}\n${chunkLabel ? `Chunk: ${chunkLabel}\n` : ''}\nContent:\n${capped.content}` },
     ],
-  }, { tenantId, callSite });
+  }, { tenantId, callSite, productLine: productLineId });
 
   const text = response.choices[0].message.content || '{}';
   const finishReason = response.choices[0].finish_reason;
@@ -595,7 +595,7 @@ the whole thing in a single object: { "products": [...] }`;
 // ── Structured Shipping Extraction ───────────────────────────────────
 
 async function extractStructuredShipping({ ctx, docId, content, fileType, chunkLabel }) {
-  const { tenantId } = ctx;
+  const { tenantId, productLineId } = ctx;
   const systemPrompt = `Extract structured shipping / logistics / delivery route data from this
 document. Be permissive: the source can be an Excel rate card, a freight
 forwarder quote PDF, a Word document, an Incoterms guide, or free-form text
@@ -634,7 +634,7 @@ no comments, no Python-style dicts. Wrap as { "routes": [...] }`;
       { role: 'system', content: systemPrompt },
       { role: 'user', content: `File type: ${fileType}\n${chunkLabel ? `Chunk: ${chunkLabel}\n` : ''}\nContent:\n${capped.content}` },
     ],
-  }, { tenantId, callSite });
+  }, { tenantId, callSite, productLine: productLineId });
 
   const text = response.choices[0].message.content || '{}';
   const finishReason = response.choices[0].finish_reason;
