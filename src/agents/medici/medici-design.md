@@ -2,7 +2,7 @@
 
 `src/agents/medici/` — WhatsApp 询盘的接待官。每条客户消息进来，它同时完成**回复客户**、**分类意图**、**评估商机**、**抽取线索**、**决定路由**这五件事。
 
-> 文档版本：2026-05-14（envelope 真源收口到 `output-schema.js::buildEnvelopeSchema`；references 收敛到模型实际用的 5 份；dev-only 验收/测试场景挪出 bundle；CONTRACT 删除 marketplace 包装）
+> 文档版本：2026-05-16（成本归属 productLine 并入 callSite='medici.qualify' → llm_usage_logs；attachment-guard 上线，发图前按 SKU/品牌过滤；Medici 调试台从顶级 `/medici-simulator` 挪到 `product-lines/[id]` 的「Medici 调试台」tab；2026-05-14 之前的 envelope / references / bundle 拆分修订仍有效）
 
 ---
 
@@ -98,7 +98,8 @@ src/agents/medici/
 ├── output-schema.js        GENERIC_LEAD_OUTPUT_SCHEMA + envelope enums (INTENT / INQUIRY_QUALITY /
 │                              BUSINESS_VALUE / ROUTE / ENVELOPE_REQUIRED) + resolveOutputSchema
 ├── kb-tools.js             KB tool 适配器（包装外部共享的 kb-search.service.js）
-├── send-attachments.js     attachments[] → WhatsApp 图片发送（queue-processor 调）
+├── attachment-guard.js     SKU/品牌过滤层：发图前剔除明显不匹配本对话产品语境的资产
+├── send-attachments.js     attachments[] → WhatsApp 图片发送（queue-processor 调，发前调 attachment-guard）
 ├── medici-design.md        本文
 └── types.md                运行时契约（TS 类型 + invariants + "我想改 X 去哪个文件" 对照表）
 
@@ -119,7 +120,7 @@ skills/
 - **宿主收口 prose**（`skill-host-patch.md`）—— RD 维护，把 skill 校准到 LeadEngine 的 envelope / 工具 / 路由
 - **纯数据常量**（`output-schema.js`）—— 塞进 index.js 会压垮阅读体验
 - **配置装配层**（`config.js`）—— DB 行 → agentConfig 的纯转换 + 缓存，被 queue-processor 和 /product-lines 后台 UI 共同消费
-- **独立工具服务**（`kb-tools.js` / `send-attachments.js`）—— 外部数据层接入
+- **独立工具服务**（`kb-tools.js` / `send-attachments.js` / `attachment-guard.js`）—— 外部数据层接入
 
 ### 4.1 系统 prompt 三段拼装
 
@@ -315,8 +316,9 @@ Medici 的 6 个 KB typed tools 吃的就是这里的数据。KB 是 **(tenant_i
 Medici 在客户主动要图时回传知识库里的图片，例如"能看下实物吗？" / "再来一张图"。
 
 - **入库**：录入 → 单独图片上传 → `POST /api/knowledge/assets`；文档上传管线也会自动从 PDF/docx 抽取嵌入图（vision caption + 入库为 kb_assets），运营基本不用单独传
-- **注入**：`runMedici` 启动时与 `loadAgentTools` 并行调 `loadAvailableAssets`，把 `[{id, description, mime_type}]` 写进 `dynamicContext` 的 AVAILABLE ASSETS 块
-- **发送**：Medici 在 `attachments[]` 给出 `{asset_id, caption?}` → queue-processor 文本回复发完后调 [send-attachments.js](./send-attachments.js)
+- **注入**：`runMedici` 启动时与 `loadAgentTools` 并行调 `loadAvailableAssets`，把 `[{id, description, mime_type, linked_skus}]` 写进 `dynamicContext` 的 AVAILABLE ASSETS 块
+- **发送**：Medici 在 `attachments[]` 给出 `{asset_id, caption?}` → queue-processor 文本回复发完后调 [send-attachments.js](./send-attachments.js) → 内部先经 [attachment-guard.js](./attachment-guard.js) 的 `filterAttachmentsBySkuContext` 过滤：把 `kb_assets.linked_skus` 跟当前 conversation 推断出的产品语境（品牌 / 型号）做对照，明显错配的资产被 drop（计入 `dropped` 计数 + warn 日志），剩余的才真正发出。这是"模型挑错图"的兜底——比如客户聊星耀8，模型却挑了 SU7 的图，就会被拦在这里
+- **持久化与归因**：成功发出的资产会写一行 assistant message + `metadata.kb_asset_id`，便于 LeadHub 显示；返回 `{sent, failed, dropped}` 三元组进 queue-processor 日志
 
 被动策略：默认不发图，只有客户明确请求才挑 asset_id。
 
@@ -334,6 +336,7 @@ Medici 在客户主动要图时回传知识库里的图片，例如"能看下实
 | 加 per-turn dynamic context 字段 | `index.js` → Prompt assembly 段的 `buildDynamicContext` |
 | 加图 / 语音 / 文件等模态 | `index.js` → Messages 段的 `buildClaudeContent` |
 | 加新的 KB tool | `kb-tools.js`（底层加到 `src/kb-search.service.js`） |
+| 改图片外发的过滤规则 | `attachment-guard.js::filterAttachmentsBySkuContext` |
 | 改配置缓存 TTL | `config.js` 里 `TTL_MS` |
 | 加新的 lead_field 类型 | `config.js::leadFieldToJsonSchemaProp` |
 | 改 per-conversation 配置解析 | `config.js::loadMediciConfig` |
@@ -347,11 +350,11 @@ Medici 在客户主动要图时回传知识库里的图片，例如"能看下实
 
 ### 端到端冒烟
 
-dev-tools 里的 **Medici 调试台** (`/medici-simulator`) 直接调 `runMedici`，全流程同生产但零 DB 写入。每次改 skill / 改 host-patch / 改提示词 / 改 tool / 改输出形态都先在这里过一遍再发。
+**Medici 调试台** 是 `product-lines/[id]` 详情页下的一个 tab（[MediciSimulatorTab.js](../../../app/(app)/product-lines/[id]/medici-simulator/MediciSimulatorTab.js)），直接调 `runMedici`，全流程同生产但**零 DB 写入**。每次改 skill / 改 host-patch / 改提示词 / 改 tool / 改输出形态都先在这里过一遍再发。
 
-路由：`app/api/medici-simulator/send/route.js` → `runMedici({...})`。
-
-**Tool 可视化**：simulator 调 `runMedici` 时注入 `onToolEvent` 回调，把每次 tool_call（含入参）和 tool_result（截断后的返回）插进 trace 数组，前端用蓝/绿色高亮显示。运营 / RD 可以直接看到 Claude 调了哪些 KB 工具、查了什么、命中了什么。
+- **路由**：`app/api/medici-simulator/send/route.js` → `runMedici({...})`，simulator 复用 attachment-guard 做发图过滤演练
+- **入口位置**：因为 Medici 是 per-product-line 配置，调试台天然就跟着产品线走——挪到详情页 tab 后跟「知识库」「LeadFields 编辑」并列，操作时不再需要切应用层 sidebar
+- **Tool 可视化**：simulator 调 `runMedici` 时注入 `onToolEvent` 回调，把每次 tool_call（含入参）和 tool_result（截断后的返回）插进 trace 数组，前端用蓝/绿色高亮显示。运营 / RD 可以直接看到 Claude 调了哪些 KB 工具、查了什么、命中了什么
 
 ---
 
@@ -365,7 +368,14 @@ dev-tools 里的 **Medici 调试台** (`/medici-simulator`) 直接调 `runMedici
 | 缓存命中率 | 静态段稳定状态下 > 80%（Sonnet 缓存价格 = input 的 10%） |
 | 模型 | `claude-sonnet-4-6`（固定，`callClaude` 里） |
 
-`callClaude` 透传 `{ tenantId, callSite: 'medici.qualify' }` 给 [llm-client.js](../../llm-client.js)，每次调用 fire-and-forget 落 `llm_usage_logs` 一行（input / output / cache hit tokens + 计价）。Founder 在 `/admin/llm-usage` 看按租户 / callSite / 模型聚合的成本（今日 / 7天 / 30天）。
+`callClaude` 透传 `{ tenantId, callSite: 'medici.qualify', productLine }` 给 [llm-client.js](../../llm-client.js)，每次调用 fire-and-forget 落 `llm_usage_logs` 一行（input / output / cache hit / cache write tokens + 计价 + 产品线归属）。`productLine` 来自 `agentConfig.product_line`，让单条 LLM 调用挂回它服务的产品线。
+
+成本看两个地方：
+
+- **`/admin/llm-usage`**（founder-only）—— 全租户视图，按 callSite / 模型 / tenant 聚合 + 时间窗（今日/7天/30天），用于运维监控。Medici 的所有 turn 在这里以 `medici.qualify` 出现
+- **`/product-lines/[id]` → 「成本分析」tab**（[CostStatsTab.js](../../../app/(app)/product-lines/[id]/cost-stats/CostStatsTab.js)）—— per-product-line 视图，跟 LeadHub 共用时间窗 preset（昨日 / 近 7 天 / 近 30 天 / 近一年 / 自定义 / 全部，北京时区对齐）。`/api/product-lines/[id]/cost-stats` 按 `call_site` 前缀切两块：**medici 类**（`medici.qualify` / `kb.*` / `knowledge.teach.extract` / `contacts.profile.summary` 等）跟 **ogilvy 类**（`ogilvy.*`）平级展示，配 conversations / msgs_in / msgs_out / leads_qualified / kb_docs 五项 volume，再加上一期同窗对比
+
+数据基础：[`2026-05-15-llm-usage-session-id.sql`](../../../supabase/migrations/2026-05-15-llm-usage-session-id.sql) 给 `llm_usage_logs` 加了 `session_id`、[`2026-05-16-llm-usage-product-line.sql`](../../../supabase/migrations/2026-05-16-llm-usage-product-line.sql) 加了 `product_line`、[`2026-05-13-llm-usage-cache-tokens.sql`](../../../supabase/migrations/2026-05-13-llm-usage-cache-tokens.sql) 加了 `cache_creation_input_tokens` / `cache_read_input_tokens`。Medici 同时受益于这三列，cost-stats 才能切出"这个产品线本月 Medici 花了多少 + 缓存命中省了多少"。
 
 成本优化点都收敛在 `index.js` 的 LLM transport 段：换 Haiku、分拆合成轮、调低 `MAX_TOKENS`。
 
