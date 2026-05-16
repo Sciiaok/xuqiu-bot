@@ -1,6 +1,6 @@
 # Schema Snapshot (auto-generated)
 
-Generated: 2026-05-16T08:56:55.096Z
+Generated: 2026-05-16T11:52:45.147Z
 
 Live snapshot of `public` schema from Supabase. **Do not edit by hand** — run `node scripts/build-index.mjs` to refresh.
 
@@ -198,12 +198,14 @@ Tables: **50**. Listed alphabetically.
 | `tenant_id` | uuid | N | `'00000000-0000-0000-0000-000000000001':…` |
 | `deleted_at` | timestamp with time zone | Y |  |
 | `stage_outputs` | jsonb | N | `'[]'::jsonb` |
+| `product_line` | text | Y |  |
 
 **Foreign keys:**
 - `tenant_id` → `tenants.id`
 
 **Indexes:**
 - `idx_autopilot_sessions_active` USING btree (tenant_id, user_id, updated_at DESC) WHERE (deleted_at IS NULL)
+- `idx_autopilot_sessions_pl` USING btree (tenant_id, product_line) WHERE (deleted_at IS NULL)
 - `idx_autopilot_sessions_status` USING btree (status) WHERE (status <> 'archived'::text)
 - `idx_autopilot_sessions_tenant` USING btree (tenant_id)
 - `idx_autopilot_sessions_user` USING btree (user_id, created_at DESC)

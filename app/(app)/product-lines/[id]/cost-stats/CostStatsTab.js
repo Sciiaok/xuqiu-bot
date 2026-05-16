@@ -66,15 +66,18 @@ export default function CostStatsTab({ productLineId }) {
         return r.json();
       });
 
-    // ads/dashboard 接受 preset=7d|30d / days=N / startDate=YYYY-MM-DD&endDate=...
-    // 共享同一份 preset 字符串但 90d/365d/all/custom 走 days 或 explicit start/end 兜底。
-    const adsUrl = buildAdsUrl(productLineId, preset, range, customFrom, customTo);
-    const adsPromise = adsUrl
-      ? fetch(adsUrl).then(async r => {
-          if (!r.ok) throw new Error((await r.json()).error || `HTTP ${r.status}`);
-          return r.json();
-        })
-      : Promise.resolve(null);
+    // 切到专用的 Ogilvy-only ad spend endpoint —— 只数从本产品线 Ogilvy
+    // launch 出去的 campaign,跟整个产品线 wa_phone_number_id 反推的 dashboard
+    // 口径不同。dashboard 会把用户在 Meta Ads Manager 手工建的广告也算进来,
+    // 这里只算 Ogilvy 真创编的活动。
+    const adsQs = new URLSearchParams();
+    if (range.dateFrom) adsQs.set('from', range.dateFrom);
+    if (range.dateTo) adsQs.set('to', range.dateTo);
+    const adsPromise = fetch(`/api/product-lines/${productLineId}/ogilvy-ad-spend?${adsQs}`)
+      .then(async r => {
+        if (!r.ok) throw new Error((await r.json()).error || `HTTP ${r.status}`);
+        return r.json();
+      });
 
     Promise.allSettled([statsPromise, adsPromise]).then(([statsRes, adsRes]) => {
       if (cancelled) return;
@@ -83,9 +86,19 @@ export default function CostStatsTab({ productLineId }) {
       } else {
         setError(statsRes.reason?.message || '加载失败');
       }
-      if (adsRes.status === 'fulfilled') {
-        setAdSummary(adsRes.value?.summary || null);
-      } else {
+      if (adsRes.status === 'fulfilled' && adsRes.value) {
+        const v = adsRes.value;
+        // 新 endpoint 返回 {spend, wa_conversations, cpa, campaign_count, ad_count, source}
+        // 对齐旧 dashboard summary shape 让下游代码不用再改一遍
+        setAdSummary({
+          spend: v.spend,
+          waConversations: v.wa_conversations,
+          cpa: v.cpa,
+          campaignCount: v.campaign_count,
+          adCount: v.ad_count,
+          source: v.source,
+        });
+      } else if (adsRes.status === 'rejected') {
         setAdError(adsRes.reason?.message || '广告数据加载失败');
       }
       setLoading(false);
@@ -159,7 +172,7 @@ export default function CostStatsTab({ productLineId }) {
         <KpiCard
           label="LLM Medici 类"
           value={fmtUsd(mediciCost)}
-          sub={`${stats.medici.totals.count} 次调用 · ${renderDelta(computeDelta(mediciCost, mediciPrev))}`}
+          sub={<>{stats.medici.totals.count} 次调用 · {renderDelta(computeDelta(mediciCost, mediciPrev))}</>}
         />
         {showOgilvy && (
           <KpiCard
@@ -170,9 +183,15 @@ export default function CostStatsTab({ productLineId }) {
         )}
         {showAds && (
           <KpiCard
-            label="广告花费 (Meta)"
+            label="广告花费 (Ogilvy 创编)"
             value={adError ? '—' : fmtUsd(adSpend)}
-            sub={adError ? '数据不可用' : `${adSummary?.waConversations || 0} 个 WA 对话 · CPA ${fmtUsd(adSummary?.cpa || 0)}`}
+            sub={adError
+              ? '数据不可用'
+              : adSummary?.source === 'no_campaigns'
+                ? '本产品线暂无 Ogilvy 投放活动'
+                : adSummary?.source === 'meta_not_connected'
+                  ? 'Meta 未连接,无法拉取花费'
+                  : `${adSummary?.campaignCount || 0} 个活动 · ${adSummary?.waConversations || 0} 个 WA 对话 · CPA ${fmtUsd(adSummary?.cpa || 0)}`}
           />
         )}
         {totalDelta && totalDelta.pct != null && (
@@ -205,7 +224,9 @@ export default function CostStatsTab({ productLineId }) {
           <>
             说明: <b>Medici 类</b>包含 medici 应答、KB 搜索/上传/视觉理解、知识教学、画像总结、单产品线日报;
             <b>Ogilvy 类</b>包含本产品线所有 Ogilvy 项目的会话推理、网页搜索、图片生成;
-            <b>广告花费</b>来自 Meta API,按 Asia/Shanghai 昨日截止取数。时间窗口与 LLM 一致(昨日对齐)。
+            <b>广告花费</b>严格按"本产品线下从 Ogilvy launch 出去的活动"统计 ——
+            通过 <code>autopilot_sessions.meta_campaign_ids</code> 反查 Meta /insights,
+            手工在 Meta Ads Manager 建的广告不计入。
           </>
         ) : (
           <>说明: 当前视角仅显示运营产品线本身的 LLM Medici 类成本(应答 / KB / 画像 / 日报),不含 Ogilvy 工作台和广告花费。切到「全成本」可看全部。</>
@@ -213,20 +234,6 @@ export default function CostStatsTab({ productLineId }) {
       </p>
     </div>
   );
-}
-
-function buildAdsUrl(productLineId, preset, range, customFrom, customTo) {
-  const base = `/api/ads/dashboard?productLine=${encodeURIComponent(productLineId)}`;
-  if (preset === 'all') return `${base}&days=365`; // ads 不接受 'all', 用一年兜底
-  if (preset === 'custom') {
-    if (!customFrom || !customTo) return null;
-    // /api/ads/dashboard 接 startDate=YYYY-MM-DD&endDate=YYYY-MM-DD(北京时区);
-    // 用户从 date input 拿到的就是北京时区的 YYYY-MM-DD,直接转发不需要再换。
-    return `${base}&startDate=${customFrom}&endDate=${customTo}`;
-  }
-  // 1d / 7d / 30d / 365d:Ads endpoint preset 只支持 7d/30d,其它走 days
-  const PRESET_TO_DAYS = { '1d': 1, '7d': 7, '30d': 30, '365d': 365 };
-  return `${base}&days=${PRESET_TO_DAYS[preset] || 30}`;
 }
 
 // ── Range selector + view toggle ─────────────────────────────────────

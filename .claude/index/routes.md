@@ -1,12 +1,12 @@
 # Routes (auto-generated)
 
-Generated: 2026-05-16T08:56:07.597Z
+Generated: 2026-05-16T11:52:42.280Z
 
 Filesystem-derived list of API endpoints and UI pages. **Do not edit** — run `node scripts/build-index.mjs` to refresh.
 
 ## API Endpoints
 
-Total: **74**
+Total: **75**
 
 | Path | Methods | File |
 | --- | --- | --- |
@@ -77,6 +77,7 @@ Total: **74**
 | `/api/product-lines` | GET, POST | [app/api/product-lines/route.js](../../app/api/product-lines/route.js) |
 | `/api/product-lines/[id]` | GET, PUT | [app/api/product-lines/[id]/route.js](../../app/api/product-lines/[id]/route.js) |
 | `/api/product-lines/[id]/cost-stats` | GET | [app/api/product-lines/[id]/cost-stats/route.js](../../app/api/product-lines/[id]/cost-stats/route.js) |
+| `/api/product-lines/[id]/ogilvy-ad-spend` | GET | [app/api/product-lines/[id]/ogilvy-ad-spend/route.js](../../app/api/product-lines/[id]/ogilvy-ad-spend/route.js) |
 | `/api/reports` | GET, POST | [app/api/reports/route.js](../../app/api/reports/route.js) |
 | `/api/reports/[id]` | GET, POST | [app/api/reports/[id]/route.js](../../app/api/reports/[id]/route.js) |
 | `/api/reports/export` | GET | [app/api/reports/export/route.js](../../app/api/reports/export/route.js) |
