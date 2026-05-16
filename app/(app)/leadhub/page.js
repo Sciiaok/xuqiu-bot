@@ -36,12 +36,14 @@ import ChatMessage from './ChatMessage';
 
 /* ── Constants ─────────────────────────────────────────── */
 
+// FAQ_END 之前叫「已结束」会让人误以为对话整体关掉了。它实际只代表"最新一条
+// lead 被路由到 FAQ 资料兜底"，对话本身可能还在收消息。改成「AI 已结单」直
+// 白说明发生了什么 + 谁做的。
 const ROUTE_FILTERS = [
   { key: 'all', label: '全部' },
   { key: 'HUMAN_NOW', label: '人工跟进中', variant: 'human' },
   { key: 'CONTINUE', label: 'AI跟进中', variant: null },
-  { key: 'NURTURE', label: '待培育', variant: 'qualify' },
-  { key: 'FAQ_END', label: '已结束', variant: 'low' },
+  { key: 'FAQ_END', label: 'AI 已结单', variant: 'low' },
 ];
 
 const DETAIL_TABS = [
@@ -88,7 +90,7 @@ export default function LeadHubPage() {
   // Server-side route distribution across **all** matching conversations (not
   // just the in-memory window). Drives the route bar + overview cards so they
   // don't lie when only the first page is loaded. Refreshed alongside the list.
-  const [routeBuckets, setRouteBuckets] = useState({ HUMAN_NOW: 0, CONTINUE: 0, NURTURE: 0, FAQ_END: 0 });
+  const [routeBuckets, setRouteBuckets] = useState({ HUMAN_NOW: 0, CONTINUE: 0, FAQ_END: 0 });
   const [hasMore, setHasMore] = useState(false);
   const [nextCursor, setNextCursor] = useState(null);
   const [loadingList, setLoadingList] = useState(true);
@@ -224,15 +226,16 @@ export default function LeadHubPage() {
     return () => { cancelled = true; };
   }, []);
 
-  // Build query string from current filters.
-  // NOTE: `routeFilter` is intentionally NOT included here — route-bar buttons
-  // (全部/人工跟进中/AI跟进中/待培育/已结束) filter the already-loaded list
-  // client-side to avoid re-hitting the DB on tab switches.
+  // Build query string from current filters. route bar (routeFilter) 现在也是
+  // 服务端 filter：API 用 conversations_with_resolved_route 视图把 resolved_route
+  // 做成可查询列，让 tab 切换的真实条数与 routeBuckets count 保持一致。
+  // 'all' 不带参数。
   const buildQs = useCallback((cursor = null) => {
     const qs = new URLSearchParams();
     qs.set('limit', '20');
     if (supplyChain !== SUPPLY_CHAIN_ALL) qs.append('agentIds', supplyChain);
     if (quality !== QUALITY_ALL) qs.append('inquiryQuality', quality);
+    if (routeFilter !== 'all') qs.set('resolvedRoute', routeFilter);
     if (debouncedSearch) qs.set('customer', debouncedSearch);
     const { dateFrom, dateTo } = resolveDateRange(datePreset, customFrom, customTo);
     if (dateFrom) qs.set('dateFrom', dateFrom);
@@ -243,7 +246,7 @@ export default function LeadHubPage() {
       qs.set('cursorId', cursor.cursorId);
     }
     return qs;
-  }, [supplyChain, quality, datePreset, customFrom, customTo, debouncedSearch, metaAdIds]);
+  }, [supplyChain, quality, routeFilter, datePreset, customFrom, customTo, debouncedSearch, metaAdIds]);
 
   // Shared fetch for the first page — used by both initial load and realtime refresh.
   // `resetSelection` = true on filter changes (pick first card), false on realtime
@@ -261,7 +264,7 @@ export default function LeadHubPage() {
       setTotalContacts(json.totalContacts ?? 0);
       setTotalConversations(json.totalConversations ?? 0);
       setTotalLeads(json.totalLeads ?? 0);
-      setRouteBuckets(json.routeBuckets ?? { HUMAN_NOW: 0, CONTINUE: 0, NURTURE: 0, FAQ_END: 0 });
+      setRouteBuckets(json.routeBuckets ?? { HUMAN_NOW: 0, CONTINUE: 0, FAQ_END: 0 });
       setHasMore(json.hasMore ?? false);
       setNextCursor(json.nextCursor ?? null);
       if (resetSelection && !selectionApplied && mapped.length > 0) {
@@ -715,11 +718,9 @@ export default function LeadHubPage() {
     }
   }
 
-  // Client-side slice driven by the route-bar buttons. Does not trigger a refetch.
-  const visibleCards = useMemo(
-    () => (routeFilter === 'all' ? cards : cards.filter((c) => c.route === routeFilter)),
-    [cards, routeFilter],
-  );
+  // Route bar 切换现在走 buildQs/refreshList 服务端过滤，所以 cards 已经是
+  // 当前 routeFilter 范围内的全集（受 cursor 分页限制）。无需再客户端切片。
+  const visibleCards = cards;
 
   // Per-route counts come from the server (`routeBuckets`), so the numbers
   // reflect the full filtered set rather than just the in-memory window. `all`
@@ -730,7 +731,6 @@ export default function LeadHubPage() {
     all: totalConversations,
     HUMAN_NOW: routeBuckets.HUMAN_NOW || 0,
     CONTINUE: routeBuckets.CONTINUE || 0,
-    NURTURE: routeBuckets.NURTURE || 0,
     FAQ_END: routeBuckets.FAQ_END || 0,
   }), [totalConversations, routeBuckets]);
 
@@ -886,7 +886,7 @@ export default function LeadHubPage() {
                   setDatePreset(v);
                   if (v !== 'custom') { setCustomFrom(''); setCustomTo(''); }
                 }}
-                title="时间范围"
+                title="时间范围以昨日 23:59（北京时间）为终点，与 analytics / 报表对齐"
               >
                 {DATE_PRESETS.map(p => (
                   <option key={p.key} value={p.key}>{p.label}</option>
@@ -1031,37 +1031,8 @@ export default function LeadHubPage() {
                 <div className={s.emptyTitle}>从左侧选择一个对话</div>
                 <div className={s.emptyHint}>查看消息记录、客户档案、生成 AI 画像，或人工接管回复。</div>
               </div>
-              {cards.length > 0 && (
-                <div className={s.overviewCards}>
-                  <button
-                    type="button"
-                    className={`${s.overviewCard} ${s.overviewCardHuman}`}
-                    onClick={() => setRouteFilter('HUMAN_NOW')}
-                  >
-                    <span className={s.overviewCardLabel}>人工跟进中</span>
-                    <span className={s.overviewCardValue}>{routeCounts.HUMAN_NOW}</span>
-                    <span className={s.overviewCardHint}>需要你回应</span>
-                  </button>
-                  <button
-                    type="button"
-                    className={`${s.overviewCard} ${s.overviewCardAi}`}
-                    onClick={() => setRouteFilter('CONTINUE')}
-                  >
-                    <span className={s.overviewCardLabel}>AI 跟进中</span>
-                    <span className={s.overviewCardValue}>{routeCounts.CONTINUE}</span>
-                    <span className={s.overviewCardHint}>自动应答，可旁观</span>
-                  </button>
-                  <button
-                    type="button"
-                    className={`${s.overviewCard} ${s.overviewCardNurture}`}
-                    onClick={() => setRouteFilter('NURTURE')}
-                  >
-                    <span className={s.overviewCardLabel}>待培育</span>
-                    <span className={s.overviewCardValue}>{routeCounts.NURTURE}</span>
-                    <span className={s.overviewCardHint}>暂缓、长线机会</span>
-                  </button>
-                </div>
-              )}
+              {/* overview cards 已删：与顶部 route bar 完全同义、且会和 hotLeadList
+                  抢眼球。route bar 已经把 4 个分桶的真实 count 摆在最显眼位置。 */}
               {cards.some(isHotLead) && (
                 <div className={s.hotLeadList}>
                   <div className={s.hotLeadHead}>

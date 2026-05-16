@@ -277,12 +277,6 @@
   color: var(--red);
 }
 
-.routeBtn_qualify.routeBtnActive {
-  background: var(--green-dim);
-  border-color: var(--green);
-  color: var(--green);
-}
-
 .routeBtn_low.routeBtnActive {
   background: var(--bg4);
   border-color: var(--border2);
@@ -300,7 +294,6 @@
 }
 .routeDot_all { background: var(--accent); }
 .routeDot_human { background: var(--red); }
-.routeDot_qualify { background: var(--green); }
 .routeDot_low { background: var(--text3); }
 
 .routeCount {
@@ -562,11 +555,10 @@
 }
 
 /* Route-driven left border accent on each card. Reads at a glance: red bar =
-   人工跟进 (urgent), green = 待培育, neutral = AI / 已结束. The active state
+   人工跟进 (urgent), blue = AI 跟进中, neutral = 已结束. The active state
    above wins (accent blue) so the selected card is always unambiguous. */
 .route_dotHuman { border-left-color: var(--red); }
 .route_dotAi { border-left-color: rgba(37, 99, 235, 0.45); }
-.route_dotNurture { border-left-color: var(--green); }
 .route_dotEnd { border-left-color: var(--border2); }
 
 /* Hot lead = PROOF quality + (HIGH value OR ≥2 leads). Faint amber haze + ✦
@@ -702,64 +694,6 @@
   gap: 6px;
   text-align: center;
   max-width: 360px;
-}
-
-.overviewCards {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 10px;
-  width: 100%;
-  max-width: 560px;
-  margin-top: 8px;
-}
-
-.overviewCard {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 4px;
-  padding: 14px 16px;
-  background: var(--bg);
-  border: 1px solid var(--border);
-  border-radius: var(--r);
-  cursor: pointer;
-  font-family: var(--font-sans);
-  text-align: left;
-  transition: border-color 0.15s, background 0.15s, transform 0.05s;
-}
-
-.overviewCard:hover {
-  border-color: var(--border2);
-  background: var(--bg3);
-}
-
-.overviewCard:active { transform: translateY(1px); }
-
-.overviewCardHuman { border-left: 3px solid var(--red); }
-.overviewCardAi { border-left: 3px solid rgba(37, 99, 235, 0.6); }
-.overviewCardNurture { border-left: 3px solid var(--green); }
-
-.overviewCardLabel {
-  font-size: 11px;
-  color: var(--text3);
-  font-family: var(--font-mono);
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-}
-
-.overviewCardValue {
-  font-size: 24px;
-  font-weight: 700;
-  color: var(--text);
-  font-family: var(--font-display);
-  font-variant-numeric: tabular-nums;
-  line-height: 1.1;
-}
-
-.overviewCardHint {
-  font-size: 11px;
-  color: var(--text3);
-  font-family: var(--font-sans);
 }
 
 /* Top hot-lead shortcuts, shown only when at least one currently-loaded

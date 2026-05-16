@@ -236,10 +236,9 @@ export function mapGroupToCard(group) {
 // ── Route + hotness ────────────────────────────────────────────────
 
 export const ROUTE_META = {
-  HUMAN_NOW: { variant: 'human',   label: '人工跟进中', dotClass: 'dotHuman' },
-  CONTINUE:  { variant: 'proof',   label: 'AI 跟进中',  dotClass: 'dotAi' },
-  NURTURE:   { variant: 'qualify', label: '待培育',     dotClass: 'dotNurture' },
-  FAQ_END:   { variant: 'low',     label: '已结束',     dotClass: 'dotEnd' },
+  HUMAN_NOW: { variant: 'human', label: '人工跟进中', dotClass: 'dotHuman' },
+  CONTINUE:  { variant: 'proof', label: 'AI 跟进中',  dotClass: 'dotAi' },
+  FAQ_END:   { variant: 'low',   label: 'AI 已结单',  dotClass: 'dotEnd' },
 };
 
 export function RouteTag({ route }) {

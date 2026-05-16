@@ -35,6 +35,7 @@ const LEADS_SELECT = `
 const CONVERSATION_SELECT = `
   id, status, last_message_at, message_count,
   contact_id, agent_id, is_human_takeover, wa_phone_number_id, meta_ad_id,
+  resolved_route,
   contact:contacts!inner(wa_id, company_name, name),
   agent:agents(id, product_line)
 `;
@@ -91,9 +92,15 @@ function parseLimit(sp) {
   return Math.min(raw, MAX_LIMIT);
 }
 
+// resolvedRoute（会话级当前路由，由 conversations_with_resolved_route 视图算出）
+// 与 routes（leads.route 多选过滤，lead 级）语义不同。前者用于 leadhub 顶部 route
+// bar 的 tab 切换；后者保留给原本就按 lead.route 多选的场景。
+const RESOLVED_ROUTE_VALUES = new Set(['HUMAN_NOW', 'CONTINUE', 'FAQ_END']);
+
 function parseFilters(sp) {
   const dateFrom = sp.get('dateFrom') || '';
   const dateTo = sp.get('dateTo') || '';
+  const rawResolvedRoute = sp.get('resolvedRoute') || '';
   return {
     // lead-level filters
     inquiryQualities: parseMultiSelectParams(sp, 'inquiryQuality', INQUIRY_QUALITY_OPTIONS),
@@ -101,6 +108,9 @@ function parseFilters(sp) {
     routes: parseMultiSelectParams(sp, 'route', ROUTE_OPTIONS),
     country: sp.get('country') || 'all',
     model: sp.get('model') || 'all',
+
+    // conversation-level resolved-route filter (HUMAN_NOW / CONTINUE / FAQ_END)
+    resolvedRoute: RESOLVED_ROUTE_VALUES.has(rawResolvedRoute) ? rawResolvedRoute : null,
 
     // contact-level filters
     customer: sp.get('customer') || '',
@@ -165,6 +175,15 @@ function applyConversationFilters(query, filters, { foreignTable } = {}) {
     query = query.eq(col('id'), filters.conversationIds[0]);
   } else if (filters.conversationIds.length > 1) {
     query = query.in(col('id'), filters.conversationIds);
+  }
+  // resolved_route 只存在于 conversations_with_resolved_route 视图（即 base 查询，
+  // 没有 foreignTable）。lead-base 查询走 conversations!inner 嵌套是 base 表，
+  // 没有这列；这里跳过避免 PostgREST 报 unknown column。代价是：当 resolvedRoute
+  // 过滤生效时，totalLeads / approvedCount 会反映"全部 route 范围内的 lead 总数"
+  // 而不是仅当前选中 route。KpiStrip 的 "线索" 字段是 scope 指示，可接受；route
+  // bar 本身的精确 count 由服务端独立计算的 routeBuckets 提供。
+  if (filters.resolvedRoute && !foreignTable) {
+    query = query.eq('resolved_route', filters.resolvedRoute);
   }
   return query;
 }
@@ -243,9 +262,14 @@ function applyCursor(query, cursor) {
  * the single scaffold; specialised builders pick a select and add pagination.
  * ─────────────────────────────────────────────────────────────────────── */
 
+// 所有"对话为主"的查询走视图 conversations_with_resolved_route，让 resolvedRoute
+// 过滤、resolved_route 列、以及顶部 route bar 的 server-side filter 全部在 SQL
+// 层完成。视图列是 conversations.* + resolved_route，原本的字段选择无需调整。
+const CONVERSATIONS_SOURCE = 'conversations_with_resolved_route';
+
 function buildConversationsQuery(supabase, tenantId, filters, { select, count = false }) {
   const base = supabase
-    .from('conversations')
+    .from(CONVERSATIONS_SOURCE)
     .select(select, count ? { count: 'exact', head: true } : undefined)
     .eq('tenant_id', tenantId);
 
@@ -307,37 +331,28 @@ function buildLeadCountQuery(supabase, tenantId, filters, { approvedOnly = false
   return query;
 }
 
-const EMPTY_ROUTE_BUCKETS = { HUMAN_NOW: 0, CONTINUE: 0, NURTURE: 0, FAQ_END: 0 };
+const EMPTY_ROUTE_BUCKETS = { HUMAN_NOW: 0, CONTINUE: 0, FAQ_END: 0 };
 
 // Single scan that yields both the distinct contact count and the route-bucket
-// distribution. We replicate `mapConversationGroup` 's resolvedRoute rule here
-// (is_human_takeover wins; otherwise latest lead.route by updated_at; else
-// CONTINUE) so the leadhub route bar / overview tiles can show DB-true totals
-// instead of in-memory window counts.
+// distribution. resolved_route 现在直接来自视图列，省掉了原本"扫 leads + 在
+// JS 里推断最新 route"的逻辑。重要：route bar 自己的 count 必须反映"全部 route
+// 的整体分布"，所以这里显式剥掉 resolvedRoute filter，否则切到 HUMAN_NOW tab
+// 会让 routeBuckets 全部归零除了 HUMAN_NOW。
 async function fetchAggregates(supabase, tenantId, filters) {
+  const filtersNoRoute = { ...filters, resolvedRoute: null };
   const ids = new Set();
   const routeBuckets = { ...EMPTY_ROUTE_BUCKETS };
-  const selectFragment = `id, contact_id, is_human_takeover, contact:contacts!inner(id), ${leadsJoinFragment(filters)}(route, updated_at)`;
+  const selectFragment = `id, contact_id, resolved_route, contact:contacts!inner(id)${hasLeadScopedFilter(filtersNoRoute) ? ', leads!inner(id)' : ''}`;
 
   for (let offset = 0; ; offset += CONTACT_ID_BATCH) {
-    const query = buildConversationsQuery(supabase, tenantId, filters, { select: selectFragment })
+    const query = buildConversationsQuery(supabase, tenantId, filtersNoRoute, { select: selectFragment })
       .order('id', { ascending: true })
       .range(offset, offset + CONTACT_ID_BATCH - 1);
     const { data } = throwIfError(await query);
     const batch = data || [];
     for (const row of batch) {
       if (row.contact_id) ids.add(row.contact_id);
-      let resolved;
-      if (row.is_human_takeover) {
-        resolved = 'HUMAN_NOW';
-      } else {
-        const leads = row.leads || [];
-        let latest = null;
-        for (const l of leads) {
-          if (!latest || (l.updated_at || '') > (latest.updated_at || '')) latest = l;
-        }
-        resolved = latest?.route || 'CONTINUE';
-      }
+      const resolved = row.resolved_route || 'CONTINUE';
       if (resolved in routeBuckets) routeBuckets[resolved] += 1;
     }
     if (batch.length < CONTACT_ID_BATCH) break;
@@ -426,13 +441,12 @@ function mapConversationGroup(conversation) {
     .sort((a, b) => new Date(b.updated_at) - new Date(a.updated_at));
   const latest = leads[0] || null;
 
-  // is_human_takeover is the authoritative runtime state: a human operator can
-  // take over at any time regardless of Claude's routing recommendation stored
-  // in lead.route. So HUMAN_NOW always wins when the flag is set; otherwise
-  // fall back to lead.route (which may be CONTINUE / NURTURE / FAQ_END).
-  const resolvedRoute = conversation.is_human_takeover
-    ? 'HUMAN_NOW'
-    : (latest?.route || 'CONTINUE');
+  // resolved_route 来自 conversations_with_resolved_route 视图（is_human_takeover
+  // 覆盖 + 最新 lead.route + CONTINUE fallback），跟 route bar 的服务端筛选用同
+  // 一份事实源头，确保卡片上 RouteTag 与 tab 过滤结果不会打架。视图列缺失时
+  // (e.g. 历史 test fixture)，退化到原 JS 推断保险。
+  const resolvedRoute = conversation.resolved_route
+    || (conversation.is_human_takeover ? 'HUMAN_NOW' : (latest?.route || 'CONTINUE'));
   const productLine =
     conversation.agent?.product_line || latest?.agent_product_line || null;
 
@@ -493,35 +507,33 @@ function paginatedResponse(rows, limit, counts) {
 function aggregateRouteBuckets(rows) {
   const buckets = { ...EMPTY_ROUTE_BUCKETS };
   for (const conv of rows) {
-    let resolved;
-    if (conv.is_human_takeover) {
-      resolved = 'HUMAN_NOW';
-    } else {
-      const leads = conv.leads || [];
-      let latest = null;
-      for (const l of leads) {
-        if (!latest || (l.updated_at || '') > (latest.updated_at || '')) latest = l;
-      }
-      resolved = latest?.route || 'CONTINUE';
-    }
+    const resolved = conv.resolved_route || 'CONTINUE';
     if (resolved in buckets) buckets[resolved] += 1;
   }
   return buckets;
 }
 
 async function handleQuantityBranch(supabase, tenantId, filters, limit, cursor) {
-  const rows = await fetchAllQuantityFiltered(supabase, tenantId, filters);
-  const visible = rows.filter((r) => rowBeforeCursor(r, cursor));
+  // route bar 切 tab 不影响 routeBuckets 的整体分布，且 quantity 路径只扫一次，
+  // 所以这里也剥掉 resolvedRoute filter 跑完整集合，再 JS 侧用 resolved_route 做
+  // 二次过滤，让显示口径跟 standard 分支一致。
+  const filtersNoRoute = { ...filters, resolvedRoute: null };
+  const rows = await fetchAllQuantityFiltered(supabase, tenantId, filtersNoRoute);
+  const routeBuckets = aggregateRouteBuckets(rows);
+  const filtered = filters.resolvedRoute
+    ? rows.filter((r) => (r.resolved_route || 'CONTINUE') === filters.resolvedRoute)
+    : rows;
+  const visible = filtered.filter((r) => rowBeforeCursor(r, cursor));
 
   return paginatedResponse(visible, limit, {
-    totalContacts: new Set(rows.map((r) => r.contact_id).filter(Boolean)).size,
-    totalConversations: rows.length,
-    totalLeads: rows.reduce((n, c) => n + (c.leads?.length || 0), 0),
-    approvedCount: rows.reduce(
+    totalContacts: new Set(filtered.map((r) => r.contact_id).filter(Boolean)).size,
+    totalConversations: filtered.length,
+    totalLeads: filtered.reduce((n, c) => n + (c.leads?.length || 0), 0),
+    approvedCount: filtered.reduce(
       (n, c) => n + (c.leads || []).filter((l) => l.approved).length,
       0,
     ),
-    routeBuckets: aggregateRouteBuckets(rows),
+    routeBuckets,
   });
 }
 

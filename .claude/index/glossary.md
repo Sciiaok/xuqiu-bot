@@ -29,7 +29,7 @@ Words that appear repeatedly across code, schema, and UI. Many are not self-expl
 ## Lead lifecycle
 
 - **Lead** (DB) ≡ **Inquiry** (UI) — Extracted prospect record from a conversation. Fields: brand, car_model, destination_country, color_quantity, qty_bucket, timeline, business_value, inquiry_quality, etc. **The UI calls them "inquiries"; the schema calls them "leads".** Don't rename either.
-- **Inquiry quality** — Categorical score: `PROOF` / `QUALIFY` / `GOOD` / `BAD`. Set by LLM during extraction per `src/scoring-rules.json`.
+- **Inquiry quality** — Categorical score: `PROOF` / `QUALIFY` / `GOOD` / `BAD`. Set by Medici (`src/agents/medici/`) during lead extraction; enum lives in `src/agents/medici/output-schema.js::INQUIRY_QUALITY_ENUM`.
 - **Business value** — Categorical score: `HIGH` / `AVERAGE` / `LOW`.
 - **Lead-extractor** — `lib/lead-extractor.js` — LLM logic that parses conversation history → structured lead. Triggered by inbound messages and by `sync-leads` cron.
 - **Approval** — A lead can be manually `approved` (boolean), capturing the founder's confirmation; tracked with `approved_at`, `approved_by`.
