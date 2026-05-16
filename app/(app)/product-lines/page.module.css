@@ -43,12 +43,12 @@
 .card {
   display: flex;
   flex-direction: column;
-  gap: 10px;
-  padding: 18px;
+  gap: 16px;
+  padding: 20px;
   background: var(--bg2);
   border: 1px solid var(--border);
   border-radius: var(--rl);
-  transition: border-color 0.15s, transform 0.15s;
+  transition: border-color 0.15s, transform 0.15s, box-shadow 0.15s;
   text-align: left;
   text-decoration: none;
   color: inherit;
@@ -59,10 +59,12 @@
 .card:hover:not(:disabled) {
   border-color: var(--accent);
   transform: translateY(-1px);
+  box-shadow: 0 4px 16px -8px color-mix(in srgb, var(--accent) 40%, transparent);
 }
 
 .cardPending {
   border-style: dashed;
+  background: var(--bg);
 }
 
 .cardLoading {
@@ -70,32 +72,45 @@
   cursor: progress;
 }
 
+/* HEAD — name + phone left, status chip right */
 .cardHeader {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: space-between;
-  gap: 8px;
+  gap: 12px;
+}
+
+.cardHeaderText {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
 }
 
 .cardName {
-  font-size: 15px;
+  font-size: 17px;
   font-weight: 600;
   color: var(--text);
+  font-family: var(--font-display, var(--font-sans));
+  line-height: 1.2;
 }
 
-.cardId {
-  font-size: 12px;
-  color: var(--text3);
+.cardPhone {
+  font-size: 13px;
+  color: var(--text2);
   font-family: var(--font-mono, monospace);
 }
 
 .statusOk,
 .statusWarn,
 .statusOff {
+  flex-shrink: 0;
   font-size: 11px;
-  padding: 2px 8px;
+  padding: 3px 10px;
   border-radius: 10px;
   font-family: var(--font-sans);
+  font-weight: 500;
+  white-space: nowrap;
 }
 
 .statusOk {
@@ -113,20 +128,111 @@
   color: var(--text3);
 }
 
-.bindingRow {
+/* META — Phone Number ID + quality chip on one row */
+.cardMeta {
   display: flex;
   align-items: center;
-  gap: 6px;
+  justify-content: space-between;
+  gap: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+
+.metaItem {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.metaLabel {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text3);
+  font-family: var(--font-sans);
+}
+
+.metaValue {
   font-size: 12px;
   color: var(--text2);
-}
-
-.bindingLabel {
-  color: var(--text3);
-}
-
-.bindingValue {
   font-family: var(--font-mono, monospace);
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.qualityChip {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  padding: 3px 8px;
+  border-radius: 10px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  color: var(--text2);
+  font-family: var(--font-mono, monospace);
+  letter-spacing: 0.02em;
+}
+
+.qualityDot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--text3);
+}
+
+.qualityChip_green .qualityDot { background: var(--green, #3fb950); }
+.qualityChip_yellow .qualityDot { background: var(--amber, #d29922); }
+.qualityChip_red .qualityDot { background: var(--red, #f85149); }
+
+/* STATS — KPI strip at the bottom */
+.cardStats {
+  display: flex;
+  align-items: stretch;
+  background: var(--bg);
+  border-radius: 10px;
+  padding: 12px 4px;
+}
+
+.statTile {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 0 8px;
+  min-width: 0;
+}
+
+.statLabel {
+  font-size: 11px;
+  color: var(--text3);
+  font-family: var(--font-sans);
+}
+
+.statValue {
+  font-size: 22px;
+  font-weight: 600;
+  color: var(--text);
+  font-family: var(--font-display, var(--font-sans));
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+}
+
+.statDivider {
+  width: 1px;
+  background: var(--border);
+  margin: 4px 0;
+}
+
+.cardPendingHint {
+  font-size: 12px;
+  color: var(--text3);
+  padding: 12px 0 4px;
+  text-align: center;
+  border-top: 1px dashed var(--border);
 }
 
 .loadingWrap {

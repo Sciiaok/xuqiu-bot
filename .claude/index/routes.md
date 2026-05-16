@@ -1,12 +1,12 @@
 # Routes (auto-generated)
 
-Generated: 2026-05-16T11:52:42.280Z
+Generated: 2026-05-16T19:01:49.854Z
 
 Filesystem-derived list of API endpoints and UI pages. **Do not edit** — run `node scripts/build-index.mjs` to refresh.
 
 ## API Endpoints
 
-Total: **75**
+Total: **79**
 
 | Path | Methods | File |
 | --- | --- | --- |
@@ -68,8 +68,11 @@ Total: **75**
 | `/api/meta/refresh` | POST | [app/api/meta/refresh/route.js](../../app/api/meta/refresh/route.js) |
 | `/api/ogilvy/conversations` | GET, POST | [app/api/ogilvy/conversations/route.js](../../app/api/ogilvy/conversations/route.js) |
 | `/api/ogilvy/conversations/[id]` | GET, DELETE | [app/api/ogilvy/conversations/[id]/route.js](../../app/api/ogilvy/conversations/[id]/route.js) |
+| `/api/ogilvy/conversations/[id]/ad-status` | GET | [app/api/ogilvy/conversations/[id]/ad-status/route.js](../../app/api/ogilvy/conversations/[id]/ad-status/route.js) |
 | `/api/ogilvy/conversations/[id]/launch` | POST | [app/api/ogilvy/conversations/[id]/launch/route.js](../../app/api/ogilvy/conversations/[id]/launch/route.js) |
 | `/api/ogilvy/conversations/[id]/messages` | POST | [app/api/ogilvy/conversations/[id]/messages/route.js](../../app/api/ogilvy/conversations/[id]/messages/route.js) |
+| `/api/ogilvy/conversations/[id]/pause` | POST | [app/api/ogilvy/conversations/[id]/pause/route.js](../../app/api/ogilvy/conversations/[id]/pause/route.js) |
+| `/api/ogilvy/conversations/[id]/resume` | POST | [app/api/ogilvy/conversations/[id]/resume/route.js](../../app/api/ogilvy/conversations/[id]/resume/route.js) |
 | `/api/ogilvy/conversations/[id]/usage` | GET | [app/api/ogilvy/conversations/[id]/usage/route.js](../../app/api/ogilvy/conversations/[id]/usage/route.js) |
 | `/api/ogilvy/upload` | POST | [app/api/ogilvy/upload/route.js](../../app/api/ogilvy/upload/route.js) |
 | `/api/ogilvy/whatsapp-accounts` | GET | [app/api/ogilvy/whatsapp-accounts/route.js](../../app/api/ogilvy/whatsapp-accounts/route.js) |
@@ -78,6 +81,7 @@ Total: **75**
 | `/api/product-lines/[id]` | GET, PUT | [app/api/product-lines/[id]/route.js](../../app/api/product-lines/[id]/route.js) |
 | `/api/product-lines/[id]/cost-stats` | GET | [app/api/product-lines/[id]/cost-stats/route.js](../../app/api/product-lines/[id]/cost-stats/route.js) |
 | `/api/product-lines/[id]/ogilvy-ad-spend` | GET | [app/api/product-lines/[id]/ogilvy-ad-spend/route.js](../../app/api/product-lines/[id]/ogilvy-ad-spend/route.js) |
+| `/api/product-lines/stats` | GET | [app/api/product-lines/stats/route.js](../../app/api/product-lines/stats/route.js) |
 | `/api/reports` | GET, POST | [app/api/reports/route.js](../../app/api/reports/route.js) |
 | `/api/reports/[id]` | GET, POST | [app/api/reports/[id]/route.js](../../app/api/reports/[id]/route.js) |
 | `/api/reports/export` | GET | [app/api/reports/export/route.js](../../app/api/reports/export/route.js) |

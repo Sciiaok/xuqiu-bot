@@ -323,6 +323,86 @@ export async function* stageCampaigns(plan, { userId }) {
   return out;
 }
 
+// ── fetchAdStatuses (read effective_status from Meta) ──────────────────
+
+/**
+ * Batch-fetch `effective_status` for every ad ID. This is distinct from what
+ * we set via /pause /resume: configured_status tells Meta "we want this on",
+ * effective_status tells us what's actually happening — IN_PROCESS while
+ * Meta reviews, ACTIVE when it's truly serving, DISAPPROVED if rejected,
+ * WITH_ISSUES / PENDING_BILLING_INFO if blocked on something else.
+ *
+ * Returns: [{ id, name, effective_status, issues_info? }]. Missing IDs are
+ * omitted from the response (Meta drops them silently).
+ */
+export async function fetchAdStatuses(adIds, { userId }) {
+  if (!Array.isArray(adIds) || adIds.length === 0) return [];
+  const account = await getMetaAccountForUser(userId);
+  if (!account) throw new Error('Meta 未连接：请先在「设置 → Meta 连接」完成接入');
+  const { access_token } = account;
+
+  // Batch lookup: GET /v21.0/?ids=AD_1,AD_2&fields=… returns
+  // { AD_1: {...}, AD_2: {...} }. One request for any number of ads.
+  const url = new URL(graphUrl(''));
+  url.searchParams.set('ids', adIds.join(','));
+  url.searchParams.set('fields', 'id,name,effective_status,issues_info');
+  url.searchParams.set('access_token', access_token);
+
+  const res = await fetch(url, { signal: AbortSignal.timeout(FETCH_TIMEOUT) });
+  const data = await res.json();
+  if (data.error) {
+    const msg = data.error.error_user_msg || data.error.message;
+    throw new Error(`Meta API [ad-status]: ${msg}`);
+  }
+  return Object.values(data).filter((row) => row && row.id);
+}
+
+// ── setCampaignsStatus (pause / resume) ────────────────────────────────
+
+/**
+ * Flip every level (campaign → adset → ad) to a target status (ACTIVE or
+ * PAUSED). Mirrors activateCampaigns but as a one-shot async function — pause
+ * and resume don't need streaming (just N small status-update calls, no image
+ * uploads, no entity creation).
+ *
+ * Returns per-id results so partial failures are visible:
+ *   [{ level, id, status: 'PAUSED' }, { level, id, error: '...' }]
+ */
+export async function setCampaignsStatus(
+  { campaign_ids = [], adset_ids = [], ad_ids = [] },
+  target,
+  { userId },
+) {
+  if (target !== 'ACTIVE' && target !== 'PAUSED') {
+    throw new Error(`setCampaignsStatus: target must be ACTIVE or PAUSED, got ${target}`);
+  }
+  const account = await getMetaAccountForUser(userId);
+  if (!account) throw new Error('Meta 未连接：请先在「设置 → Meta 连接」完成接入');
+  const { access_token } = account;
+
+  const results = [];
+  // Same top-down order as activateCampaigns — cosmetic, but avoids the
+  // transient state where an ad is ACTIVE while its parent adset is still
+  // PAUSED (or vice-versa on pause).
+  for (const [level, ids] of [
+    ['campaign', campaign_ids],
+    ['adset',    adset_ids],
+    ['ad',       ad_ids],
+  ]) {
+    if (!ids.length) continue;
+    const levelResults = await Promise.all(ids.map(async (id) => {
+      try {
+        await metaPost(id, { status: target }, access_token, { step: `set ${level} ${id} → ${target}` });
+        return { level, id, status: target };
+      } catch (err) {
+        return { level, id, error: err.message };
+      }
+    }));
+    results.push(...levelResults);
+  }
+  return results;
+}
+
 // ── activateCampaigns ──────────────────────────────────────────────────
 
 /**

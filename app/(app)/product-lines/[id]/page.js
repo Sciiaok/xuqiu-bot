@@ -29,8 +29,8 @@ const TABS = [
  *
  * 用户可自定义的只有 4 项：
  *   1. 产品线名称           → form.name (顶栏 input)
- *   2. 价值判定标准         → form.business_value_guidance
- *   3. 线索字段表           → leadFields (LeadFieldsEditor)
+ *   2. 线索字段表           → leadFields (LeadFieldsEditor)
+ *   3. 线索价值评定         → form.business_value_guidance
  *   4. 知识库               → /knowledge-base 三个 tab (overview / upload / assets)
  *
  * 旧字段（catalog_description / domain_glossary / message_style_examples /
@@ -189,7 +189,19 @@ export default function ProductLineEditPage() {
 
           <div className={s.section}>
             <div className={s.sectionHead}>
-              <h3 className={s.sectionTitle}>价值判定标准</h3>
+              <h3 className={s.sectionTitle}>线索字段表</h3>
+              <p className={s.sectionHint}>
+                告诉 AI 在跟客户聊的时候要尝试问出哪些信息。每条会进入 AI 的输出，并影响线索的评级。
+                高质线索应该包含足够信息让销售能直接跟进；低质线索则可能只包含客户的基本联系方式，或根本没有有效信息。
+                请根据实际情况调整字段列表，删除不必要的字段，添加重要但目前缺失的字段。
+              </p>
+            </div>
+            <LeadFieldsEditor value={leadFields} onChange={handleLeadFieldsChange} />
+          </div>
+
+          <div className={s.section}>
+            <div className={s.sectionHead}>
+              <h3 className={s.sectionTitle}>线索价值评定</h3>
               <p className={s.sectionHint}>
                 本线判定 LOW / AVERAGE / HIGH 的依据（数量、客户类型、采购历史等）。AI 评估
                 business_value 时会按这里的口径打分。
@@ -202,18 +214,6 @@ export default function ProductLineEditPage() {
               onChange={(e) => handleText('business_value_guidance', e.target.value)}
               placeholder={'例：\n- 1-10 台：LOW\n- 11-50 台：AVERAGE\n- 50+ 台 或已建立的经销商：HIGH'}
             />
-          </div>
-
-          <div className={s.section}>
-            <div className={s.sectionHead}>
-              <h3 className={s.sectionTitle}>线索字段表</h3>
-              <p className={s.sectionHint}>
-                告诉 AI 在跟客户聊的时候要尝试问出哪些信息。每条会进入 AI 的输出，并影响线索的评级。
-                高质线索应该包含足够信息让销售能直接跟进；低质线索则可能只包含客户的基本联系方式，或根本没有有效信息。
-                请根据实际情况调整字段列表，删除不必要的字段，添加重要但目前缺失的字段。
-              </p>
-            </div>
-            <LeadFieldsEditor value={leadFields} onChange={handleLeadFieldsChange} />
           </div>
 
           <div className={s.saveBar}>

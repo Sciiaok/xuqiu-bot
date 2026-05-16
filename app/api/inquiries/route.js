@@ -527,7 +527,9 @@ async function handleQuantityBranch(supabase, tenantId, filters, limit, cursor) 
 
   return paginatedResponse(visible, limit, {
     totalContacts: new Set(filtered.map((r) => r.contact_id).filter(Boolean)).size,
-    totalConversations: filtered.length,
+    // route bar 的「全部」chip 期望反映"非路由 filter 下"的总对话数；用未经
+    // resolvedRoute 二次过滤的 rows.length，跟 standard 分支语义对齐。
+    totalConversations: rows.length,
     totalLeads: filtered.reduce((n, c) => n + (c.leads?.length || 0), 0),
     approvedCount: filtered.reduce(
       (n, c) => n + (c.leads || []).filter((l) => l.approved).length,
@@ -538,10 +540,17 @@ async function handleQuantityBranch(supabase, tenantId, filters, limit, cursor) 
 }
 
 async function handleStandardBranch(supabase, tenantId, filters, limit, cursor) {
+  // 列表查询保留 resolvedRoute（点 tab 就只看那个路由的对话），但 count 类
+  // 聚合查询必须剥掉 resolvedRoute：route bar 的「全部」chip 和 KPI 条「对话」
+  // 期望反映"应用全部 *非路由* filter 的对话总数"。否则点「人工跟进中」会让
+  // 「全部」collapse 成人工那个数，看起来像 bug。totalLeads / approvedCount
+  // 走 leads-base 查询，因为 PostgREST 嵌套限制本来就拿不到 resolved_route，
+  // 天然 route-independent，不用动。
+  const filtersNoRoute = { ...filters, resolvedRoute: null };
   const [dataRes, convCountRes, leadsCountRes, approvedCountRes, aggregates] =
     await Promise.all([
       buildListQuery(supabase, tenantId, filters, limit, cursor),
-      buildConversationCountQuery(supabase, tenantId, filters),
+      buildConversationCountQuery(supabase, tenantId, filtersNoRoute),
       buildLeadCountQuery(supabase, tenantId, filters),
       buildLeadCountQuery(supabase, tenantId, filters, { approvedOnly: true }),
       fetchAggregates(supabase, tenantId, filters),

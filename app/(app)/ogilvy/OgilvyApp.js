@@ -5,7 +5,7 @@ import { useSearchParams } from 'next/navigation';
 import s from './ogilvy.module.css';
 import Markdown from '../../components/Markdown/Markdown';
 import WhatsAppGateCard from './components/WhatsAppGateCard';
-import AdPlanCard from './components/AdPlanCard';
+import AdPlanCard, { summarizeAdStatuses } from './components/AdPlanCard';
 import UsageBadge from './components/UsageBadge';
 import StageArchive from './components/StageArchive';
 import Skeleton, { SkeletonStack } from '../../components/Skeleton/Skeleton';
@@ -372,6 +372,92 @@ export default function OgilvyApp() {
   // Streams progress from /launch into `launchProgress`, then refetches the
   // session so the card reflects the final plan_json (status, meta_ids).
   const [launchProgress, setLaunchProgress] = useState(null);
+  // Single in-flight flag for pause + resume — both are short non-streaming
+  // POSTs, so a plain boolean is enough to disable the button while waiting.
+  const [controlBusy, setControlBusy] = useState(false);
+
+  // ── Live ad effective_status from Meta (审核中 / 投放中 / 被拒 / …) ──
+  // adStatuses = { summary: { counts, worst, total }, ads, error?, fetched_at }
+  // null = not fetched yet for the current session. Keyed by selectedId; we
+  // clear it when the user switches sessions so we don't show stale data.
+  const [adStatuses, setAdStatuses] = useState(null);
+  const [refreshingStatus, setRefreshingStatus] = useState(false);
+  const adStatusFetchedAtRef = useRef(0);
+
+  const fetchAdStatuses = useCallback(async (sessionId) => {
+    if (!sessionId) return;
+    // 30s cooldown to keep the user from spamming Meta. The button itself
+    // disables for the same window via refreshingStatus, but the cooldown
+    // also dedupes the auto-fetch fired by session-switch.
+    if (Date.now() - adStatusFetchedAtRef.current < 30_000) return;
+    setRefreshingStatus(true);
+    try {
+      const res = await fetch(`/api/ogilvy/conversations/${sessionId}/ad-status`);
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setAdStatuses({ ads: [], summary: null, error: body.error || `HTTP ${res.status}` });
+      } else {
+        const ads = body.ads || [];
+        const summary = ads.length > 0 ? summarizeAdStatuses(ads) : null;
+        setAdStatuses({ ads, summary, fetched_at: body.fetched_at });
+      }
+    } catch (err) {
+      setAdStatuses({ ads: [], summary: null, error: err.message });
+    } finally {
+      adStatusFetchedAtRef.current = Date.now();
+      setRefreshingStatus(false);
+    }
+  }, []);
+
+  // Auto-fetch on session select when the plan is live on Meta (launched OR
+  // paused). Resets adStatuses on session switch so we don't carry over the
+  // previous session's badges.
+  useEffect(() => {
+    setAdStatuses(null);
+    adStatusFetchedAtRef.current = 0;
+    if (!selectedId) return;
+    const status = plan?.status;
+    if (status === 'launched' || status === 'paused') {
+      fetchAdStatuses(selectedId);
+    }
+  }, [selectedId, plan?.status, fetchAdStatuses]);
+
+  const handleRefreshStatus = useCallback(() => {
+    // Bypass cooldown when the user explicitly clicks — they want fresh data.
+    adStatusFetchedAtRef.current = 0;
+    fetchAdStatuses(selectedId);
+  }, [selectedId, fetchAdStatuses]);
+
+  async function handlePause() {
+    if (!selectedId || controlBusy) return;
+    setControlBusy(true);
+    try {
+      const res = await fetch(`/api/ogilvy/conversations/${selectedId}/pause`, { method: 'POST' });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(body.error || `HTTP ${res.status}`);
+    } catch (err) {
+      window.alert(`暂停失败：${err.message}`);
+    } finally {
+      setControlBusy(false);
+      await refreshSelected();
+    }
+  }
+
+  async function handleResume() {
+    if (!selectedId || controlBusy) return;
+    setControlBusy(true);
+    try {
+      const res = await fetch(`/api/ogilvy/conversations/${selectedId}/resume`, { method: 'POST' });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(body.error || `HTTP ${res.status}`);
+    } catch (err) {
+      window.alert(`恢复失败：${err.message}`);
+    } finally {
+      setControlBusy(false);
+      await refreshSelected();
+    }
+  }
+
   async function handleLaunch() {
     if (!selectedId || !plan) return;
     setLaunchProgress({ phase: 'starting', detail: '连接 Meta…' });
@@ -688,7 +774,13 @@ export default function OgilvyApp() {
             <AdPlanCard
               plan={streamingPlan || plan}
               onLaunch={handleLaunch}
+              onPause={handlePause}
+              onResume={handleResume}
+              onRefreshStatus={handleRefreshStatus}
+              adStatuses={adStatuses}
+              refreshingStatus={refreshingStatus}
               launchProgress={launchProgress}
+              controlBusy={controlBusy}
               streaming={!!streamingPlan}
             />
           ) : (
@@ -878,6 +970,7 @@ function SessionCard({ session, productLineName, active, onSelect, onDelete }) {
 function describeSessionStatus(status) {
   switch (status) {
     case 'launched':  return { dotClass: s.sessionDotLaunched, statusLabel: '投放中' };
+    case 'paused':    return { dotClass: s.sessionDotPaused,   statusLabel: '已暂停' };
     case 'staging':
     case 'staged':    return { dotClass: s.sessionDotBusy,     statusLabel: '启动中' };
     case 'failed':    return { dotClass: s.sessionDotFailed,   statusLabel: '启动失败' };

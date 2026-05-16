@@ -19,10 +19,56 @@ import AdCreativePreview from './AdCreativePreview';
  * to change it, the user asks the AI to redraft. Keeps the card's job:
  * display + confirm + launch.
  */
+// ── Meta effective_status → coarse buckets the UI cares about ──────────
+// Meta's enum is long (15+ values); we collapse to 5 buckets, ordered worst
+// → best for aggregation: 被拒 / 有问题 outranks 审核中 outranks 投放中.
+// Source: https://developers.facebook.com/docs/marketing-api/reference/ad-account/ads
+const META_STATUS_BUCKET = {
+  ACTIVE:                'active',
+  IN_PROCESS:            'review',
+  PENDING_REVIEW:        'review',
+  DISAPPROVED:           'rejected',
+  WITH_ISSUES:           'issue',
+  PENDING_BILLING_INFO:  'issue',
+  ADSET_PAUSED:          'paused',
+  CAMPAIGN_PAUSED:       'paused',
+  PAUSED:                'paused',
+  ARCHIVED:              'paused',
+  DELETED:               'paused',
+};
+const BUCKET_LABEL = {
+  active:   '投放中',
+  review:   '审核中',
+  rejected: '被拒',
+  issue:    '有问题',
+  paused:   '已暂停',
+};
+// Severity for picking the "worst" bucket as the headline label.
+const BUCKET_SEVERITY = { rejected: 4, issue: 3, review: 2, paused: 1, active: 0 };
+
+export function summarizeAdStatuses(ads = []) {
+  if (!Array.isArray(ads) || ads.length === 0) return null;
+  const counts = { active: 0, review: 0, rejected: 0, issue: 0, paused: 0 };
+  for (const ad of ads) {
+    const b = META_STATUS_BUCKET[ad?.effective_status] || 'paused';
+    counts[b] += 1;
+  }
+  const worst = Object.entries(counts)
+    .filter(([, n]) => n > 0)
+    .sort((a, b) => BUCKET_SEVERITY[b[0]] - BUCKET_SEVERITY[a[0]])[0]?.[0] || 'active';
+  return { counts, worst, total: ads.length };
+}
+
 export default function AdPlanCard({
   plan,
   onLaunch,
+  onPause,
+  onResume,
+  onRefreshStatus,
+  adStatuses = null,
+  refreshingStatus = false,
   launchProgress = null,
+  controlBusy = false,
   streaming = false,
 }) {
   if (!plan) return null;
@@ -90,17 +136,29 @@ export default function AdPlanCard({
   const missingImages = adSets.some(as => (as.ads || []).some(ad => !ad.creative?.image_url));
   const isBusy = plan.status === 'staging' || plan.status === 'staged' || launchProgress?.phase;
   const isLaunched = plan.status === 'launched';
+  const isPaused = plan.status === 'paused';
   const isFailed = plan.status === 'failed';
-  const canLaunch = !streaming && !isBusy && !isLaunched && !missingImages;
+  const liveOnMeta = isLaunched || isPaused;
+  const canLaunch = !streaming && !isBusy && !isLaunched && !isPaused && !missingImages;
 
+  // Headline tone: when launched with real Meta data, the worst-bucket from
+  // effective_status overrides the simple "launched" green — a rejected ad is
+  // not a green-light state. Without data, fall back to the configured-status
+  // tone.
+  const liveBucket = isLaunched && adStatuses?.summary ? adStatuses.summary.worst : null;
   const statusTone =
-    isLaunched ? 'launched'
+    liveBucket === 'rejected' ? 'failed'
+    : liveBucket === 'issue' ? 'failed'
+    : liveBucket === 'review' ? 'busy'
+    : isLaunched ? 'launched'
+    : isPaused ? 'paused'
     : isBusy ? 'busy'
     : isFailed ? 'failed'
     : streaming ? 'streaming'
     : 'draft';
   const statusLabel = {
     launched: '投放中',
+    paused:   '已暂停',
     busy:     plan.status === 'staged' ? '激活中…' : '创建中…',
     failed:   '启动失败',
     streaming: '生成中…',
@@ -244,7 +302,29 @@ export default function AdPlanCard({
       <footer className={s.planFoot}>
         <div className={s.footStatus}>
           <span className={`${s.statusDot} ${s[`statusDot_${statusTone}`]}`} />
-          <span className={s.statusText}>{statusLabel}</span>
+          <span className={s.statusText}>
+            {(() => {
+              // When launched and we have effective_status from Meta, show
+              // the *worst* bucket as the headline — "投放中" stays only if
+              // every ad really is ACTIVE. Without the data, fall back to the
+              // configured-status label.
+              if (isLaunched && adStatuses?.summary) {
+                return BUCKET_LABEL[adStatuses.summary.worst] || statusLabel;
+              }
+              return statusLabel;
+            })()}
+          </span>
+          {liveOnMeta && adStatuses?.summary && adStatuses.summary.total > 1 && (
+            <span className={s.statusDetail}>
+              {Object.entries(adStatuses.summary.counts)
+                .filter(([, n]) => n > 0)
+                .map(([b, n]) => `${n} ${BUCKET_LABEL[b]}`)
+                .join(' · ')}
+            </span>
+          )}
+          {liveOnMeta && adStatuses?.error && (
+            <span className={s.statusDetail}>状态获取失败：{adStatuses.error}</span>
+          )}
           {launchProgress?.detail && (
             <span className={s.statusDetail}>{launchProgress.detail}</span>
           )}
@@ -256,7 +336,20 @@ export default function AdPlanCard({
           )}
         </div>
 
-        {!isLaunched && (
+        {liveOnMeta && onRefreshStatus && (
+          <button
+            type="button"
+            className={`${s.refreshStatusBtn} ${refreshingStatus ? s.refreshStatusBtnDisabled : ''}`}
+            onClick={() => onRefreshStatus()}
+            disabled={refreshingStatus}
+            title="向 Meta 拉一次最新审核 / 投放状态"
+            aria-label="刷新投放状态"
+          >
+            {refreshingStatus ? '…' : '↻'}
+          </button>
+        )}
+
+        {!isLaunched && !isPaused && (
           <button
             className={`${s.launchBtn} ${!canLaunch ? s.launchBtnDisabled : ''}`}
             onClick={() => onLaunch?.()}
@@ -271,10 +364,33 @@ export default function AdPlanCard({
             {streaming ? '生成中…' : isBusy ? '启动中…' : isFailed ? '↻ 重新启动' : '✦ 启动投放'}
           </button>
         )}
+
+        {isLaunched && onPause && (
+          <button
+            className={`${s.launchBtn} ${s.launchBtnSecondary} ${controlBusy ? s.launchBtnDisabled : ''}`}
+            onClick={() => onPause()}
+            disabled={controlBusy}
+            title="暂停投放：把 Meta 上的 campaign / adset / ad 全部翻回 PAUSED"
+          >
+            {controlBusy ? '暂停中…' : '⏸ 暂停投放'}
+          </button>
+        )}
+
+        {isPaused && onResume && (
+          <button
+            className={`${s.launchBtn} ${controlBusy ? s.launchBtnDisabled : ''}`}
+            onClick={() => onResume()}
+            disabled={controlBusy}
+            title="恢复投放：把 Meta 上的 campaign / adset / ad 重新切回 ACTIVE"
+          >
+            {controlBusy ? '恢复中…' : '✦ 恢复投放'}
+          </button>
+        )}
       </footer>
 
-      {/* LAUNCHED LINKS ─ separate row below foot so they can wrap on narrow widths */}
-      {isLaunched && plan.meta_campaign_ids?.length > 0 && (
+      {/* LIVE LINKS ─ separate row below foot so they can wrap on narrow widths.
+          Visible whenever campaigns exist on Meta (launched OR paused). */}
+      {liveOnMeta && plan.meta_campaign_ids?.length > 0 && (
         <nav className={s.planLinks}>
           <a href={`/campaign-studio?campaign_id=${encodeURIComponent(plan.meta_campaign_ids[0])}`}>看数据 →</a>
           <a

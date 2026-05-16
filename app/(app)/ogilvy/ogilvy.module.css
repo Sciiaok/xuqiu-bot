@@ -220,6 +220,7 @@
 .sessionDotDraft     { background: var(--text3); }
 .sessionDotBusy      { background: var(--amber); animation: sessionPulse 1.4s ease-in-out infinite; }
 .sessionDotLaunched  { background: var(--green); }
+.sessionDotPaused    { background: var(--amber); }
 .sessionDotFailed    { background: var(--red); }
 .sessionDotArchived  { background: transparent; border: 1px solid var(--border3); }
 @keyframes sessionPulse {
@@ -1828,6 +1829,7 @@
 .statusDot_streaming { background: var(--accent); animation: pulse 1.4s ease-in-out infinite; }
 .statusDot_busy      { background: var(--amber); animation: pulse 1.4s ease-in-out infinite; }
 .statusDot_launched  { background: var(--green); }
+.statusDot_paused    { background: var(--amber); }
 .statusDot_failed    { background: var(--red); }
 @keyframes pulse {
   0%, 100% { opacity: 1; }
@@ -1854,11 +1856,35 @@
   transition: filter 0.12s;
 }
 .launchBtn:hover { filter: brightness(1.05); }
+.launchBtnSecondary {
+  background: transparent;
+  color: var(--text);
+  border: 1px solid var(--border);
+}
+.launchBtnSecondary:hover { background: var(--bg2); filter: none; }
 .launchBtnDisabled {
   opacity: 0.5;
   cursor: not-allowed;
 }
 .launchBtnDisabled:hover { filter: none; }
+
+.refreshStatusBtn {
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text2);
+  cursor: pointer;
+  font-size: 14px;
+  line-height: 1;
+  flex-shrink: 0;
+  transition: background 0.12s, color 0.12s;
+}
+.refreshStatusBtn:hover { background: var(--bg2); color: var(--text); }
+.refreshStatusBtnDisabled { opacity: 0.4; cursor: not-allowed; }
+.refreshStatusBtnDisabled:hover { background: transparent; color: var(--text2); }
 
 /* ── Launched: shortcut links below the foot ── */
 .planLinks {

@@ -25,11 +25,14 @@ export default function ProductLinesPage() {
   // Synchronous cache reads on first render → instant paint when preloaded.
   const cachedLines = readCache(KEYS.PRODUCT_LINES_ALL);
   const cachedAccts = readCache(KEYS.OGILVY_WA_ACCOUNTS);
+  const cachedStats = readCache(KEYS.PRODUCT_LINES_STATS);
   const haveBoth = !!(cachedLines && cachedAccts);
   const [lines, setLines] = useState(cachedLines?.data ?? []);
   const [accounts, setAccounts] = useState(
     cachedAccts?.data ?? { status: 'loading', numbers: [], all_numbers: [] },
   );
+  // stats 是次要数据：列表先渲染，stats 异步追上来。null = 还没回，{} = 没数据。
+  const [stats, setStats] = useState(cachedStats?.data ?? null);
   const [loading, setLoading] = useState(!haveBoth);
   const [loadError, setLoadError] = useState('');
   const [openingId, setOpeningId] = useState('');
@@ -53,6 +56,10 @@ export default function ProductLinesPage() {
     } finally {
       if (!silent) setLoading(false);
     }
+    // stats 单独跑：失败不影响主列表，错误吞掉静默 fallback 到 "—"。
+    prefetch(KEYS.PRODUCT_LINES_STATS, FETCHERS[KEYS.PRODUCT_LINES_STATS])
+      .then(setStats)
+      .catch(() => setStats({}));
   }
 
   useEffect(() => { loadAll({ silent: haveBoth }); }, []); // eslint-disable-line react-hooks/exhaustive-deps
@@ -140,6 +147,7 @@ export default function ProductLinesPage() {
           {cards.map(({ number, line }) => {
             const configured = Boolean(line);
             const opening = openingId === number.phone_number_id;
+            const lineStats = configured && stats ? stats[line.id] : null;
             return (
               <button
                 key={number.phone_number_id}
@@ -148,12 +156,13 @@ export default function ProductLinesPage() {
                 className={`${s.card} ${configured ? '' : s.cardPending} ${opening ? s.cardLoading : ''}`}
                 disabled={opening}
               >
+                {/* HEAD ─ status chip floats top-right, name + phone left */}
                 <div className={s.cardHeader}>
-                  <div>
+                  <div className={s.cardHeaderText}>
                     <div className={s.cardName}>
                       {configured ? line.name : (number.verified_name || '未命名')}
                     </div>
-                    <div className={s.cardId}>{number.display_number}</div>
+                    <div className={s.cardPhone}>{number.display_number}</div>
                   </div>
                   {opening
                     ? <span className={s.statusOff}>打开中…</span>
@@ -162,16 +171,40 @@ export default function ProductLinesPage() {
                       : <span className={s.statusWarn}>待配置</span>}
                 </div>
 
-                <div className={s.bindingRow}>
-                  <span className={s.bindingLabel}>WA 号码 ID：</span>
-                  <span className={s.bindingValue}>{number.phone_number_id}</span>
+                {/* META ─ Phone Number ID prominently (it's the routing key), quality chip */}
+                <div className={s.cardMeta}>
+                  <div className={s.metaItem}>
+                    <span className={s.metaLabel}>Phone Number ID</span>
+                    <span className={s.metaValue}>{number.phone_number_id}</span>
+                  </div>
+                  {number.quality_rating && (
+                    <span className={`${s.qualityChip} ${s[`qualityChip_${number.quality_rating.toLowerCase()}`] || ''}`}>
+                      <span className={s.qualityDot} />
+                      {number.quality_rating}
+                    </span>
+                  )}
                 </div>
 
-                {number.quality_rating && (
-                  <div className={s.bindingRow}>
-                    <span className={s.bindingLabel}>质量等级：</span>
-                    <span className={s.bindingValue}>{number.quality_rating}</span>
+                {/* STATS ─ KPI strip. Configured cards show real numbers; pending
+                    cards show a CTA hint since stats aren't meaningful yet. */}
+                {configured ? (
+                  <div className={s.cardStats}>
+                    <div className={s.statTile}>
+                      <span className={s.statLabel}>对话总数</span>
+                      <span className={s.statValue}>
+                        {lineStats == null ? '—' : (lineStats.conversations ?? 0).toLocaleString()}
+                      </span>
+                    </div>
+                    <div className={s.statDivider} />
+                    <div className={s.statTile}>
+                      <span className={s.statLabel}>入站消息</span>
+                      <span className={s.statValue}>
+                        {lineStats == null ? '—' : (lineStats.inbound_messages ?? 0).toLocaleString()}
+                      </span>
+                    </div>
                   </div>
+                ) : (
+                  <div className={s.cardPendingHint}>点击此卡片创建配置 →</div>
                 )}
               </button>
             );

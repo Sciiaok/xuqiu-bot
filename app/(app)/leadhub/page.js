@@ -9,6 +9,7 @@ import TabBar from '../../components/TabBar/TabBar';
 import { createClient } from '../../../lib/supabase-browser';
 import {
   INQUIRY_QUALITY_LABELS as QUALITY_LABELS,
+  BUSINESS_VALUE_LABELS,
 } from '../../../lib/inquiries-filters';
 import Markdown from '../../components/Markdown/Markdown';
 import AdPreviewModal from '../../components/AdPreviewModal/AdPreviewModal';
@@ -57,6 +58,7 @@ const DETAIL_TABS = [
 // accepts product_line slugs (not just UUIDs) as agentIds — see resolveAgentIdsFilter.
 const SUPPLY_CHAIN_ALL = '全部产品线';
 const QUALITY_ALL = '全部质量';
+const BUSINESS_VALUE_ALL = '全部价值';
 // Dropdown entries: value = enum sent to /api/inquiries, label = zh-CN from
 // INQUIRY_QUALITY_LABELS. BAD leads aren't listed here — they land in
 // FAQ_END routing and aren't useful to browse.
@@ -65,6 +67,12 @@ const QUALITY_OPTIONS = [
   { value: 'PROOF',   label: QUALITY_LABELS.PROOF },
   { value: 'QUALIFY', label: QUALITY_LABELS.QUALIFY },
   { value: 'GOOD',    label: QUALITY_LABELS.GOOD },
+];
+const BUSINESS_VALUE_FILTER_OPTIONS = [
+  { value: BUSINESS_VALUE_ALL, label: BUSINESS_VALUE_ALL },
+  { value: 'HIGH',    label: BUSINESS_VALUE_LABELS.HIGH },
+  { value: 'AVERAGE', label: BUSINESS_VALUE_LABELS.AVERAGE },
+  { value: 'LOW',     label: BUSINESS_VALUE_LABELS.LOW },
 ];
 
 const SEARCH_DEBOUNCE_MS = 300;
@@ -103,6 +111,7 @@ export default function LeadHubPage() {
   const [supplyChain, setSupplyChain] = useState(SUPPLY_CHAIN_ALL);
   const [supplyChainOptions, setSupplyChainOptions] = useState([]);
   const [quality, setQuality] = useState(QUALITY_ALL);
+  const [businessValue, setBusinessValue] = useState(BUSINESS_VALUE_ALL);
   const [datePreset, setDatePreset] = useState('all');
   const [customFrom, setCustomFrom] = useState('');
   const [customTo, setCustomTo] = useState('');
@@ -235,6 +244,7 @@ export default function LeadHubPage() {
     qs.set('limit', '20');
     if (supplyChain !== SUPPLY_CHAIN_ALL) qs.append('agentIds', supplyChain);
     if (quality !== QUALITY_ALL) qs.append('inquiryQuality', quality);
+    if (businessValue !== BUSINESS_VALUE_ALL) qs.append('businessValue', businessValue);
     if (routeFilter !== 'all') qs.set('resolvedRoute', routeFilter);
     if (debouncedSearch) qs.set('customer', debouncedSearch);
     const { dateFrom, dateTo } = resolveDateRange(datePreset, customFrom, customTo);
@@ -246,7 +256,7 @@ export default function LeadHubPage() {
       qs.set('cursorId', cursor.cursorId);
     }
     return qs;
-  }, [supplyChain, quality, routeFilter, datePreset, customFrom, customTo, debouncedSearch, metaAdIds]);
+  }, [supplyChain, quality, businessValue, routeFilter, datePreset, customFrom, customTo, debouncedSearch, metaAdIds]);
 
   // Shared fetch for the first page — used by both initial load and realtime refresh.
   // `resetSelection` = true on filter changes (pick first card), false on realtime
@@ -739,6 +749,7 @@ export default function LeadHubPage() {
   const hasActiveFilter =
     supplyChain !== SUPPLY_CHAIN_ALL ||
     quality !== QUALITY_ALL ||
+    businessValue !== BUSINESS_VALUE_ALL ||
     datePreset !== 'all' ||
     !!debouncedSearch ||
     metaAdIds.length > 0;
@@ -746,6 +757,7 @@ export default function LeadHubPage() {
   const resetFilters = useCallback(() => {
     setSupplyChain(SUPPLY_CHAIN_ALL);
     setQuality(QUALITY_ALL);
+    setBusinessValue(BUSINESS_VALUE_ALL);
     setDatePreset('all');
     setCustomFrom('');
     setCustomTo('');
@@ -766,6 +778,10 @@ export default function LeadHubPage() {
       const opt = QUALITY_OPTIONS.find((o) => o.value === quality);
       chips.push({ key: 'quality', label: `质量：${opt?.label || quality}`, clear: () => setQuality(QUALITY_ALL) });
     }
+    if (businessValue !== BUSINESS_VALUE_ALL) {
+      const opt = BUSINESS_VALUE_FILTER_OPTIONS.find((o) => o.value === businessValue);
+      chips.push({ key: 'business_value', label: `价值：${opt?.label || businessValue}`, clear: () => setBusinessValue(BUSINESS_VALUE_ALL) });
+    }
     if (datePreset !== 'all') {
       const opt = DATE_PRESETS.find((p) => p.key === datePreset);
       chips.push({ key: 'date', label: `时间：${opt?.label || datePreset}`, clear: () => { setDatePreset('all'); setCustomFrom(''); setCustomTo(''); } });
@@ -774,7 +790,7 @@ export default function LeadHubPage() {
       chips.push({ key: 'search', label: `搜索：${debouncedSearch}`, clear: () => setSearch('') });
     }
     return chips;
-  }, [supplyChain, supplyChainOptions, quality, datePreset, debouncedSearch]);
+  }, [supplyChain, supplyChainOptions, quality, businessValue, datePreset, debouncedSearch]);
 
   // ── Keyboard shortcuts ──
   // `/` focuses the search box (Slack/Linear pattern). Esc clears focus or
@@ -875,6 +891,11 @@ export default function LeadHubPage() {
               </select>
               <select className={s.filterSelect} value={quality} onChange={e => setQuality(e.target.value)} title="线索质量">
                 {QUALITY_OPTIONS.map(opt => (
+                  <option key={opt.value} value={opt.value}>{opt.label}</option>
+                ))}
+              </select>
+              <select className={s.filterSelect} value={businessValue} onChange={e => setBusinessValue(e.target.value)} title="商业价值">
+                {BUSINESS_VALUE_FILTER_OPTIONS.map(opt => (
                   <option key={opt.value} value={opt.value}>{opt.label}</option>
                 ))}
               </select>
