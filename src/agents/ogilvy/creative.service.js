@@ -145,16 +145,15 @@ async function callOpenRouterFallback(model, prompt, refUrls) {
   const message = data.choices?.[0]?.message;
   if (!message) throw new Error('No message in response');
 
-  // Gemini via OpenRouter returns message.content[] with type=image_url and
-  // a data: URL whose payload is the base64 image.
+  // Gemini via OpenRouter returns the image on message.images[] (not
+  // message.content[]) — content is null on image responses. Each item is
+  // { type: 'image_url', image_url: { url: 'data:image/...;base64,...' } }.
   let b64 = null;
-  if (Array.isArray(message.content)) {
-    for (const part of message.content) {
-      if (part.type === 'image_url') {
-        const u = part.image_url?.url;
-        b64 = u?.includes(',') ? u.split(',')[1] : u;
-        break;
-      }
+  for (const part of Array.isArray(message.images) ? message.images : []) {
+    if (part?.type === 'image_url') {
+      const u = part.image_url?.url;
+      b64 = u?.includes(',') ? u.split(',')[1] : u;
+      if (b64) break;
     }
   }
   if (!b64) throw new Error('No image returned by model');
