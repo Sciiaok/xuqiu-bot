@@ -1,50 +1,45 @@
 /**
- * GET /api/product-lines/[id]/cost-stats?range=7d|30d|90d
+ * GET /api/product-lines/[id]/cost-stats?preset=all|1d|7d|30d|365d|custom&from=&to=
  *
- * 成本分析 tab 的数据源。聚合「能挂到这条产品线的」LLM token 成本
- * (medici.qualify / kb.search.* / kb_asset_linker.match / kb.upload.* /
- * knowledge.teach.extract / contacts.profile.summary / report-generator.*)
- * + 量化指标(对话数 / 消息数 / 合格线索数)。
+ * 成本分析 tab 的数据源。从 2026-05-17 起 Ogilvy 工作台也按产品线绑定,
+ * 这里把"能挂到本产品线的所有 LLM 成本"分两块返回:
+ *
+ *   - medici:   medici.qualify / kb.* / knowledge.teach.extract /
+ *               contacts.profile.summary / report-generator.* / kb.image-extract.*
+ *               (运营产品线本身花的钱)
+ *   - ogilvy:   ogilvy.turn / ogilvy.web_search / ogilvy.read_webpage /
+ *               ogilvy.image-gen (策划广告创意花的钱)
+ *
+ * 时间窗口跟 leadhub 一致:lib/date-range-presets.js,yesterday-aligned 北京时区。
+ *
+ * 量化指标 (volume) + 上期对比 (medici_prev / ogilvy_prev) 一并返回。
  *
  * 不在此返回:
- *   - Meta 广告花费(前端单独调 /api/ads/dashboard?productLine=<id> 拿,
- *     避免重复实现 Meta API 拉取 + 缓存)
- *   - Ogilvy 工作台调用 (ogilvy.turn / ogilvy.web_search / ogilvy.read_webpage)
- *     和 ogilvy.image-gen 图片生成:这部分 product_line=NULL,单独算租户级,
- *     UI 上以"工作台占用"独立 section 展示
+ *   - Meta 广告花费(前端单独调 /api/ads/dashboard?productLine=<id>)
  *   - inquiry-dashboard.summary / dev-tools.ai-sql / ai-report.* (租户级)
- *
- * 老行处理:product_line 列上线前的所有数据 product_line IS NULL,这部分对
- * 单产品线视图不可见;UI 上若需要历史数据由 supabase/operations 的 backfill
- * 脚本反推后再显示。
  */
 import { getTenantContext } from '../../../../../lib/tenant-context.js';
 import { findProductLineById } from '../../../../../lib/repositories/product-line.repository.js';
 import { getSupabaseAdmin } from '../../../../../lib/supabase-admin.js';
+import { resolveDateRange, resolvePrevDateRange, PRESET_DAYS } from '../../../../../lib/date-range-presets.js';
 
-const RANGE_DAYS = { '7d': 7, '30d': 30, '90d': 90 };
+// 区分 medici-class vs ogilvy-class 的 call_site 前缀
+const OGILVY_CALL_SITE_PREFIX = 'ogilvy.';
+const OGILVY_IMAGE_CALL_SITE = 'ogilvy.image-gen';
 
 function parseRange(searchParams) {
-  const key = String(searchParams.get('range') || '30d');
-  const days = RANGE_DAYS[key] || 30;
-  // 对齐 UTC 整天边界:to = 明天 UTC 00:00 (exclusive 上限,覆盖今天到 24:00),
-  // from = to - days*86400000。这样和 dayBucket()(取 ISO yyyy-mm-dd UTC)
-  // / UI 的 fillMissingDays(按 UTC 日历日填充)三者口径一致,KPI 总和不会和
-  // 柱图各天加总对不上。
-  const now = new Date();
-  const todayMidnightUtc = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
-  const DAY_MS = 24 * 60 * 60 * 1000;
-  const toMs = todayMidnightUtc + DAY_MS;
-  const fromMs = toMs - days * DAY_MS;
-  const prevToMs = fromMs;
-  const prevFromMs = prevToMs - days * DAY_MS;
+  const preset = String(searchParams.get('preset') || 'all');
+  const customFrom = searchParams.get('from') || '';
+  const customTo = searchParams.get('to') || '';
+  const { dateFrom, dateTo } = resolveDateRange(preset, customFrom, customTo);
+  const prev = resolvePrevDateRange(preset);
   return {
-    range_key: RANGE_DAYS[key] ? key : '30d',
-    days,
-    from: new Date(fromMs).toISOString(),
-    to: new Date(toMs).toISOString(),
-    prev_from: new Date(prevFromMs).toISOString(),
-    prev_to: new Date(prevToMs).toISOString(),
+    preset,
+    from: dateFrom || null,
+    to: dateTo || null,
+    prev_from: prev.dateFrom || null,
+    prev_to: prev.dateTo || null,
+    days: PRESET_DAYS[preset] || null,
   };
 }
 
@@ -62,13 +57,12 @@ function bumpBucket(b, row) {
 }
 
 function dayBucket(createdAt) {
-  // YYYY-MM-DD (UTC),前端按本地时区显示堆叠柱图
+  // YYYY-MM-DD 切片;dayBucket 算的是 UTC 日历日。UI 把柱图横轴标签转成
+  // 本地展示即可,聚合本身与时区无关。
   return String(createdAt || '').slice(0, 10);
 }
 
-// PostgREST 默认 max_rows=1000;30 天产品线 LLM 调用动辄上千行,要翻页。
 const LLM_PAGE = 1000;
-
 async function* streamLlmRows(builder) {
   let offset = 0;
   while (true) {
@@ -81,150 +75,155 @@ async function* streamLlmRows(builder) {
   }
 }
 
-async function aggregateLlm({ admin, tenantId, productLine, fromISO, toISO }) {
-  const totals = emptyTotals();
-  const byCallSite = {};
-  const byModel = {};
-  const byDay = {};
+/**
+ * 拉本产品线在窗内所有 LLM 调用,按 medici-class / ogilvy-class 分桶 ——
+ * 一次扫描两份结果,避免两次往返。
+ */
+async function aggregateLlmSplit({ admin, tenantId, productLine, fromISO, toISO }) {
+  const medici = { totals: emptyTotals(), by_call_site: {}, by_model: {}, by_day: {} };
+  const ogilvy = {
+    totals: emptyTotals(),
+    reasoning_usd: 0,
+    reasoning_count: 0,
+    image_usd: 0,
+    image_count: 0,
+    by_call_site: {},
+    by_model: {},
+    by_day: {},
+  };
 
-  // tie-breaker by id 保证两条 created_at 完全相同的行不会跨页错位
-  // (高并发写入下 microsecond 时间戳偶尔会撞)。
-  const builder = () => admin
+  const builderBase = () => admin
     .from('llm_usage_logs')
     .select('call_site, model, prompt_tokens, completion_tokens, cache_creation_input_tokens, cache_read_input_tokens, cost_usd, created_at')
     .eq('tenant_id', tenantId)
-    .eq('product_line', productLine)
-    .gte('created_at', fromISO)
-    .lt('created_at', toISO)
-    .order('created_at', { ascending: true })
-    .order('id', { ascending: true });
+    .eq('product_line', productLine);
+  const builder = () => {
+    let q = builderBase();
+    if (fromISO) q = q.gte('created_at', fromISO);
+    if (toISO) q = q.lt('created_at', toISO);
+    return q
+      .order('created_at', { ascending: true })
+      .order('id', { ascending: true });
+  };
 
   for await (const row of streamLlmRows(builder)) {
-    bumpBucket(totals, row);
+    const isOgilvy = (row.call_site || '').startsWith(OGILVY_CALL_SITE_PREFIX);
+    const target = isOgilvy ? ogilvy : medici;
+
+    bumpBucket(target.totals, row);
     const cs = row.call_site || 'unknown';
-    if (!byCallSite[cs]) byCallSite[cs] = emptyTotals();
-    bumpBucket(byCallSite[cs], row);
-
+    if (!target.by_call_site[cs]) target.by_call_site[cs] = emptyTotals();
+    bumpBucket(target.by_call_site[cs], row);
     const m = row.model || 'unknown';
-    if (!byModel[m]) byModel[m] = emptyTotals();
-    bumpBucket(byModel[m], row);
-
+    if (!target.by_model[m]) target.by_model[m] = emptyTotals();
+    bumpBucket(target.by_model[m], row);
     const d = dayBucket(row.created_at);
-    if (!byDay[d]) byDay[d] = { day: d, cost_usd: 0, count: 0 };
-    byDay[d].cost_usd += Number(row.cost_usd) || 0;
-    byDay[d].count += 1;
+    if (!target.by_day[d]) target.by_day[d] = { day: d, cost_usd: 0, count: 0 };
+    target.by_day[d].cost_usd += Number(row.cost_usd) || 0;
+    target.by_day[d].count += 1;
+
+    if (isOgilvy) {
+      const v = Number(row.cost_usd) || 0;
+      if (row.call_site === OGILVY_IMAGE_CALL_SITE) {
+        ogilvy.image_usd += v;
+        ogilvy.image_count += 1;
+      } else {
+        ogilvy.reasoning_usd += v;
+        ogilvy.reasoning_count += 1;
+      }
+    }
   }
 
-  return {
-    totals,
-    by_call_site: byCallSite,
-    by_model: byModel,
-    by_day: Object.values(byDay).sort((a, b) => a.day.localeCompare(b.day)),
-  };
+  // by_day 数组化排序,by_call_site / by_model 在前端排序方便
+  medici.by_day = Object.values(medici.by_day).sort((a, b) => a.day.localeCompare(b.day));
+  ogilvy.by_day = Object.values(ogilvy.by_day).sort((a, b) => a.day.localeCompare(b.day));
+  return { medici, ogilvy };
 }
 
-// Ogilvy + image-gen 是 tenant 级、不挂产品线。但用户问"本期 Ogilvy 用了多少"
-// 仍然有意义,所以 dashboard 顶部会显示一个 informational 数字。
-async function aggregateTenantOgilvy({ admin, tenantId, fromISO, toISO }) {
-  const builder = () => admin
+async function aggregateLlmTotals({ admin, tenantId, productLine, fromISO, toISO }) {
+  // 上期对比只要总数,不展开分桶 —— 单查 head=true 的两组 sum 也行但 PostgREST
+  // 不原生支持 SUM,只能跑普通 select 用流式扫一遍。范围小不是问题。
+  let mediciCost = 0;
+  let ogilvyCost = 0;
+  const builderBase = () => admin
     .from('llm_usage_logs')
     .select('call_site, cost_usd')
     .eq('tenant_id', tenantId)
-    .is('product_line', null)
-    .gte('created_at', fromISO)
-    .lt('created_at', toISO)
-    .in('call_site', ['ogilvy.turn', 'ogilvy.web_search', 'ogilvy.read_webpage', 'ogilvy.image-gen'])
-    .order('created_at', { ascending: true })
-    .order('id', { ascending: true });
-
-  let reasoningUsd = 0;
-  let imageUsd = 0;
-  let reasoningCount = 0;
-  let imageCount = 0;
+    .eq('product_line', productLine);
+  const builder = () => {
+    let q = builderBase();
+    if (fromISO) q = q.gte('created_at', fromISO);
+    if (toISO) q = q.lt('created_at', toISO);
+    return q.order('created_at', { ascending: true }).order('id', { ascending: true });
+  };
   for await (const row of streamLlmRows(builder)) {
     const v = Number(row.cost_usd) || 0;
-    if (row.call_site === 'ogilvy.image-gen') {
-      imageUsd += v;
-      imageCount += 1;
-    } else {
-      // ogilvy.turn / ogilvy.web_search / ogilvy.read_webpage 都是 LLM 推理
-      reasoningUsd += v;
-      reasoningCount += 1;
-    }
+    if ((row.call_site || '').startsWith(OGILVY_CALL_SITE_PREFIX)) ogilvyCost += v;
+    else mediciCost += v;
   }
-  return {
-    total_usd: reasoningUsd + imageUsd,
-    reasoning_usd: reasoningUsd,
-    reasoning_count: reasoningCount,
-    image_usd: imageUsd,
-    image_count: imageCount,
-  };
+  return { medici_cost_usd: mediciCost, ogilvy_cost_usd: ogilvyCost };
 }
 
-// "合格线索" = inquiry_quality 在 GOOD / QUALIFY / PROOF 中(详见 medici
-// skill host §1-3:BAD < GOOD < QUALIFY < PROOF)。EXCELLENT 不是有效值;
-// 早期实现写成 GOOD+EXCELLENT 会漏掉真正高质量的 PROOF/QUALIFY 行。
 const QUALIFIED_LEADS = ['GOOD', 'QUALIFY', 'PROOF'];
 
-// 用 PostgREST 的 !inner 嵌入资源过滤直接按 conversations.product_line = X
-// 单次 count,免去把上千个 conv_id 拼进 .in() 撑爆 URL,数据库一次 join 完事。
-// 关键:metrics 的时间口径必须跟 llm.totals 一致 —— 都是"本期发生 sent_at /
-// created_at",不能只看"本期新开会话",否则单消息 LLM 成本这种比值的分子分母
-// 会错位。
 async function countMessagesByRole({ admin, tenantId, productLine, role, fromISO, toISO }) {
-  const { count, error } = await admin
+  let q = admin
     .from('messages')
     .select('id, conversations!inner(product_line)', { count: 'exact', head: true })
     .eq('tenant_id', tenantId)
     .eq('conversations.product_line', productLine)
-    .eq('role', role)
-    .gte('sent_at', fromISO)
-    .lt('sent_at', toISO);
+    .eq('role', role);
+  if (fromISO) q = q.gte('sent_at', fromISO);
+  if (toISO) q = q.lt('sent_at', toISO);
+  const { count, error } = await q;
   if (error) throw new Error(error.message);
   return count || 0;
 }
 
 async function countQualifiedLeads({ admin, tenantId, productLine, fromISO, toISO }) {
-  const { count, error } = await admin
+  let q = admin
     .from('leads')
     .select('id, conversations!inner(product_line)', { count: 'exact', head: true })
     .eq('tenant_id', tenantId)
     .eq('conversations.product_line', productLine)
-    .in('inquiry_quality', QUALIFIED_LEADS)
-    .gte('created_at', fromISO)
-    .lt('created_at', toISO);
+    .in('inquiry_quality', QUALIFIED_LEADS);
+  if (fromISO) q = q.gte('created_at', fromISO);
+  if (toISO) q = q.lt('created_at', toISO);
+  const { count, error } = await q;
   if (error) throw new Error(error.message);
   return count || 0;
 }
 
 async function countNewConversations({ admin, tenantId, productLine, fromISO, toISO }) {
-  const { count, error } = await admin
+  let q = admin
     .from('conversations')
     .select('id', { count: 'exact', head: true })
     .eq('tenant_id', tenantId)
-    .eq('product_line', productLine)
-    .gte('started_at', fromISO)
-    .lt('started_at', toISO);
+    .eq('product_line', productLine);
+  if (fromISO) q = q.gte('started_at', fromISO);
+  if (toISO) q = q.lt('started_at', toISO);
+  const { count, error } = await q;
   if (error) throw new Error(error.message);
   return count || 0;
 }
 
 async function aggregateVolume({ admin, tenantId, productLine, fromISO, toISO }) {
-  // 四个 count 全部用 head=true,各自一次查询,彼此独立、并行。
-  // 「对话数」= 本期新开 conv;其余三个 = 本期发生的入/出消息 + 合格线索,
-  // 跟 llm.totals 的"本期发生"口径对齐。
+  const kbBuilder = (() => {
+    let q = admin
+      .from('kb_documents')
+      .select('id', { count: 'exact', head: true })
+      .eq('tenant_id', tenantId)
+      .eq('product_line_id', productLine);
+    if (fromISO) q = q.gte('created_at', fromISO);
+    if (toISO) q = q.lt('created_at', toISO);
+    return q;
+  })();
   const [conversations, msgsIn, msgsOut, leadsQualified, { count: kbDocs, error: kbErr }] = await Promise.all([
     countNewConversations({ admin, tenantId, productLine, fromISO, toISO }),
     countMessagesByRole({ admin, tenantId, productLine, role: 'user', fromISO, toISO }),
     countMessagesByRole({ admin, tenantId, productLine, role: 'assistant', fromISO, toISO }),
     countQualifiedLeads({ admin, tenantId, productLine, fromISO, toISO }),
-    admin
-      .from('kb_documents')
-      .select('id', { count: 'exact', head: true })
-      .eq('tenant_id', tenantId)
-      .eq('product_line_id', productLine)
-      .gte('created_at', fromISO)
-      .lt('created_at', toISO),
+    kbBuilder,
   ]);
   if (kbErr) throw new Error(kbErr.message);
 
@@ -250,21 +249,23 @@ export async function GET(request, { params }) {
 
   try {
     const admin = getSupabaseAdmin();
-
-    // 当前期 LLM + 上期 LLM + Ogilvy 租户级 + volume 并行
-    const [current, previous, ogilvy, volume] = await Promise.all([
-      aggregateLlm({ admin, tenantId: ctx.tenantId, productLine: id, fromISO: range.from, toISO: range.to }),
-      aggregateLlm({ admin, tenantId: ctx.tenantId, productLine: id, fromISO: range.prev_from, toISO: range.prev_to }),
-      aggregateTenantOgilvy({ admin, tenantId: ctx.tenantId, fromISO: range.from, toISO: range.to }),
+    const [split, prev, volume] = await Promise.all([
+      aggregateLlmSplit({ admin, tenantId: ctx.tenantId, productLine: id, fromISO: range.from, toISO: range.to }),
+      // 'all' / 'custom' 上期没有意义 —— resolvePrevDateRange 会返空,这里
+      // 直接给 0 兜底,免去前端空判分支。
+      range.prev_from && range.prev_to
+        ? aggregateLlmTotals({ admin, tenantId: ctx.tenantId, productLine: id, fromISO: range.prev_from, toISO: range.prev_to })
+        : Promise.resolve({ medici_cost_usd: 0, ogilvy_cost_usd: 0 }),
       aggregateVolume({ admin, tenantId: ctx.tenantId, productLine: id, fromISO: range.from, toISO: range.to }),
     ]);
 
     return Response.json({
       product_line: id,
       range,
-      llm: current,
-      llm_prev: { totals: previous.totals },
-      ogilvy_tenant: ogilvy,
+      medici: split.medici,
+      ogilvy: split.ogilvy,
+      medici_prev: { cost_usd: prev.medici_cost_usd },
+      ogilvy_prev: { cost_usd: prev.ogilvy_cost_usd },
       volume,
     });
   } catch (err) {

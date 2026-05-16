@@ -11,17 +11,12 @@
   transition: opacity 0.15s;
 }
 
-/* ── Range pills ──────────────────────────────────────────────────── */
+/* ── Range pills + view toggle ───────────────────────────────────── */
 .rangeBar {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  flex-wrap: wrap;
   gap: 12px;
-}
-
-.rangeLabel {
-  font-size: 12px;
-  color: var(--text3);
 }
 
 .rangePills {
@@ -56,6 +51,57 @@
 
 .rangePillActive:hover {
   color: white;
+}
+
+.customRange {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+}
+
+.customRange input[type="date"] {
+  padding: 4px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-size: 12px;
+  background: var(--bg2);
+  color: var(--text);
+  font-family: var(--font-mono);
+}
+
+.rangeSep {
+  color: var(--text3);
+}
+
+/* 视角切换 (Medici / 全成本) —— 放在 rangeBar 右侧 */
+.viewPills {
+  margin-left: auto;
+  display: inline-flex;
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 3px;
+  gap: 2px;
+}
+
+.viewPill {
+  padding: 5px 14px;
+  border: none;
+  background: transparent;
+  color: var(--text2);
+  font-size: 12.5px;
+  font-weight: 500;
+  border-radius: 999px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.viewPill:hover { color: var(--text); }
+
+.viewPillActive {
+  background: var(--accent-dim);
+  color: var(--accent);
 }
 
 /* ── KPI strip ────────────────────────────────────────────────────── */

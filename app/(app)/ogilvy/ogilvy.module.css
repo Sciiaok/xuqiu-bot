@@ -60,9 +60,12 @@
   text-align: center;
 }
 
+.newBtnWrap {
+  position: relative;
+  padding: 0 10px 10px;
+}
 .newBtn {
-  width: calc(100% - 20px);
-  margin: 0 10px 10px;
+  width: 100%;
   padding: 10px 12px;
   background: linear-gradient(180deg, var(--bg2) 0%, var(--bg2) 100%);
   border: 1px solid var(--border);
@@ -86,6 +89,79 @@
 }
 .newBtn:active { transform: translateY(0.5px); }
 .newBtn:disabled { opacity: 0.5; cursor: wait; box-shadow: none; }
+
+/* ── Product-line picker (新项目 dropdown) ─────────────────────────────── */
+.plPicker {
+  position: absolute;
+  top: 100%;
+  left: 10px;
+  right: 10px;
+  margin-top: 4px;
+  background: var(--bg2);
+  border: 1px solid var(--border2);
+  border-radius: 10px;
+  box-shadow: var(--shadow-lg);
+  z-index: 20;
+  padding: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.plPickerHead {
+  font-size: 11px;
+  color: var(--text3);
+  padding: 6px 10px 4px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.plPickerEmpty {
+  font-size: 12px;
+  color: var(--text3);
+  padding: 8px 10px;
+}
+.plPickerItem {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  background: transparent;
+  border: none;
+  border-radius: 6px;
+  color: var(--text);
+  font-size: 13px;
+  cursor: pointer;
+  text-align: left;
+  font-family: inherit;
+}
+.plPickerItem:hover {
+  background: var(--bg3);
+}
+.plPickerItemDisabled {
+  color: var(--text3);
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+.plPickerItemDisabled:hover {
+  background: transparent;
+}
+.plPickerName { font-weight: 500; }
+.plPickerHint {
+  font-size: 11px;
+  color: var(--text3);
+  font-family: var(--font-mono);
+}
+
+/* ── Session card 产品线 chip ──────────────────────────────────────────── */
+.sessionCardPl {
+  font-size: 10.5px;
+  font-weight: 500;
+  padding: 1px 6px;
+  background: var(--accent-dim);
+  color: var(--accent);
+  border-radius: 4px;
+  font-family: var(--font-mono);
+}
 .newBtnIcon { color: var(--accent); flex-shrink: 0; }
 
 .sessionList {

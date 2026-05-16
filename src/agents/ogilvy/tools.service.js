@@ -113,7 +113,7 @@ function extractUrls(text = '') {
  * verbatim. The agent sees the same shape — only `cached: true` is added so
  * the route layer / logs can distinguish.
  */
-export async function webSearch({ query }, { tenantId, sessionId } = {}) {
+export async function webSearch({ query }, { tenantId, sessionId, productLine } = {}) {
   if (!query || typeof query !== 'string') {
     return { error: 'query is required' };
   }
@@ -129,10 +129,10 @@ export async function webSearch({ query }, { tenantId, sessionId } = {}) {
       // Don't silently regress to the expensive path — log the reason so it
       // shows up when the cheap one breaks (rate-limit, key invalidated, etc).
       console.warn(`[ogilvy/tools] tavily search failed, falling back to anthropic: ${err.message}`);
-      result = await anthropicWebSearch(query, { tenantId, sessionId });
+      result = await anthropicWebSearch(query, { tenantId, sessionId, productLine });
     }
   } else {
-    result = await anthropicWebSearch(query, { tenantId, sessionId });
+    result = await anthropicWebSearch(query, { tenantId, sessionId, productLine });
   }
 
   // Don't pollute the cache with error results.
@@ -149,7 +149,7 @@ export async function webSearch({ query }, { tenantId, sessionId } = {}) {
  * call volume is materially lower than web_search (last 30d: 20 read_webpage
  * vs 624 web_search per the usage log), so the ROI is in the search path.
  */
-export async function readWebpage({ url }, { tenantId, sessionId } = {}) {
+export async function readWebpage({ url }, { tenantId, sessionId, productLine } = {}) {
   if (!url || typeof url !== 'string') {
     return { error: 'url is required' };
   }
@@ -177,7 +177,7 @@ export async function readWebpage({ url }, { tenantId, sessionId } = {}) {
         allowed_domains: [hostname],
         max_content_tokens: 12000,
       }],
-    }, { tenantId, callSite: 'ogilvy.read_webpage', sessionId });
+    }, { tenantId, callSite: 'ogilvy.read_webpage', sessionId, productLine });
 
     const text = getMessageText(response);
     const parsed = tryParseJson(text);
@@ -244,7 +244,7 @@ async function tavilySearch(query) {
 
 // ── Anthropic native fallback (legacy path) ─────────────────────────────
 
-async function anthropicWebSearch(query, { tenantId, sessionId }) {
+async function anthropicWebSearch(query, { tenantId, sessionId, productLine }) {
   try {
     const response = await openrouter.messages.create({
       models: [MODELS.HAIKU],
@@ -258,7 +258,7 @@ async function anthropicWebSearch(query, { tenantId, sessionId }) {
           'results 最多 5 条，优先保留官网、产品页、权威资料链接。',
       }],
       tools: [{ type: 'web_search_20250305', name: 'web_search', max_uses: 2 }],
-    }, { tenantId, callSite: 'ogilvy.web_search', sessionId });
+    }, { tenantId, callSite: 'ogilvy.web_search', sessionId, productLine });
 
     const text = getMessageText(response);
     const parsed = tryParseJson(text);

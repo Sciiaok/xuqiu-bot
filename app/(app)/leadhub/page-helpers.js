@@ -13,42 +13,9 @@ import {
 import s from './page.module.css';
 
 // ── Date helpers ───────────────────────────────────────────────────
-
-const PRESET_DAYS = { '1d': 1, '7d': 7, '30d': 30, '365d': 365 };
-
-// Convert a <input type="date"> value (YYYY-MM-DD, Beijing-local) to an ISO
-// timestamp. `endOfDay=true` snaps to 23:59:59.999 so the "to" side is inclusive.
-export function dateInputToIso(dateStr, { endOfDay = false } = {}) {
-  if (!dateStr) return '';
-  const time = endOfDay ? 'T23:59:59.999' : 'T00:00:00.000';
-  return new Date(`${dateStr}${time}+08:00`).toISOString();
-}
-
-// Resolve a preset + custom inputs to the final { dateFrom, dateTo } sent to
-// /api/inquiries. Presets are yesterday-based windows to match analytics and
-// campaign-studio.
-export function resolveDateRange(preset, customFrom, customTo) {
-  if (preset === 'all') return { dateFrom: '', dateTo: '' };
-  if (preset === 'custom') {
-    return {
-      dateFrom: customFrom ? dateInputToIso(customFrom) : '',
-      dateTo: customTo ? dateInputToIso(customTo, { endOfDay: true }) : '',
-    };
-  }
-  const days = PRESET_DAYS[preset];
-  if (!days) return { dateFrom: '', dateTo: '' };
-  const todayBeijing = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Shanghai' });
-  const yesterday = new Date(`${todayBeijing}T00:00:00+08:00`);
-  yesterday.setUTCDate(yesterday.getUTCDate() - 1);
-  const yesterdayStr = yesterday.toLocaleDateString('en-CA', { timeZone: 'Asia/Shanghai' });
-  const start = new Date(`${yesterdayStr}T00:00:00+08:00`);
-  start.setUTCDate(start.getUTCDate() - (days - 1));
-  const startStr = start.toLocaleDateString('en-CA', { timeZone: 'Asia/Shanghai' });
-  return {
-    dateFrom: dateInputToIso(startStr),
-    dateTo: dateInputToIso(yesterdayStr, { endOfDay: true }),
-  };
-}
+// 提取到 lib/date-range-presets.js 供 cost-stats 等其它页面共用,本文件 re-export
+// 保持原有 import 路径不变。
+export { dateInputToIso, resolveDateRange } from '../../../lib/date-range-presets';
 
 export const toBeijingTime = (utcStr) =>
   new Date(utcStr)

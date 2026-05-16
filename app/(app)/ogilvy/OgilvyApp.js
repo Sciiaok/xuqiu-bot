@@ -59,6 +59,10 @@ export default function OgilvyApp() {
   const [archives, setArchives] = useState([]);          // session.stage_outputs（已存档产出）
   const [loadingMessages, setLoadingMessages] = useState(false);
   const [creating, setCreating] = useState(false);
+  // Product-line picker for "新项目" — 创建会话强制选一个绑了 WA 号码的产品线,
+  // 未绑号的灰掉。sessions 列表的 product_lines 在 GET 时一起拿回来。
+  const [productLines, setProductLines] = useState([]);
+  const [pickerOpen, setPickerOpen] = useState(false);
   const [inputVal, setInputVal] = useState('');
   // Pending uploads: [{id, file, preview, uploading, uploaded: {url, ...} | null}]
   // Cleared after handleSend, so attachments only travel with the next message.
@@ -105,6 +109,7 @@ export default function OgilvyApp() {
         setGate(gateRes);
         const list = sessRes.data || [];
         setSessions(list);
+        setProductLines(sessRes.product_lines || []);
         writeSessionsCache({ sessions: list, gate: gateRes });
         if (!cached) {
           // Only drive selection on cold load — warm path already did it above.
@@ -207,11 +212,15 @@ export default function OgilvyApp() {
   }, [selectedId]);
 
   // ── Actions ─────────────────────────────────────────────────
-  // Create a new conversation. Returns the created row id (or null on failure).
-  // Kept as a pure helper so both the "新项目" button and the first-message
-  // auto-create path in handleSend can share the same error handling.
-  const createConversation = useCallback(async () => {
-    const r = await fetch('/api/ogilvy/conversations', { method: 'POST' });
+  // 创建会话必传 productLine —— 后端会拒绝缺失。"新项目" 按钮先弹 picker 让
+  // 用户挑产品线,然后才发 POST。
+  const createConversation = useCallback(async (productLine) => {
+    if (!productLine) throw new Error('未选择产品线');
+    const r = await fetch('/api/ogilvy/conversations', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ productLine }),
+    });
     if (!r.ok) {
       const body = await r.json().catch(() => ({}));
       throw new Error(body.error || `创建对话失败（HTTP ${r.status}）`);
@@ -226,10 +235,16 @@ export default function OgilvyApp() {
     return row.id;
   }, []);
 
-  async function handleNewConversation() {
+  function handleNewConversation() {
+    if (creating) return;
+    setPickerOpen(true);
+  }
+
+  async function handlePickProductLine(productLine) {
+    setPickerOpen(false);
     setCreating(true);
     try {
-      const id = await createConversation();
+      const id = await createConversation(productLine);
       selectSession(id);
     } catch (err) {
       window.alert(err.message);
@@ -305,18 +320,13 @@ export default function OgilvyApp() {
     if (stillUploading) return;  // wait for uploads to finish
     if ((!text && !readyAttachments.length) || isStreaming) return;
 
-    // No session yet → create one before sending. Abort early on failure so
-    // we never call /messages with an undefined id (the old code did).
-    let targetId = selectedId;
-    if (!targetId) {
-      try {
-        targetId = await createConversation();
-        selectSession(targetId);
-      } catch (err) {
-        window.alert(err.message);
-        return;
-      }
+    // 没有选中会话 → 不再自动创建(以前是裸调 createConversation,现在需要
+    // 产品线,无法在 send 路径推断)。弹 picker 让用户先选产品线。
+    if (!selectedId) {
+      setPickerOpen(true);
+      return;
     }
+    const targetId = selectedId;
 
     // Optimistic append of the user bubble. If send() throws we refetch below
     // which will replace this temp row with the persisted one.
@@ -468,12 +478,21 @@ export default function OgilvyApp() {
             <span className={s.sidebarHeadCount}>{sessions.length}</span>
           )}
         </div>
-        <button className={s.newBtn} onClick={handleNewConversation} disabled={creating || gateBlocked}>
-          <svg className={s.newBtnIcon} width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true">
-            <path d="M7 2v10M2 7h10" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
-          </svg>
-          <span>新项目</span>
-        </button>
+        <div className={s.newBtnWrap}>
+          <button className={s.newBtn} onClick={handleNewConversation} disabled={creating || gateBlocked}>
+            <svg className={s.newBtnIcon} width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true">
+              <path d="M7 2v10M2 7h10" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+            </svg>
+            <span>新项目</span>
+          </button>
+          {pickerOpen && (
+            <ProductLinePicker
+              productLines={productLines}
+              onPick={handlePickProductLine}
+              onClose={() => setPickerOpen(false)}
+            />
+          )}
+        </div>
         <div className={s.sessionList}>
           {loadingSessions ? (
             <SessionSkeletonList />
@@ -492,6 +511,7 @@ export default function OgilvyApp() {
               <SessionCard
                 key={sess.id}
                 session={sess}
+                productLineName={productLines.find(p => p.id === sess.product_line)?.name}
                 active={selectedId === sess.id}
                 onSelect={() => selectSession(sess.id)}
                 onDelete={(e) => handleDelete(sess.id, e)}
@@ -754,7 +774,46 @@ function PlanBlueprint() {
  *
  * The delete × button is hidden until hover so the card stays clean.
  */
-function SessionCard({ session, active, onSelect, onDelete }) {
+function ProductLinePicker({ productLines, onPick, onClose }) {
+  const ref = useRef(null);
+  useEffect(() => {
+    function handler(e) {
+      if (ref.current && !ref.current.contains(e.target)) onClose();
+    }
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, [onClose]);
+
+  return (
+    <div ref={ref} className={s.plPicker} role="menu" aria-label="选择产品线">
+      <div className={s.plPickerHead}>选择产品线</div>
+      {productLines.length === 0 && (
+        <div className={s.plPickerEmpty}>没有可用产品线 — 请先去 /product-lines 创建</div>
+      )}
+      {productLines.map(pl => {
+        const disabled = !pl.has_phone;
+        return (
+          <button
+            key={pl.id}
+            type="button"
+            className={`${s.plPickerItem} ${disabled ? s.plPickerItemDisabled : ''}`}
+            onClick={() => !disabled && onPick(pl.id)}
+            disabled={disabled}
+            title={disabled ? `产品线「${pl.name}」尚未绑定 WhatsApp 号码,请先在 /product-lines/${pl.id} 完成绑定` : ''}
+            role="menuitem"
+          >
+            <span className={s.plPickerName}>{pl.name}</span>
+            <span className={s.plPickerHint}>
+              {disabled ? '未绑号码' : pl.id}
+            </span>
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+function SessionCard({ session, productLineName, active, onSelect, onDelete }) {
   const plan = session.plan_json;
   const campaign = plan?.campaigns?.[0];
 
@@ -793,8 +852,13 @@ function SessionCard({ session, active, onSelect, onDelete }) {
           aria-label="删除"
         >×</button>
       </div>
-      {(countries.length > 0 || dailyUsd != null || when) && (
+      {(session.product_line || countries.length > 0 || dailyUsd != null || when) && (
         <div className={s.sessionCardMeta}>
+          {session.product_line && (
+            <span className={s.sessionCardPl} title={`产品线: ${productLineName || session.product_line}`}>
+              {productLineName || session.product_line}
+            </span>
+          )}
           {countries.length > 0 && (
             <span className={s.sessionCardCountries} title={countries.join(', ')}>
               {countries.slice(0, 3).join(' · ')}

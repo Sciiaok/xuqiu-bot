@@ -30,7 +30,8 @@ import {
   getMessages,
 } from '../../../lib/repositories/ogilvy.repository.js';
 import { loadSkill } from '../skills-runtime/index.js';
-import { getMetaAccountForUser, listWhatsAppAccountsForUser } from './whatsapp-accounts.service.js';
+import { getMetaAccountForUser, getWhatsAppNumberById } from './whatsapp-accounts.service.js';
+import { findProductLineById } from '../../../lib/repositories/product-line.repository.js';
 import { webSearch, readWebpage } from './tools.service.js';
 import { generateAdCreative, isAllowedCreativeUrl } from './creative.service.js';
 
@@ -493,16 +494,33 @@ export async function* runOgilvy(sessionId, userText, attachments = [], userId =
 
   yield { event: 'user_saved', data: { message_index: userIdx } };
 
-  // 2. Fetch the available WhatsApp numbers + uploaded reference images. We
-  //    pass image indices (not URLs) to the Agent to keep tool args short,
-  //    and the dispatcher maps indices back to URLs before calling generate.
-  const [waGate, metaAccount, uploadedImageUrls] = await Promise.all([
-    listWhatsAppAccountsForUser(userId),
+  // 2. Session 锁定单产品线 → 自动注入对应的 WA 号码,模型不再让用户选。
+  //    历史 (productLine=NULL) 的会话也 fail-safe:返回错误而不是回退到
+  //    "随便挑一个号码"——避免错号发广告。
+  const productLine = session?.product_line || null;
+  if (!productLine) {
+    yield { event: 'error', data: { message: '此会话未绑定产品线(可能是迁移前老数据),无法继续。请新建项目。' } };
+    return;
+  }
+  const productLineRow = await findProductLineById({ tenantId: session.tenant_id, id: productLine });
+  if (!productLineRow?.wa_phone_number_id) {
+    yield { event: 'error', data: { message: `产品线「${productLineRow?.name || productLine}」未绑定 WhatsApp 号码,请先在产品线配置里绑定` } };
+    return;
+  }
+  const boundWaNumber = await getWhatsAppNumberById(userId, productLineRow.wa_phone_number_id);
+  if (!boundWaNumber) {
+    yield { event: 'error', data: { message: `产品线绑定的号码 ${productLineRow.wa_phone_number_id} 在 Meta 端不可用(可能已停用或当前用户无权限)` } };
+    return;
+  }
+
+  const [metaAccount, uploadedImageUrls] = await Promise.all([
     getMetaAccountForUser(userId),
     collectSessionUploadUrls(sessionId),
   ]);
+  // 单号码包装成数组喂给 buildDynamicSystemPrompt — 提示词模板不变,
+  // 模型看到的就是"只有这一个号码可用",自然不会试图调 listWhatsAppAccounts。
   const dynamicPrompt = buildDynamicSystemPrompt(
-    waGate.numbers || [],
+    [boundWaNumber],
     uploadedImageUrls,
     metaAccount?.page_id || null,
   );
@@ -545,7 +563,7 @@ export async function* runOgilvy(sessionId, userText, attachments = [], userId =
         // Pin to Anthropic direct — keeps cache_control semantics consistent
         // (Bedrock strips it) and reduces provider-variance latency spikes.
         provider: { order: ['anthropic'], allow_fallbacks: false },
-      }, { tenantId: session?.tenant_id || null, callSite: 'ogilvy.turn', sessionId });
+      }, { tenantId: session?.tenant_id || null, callSite: 'ogilvy.turn', sessionId, productLine });
 
       // Track which tool-call indices have already signaled 'tool_call_start'
       // — we emit it the moment the tool name is known, long before args
@@ -676,7 +694,8 @@ export async function* runOgilvy(sessionId, userText, attachments = [], userId =
       sessionId,
       userId,
       tenantId: session?.tenant_id || null,
-      waNumbers: waGate.numbers || [],
+      productLine,
+      waNumbers: [boundWaNumber],
       uploadedImageUrls,
     };
 
@@ -734,9 +753,9 @@ async function executeTool(name, input, ctx) {
     case 'persist_stage_output':
       return persistStageOutput(input, ctx);
     case 'web_search':
-      return webSearch(input, { tenantId: ctx.tenantId, sessionId: ctx.sessionId });
+      return webSearch(input, { tenantId: ctx.tenantId, sessionId: ctx.sessionId, productLine: ctx.productLine });
     case 'read_webpage':
-      return readWebpage(input, { tenantId: ctx.tenantId, sessionId: ctx.sessionId });
+      return readWebpage(input, { tenantId: ctx.tenantId, sessionId: ctx.sessionId, productLine: ctx.productLine });
     case 'generate_ad_creative': {
       // Translate 1-based index references into real Supabase URLs. Keeping
       // URLs out of tool args saves ~200-600 tokens per call (Supabase URLs
@@ -792,6 +811,7 @@ async function executeTool(name, input, ctx) {
         sessionId:           ctx.sessionId,
         userId:              ctx.userId,
         tenantId:            ctx.tenantId,
+        productLine:         ctx.productLine,
       });
     }
     default:

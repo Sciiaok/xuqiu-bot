@@ -2,52 +2,79 @@
 
 import { useEffect, useState, useMemo } from 'react';
 import s from './CostStatsTab.module.css';
+import { DATE_PRESETS, resolveDateRange } from '../../../../../lib/date-range-presets';
 
 /**
- * CostStatsTab — per-product-line cost breakdown.
+ * CostStatsTab — 产品线粒度成本分析。
  *
- * 数据源:
- *   /api/product-lines/[id]/cost-stats  — LLM + 量化 + Ogilvy tenant-level
- *   /api/ads/dashboard?productLine=[id] — Meta 广告花费(复用现有 endpoint)
- *
- * 两路并行 fetch,任一失败不互相阻塞;ad spend 失败时降级显示"广告数据
- * 暂不可用"(通常是 Meta 未连接或 token 过期),不影响 LLM 区域。
+ * 关键设计:
+ *   - 时间窗口跟 leadhub 一致(全部 / 昨天 / 前一周 / 前一个月 / 前一年 / 自定义),
+ *     yesterday-aligned 北京时区,共用 lib/date-range-presets.js。
+ *   - "成本视角" 切换 Medici-only vs 全成本:
+ *       Medici-only: 仅 LLM Medici 类成本(运营产品线本身花的钱)
+ *       全成本(default): Medici + Ogilvy 工作台(推理+图片) + Meta 广告花费
+ *     "实际投入这条产品线的总钱"用全成本更直观。
+ *   - 数据源:
+ *       /api/product-lines/[id]/cost-stats — medici / ogilvy / volume / prev
+ *       /api/ads/dashboard                 — Meta 广告花费 (复用现成 endpoint)
+ *     两路并行 fetch,广告挂掉不影响 LLM 区域。
  */
-const RANGE_OPTIONS = [
-  { key: '7d',  label: '近 7 天',  days: 7  },
-  { key: '30d', label: '近 30 天', days: 30 },
-  { key: '90d', label: '近 90 天', days: 90 },
+const VIEW_OPTIONS = [
+  { key: 'all',    label: '全成本' },
+  { key: 'medici', label: '仅 Medici' },
 ];
 
 export default function CostStatsTab({ productLineId }) {
-  const [rangeKey, setRangeKey] = useState('30d');
+  const [preset, setPreset] = useState('all');
+  const [customFrom, setCustomFrom] = useState('');
+  const [customTo, setCustomTo] = useState('');
+  const [view, setView] = useState('all'); // 'all' | 'medici'
   const [stats, setStats] = useState(null);
   const [adSummary, setAdSummary] = useState(null);
   const [adError, setAdError] = useState('');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
 
+  // 把当前 preset/custom 化为 ISO 范围,用来串到两个 endpoint。
+  const range = useMemo(
+    () => resolveDateRange(preset, customFrom, customTo),
+    [preset, customFrom, customTo],
+  );
+
   useEffect(() => {
+    // custom 模式只在用户填了两端日期才发请求,否则等输入。
+    if (preset === 'custom' && (!range.dateFrom || !range.dateTo)) {
+      setLoading(false);
+      return;
+    }
     let cancelled = false;
     setLoading(true);
     setError('');
     setAdError('');
 
-    const statsPromise = fetch(`/api/product-lines/${productLineId}/cost-stats?range=${rangeKey}`)
+    const statsQs = new URLSearchParams({ preset });
+    // custom mode: 直接传 YYYY-MM-DD(input 原值),route 会再调一次 resolveDateRange
+    // 把它扩成北京时区的 [00:00, 23:59.999] —— UI 已 resolve 过的 ISO 串再丢回去
+    // 会被 dateInputToIso 拼坏(2026-...ZT00:00:00.000+08:00),route 500。
+    if (preset === 'custom') {
+      if (customFrom) statsQs.set('from', customFrom);
+      if (customTo) statsQs.set('to', customTo);
+    }
+    const statsPromise = fetch(`/api/product-lines/${productLineId}/cost-stats?${statsQs.toString()}`)
       .then(async r => {
         if (!r.ok) throw new Error((await r.json()).error || `HTTP ${r.status}`);
         return r.json();
       });
 
-    // ads/dashboard 不接受 `range=`,要么 preset=7d|30d 要么 days=N。90d 不是
-    // 已知 preset,所以两个端点的参数名故意分开:cost-stats 用 range,ads 用
-    // days(走 default 分支自动构造 ${days}d preset)。
-    const days = RANGE_OPTIONS.find(o => o.key === rangeKey)?.days || 30;
-    const adsPromise = fetch(`/api/ads/dashboard?productLine=${productLineId}&days=${days}`)
-      .then(async r => {
-        if (!r.ok) throw new Error((await r.json()).error || `HTTP ${r.status}`);
-        return r.json();
-      });
+    // ads/dashboard 接受 preset=7d|30d / days=N / startDate=YYYY-MM-DD&endDate=...
+    // 共享同一份 preset 字符串但 90d/365d/all/custom 走 days 或 explicit start/end 兜底。
+    const adsUrl = buildAdsUrl(productLineId, preset, range, customFrom, customTo);
+    const adsPromise = adsUrl
+      ? fetch(adsUrl).then(async r => {
+          if (!r.ok) throw new Error((await r.json()).error || `HTTP ${r.status}`);
+          return r.json();
+        })
+      : Promise.resolve(null);
 
     Promise.allSettled([statsPromise, adsPromise]).then(([statsRes, adsRes]) => {
       if (cancelled) return;
@@ -65,113 +92,203 @@ export default function CostStatsTab({ productLineId }) {
     });
 
     return () => { cancelled = true; };
-  }, [productLineId, rangeKey]);
+  }, [productLineId, preset, range.dateFrom, range.dateTo]);
 
   if (loading && !stats) {
-    return (
-      <div className={s.loading}>
-        <span className={s.spinner} />加载成本数据…
-      </div>
-    );
+    return <div className={s.loading}><span className={s.spinner} />加载成本数据…</div>;
   }
-  if (error) {
-    return <div className={s.errorBox}>加载失败: {error}</div>;
-  }
-  if (!stats) return null;
+  if (error) return <div className={s.errorBox}>加载失败: {error}</div>;
+  if (!stats) return (
+    <div className={s.root}>
+      <RangeBar
+        preset={preset} setPreset={setPreset}
+        customFrom={customFrom} setCustomFrom={setCustomFrom}
+        customTo={customTo} setCustomTo={setCustomTo}
+        view={view} setView={setView}
+      />
+      <div className={s.emptyBox}>请选择自定义日期范围</div>
+    </div>
+  );
 
+  // ── 数据切片:view 决定显示 Medici-only 还是全成本 ──
+  const mediciCost = Number(stats.medici.totals.cost_usd) || 0;
+  const ogilvyReasoningCost = Number(stats.ogilvy.reasoning_usd) || 0;
+  const ogilvyImageCost = Number(stats.ogilvy.image_usd) || 0;
+  const ogilvyCost = ogilvyReasoningCost + ogilvyImageCost;
   const adSpend = Number(adSummary?.spend) || 0;
-  const llmCost = Number(stats.llm.totals.cost_usd) || 0;
-  const llmCostPrev = Number(stats.llm_prev?.totals?.cost_usd) || 0;
-  const totalCost = adSpend + llmCost;
-  const llmDelta = computeDelta(llmCost, llmCostPrev);
+
+  const showOgilvy = view === 'all';
+  const showAds = view === 'all';
+  const totalCost = mediciCost + (showOgilvy ? ogilvyCost : 0) + (showAds ? adSpend : 0);
+
+  const mediciPrev = Number(stats.medici_prev?.cost_usd) || 0;
+  const ogilvyPrev = Number(stats.ogilvy_prev?.cost_usd) || 0;
+  const totalPrev = mediciPrev + (showOgilvy ? ogilvyPrev : 0);  // 广告上期对比走 ads/dashboard 自身,不在这里加
+  const totalDelta = computeDelta(totalCost - (showAds ? adSpend : 0), totalPrev);
+
+  // 合并 medici + ogilvy 的子表/趋势(仅 view=all 时)
+  const combinedByCallSite = showOgilvy
+    ? mergeBuckets(stats.medici.by_call_site, stats.ogilvy.by_call_site)
+    : stats.medici.by_call_site;
+  const combinedByModel = showOgilvy
+    ? mergeBuckets(stats.medici.by_model, stats.ogilvy.by_model)
+    : stats.medici.by_model;
+  const combinedByDay = showOgilvy
+    ? mergeDays(stats.medici.by_day, stats.ogilvy.by_day)
+    : stats.medici.by_day;
+  const grandTotal = mediciCost + (showOgilvy ? ogilvyCost : 0);
 
   return (
     <div className={`${s.root} ${loading ? s.refreshing : ''}`}>
-      {/* ── Range selector ─────────────────────────────────────────── */}
-      <div className={s.rangeBar}>
-        <span className={s.rangeLabel}>时间范围 · 当期 vs 上一周期对比</span>
-        <div className={s.rangePills}>
-          {RANGE_OPTIONS.map(opt => (
-            <button
-              key={opt.key}
-              className={`${s.rangePill} ${rangeKey === opt.key ? s.rangePillActive : ''}`}
-              onClick={() => setRangeKey(opt.key)}
-            >
-              {opt.label}
-            </button>
-          ))}
-        </div>
-      </div>
+      <RangeBar
+        preset={preset} setPreset={setPreset}
+        customFrom={customFrom} setCustomFrom={setCustomFrom}
+        customTo={customTo} setCustomTo={setCustomTo}
+        view={view} setView={setView}
+      />
 
       {/* ── KPI strip ──────────────────────────────────────────────── */}
       <div className={s.kpiGrid}>
         <KpiCard
           label="本期总成本"
           value={fmtUsd(totalCost)}
-          sub="= 广告花费 + LLM 推理"
+          sub={showAds && showOgilvy
+            ? '= Medici + Ogilvy + 广告'
+            : showOgilvy ? '= Medici + Ogilvy' : '= 仅 Medici'}
         />
         <KpiCard
-          label="广告花费 (Meta)"
-          value={adError ? '—' : fmtUsd(adSpend)}
-          sub={adError ? '数据不可用' : `${adSummary?.waConversations || 0} 个 WA 对话 · CPA ${fmtUsd(adSummary?.cpa || 0)}`}
+          label="LLM Medici 类"
+          value={fmtUsd(mediciCost)}
+          sub={`${stats.medici.totals.count} 次调用 · ${renderDelta(computeDelta(mediciCost, mediciPrev))}`}
         />
-        <KpiCard
-          label="LLM 推理成本"
-          value={fmtUsd(llmCost)}
-          sub={`${stats.llm.totals.count} 次调用 · ${renderDelta(llmDelta)}`}
-        />
-        <KpiCard
-          label="Ogilvy 工作台(租户级)"
-          value={fmtUsd(stats.ogilvy_tenant.total_usd)}
-          sub={
-            <>
-              推理 {fmtUsd(stats.ogilvy_tenant.reasoning_usd)} · 图 {stats.ogilvy_tenant.image_count}张 {fmtUsd(stats.ogilvy_tenant.image_usd)}
-              <br />跨产品线
-            </>
-          }
-          info
-        />
+        {showOgilvy && (
+          <KpiCard
+            label="LLM Ogilvy 工作台"
+            value={fmtUsd(ogilvyCost)}
+            sub={`推理 ${fmtUsd(ogilvyReasoningCost)} · 图 ${stats.ogilvy.image_count}张 ${fmtUsd(ogilvyImageCost)}`}
+          />
+        )}
+        {showAds && (
+          <KpiCard
+            label="广告花费 (Meta)"
+            value={adError ? '—' : fmtUsd(adSpend)}
+            sub={adError ? '数据不可用' : `${adSummary?.waConversations || 0} 个 WA 对话 · CPA ${fmtUsd(adSummary?.cpa || 0)}`}
+          />
+        )}
+        {totalDelta && totalDelta.pct != null && (
+          <KpiCard
+            label="vs 上期 (LLM)"
+            value={renderDelta(totalDelta)}
+            sub={`Medici ${fmtUsd(mediciPrev)}${showOgilvy ? ` · Ogilvy ${fmtUsd(ogilvyPrev)}` : ''}`}
+          />
+        )}
       </div>
 
-      {/* ── Daily LLM trend ────────────────────────────────────────── */}
-      <DailyTrend days={stats.llm.by_day} rangeDays={stats.range.days} />
+      {/* ── Daily trend ────────────────────────────────────────────── */}
+      <DailyTrend days={combinedByDay} rangeDays={stats.range.days} preset={preset} />
 
       {/* ── AI by call_site ────────────────────────────────────────── */}
-      <CallSiteTable bySite={stats.llm.by_call_site} grandTotal={llmCost} />
+      <CallSiteTable bySite={combinedByCallSite} grandTotal={grandTotal} />
 
       {/* ── AI by model ────────────────────────────────────────────── */}
-      <ModelTable byModel={stats.llm.by_model} grandTotal={llmCost} />
+      <ModelTable byModel={combinedByModel} grandTotal={grandTotal} />
 
       {/* ── Volume + derived ───────────────────────────────────────── */}
-      <VolumeSection volume={stats.volume} llmCost={llmCost} adSpend={adSpend} />
+      <VolumeSection
+        volume={stats.volume}
+        llmCost={grandTotal}
+        adSpend={showAds ? adSpend : 0}
+      />
 
       <p className={s.notice}>
-        说明: LLM 成本只统计能归属到本产品线的调用 (medici 应答、KB 搜索/上传抽取/视觉理解、知识教学、画像总结、单产品线日报)。
-        Ogilvy 工作台 (会话推理 / 网页搜索 / 图片生成) 跨产品线共用,作为租户级数据单独展示。
-        历史数据 (本功能上线前) 在按时间窗反推回填后才会出现在表中,详见 supabase/operations/2026-05-16-backfill-llm-usage-product-line.sql。
-        <br />
-        时区: LLM 成本按 UTC 日历切窗 (近 N 天 = 今天 UTC 整天 + 之前 N-1 天)。
-        广告花费按 Asia/Shanghai 昨日截止取数 (Meta cache 策略,避开今日未稳数据),所以两边窗口可能差约 1 天 —— 30/90 天窗口里影响在 1-3% 量级。
+        {view === 'all' ? (
+          <>
+            说明: <b>Medici 类</b>包含 medici 应答、KB 搜索/上传/视觉理解、知识教学、画像总结、单产品线日报;
+            <b>Ogilvy 类</b>包含本产品线所有 Ogilvy 项目的会话推理、网页搜索、图片生成;
+            <b>广告花费</b>来自 Meta API,按 Asia/Shanghai 昨日截止取数。时间窗口与 LLM 一致(昨日对齐)。
+          </>
+        ) : (
+          <>说明: 当前视角仅显示运营产品线本身的 LLM Medici 类成本(应答 / KB / 画像 / 日报),不含 Ogilvy 工作台和广告花费。切到「全成本」可看全部。</>
+        )}
       </p>
     </div>
   );
 }
 
-// ── KPI card ─────────────────────────────────────────────────────────
-function KpiCard({ label, value, sub, info = false }) {
+function buildAdsUrl(productLineId, preset, range, customFrom, customTo) {
+  const base = `/api/ads/dashboard?productLine=${encodeURIComponent(productLineId)}`;
+  if (preset === 'all') return `${base}&days=365`; // ads 不接受 'all', 用一年兜底
+  if (preset === 'custom') {
+    if (!customFrom || !customTo) return null;
+    // /api/ads/dashboard 接 startDate=YYYY-MM-DD&endDate=YYYY-MM-DD(北京时区);
+    // 用户从 date input 拿到的就是北京时区的 YYYY-MM-DD,直接转发不需要再换。
+    return `${base}&startDate=${customFrom}&endDate=${customTo}`;
+  }
+  // 1d / 7d / 30d / 365d:Ads endpoint preset 只支持 7d/30d,其它走 days
+  const PRESET_TO_DAYS = { '1d': 1, '7d': 7, '30d': 30, '365d': 365 };
+  return `${base}&days=${PRESET_TO_DAYS[preset] || 30}`;
+}
+
+// ── Range selector + view toggle ─────────────────────────────────────
+function RangeBar({ preset, setPreset, customFrom, setCustomFrom, customTo, setCustomTo, view, setView }) {
   return (
-    <div className={`${s.kpiCard} ${info ? s.kpiCardInfo : ''}`}>
+    <div className={s.rangeBar}>
+      <div className={s.rangePills}>
+        {DATE_PRESETS.map(opt => (
+          <button
+            key={opt.key}
+            className={`${s.rangePill} ${preset === opt.key ? s.rangePillActive : ''}`}
+            onClick={() => {
+              setPreset(opt.key);
+              if (opt.key !== 'custom') { setCustomFrom(''); setCustomTo(''); }
+            }}
+          >
+            {opt.label}
+          </button>
+        ))}
+      </div>
+      {preset === 'custom' && (
+        <div className={s.customRange}>
+          <input type="date" value={customFrom} max={customTo || undefined}
+            onChange={e => setCustomFrom(e.target.value)} />
+          <span className={s.rangeSep}>→</span>
+          <input type="date" value={customTo} min={customFrom || undefined}
+            onChange={e => setCustomTo(e.target.value)} />
+        </div>
+      )}
+      <div className={s.viewPills}>
+        {VIEW_OPTIONS.map(opt => (
+          <button
+            key={opt.key}
+            className={`${s.viewPill} ${view === opt.key ? s.viewPillActive : ''}`}
+            onClick={() => setView(opt.key)}
+          >
+            {opt.label}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ── KPI card ─────────────────────────────────────────────────────────
+function KpiCard({ label, value, sub }) {
+  return (
+    <div className={s.kpiCard}>
       <div className={s.kpiLabel}>{label}</div>
-      <div className={`${s.kpiValue} ${info ? s.kpiValueSmall : ''}`}>{value}</div>
+      <div className={s.kpiValue}>{value}</div>
       {sub ? <div className={s.kpiSub}>{sub}</div> : null}
     </div>
   );
 }
 
 // ── Daily trend ──────────────────────────────────────────────────────
-function DailyTrend({ days, rangeDays }) {
-  // 补齐 range 内每一天 0 值,保证柱图轴对齐
-  const fullDays = useMemo(() => fillMissingDays(days, rangeDays), [days, rangeDays]);
+function DailyTrend({ days, rangeDays, preset }) {
+  // custom / all 下没有固定 rangeDays,直接按返回的 days 长度展示
+  const fullDays = useMemo(() => {
+    if (preset === 'custom' || preset === 'all' || !rangeDays) return days;
+    return fillMissingDays(days, rangeDays);
+  }, [days, rangeDays, preset]);
   const maxCost = Math.max(0.0001, ...fullDays.map(d => d.cost_usd));
 
   if (fullDays.every(d => d.cost_usd === 0)) {
@@ -182,10 +299,7 @@ function DailyTrend({ days, rangeDays }) {
       </div>
     );
   }
-
-  // 轴标签:头/尾 + 中间 1-2 个采样,避免堆叠
   const labelIdxs = pickLabelIndices(fullDays.length);
-
   return (
     <div className={s.section}>
       <h3 className={s.sectionTitle}>LLM 每日成本</h3>
@@ -212,12 +326,10 @@ function DailyTrend({ days, rangeDays }) {
 
 // ── Call site table ──────────────────────────────────────────────────
 function CallSiteTable({ bySite, grandTotal }) {
-  const rows = useMemo(() => {
-    return Object.entries(bySite)
-      .map(([cs, v]) => ({ cs, ...v }))
-      .sort((a, b) => b.cost_usd - a.cost_usd);
-  }, [bySite]);
-
+  const rows = useMemo(
+    () => Object.entries(bySite).map(([cs, v]) => ({ cs, ...v })).sort((a, b) => b.cost_usd - a.cost_usd),
+    [bySite],
+  );
   if (rows.length === 0) {
     return (
       <div className={s.section}>
@@ -226,7 +338,6 @@ function CallSiteTable({ bySite, grandTotal }) {
       </div>
     );
   }
-
   return (
     <div className={s.section}>
       <h3 className={s.sectionTitle}>按调用点 (call_site)</h3>
@@ -267,14 +378,11 @@ function CallSiteTable({ bySite, grandTotal }) {
 
 // ── Model table ──────────────────────────────────────────────────────
 function ModelTable({ byModel, grandTotal }) {
-  const rows = useMemo(() => {
-    return Object.entries(byModel)
-      .map(([m, v]) => ({ m, ...v }))
-      .sort((a, b) => b.cost_usd - a.cost_usd);
-  }, [byModel]);
-
+  const rows = useMemo(
+    () => Object.entries(byModel).map(([m, v]) => ({ m, ...v })).sort((a, b) => b.cost_usd - a.cost_usd),
+    [byModel],
+  );
   if (rows.length === 0) return null;
-
   return (
     <div className={s.section}>
       <h3 className={s.sectionTitle}>按模型</h3>
@@ -346,6 +454,36 @@ function Cell({ label, value }) {
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────
+function mergeBuckets(a, b) {
+  const out = {};
+  for (const [k, v] of Object.entries(a || {})) out[k] = { ...v };
+  for (const [k, v] of Object.entries(b || {})) {
+    if (!out[k]) out[k] = { prompt: 0, completion: 0, cache_read: 0, cache_create: 0, cost_usd: 0, count: 0 };
+    out[k].prompt += v.prompt || 0;
+    out[k].completion += v.completion || 0;
+    out[k].cache_read += v.cache_read || 0;
+    out[k].cache_create += v.cache_create || 0;
+    out[k].cost_usd += v.cost_usd || 0;
+    out[k].count += v.count || 0;
+  }
+  return out;
+}
+
+function mergeDays(a, b) {
+  const m = new Map();
+  for (const d of a || []) m.set(d.day, { day: d.day, cost_usd: d.cost_usd, count: d.count });
+  for (const d of b || []) {
+    const existing = m.get(d.day);
+    if (existing) {
+      existing.cost_usd += d.cost_usd;
+      existing.count += d.count;
+    } else {
+      m.set(d.day, { day: d.day, cost_usd: d.cost_usd, count: d.count });
+    }
+  }
+  return Array.from(m.values()).sort((a, b) => a.day.localeCompare(b.day));
+}
+
 function fmtUsd(n) {
   const v = Number(n) || 0;
   if (v === 0) return '$0.00';
@@ -369,28 +507,29 @@ function shortModelName(m) {
 }
 
 function computeDelta(curr, prev) {
-  if (!prev || prev === 0) {
-    return { kind: curr > 0 ? 'up' : 'flat', pct: null };
-  }
+  if (!prev || prev === 0) return { kind: curr > 0 ? 'up' : 'flat', pct: null };
   const diff = curr - prev;
   const pct = (diff / prev) * 100;
   return { kind: diff > 0 ? 'up' : diff < 0 ? 'down' : 'flat', pct };
 }
 
 function renderDelta(d) {
-  if (d.pct == null) return <span className={s.deltaFlat}>无上期数据</span>;
+  if (!d || d.pct == null) return <span className={s.deltaFlat}>无上期数据</span>;
   const cls = d.kind === 'up' ? s.deltaUp : d.kind === 'down' ? s.deltaDown : s.deltaFlat;
   const sign = d.kind === 'up' ? '↑' : d.kind === 'down' ? '↓' : '—';
-  return <span className={cls}>{sign} {Math.abs(d.pct).toFixed(1)}% vs 上期</span>;
+  return <span className={cls}>{sign} {Math.abs(d.pct).toFixed(1)}%</span>;
 }
 
 function fillMissingDays(days, rangeDays) {
   const map = new Map(days.map(d => [d.day, d]));
   const out = [];
+  // yesterday-aligned 跟 lib/date-range-presets.js 一致:UI 显示的 N 天柱图
+  // = 昨天 → 昨天-(N-1),不含今天。今天 LLM 数据通常还没归集完。
   const today = new Date();
   today.setUTCHours(0, 0, 0, 0);
+  const yesterday = new Date(today.getTime() - 24 * 60 * 60 * 1000);
   for (let i = rangeDays - 1; i >= 0; i--) {
-    const d = new Date(today.getTime() - i * 24 * 60 * 60 * 1000);
+    const d = new Date(yesterday.getTime() - i * 24 * 60 * 60 * 1000);
     const key = d.toISOString().slice(0, 10);
     out.push(map.get(key) || { day: key, cost_usd: 0, count: 0 });
   }
@@ -399,10 +538,7 @@ function fillMissingDays(days, rangeDays) {
 
 function pickLabelIndices(len) {
   if (len <= 7) return new Set(Array.from({ length: len }, (_, i) => i));
-  // 头、尾、再 3 个中间均分采样
   const idxs = new Set([0, len - 1]);
-  for (let k = 1; k <= 3; k++) {
-    idxs.add(Math.round((k / 4) * (len - 1)));
-  }
+  for (let k = 1; k <= 3; k++) idxs.add(Math.round((k / 4) * (len - 1)));
   return idxs;
 }

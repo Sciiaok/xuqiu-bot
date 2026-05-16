@@ -3,21 +3,35 @@ import {
   createSession,
   listSessions,
 } from '../../../../lib/repositories/ogilvy.repository.js';
-import { prewarmWhatsAppAccountsForUser } from '../../../../src/agents/ogilvy/whatsapp-accounts.service.js';
+import {
+  findProductLineById,
+  getAllProductLines,
+} from '../../../../lib/repositories/product-line.repository.js';
 
 /**
  * GET /api/ogilvy/conversations
  *
- * List the user's Ogilvy conversations, newest first. This powers the
- * left-sidebar history in the /ogilvy page.
+ * 返回当前用户的 Ogilvy 会话列表 + 可用 product_lines 元数据(含 wa 号码状态)
+ * 供 UI 在「新项目」下拉里展示并灰掉未绑号产品线。Sidebar 拿 sessions、
+ * 模态拿 product_lines —— 一次请求两份,避免新建按钮先点了再 fetch 闪烁。
  */
 export async function GET() {
   const ctx = await getTenantContext();
   if (!ctx) return Response.json({ error: 'Unauthorized' }, { status: 401 });
 
   try {
-    const sessions = await listSessions({ tenantId: ctx.tenantId, userId: ctx.user.id });
-    return Response.json({ data: sessions });
+    const [sessions, productLines] = await Promise.all([
+      listSessions({ tenantId: ctx.tenantId, userId: ctx.user.id }),
+      getAllProductLines({ tenantId: ctx.tenantId, activeOnly: true }),
+    ]);
+    return Response.json({
+      data: sessions,
+      product_lines: (productLines || []).map(pl => ({
+        id: pl.id,
+        name: pl.name,
+        has_phone: !!pl.wa_phone_number_id,
+      })),
+    });
   } catch (err) {
     console.error('[ogilvy/conversations GET]', err.message);
     return Response.json({ error: err.message }, { status: 500 });
@@ -27,18 +41,47 @@ export async function GET() {
 /**
  * POST /api/ogilvy/conversations
  *
- * Create a new conversation. Frontend calls this from the "新项目" button.
+ * Body: { productLine }
+ *
+ * productLine 必填,创建后写入 autopilot_sessions.product_line,锁定不可改 ——
+ * 后续工作流 (chat / 图片生成 / launch) 都从这里拿产品线和号码,模型不再让
+ * 用户在 chat 中选号码。
+ *
+ * 校验:
+ *   - product_line 属于当前 tenant (否则 404)
+ *   - product_line.wa_phone_number_id 必须非空 (否则 400 提示绑号码)
  */
-export async function POST() {
+export async function POST(request) {
   const ctx = await getTenantContext();
   if (!ctx) return Response.json({ error: 'Unauthorized' }, { status: 401 });
 
+  let body = {};
+  try { body = await request.json(); } catch { /* empty body ok */ }
+  // 显式 typeof 校验,避免 String([...])="...,..." / String({})="[object Object]"
+  // 这类隐式转换偷偷生成"看起来像 slug"的产品线名跑去 DB 查询。
+  const rawPl = body?.productLine;
+  const productLine = (typeof rawPl === 'string' ? rawPl : '').trim();
+  if (!productLine) {
+    return Response.json({ error: 'productLine is required (string)' }, { status: 400 });
+  }
+
+  const line = await findProductLineById({ tenantId: ctx.tenantId, id: productLine });
+  if (!line) {
+    return Response.json({ error: 'Product line not found' }, { status: 404 });
+  }
+  if (!line.wa_phone_number_id) {
+    return Response.json(
+      { error: `产品线「${line.name}」尚未绑定 WhatsApp 号码,请先在产品线配置里完成绑定` },
+      { status: 400 },
+    );
+  }
+
   try {
-    const session = await createSession({ tenantId: ctx.tenantId, userId: ctx.user.id });
-    // Fire-and-forget: pre-warm the WhatsApp gate cache so the user's first
-    // message doesn't pay the 4-6s Graph API round-trip again. If it fails,
-    // the in-agent listWhatsAppAccountsForUser call will just do it for real.
-    prewarmWhatsAppAccountsForUser(ctx.user.id);
+    const session = await createSession({
+      tenantId: ctx.tenantId,
+      userId: ctx.user.id,
+      productLine,
+    });
     return Response.json(session, { status: 201 });
   } catch (err) {
     console.error('[ogilvy/conversations POST]', err.message);

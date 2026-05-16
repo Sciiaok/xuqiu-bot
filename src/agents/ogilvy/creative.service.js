@@ -239,6 +239,7 @@ export async function generateAdCreative({
   sessionId = null,
   userId = null,
   tenantId = null,
+  productLine = null,
   authClient = null,
 }) {
   if (!tenantId) {
@@ -274,8 +275,8 @@ export async function generateAdCreative({
     try {
       const generated = await caller(model, prompt, refs);
       // 图片成本落表 —— 单价表见 llm-pricing.js#IMAGE_PRICES_PER_CALL。
-      // ogilvy session 不归属到具体 product_line(一次会话可能聊多个产品),
-      // 跟 ogilvy.turn 一样 productLine 留 null。
+      // 从 2026-05-17 起 ogilvy session 强绑 product_line,这里直接挂上,
+      // /product-lines/[id]/cost-stats 能看到本产品线的图片生成开销。
       logLlmCall({
         method: 'image.edit',
         provider: label === 'primary' ? 'openai' : 'openrouter',
@@ -290,7 +291,7 @@ export async function generateAdCreative({
         tenantId,
         callSite: 'ogilvy.image-gen',
         sessionId,
-        productLine: null,
+        productLine,
         costUsdOverride: calcImageCostUsd({ model: generated.model, count: 1 }),
       });
       const asset = await saveAssetToStorage({

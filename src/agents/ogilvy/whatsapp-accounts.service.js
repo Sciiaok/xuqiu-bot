@@ -161,17 +161,11 @@ export async function listWhatsAppAccountsForUser(userId, { force = false } = {}
   return v;
 }
 
-/**
- * Fire-and-forget prewarm. Called when a user creates a new conversation so
- * the first message doesn't wait 4-6s on Graph API. Safe to call repeatedly;
- * if the cache is warm this is a no-op.
- */
-export function prewarmWhatsAppAccountsForUser(userId) {
-  if (getCached(userId)) return;
-  listWhatsAppAccountsForUser(userId).catch(err => {
-    console.warn('[ogilvy/whatsapp-accounts] prewarm failed:', err.message);
-  });
-}
+// prewarmWhatsAppAccountsForUser 已移除:Ogilvy 会话现在强绑 product_line,
+// 创建路径直接走 findProductLineById + getWhatsAppNumberById,不再需要把
+// 用户全部号码热进缓存。listWhatsAppAccountsForUser 自身仍保留,被
+// getWhatsAppNumberById、product-lines 设置页和 /api/ogilvy/whatsapp-accounts
+// 路由使用。
 
 /**
  * Lookup a specific number within the usable list — used by stage_campaigns
