@@ -81,8 +81,9 @@ export default function AdPreviewModal({ adId, onClose }) {
         style={{ '--preview-w': `${activeFormat.w}px`, '--preview-h': `${activeFormat.h}px` }}
       >
         <header className={s.head}>
-          <div className={s.title}>
-            广告预览 <code className={s.adId}>{adId}</code>
+          <div className={s.titleStack}>
+            <span className={s.title}>广告预览</span>
+            <code className={s.adId} title={adId}>{adId}</code>
           </div>
           <button type="button" className={s.closeBtn} onClick={onClose} aria-label="关闭">×</button>
         </header>

@@ -64,29 +64,6 @@ function buildFieldState(leadData = {}, lead = null) {
   collectFlatFields(fieldState, leadData);
   collectFlatFields(fieldState, lead?.details || {});
 
-  const scalarLeadFields = {
-    brand: lead?.brand,
-    buyer_type: lead?.buyer_type,
-    car_model: lead?.car_model,
-    color_quantity: lead?.color_quantity,
-    company_name: lead?.company_name,
-    destination_country: lead?.destination_country,
-    destination_port: lead?.destination_port,
-    incoterm: lead?.incoterm,
-    international_commercial_term: lead?.incoterm,
-    loading_port: lead?.loading_port,
-    product_name: lead?.product_name,
-    qty_bucket: lead?.qty_bucket,
-    sku_description: lead?.sku_description,
-    timeline: lead?.timeline,
-  };
-
-  for (const [key, value] of Object.entries(scalarLeadFields)) {
-    if (!hasValue(fieldState[key]) && hasValue(value)) {
-      fieldState[key] = value;
-    }
-  }
-
   return fieldState;
 }
 

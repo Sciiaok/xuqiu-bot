@@ -23,11 +23,7 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 const LEADS_SELECT = `
   id, conversation_id, inquiry_quality, business_value,
   conversation_intent, conversation_intent_summary,
-  route, handoff_summary, updated_at, approved, approved_at,
-  brand, car_model, product_name,
-  destination_country, destination_port,
-  qty_bucket, color_quantity,
-  buyer_type, timeline, incoterm, loading_port,
+  route, handoff_summary, updated_at,
   details, agent_id,
   agent:agents(id, product_line)
 `;
@@ -179,9 +175,9 @@ function applyConversationFilters(query, filters, { foreignTable } = {}) {
   // resolved_route 只存在于 conversations_with_resolved_route 视图（即 base 查询，
   // 没有 foreignTable）。lead-base 查询走 conversations!inner 嵌套是 base 表，
   // 没有这列；这里跳过避免 PostgREST 报 unknown column。代价是：当 resolvedRoute
-  // 过滤生效时，totalLeads / approvedCount 会反映"全部 route 范围内的 lead 总数"
-  // 而不是仅当前选中 route。KpiStrip 的 "线索" 字段是 scope 指示，可接受；route
-  // bar 本身的精确 count 由服务端独立计算的 routeBuckets 提供。
+  // 过滤生效时，totalLeads 会反映"全部 route 范围内的 lead 总数"而不是仅当前
+  // 选中 route。KpiStrip 的 "线索" 字段是 scope 指示，可接受；route bar 本身
+  // 的精确 count 由服务端独立计算的 routeBuckets 提供。
   if (filters.resolvedRoute && !foreignTable) {
     query = query.eq('resolved_route', filters.resolvedRoute);
   }
@@ -226,7 +222,7 @@ async function resolveCustomerConvIds(supabase, tenantId, rawCustomer) {
       .from('leads')
       .select('conversation_id')
       .eq('tenant_id', tenantId)
-      .ilike('destination_country', ilikePattern)
+      .ilike('details->>destination_country', ilikePattern)
       .not('conversation_id', 'is', null),
   ]);
   throwIfError(byContact);
@@ -243,8 +239,8 @@ function applyLeadFilters(query, filters, prefix = 'leads.') {
   if (filters.inquiryQualities.length > 0) query = query.in(col('inquiry_quality'), filters.inquiryQualities);
   if (filters.businessValues.length > 0) query = query.in(col('business_value'), filters.businessValues);
   if (filters.routes.length > 0) query = query.in(col('route'), filters.routes);
-  if (filters.country !== 'all') query = query.eq(col('destination_country'), filters.country);
-  if (filters.model !== 'all') query = query.eq(col('car_model'), filters.model);
+  if (filters.country !== 'all') query = query.eq(col('details->>destination_country'), filters.country);
+  if (filters.model !== 'all') query = query.eq(col('details->>car_model'), filters.model);
   return query;
 }
 
@@ -316,7 +312,7 @@ function buildQuantityScanQuery(supabase, tenantId, filters, from, to) {
 }
 
 // Leads-centric count that still respects every active filter.
-function buildLeadCountQuery(supabase, tenantId, filters, { approvedOnly = false } = {}) {
+function buildLeadCountQuery(supabase, tenantId, filters) {
   let query = supabase.from('leads').select(`
     id,
     contact:contacts!inner(id),
@@ -327,7 +323,6 @@ function buildLeadCountQuery(supabase, tenantId, filters, { approvedOnly = false
   query = applyLeadFilters(query, filters, '');
   query = applyConversationFilters(query, filters, { foreignTable: 'conversation' });
   query = applyContactFilters(query, filters, { conversationIdCol: 'conversation_id' });
-  if (approvedOnly) query = query.eq('approved', true);
   return query;
 }
 
@@ -398,16 +393,24 @@ function rowBeforeCursor(row, cursor) {
 const LEAD_PASSTHROUGH_FIELDS = [
   'id', 'conversation_id',
   'conversation_intent', 'conversation_intent_summary',
-  'route', 'handoff_summary', 'updated_at', 'approved', 'approved_at',
+  'route', 'handoff_summary', 'updated_at',
+];
+
+// 业务字段以前在 leads 表硬编码列里，现统一从 details 读；输出 shape 保留扁平
+// 形态以兼容前端契约（前端读 lead.brand / lead.car_model 等）。
+const LEAD_BUSINESS_FIELDS_FROM_DETAILS = [
   'brand', 'car_model', 'product_name',
   'destination_country', 'destination_port',
   'qty_bucket', 'color_quantity',
-  'buyer_type', 'timeline', 'incoterm', 'loading_port',
+  'buyer_type', 'timeline', 'loading_port',
 ];
 
 function mapLead(lead, contact) {
+  const d = lead.details || {};
   const out = {};
   for (const f of LEAD_PASSTHROUGH_FIELDS) out[f] = lead[f];
+  for (const f of LEAD_BUSINESS_FIELDS_FROM_DETAILS) out[f] = d[f] ?? null;
+  out.incoterm = d.international_commercial_term ?? null;  // 列名 ↔ details key 别名
   out.wa_id = contact?.wa_id || null;
   out.company_name = contact?.company_name || null;
   out.inquiry_quality = lead.inquiry_quality || 'GOOD';
@@ -416,15 +419,15 @@ function mapLead(lead, contact) {
   out.agent_id = lead.agent_id || lead.agent?.id || null;
   out.agent_product_line = lead.agent?.product_line || null;
   out.lead_data = {
-    destination_country: lead.destination_country,
-    destination_port: lead.destination_port,
-    brand: lead.brand,
-    qty_bucket: lead.qty_bucket,
-    car_model: lead.car_model,
+    destination_country: d.destination_country || null,
+    destination_port: d.destination_port || null,
+    brand: d.brand || null,
+    qty_bucket: d.qty_bucket || null,
+    car_model: d.car_model || null,
     company_name: contact?.company_name || null,
-    buyer_type: lead.buyer_type,
-    timeline: lead.timeline,
-    color_quantity: lead.color_quantity,
+    buyer_type: d.buyer_type || null,
+    timeline: d.timeline || null,
+    color_quantity: d.color_quantity || null,
   };
   return out;
 }
@@ -486,7 +489,6 @@ function emptyResponse() {
     totalContacts: 0,
     totalConversations: 0,
     totalLeads: 0,
-    approvedCount: 0,
     routeBuckets: { ...EMPTY_ROUTE_BUCKETS },
   });
 }
@@ -531,10 +533,6 @@ async function handleQuantityBranch(supabase, tenantId, filters, limit, cursor) 
     // resolvedRoute 二次过滤的 rows.length，跟 standard 分支语义对齐。
     totalConversations: rows.length,
     totalLeads: filtered.reduce((n, c) => n + (c.leads?.length || 0), 0),
-    approvedCount: filtered.reduce(
-      (n, c) => n + (c.leads || []).filter((l) => l.approved).length,
-      0,
-    ),
     routeBuckets,
   });
 }
@@ -543,26 +541,24 @@ async function handleStandardBranch(supabase, tenantId, filters, limit, cursor) 
   // 列表查询保留 resolvedRoute（点 tab 就只看那个路由的对话），但 count 类
   // 聚合查询必须剥掉 resolvedRoute：route bar 的「全部」chip 和 KPI 条「对话」
   // 期望反映"应用全部 *非路由* filter 的对话总数"。否则点「人工跟进中」会让
-  // 「全部」collapse 成人工那个数，看起来像 bug。totalLeads / approvedCount
-  // 走 leads-base 查询，因为 PostgREST 嵌套限制本来就拿不到 resolved_route，
-  // 天然 route-independent，不用动。
+  // 「全部」collapse 成人工那个数，看起来像 bug。totalLeads 走 leads-base
+  // 查询，因为 PostgREST 嵌套限制本来就拿不到 resolved_route，天然
+  // route-independent，不用动。
   const filtersNoRoute = { ...filters, resolvedRoute: null };
-  const [dataRes, convCountRes, leadsCountRes, approvedCountRes, aggregates] =
+  const [dataRes, convCountRes, leadsCountRes, aggregates] =
     await Promise.all([
       buildListQuery(supabase, tenantId, filters, limit, cursor),
       buildConversationCountQuery(supabase, tenantId, filtersNoRoute),
       buildLeadCountQuery(supabase, tenantId, filters),
-      buildLeadCountQuery(supabase, tenantId, filters, { approvedOnly: true }),
       fetchAggregates(supabase, tenantId, filters),
     ]);
 
-  for (const r of [dataRes, convCountRes, leadsCountRes, approvedCountRes]) throwIfError(r);
+  for (const r of [dataRes, convCountRes, leadsCountRes]) throwIfError(r);
 
   return paginatedResponse(dataRes.data || [], limit, {
     totalContacts: aggregates.totalContacts,
     totalConversations: convCountRes.count || 0,
     totalLeads: leadsCountRes.count || 0,
-    approvedCount: approvedCountRes.count || 0,
     routeBuckets: aggregates.routeBuckets,
   });
 }

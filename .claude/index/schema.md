@@ -1,10 +1,10 @@
 # Schema Snapshot (auto-generated)
 
-Generated: 2026-05-16T11:52:45.147Z
+Generated: 2026-05-17T04:53:21.887Z
 
 Live snapshot of `public` schema from Supabase. **Do not edit by hand** — run `node scripts/build-index.mjs` to refresh.
 
-Tables: **50**. Listed alphabetically.
+Tables: **51**. Listed alphabetically.
 
 ## Tables
 
@@ -58,6 +58,7 @@ Tables: **50**. Listed alphabetically.
 - [`sessions`](#sessions)
 - [`tenants`](#tenants)
 - [`users`](#users)
+- [`webhook_dumps`](#webhook-dumps)
 
 ### `agents`
 
@@ -942,6 +943,10 @@ Tables: **50**. Listed alphabetically.
 - `idx_leads_conv_updated` USING btree (conversation_id, updated_at DESC NULLS LAST)
 - `idx_leads_conversation_id` USING btree (conversation_id)
 - `idx_leads_destination` USING btree (destination_country)
+- `idx_leads_details_brand` USING btree (((details ->> 'brand'::text)))
+- `idx_leads_details_buyer_type` USING btree (((details ->> 'buyer_type'::text)))
+- `idx_leads_details_car_model` USING btree (((details ->> 'car_model'::text)))
+- `idx_leads_details_destination_country` USING btree (((details ->> 'destination_country'::text)))
 - `idx_leads_inquiry_quality` USING btree (inquiry_quality)
 - `idx_leads_meta_ad_id` USING btree (meta_ad_id) WHERE (meta_ad_id IS NOT NULL)
 - `idx_leads_product_line` USING btree (product_line)
@@ -1390,3 +1395,14 @@ Tables: **50**. Listed alphabetically.
 
 **Indexes:**
 - `idx_users_tenant` USING btree (tenant_id)
+
+### `webhook_dumps`
+
+| Column | Type | Nullable | Default |
+| --- | --- | --- | --- |
+| `id` | uuid | N | `gen_random_uuid()` |
+| `received_at` | timestamp with time zone | N | `now()` |
+| `payload` | jsonb | N |  |
+
+**Indexes:**
+- `idx_webhook_dumps_received_at` USING btree (received_at DESC)

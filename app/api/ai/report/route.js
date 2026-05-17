@@ -232,7 +232,7 @@ async function buildAttributionData(tenantId, fromISO, toISO) {
   const leads = await fetchLeadsByConversationIds(
     tenantId,
     Array.from(conversationMetaAdMap.keys()),
-    'id, conversation_id, inquiry_quality, business_value, route, destination_country, agent_id, created_at, agent:agents(id, product_line)'
+    'id, conversation_id, inquiry_quality, business_value, route, details, agent_id, created_at, agent:agents(id, product_line)'
   );
 
   for (const lead of leads) {
@@ -247,7 +247,7 @@ async function buildAttributionData(tenantId, fromISO, toISO) {
     incrementMap(bucket.qualityCounts, quality);
     incrementMap(bucket.routeCounts, lead.route || 'UNKNOWN');
     incrementMap(bucket.agentCounts, agentLabel);
-    incrementMap(bucket.countryCounts, lead.destination_country || 'UNKNOWN');
+    incrementMap(bucket.countryCounts, lead.details?.destination_country || 'UNKNOWN');
 
     if (lead.conversation_id && quality === 'QUALIFY') {
       bucket.qualifyConversationIds.add(lead.conversation_id);
@@ -297,11 +297,11 @@ async function buildAttributionData(tenantId, fromISO, toISO) {
 async function buildMarketInsightData(tenantId, fromISO, toISO) {
   const { data: leads, error: leadsError } = await supabase
     .from('leads')
-    .select('id, destination_country, inquiry_quality, business_value, route, created_at')
+    .select('id, details, inquiry_quality, business_value, route, created_at')
     .eq('tenant_id', tenantId)
     .gte('created_at', fromISO)
     .lte('created_at', toISO)
-    .not('destination_country', 'is', null)
+    .not('details->>destination_country', 'is', null)
     .limit(10000);
 
   if (leadsError) throw leadsError;
@@ -310,7 +310,7 @@ async function buildMarketInsightData(tenantId, fromISO, toISO) {
   const routeDistribution = new Map();
 
   for (const lead of leads || []) {
-    const country = String(lead.destination_country || '').trim();
+    const country = String(lead.details?.destination_country || '').trim();
     if (!country) continue;
 
     if (!countryMap.has(country)) {

@@ -20,6 +20,7 @@ import {
   normalizeReferral,
 } from '../../../lib/referral-context.js';
 import { createTraceLogger, generateTraceId } from '../../../lib/core-trace.js';
+import { dumpWebhookPayload } from '../../../lib/repositories/webhook-dump.repository.js';
 
 /**
  * GET /api/webhook - Webhook verification endpoint
@@ -157,7 +158,14 @@ export async function POST(request) {
     });
 
     try {
+      const receivedAt = new Date();
       const body = await request.json();
+
+      // Observability-only raw payload archive. Fire-and-forget — never gates
+      // the message-processing path; failures are logged but swallowed.
+      dumpWebhookPayload({ receivedAt, payload: body }).catch((err) => {
+        logger.warn('webhook.dump.failed', { error: err.message });
+      });
 
       // Check if this is a message notification
       if (!body.entry || !body.entry[0].changes || !body.entry[0].changes[0].value.messages) {

@@ -4,7 +4,7 @@
  * 知识库 — 单 tab 集所有功能。
  *
  * 内部三段（top segmented control）：
- *   - 总览：健康度 + 各层覆盖 + 知识盲区 chip
+ *   - 总览：健康度 + 各层覆盖 + 过期文档
  *   - 录入：文件上传 / 对话式（两步：抽取 → 确认入库）/ 单独图片上传
  *   - 内容：已有文档 / Q&A / 图片资产
  *
@@ -20,8 +20,6 @@ import s from './page.module.css';
 import Button from '../../../../components/Button/Button';
 import {
   getHealth,
-  listGaps,
-  updateGap,
   listDocuments,
   uploadDocument,
   subscribeUploadProgress,
@@ -124,7 +122,6 @@ export default function KnowledgeBaseTab({ agentId }) {
 
   // Common data
   const [health, setHealth] = useState(null);
-  const [gaps, setGaps] = useState([]);
   const [documents, setDocuments] = useState([]);
   const [qaSnippets, setQaSnippets] = useState([]);
   const [assets, setAssets] = useState([]);
@@ -140,7 +137,6 @@ export default function KnowledgeBaseTab({ agentId }) {
     const fetchers = buildKbFetchers(agentId);
     const keys = [
       lineKeys.kbHealth(agentId),
-      lineKeys.kbGaps(agentId),
       lineKeys.kbDocs(agentId),
       lineKeys.kbQa(agentId),
       lineKeys.kbAssets(agentId),
@@ -149,8 +145,8 @@ export default function KnowledgeBaseTab({ agentId }) {
       // Drop existing entries so we get fresh data, then refetch through
       // the cache so concurrent readers (e.g. preloader) share the result.
       for (const k of keys) invalidate(k);
-      const [h, g, d, q, a] = await Promise.all(keys.map(k => prefetch(k, fetchers[k])));
-      setHealth(h); setGaps(g); setDocuments(d); setQaSnippets(q); setAssets(a);
+      const [h, d, q, a] = await Promise.all(keys.map(k => prefetch(k, fetchers[k])));
+      setHealth(h); setDocuments(d); setQaSnippets(q); setAssets(a);
     } catch (e) {
       setLoadError(e.message);
     }
@@ -161,12 +157,11 @@ export default function KnowledgeBaseTab({ agentId }) {
     // Hydrate from cache synchronously if available — KB is tenant-wide
     // prefetched by PostLoginPreloader so most opens are zero-flash.
     const cachedH = readCache(lineKeys.kbHealth(agentId))?.data;
-    const cachedG = readCache(lineKeys.kbGaps(agentId))?.data;
     const cachedD = readCache(lineKeys.kbDocs(agentId))?.data;
     const cachedQ = readCache(lineKeys.kbQa(agentId))?.data;
     const cachedA = readCache(lineKeys.kbAssets(agentId))?.data;
-    if (cachedH && cachedG && cachedD && cachedQ && cachedA) {
-      setHealth(cachedH); setGaps(cachedG); setDocuments(cachedD);
+    if (cachedH && cachedD && cachedQ && cachedA) {
+      setHealth(cachedH); setDocuments(cachedD);
       setQaSnippets(cachedQ); setAssets(cachedA); setLoading(false);
       return;
     }
@@ -177,7 +172,6 @@ export default function KnowledgeBaseTab({ agentId }) {
 
   const contentCount = documents.length + qaSnippets.length + assets.length;
   const sectionCounts = {
-    overview: gaps.length,
     content: contentCount,
   };
 
@@ -208,9 +202,7 @@ export default function KnowledgeBaseTab({ agentId }) {
       {loading && !health && <div className={s.loadingWrap}><span className={s.spinner} /></div>}
 
       {section === 'overview' && health && (
-        <OverviewSection health={health} gaps={gaps} onResolveGap={async (id, st) => {
-          await updateGap(id, st); await refreshAll();
-        }} />
+        <OverviewSection health={health} />
       )}
 
       {section === 'input' && (
@@ -232,7 +224,7 @@ export default function KnowledgeBaseTab({ agentId }) {
 
 // ── 总览 section ────────────────────────────────────────────────────
 
-function OverviewSection({ health, gaps, onResolveGap }) {
+function OverviewSection({ health }) {
   // status='error' 在后端语义里不是"出错"而是"还没建（覆盖率 0）"，所以前端
   // 不用红色 alert 风格 —— 改成中性灰 chip + "未建" 文案，避免误导用户以为坏了。
   const statusClass = (st) => st === 'good' ? s.layerGood : st === 'warn' ? s.layerWarn : s.layerEmpty;
@@ -310,45 +302,6 @@ function OverviewSection({ health, gaps, onResolveGap }) {
         </div>
       )}
 
-      <div className={s.sectionGroup}>
-        <div className={s.sectionTitle}>
-          知识盲区
-          <span className={s.sectionMutedNote}>Medici 答不上的问题，按频次聚合</span>
-        </div>
-        {gaps.length === 0 ? (
-          <div className={s.gapsEmpty}>
-            {/* 自绘极简定向 radar/sweep 图标 —— 用 currentColor 跟主题，避免空状态像
-             * "ShadCN 默认空 div"。两段式文案：第一行结论，第二行解释机制。 */}
-            <svg className={s.gapsEmptyIcon} viewBox="0 0 32 32" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-              <circle cx="16" cy="16" r="11" opacity="0.35" />
-              <circle cx="16" cy="16" r="7" opacity="0.55" />
-              <circle cx="16" cy="16" r="2.4" fill="currentColor" stroke="none" />
-              <path d="M16 16 L25 9.5" opacity="0.85" />
-            </svg>
-            <div className={s.gapsEmptyText}>
-              <div className={s.gapsEmptyTitle}>暂无盲区</div>
-              <div className={s.gapsEmptyHint}>Medici 还没遇到答不上的问题，盲区会在 AI 实际跑客户对话时自动聚合到这里。</div>
-            </div>
-          </div>
-        ) : (
-          <div className={s.gapList}>
-            {gaps.slice(0, 20).map(g => (
-              <div key={g.id} className={s.gapItem}>
-                <div className={s.gapItemHead}>
-                  <div className={s.gapQueryText}>{g.query}</div>
-                  <div className={s.gapItemActions}>
-                    <button className={s.docDeleteBtn} onClick={() => onResolveGap(g.id, 'resolved')}>已补</button>
-                    <button className={s.docDeleteBtn} onClick={() => onResolveGap(g.id, 'ignored')}>忽略</button>
-                  </div>
-                </div>
-                <div className={s.gapItemMeta}>
-                  {g.gap_type} · 命中 {g.occurrence_count} 次{g.tool_name && ` · ${g.tool_name}`}{g.layer && ` · ${g.layer}`}
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
-      </div>
     </>
   );
 }

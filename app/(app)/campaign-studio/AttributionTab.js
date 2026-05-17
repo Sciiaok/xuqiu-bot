@@ -61,13 +61,13 @@ export default function AttributionTab({ adsData, loading, daysFilter, metricsMa
         const [currentRes, prevRes] = await Promise.all([
           supabase
             .from('conversations')
-            .select('meta_ad_id, agent_id, created_at, agents(product_line), leads(inquiry_quality, destination_country)')
+            .select('meta_ad_id, agent_id, created_at, agents(product_line), leads(inquiry_quality, details)')
             .not('meta_ad_id', 'is', null)
             .gte('created_at', fromDate.toISOString())
             .lte('created_at', toDate.toISOString()),
           supabase
             .from('conversations')
-            .select('meta_ad_id, agent_id, created_at, agents(product_line), leads(inquiry_quality, destination_country)')
+            .select('meta_ad_id, agent_id, created_at, agents(product_line), leads(inquiry_quality, details)')
             .not('meta_ad_id', 'is', null)
             .gte('created_at', prevFrom.toISOString())
             .lte('created_at', prevTo.toISOString()),
@@ -99,7 +99,7 @@ export default function AttributionTab({ adsData, loading, daysFilter, metricsMa
             if (conv.meta_ad_id) lineBucket.adIds.add(String(conv.meta_ad_id));
 
             for (const lead of leadsArr) {
-              const country = lead.destination_country || '未知';
+              const country = lead.details?.destination_country || '未知';
               if (!countryMap.has(country)) {
                 countryMap.set(country, { country, conversationCount: 0, qualifyCount: 0, proofCount: 0 });
               }

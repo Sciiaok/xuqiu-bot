@@ -4,8 +4,8 @@
  * Start all services:
  *   pm2 start ecosystem.config.cjs
  *
- * Start only cron:
- *   pm2 start ecosystem.config.cjs --only lead-sync-cron
+ * Start a single app:
+ *   pm2 start ecosystem.config.cjs --only queue-cron
  */
 
 module.exports = {
@@ -26,24 +26,6 @@ module.exports = {
       max_memory_restart: '1G',
       out_file: 'logs/app-out.log',
       error_file: 'logs/app-error.log',
-      merge_logs: true,
-      log_date_format: 'YYYY-MM-DD HH:mm:ss',
-    },
-    {
-      name: 'lead-sync-cron',
-      script: 'scripts/cron-sync-leads.js',
-      cwd: __dirname,
-      node_args: '--experimental-modules',
-      env: {
-        NODE_ENV: 'production',
-        API_BASE_URL: 'http://localhost:3002',
-      },
-      instances: 1,
-      autorestart: true,
-      watch: false,
-      max_memory_restart: '256M',
-      out_file: 'logs/lead-sync-out.log',
-      error_file: 'logs/lead-sync-error.log',
       merge_logs: true,
       log_date_format: 'YYYY-MM-DD HH:mm:ss',
     },

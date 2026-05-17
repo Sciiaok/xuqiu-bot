@@ -43,14 +43,14 @@ const MAX_TOOL_ITERATIONS = 5;
 const FORCE_SUBMIT_PROMPT =
   'Please call submit_response with your structured response now.';
 
-// Fields that correspond to actual columns on the `leads` table. Anything a
-// product_line's custom lead_fields introduces beyond this set gets preserved
-// in the `details` JSONB column so DB inserts don't fail.
-const STANDARD_DB_FIELDS = new Set([
-  'brand', 'car_model', 'destination_country', 'destination_port',
-  'loading_port', 'international_commercial_term', 'company_name',
-  'timeline', 'color_quantity', 'qty_bucket', 'product_name',
-  'sku_description', 'buyer_type', 'details',
+// 顶层保留的字段集 —— 系统字段 + 评分类元数据。
+// 其他字段（业务字段、产品线自定义 lead_fields）全部进 details JSONB。
+const TOP_LEVEL_RETAIN = new Set([
+  'id', 'conversation_id', 'contact_id', 'tenant_id', 'agent_id',
+  'product_line', 'meta_ad_id', 'lead_key',
+  'created_at', 'updated_at', 'approved', 'approved_at', 'approved_by',
+  'inquiry_quality', 'business_value', 'conversation_intent',
+  'conversation_intent_summary', 'route', 'score', 'handoff_summary',
 ]);
 
 // ─── Skill bundle + host patch (loaded once, cached at module scope) ─
@@ -500,16 +500,6 @@ function safeParseJson(s) {
 
 // ─── Post-process ────────────────────────────────────────────────────
 
-function cleanEmptyValues(obj) {
-  if (!obj || typeof obj !== 'object') return obj;
-  const cleaned = {};
-  for (const [key, value] of Object.entries(obj)) {
-    if (value === '' || value === null || value === undefined) continue;
-    cleaned[key] = value;
-  }
-  return cleaned;
-}
-
 /**
  * Schema requires every field to appear, so Claude emits '' for unknowns.
  * We strip those before storage.
@@ -526,26 +516,38 @@ export function stripEmptyStringFields(obj) {
 /**
  * Normalize agent responses to canonical leads[].
  *
- * 双写阶段：无条件把所有非空字段都拷进 details，让硬编码列与 details 同源。
- * 阶段 3 drop 列后，details 就是唯一数据源。
+ * 业务字段（brand / car_model / destination_country 等）和产品线自定义
+ * lead_fields 全部进 details JSONB；顶层只保留 TOP_LEVEL_RETAIN 里列出的系统
+ * 字段 + 评分元数据。
  *
- * 同时处理两个旧别名（car_brand→brand、part_name→product_name、quantity→qty_bucket）
- * 以兼容老 agent 输出。
+ * Legacy LLM 输出别名（car_brand→brand / part_name→product_name / quantity→qty_bucket）
+ * 在进 details 前先 canonicalize。
  */
 export function normalizeAgentResponse(parsed) {
-  if (parsed.leads) {
-    parsed.leads = parsed.leads.map((lead) => {
-      const mapped = { ...lead };
-      if (lead.car_brand && !lead.brand) mapped.brand = lead.car_brand;
-      if (lead.part_name && !lead.product_name) mapped.product_name = lead.part_name;
-      if (lead.quantity && !lead.qty_bucket) mapped.qty_bucket = lead.quantity;
+  if (!parsed.leads) return;
+  parsed.leads = parsed.leads.map((lead) => {
+    const canonical = { ...lead };
+    if (canonical.car_brand && !canonical.brand) { canonical.brand = canonical.car_brand; delete canonical.car_brand; }
+    if (canonical.part_name && !canonical.product_name) { canonical.product_name = canonical.part_name; delete canonical.part_name; }
+    if (canonical.quantity && !canonical.qty_bucket) { canonical.qty_bucket = canonical.quantity; delete canonical.quantity; }
+    if (canonical.incoterm && !canonical.international_commercial_term) {
+      canonical.international_commercial_term = canonical.incoterm;
+      delete canonical.incoterm;
+    }
 
-      const allFields = cleanEmptyValues(lead);
-      delete allFields.details;
-      mapped.details = { ...(lead.details || {}), ...allFields };
-      return mapped;
-    });
-  }
+    const detailsObj = { ...(canonical.details || {}) };
+    const topLevel = {};
+    for (const [key, value] of Object.entries(canonical)) {
+      if (key === 'details') continue;
+      if (TOP_LEVEL_RETAIN.has(key)) {
+        topLevel[key] = value;
+      } else if (value !== '' && value !== null && value !== undefined) {
+        detailsObj[key] = value;
+      }
+    }
+
+    return { ...topLevel, details: detailsObj };
+  });
 }
 
 // ─── Orchestrator (public entry) ─────────────────────────────────────

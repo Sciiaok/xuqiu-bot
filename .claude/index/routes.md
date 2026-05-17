@@ -1,12 +1,12 @@
 # Routes (auto-generated)
 
-Generated: 2026-05-16T19:01:49.854Z
+Generated: 2026-05-17T09:29:02.867Z
 
 Filesystem-derived list of API endpoints and UI pages. **Do not edit** — run `node scripts/build-index.mjs` to refresh.
 
 ## API Endpoints
 
-Total: **79**
+Total: **78**
 
 | Path | Methods | File |
 | --- | --- | --- |
@@ -35,7 +35,6 @@ Total: **79**
 | `/api/cron/process-queue` | GET | [app/api/cron/process-queue/route.js](../../app/api/cron/process-queue/route.js) |
 | `/api/cron/recover-stale-kb-docs` | GET | [app/api/cron/recover-stale-kb-docs/route.js](../../app/api/cron/recover-stale-kb-docs/route.js) |
 | `/api/cron/release-takeovers` | GET | [app/api/cron/release-takeovers/route.js](../../app/api/cron/release-takeovers/route.js) |
-| `/api/cron/sync-leads` | GET, POST | [app/api/cron/sync-leads/route.js](../../app/api/cron/sync-leads/route.js) |
 | `/api/dev-tools/ai-sql` | POST | [app/api/dev-tools/ai-sql/route.js](../../app/api/dev-tools/ai-sql/route.js) |
 | `/api/dev-tools/sql` | POST | [app/api/dev-tools/sql/route.js](../../app/api/dev-tools/sql/route.js) |
 | `/api/health` | GET | [app/api/health/route.js](../../app/api/health/route.js) |
@@ -47,7 +46,6 @@ Total: **79**
 | `/api/knowledge/documents` | GET, DELETE | [app/api/knowledge/documents/route.js](../../app/api/knowledge/documents/route.js) |
 | `/api/knowledge/documents/download` | GET | [app/api/knowledge/documents/download/route.js](../../app/api/knowledge/documents/download/route.js) |
 | `/api/knowledge/documents/reparse` | POST | [app/api/knowledge/documents/reparse/route.js](../../app/api/knowledge/documents/reparse/route.js) |
-| `/api/knowledge/gaps` | GET, PUT | [app/api/knowledge/gaps/route.js](../../app/api/knowledge/gaps/route.js) |
 | `/api/knowledge/health` | GET | [app/api/knowledge/health/route.js](../../app/api/knowledge/health/route.js) |
 | `/api/knowledge/pending-review` | GET, POST | [app/api/knowledge/pending-review/route.js](../../app/api/knowledge/pending-review/route.js) |
 | `/api/knowledge/qa-snippets` | GET, PUT, DELETE | [app/api/knowledge/qa-snippets/route.js](../../app/api/knowledge/qa-snippets/route.js) |
@@ -56,8 +54,6 @@ Total: **79**
 | `/api/knowledge/upload` | POST | [app/api/knowledge/upload/route.js](../../app/api/knowledge/upload/route.js) |
 | `/api/knowledge/upload/stream` | GET | [app/api/knowledge/upload/stream/route.js](../../app/api/knowledge/upload/stream/route.js) |
 | `/api/leads/[id]` | GET, PATCH | [app/api/leads/[id]/route.js](../../app/api/leads/[id]/route.js) |
-| `/api/leads/approve` | POST | [app/api/leads/approve/route.js](../../app/api/leads/approve/route.js) |
-| `/api/leads/sync` | POST | [app/api/leads/sync/route.js](../../app/api/leads/sync/route.js) |
 | `/api/media/whatsapp/[mediaId]` | GET | [app/api/media/whatsapp/[mediaId]/route.js](../../app/api/media/whatsapp/[mediaId]/route.js) |
 | `/api/medici-simulator/send` | POST | [app/api/medici-simulator/send/route.js](../../app/api/medici-simulator/send/route.js) |
 | `/api/meta/connect` | POST | [app/api/meta/connect/route.js](../../app/api/meta/connect/route.js) |
@@ -74,6 +70,9 @@ Total: **79**
 | `/api/ogilvy/conversations/[id]/pause` | POST | [app/api/ogilvy/conversations/[id]/pause/route.js](../../app/api/ogilvy/conversations/[id]/pause/route.js) |
 | `/api/ogilvy/conversations/[id]/resume` | POST | [app/api/ogilvy/conversations/[id]/resume/route.js](../../app/api/ogilvy/conversations/[id]/resume/route.js) |
 | `/api/ogilvy/conversations/[id]/usage` | GET | [app/api/ogilvy/conversations/[id]/usage/route.js](../../app/api/ogilvy/conversations/[id]/usage/route.js) |
+| `/api/ogilvy/creatives` | GET | [app/api/ogilvy/creatives/route.js](../../app/api/ogilvy/creatives/route.js) |
+| `/api/ogilvy/sessions/ad-status` | GET | [app/api/ogilvy/sessions/ad-status/route.js](../../app/api/ogilvy/sessions/ad-status/route.js) |
+| `/api/ogilvy/sessions/metrics` | GET | [app/api/ogilvy/sessions/metrics/route.js](../../app/api/ogilvy/sessions/metrics/route.js) |
 | `/api/ogilvy/upload` | POST | [app/api/ogilvy/upload/route.js](../../app/api/ogilvy/upload/route.js) |
 | `/api/ogilvy/whatsapp-accounts` | GET | [app/api/ogilvy/whatsapp-accounts/route.js](../../app/api/ogilvy/whatsapp-accounts/route.js) |
 | `/api/onboarding/progress` | GET, POST | [app/api/onboarding/progress/route.js](../../app/api/onboarding/progress/route.js) |
@@ -120,4 +119,3 @@ Total: **16**
 - `/api/cron/process-queue` → [app/api/cron/process-queue/route.js](../../app/api/cron/process-queue/route.js)
 - `/api/cron/recover-stale-kb-docs` → [app/api/cron/recover-stale-kb-docs/route.js](../../app/api/cron/recover-stale-kb-docs/route.js)
 - `/api/cron/release-takeovers` → [app/api/cron/release-takeovers/route.js](../../app/api/cron/release-takeovers/route.js)
-- `/api/cron/sync-leads` → [app/api/cron/sync-leads/route.js](../../app/api/cron/sync-leads/route.js)

@@ -19,6 +19,7 @@ import { createTraceLogger } from '../lib/core-trace.js';
 import { config } from './config.js';
 import supabase from '../lib/supabase.js';
 import { getReferralAdId } from '../lib/referral-context.js';
+import { parseIntents } from '../lib/inquiry-dashboard.js';
 
 // Used when a product line hasn't customized faq_message in the config UI.
 const DEFAULT_FAQ_MESSAGE = `Thank you for your interest!
@@ -76,7 +77,10 @@ function formatFieldValue(v) {
 }
 
 function buildFeishuLeadMessage(lead, handoffSummary, context = {}) {
-  const intents = Array.isArray(lead.conversation_intent) ? lead.conversation_intent : [];
+  // session.js 写库时把数组 join 成逗号串(见 lib/session.js intentString),所以
+  // lead.conversation_intent 实际是字符串,Array.isArray 永远 false。复用
+  // parseIntents,它兼容逗号串 / "[...]" JSON 串 / 纯字符串三种形态。
+  const intents = parseIntents(lead.conversation_intent);
   const intentText = intents.map((i) => INTENT_LABEL[i] || i).join(' · ') || '-';
 
   // 归属头部：租户 / 产品线 / 广告 —— 一眼定位是哪个工作区 + 哪条产品线 + 哪条广告进来的
@@ -104,7 +108,7 @@ function buildFeishuLeadMessage(lead, handoffSummary, context = {}) {
 
   // Canonical 字段按非空过滤；lead.details 里超出 CANONICAL 的 key 单独展开
   const canonicalRows = CANONICAL_FIELDS
-    .map(([key, label]) => ({ label, value: formatFieldValue(lead[key]) }))
+    .map(([key, label]) => ({ label, value: formatFieldValue(lead.details?.[key]) }))
     .filter((r) => r.value !== '');
   const canonicalKeys = new Set(CANONICAL_FIELDS.map(([k]) => k));
 
@@ -125,7 +129,7 @@ function buildFeishuLeadMessage(lead, handoffSummary, context = {}) {
     headerBits.join(' · '),
     '',
     '**客户信息**',
-    `👤 ${lead.contact?.name || '未知'}${lead.company_name || lead.contact?.company_name ? ` — ${lead.company_name || lead.contact.company_name}` : ''}`,
+    `👤 ${lead.contact?.name || '未知'}${lead.details?.company_name || lead.contact?.company_name ? ` — ${lead.details?.company_name || lead.contact.company_name}` : ''}`,
     `📞 +${lead.contact?.wa_id || '未知'}`,
   ];
 

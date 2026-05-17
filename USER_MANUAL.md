@@ -140,7 +140,6 @@ kb_documents（原始文件，比如一份 Excel SKU 报价单）
 外加：
 
 - `kb_qa_snippets`：你自己手写的 Q&A 片段（带 embedding，回答常见问题最快）
-- `kb_knowledge_gaps`：客户问过但 KB 答不上来的问题清单
 - `kb_corrections`：你审核 AI 回复后的纠正
 - `kb_pending_review`：抽取出来与既有数据冲突 / 不确定的内容，等你审批
 
@@ -193,26 +192,14 @@ kb_documents（原始文件，比如一份 Excel SKU 报价单）
 
 **客户问"能不能发张图"** → Medici 从 AVAILABLE ASSETS 里挑一个 `asset_id` 挂到回复里，平台自动作为单独 WhatsApp 消息发出去。配置 `linked_skus` 越准，匹配越精确。
 
-### 5.5 知识缺口（Gaps）
-
-`/knowledge/gaps`：客户问了但 KB 答不上的问题汇总。
-
-- AI 工具返回 `not_found` / `needs_human` / `unknown` 时自动记一条
-- 同一句问题（按 `question_signature` 归一）会累积 `occurrence_count`
-- 处理方式：
-  - 点 "教 KB" → 用你的回答写一条 `kb_knowledge_points` 或 `kb_corrections`
-  - 标记 "已解决"
-
-这是你长期迭代 KB 的最大入口——**看 Gaps 知道补什么 KB 最值钱**。
-
-### 5.6 待审批（Pending Review）
+### 5.5 待审批（Pending Review）
 
 新抽出来的内容跟既有数据冲突 / 抽取置信度不够时不会直接进知识库，而是先落 `kb_pending_review`：
 
 - 你看到 "新版本 vs 旧版本" 的对比
 - 选 "采纳新的"（覆盖） / "保留旧的"（拒收） / "合并" / "另存为新条目"
 
-### 5.7 Medici 模拟器
+### 5.6 Medici 模拟器
 
 产品线详情页内嵌一个 chat 面板——直接在 UI 跟 Medici 聊，验证你刚配的字段表 / 价值规则 / 知识库是否符合预期。**所有调用都走和真实 WhatsApp 一样的路径**——同一个 Medici、同一个 KB、同一个 prompt，只是不发出去。
 
@@ -245,19 +232,14 @@ kb_documents（原始文件，比如一份 Excel SKU 报价单）
 
 - **chat**：完整对话流（按天分组）；客户消息 + AI 回复 + 人工接管时你发的消息 + 系统事件
 - **notes**：自由备注（CRM 卡片）；增删改全部走 `/api/contacts/[id]/notes`
-- **inquiry-details**：抽出来的 lead 字段；可以编辑 / 标审批 / 改质量等级
-- **timeline**：所有动作时间线（接管 / 释放 / 同步外部系统 / Feishu 推送等）
+- **inquiry-details**：抽出来的 lead 字段；可以编辑 / 改质量等级
+- **timeline**：所有动作时间线（接管 / 释放 / Feishu 推送等）
 
 ### 6.3 人工接管 / 释放
 
 - 点 "接管" → `conversations.is_human_takeover=true`，AI 暂时不再回复；你可以在 chat 里直接输入回复 → 平台调 WhatsApp 出站
 - 点 "释放" → AI 立刻接回
 - 默认接管 TTL（2 小时）到点自动释放（cron `release-takeovers`）
-
-### 6.4 审批 lead
-
-- 点 lead 卡片上的 "审批" → `leads.approved=true`、`approved_at=now`、`approved_by=<你>`
-- 审批后的 lead 会被 `cron sync-leads` 同步到外部 SCM（如果你接入了 REVO 等系统）
 
 ---
 
@@ -429,14 +411,7 @@ LeadEngine 的最大业务红线之一：**未到 QUALIFY 客户看不到价格*
 
 `/reports/[id]` → 导出按钮（CSV / Markdown）
 
-### 12.2 外部 SCM 同步
-
-如果你接入了 REVO SCM（或其它兼容系统）：
-
-- cron `sync-leads` 每隔一段时间把 `approved=true` 且 `synced_at IS NULL` 的 lead 推过去
-- 同步状态见 `lead_sync_logs` 表（暂无 UI，可以在 dev-tools 查）
-
-### 12.3 dev-tools / SQL（founder 专用）
+### 12.2 dev-tools / SQL（founder 专用）
 
 `/dev-tools/sql`：
 
@@ -460,7 +435,7 @@ LeadEngine 的最大业务红线之一：**未到 QUALIFY 客户看不到价格*
 
 ### Q: AI 答了错的内容怎么办？
 
-去 `/leadhub`，找到那条 AI 回复 → 点 "纠正" → 写正确答案 → 落 `kb_corrections`。下次同样问题用你的版本。也可以去 KB → Gaps，找到该问题，"教 KB"。
+去 `/leadhub`，找到那条 AI 回复 → 点 "纠正" → 写正确答案 → 落 `kb_corrections`。下次同样问题用你的版本。
 
 ### Q: AI 总是问相同问题不推进？
 

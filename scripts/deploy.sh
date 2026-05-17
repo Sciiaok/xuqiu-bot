@@ -79,9 +79,3 @@ echo -e "${GREEN}========================================${NC}"
 # Show PM2 status
 echo -e "\n${YELLOW}PM2 Status:${NC}"
 ssh $SERVER "pm2 status"
-
-echo -e "\n${YELLOW}Logs:${NC}"
-echo "  ssh $SERVER 'pm2 logs lead-engine-next'"
-echo "  ssh $SERVER 'pm2 logs lead-sync-cron'"
-echo "  ssh $SERVER 'pm2 logs queue-cron'"
-echo "  ssh $SERVER 'pm2 logs report-cron'"

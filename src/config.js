@@ -96,6 +96,5 @@ export const config = {
   // Internal API secrets (cron jobs, partner APIs)
   secrets: {
     cron: process.env.CRON_SECRET,
-    revoScmApiKey: process.env.REVO_SCM_API_KEY,
   },
 };

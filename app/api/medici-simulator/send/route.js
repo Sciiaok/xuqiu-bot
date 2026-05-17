@@ -177,14 +177,18 @@ export async function POST(request) {
       qualificationConfig: agentConfig.qualification_config,
       lead: null,
     });
+    // Leads 通用化迁移阶段 2 后,业务字段都在 details JSONB 下(queue-processor
+    // 同样这么读)。前端 echo 回来的 `priorLead` 就是上一轮 response.leads[0],
+    // 已经是 details 嵌套形态。
+    const priorDetails = priorLeadData?.details || {};
     const priorState = priorLeadData ? {
       conversation_intent: priorLeadData.conversation_intent,
       inquiry_quality: priorLeadData.inquiry_quality,
       business_value: priorLeadData.business_value,
-      car_model: priorLeadData.car_model || priorLeadData.product_name || null,
-      qty_bucket: priorLeadData.qty_bucket || null,
-      destination_country: priorLeadData.destination_country || null,
-      company_name: priorLeadData.company_name || null,
+      car_model: priorDetails.car_model || priorDetails.product_name || null,
+      qty_bucket: priorDetails.qty_bucket || null,
+      destination_country: priorDetails.destination_country || null,
+      company_name: priorDetails.company_name || null,
     } : null;
     const contextInfo = {
       missing_fields: missingFields,
@@ -335,9 +339,9 @@ export async function POST(request) {
     // lead's product fields so the guard can drop SKU-mismatched attachments.
     const freshLead = Array.isArray(response.leads) ? response.leads[0] : null;
     const productContext = freshLead ? {
-      carModel: freshLead.car_model || null,
-      brand: freshLead.brand || null,
-      productName: freshLead.product_name || null,
+      carModel: freshLead.details?.car_model || null,
+      brand: freshLead.details?.brand || null,
+      productName: freshLead.details?.product_name || null,
     } : {};
     const attachments = await resolveAttachmentUrls(response.attachments, {
       tenantId: ctx.tenantId,

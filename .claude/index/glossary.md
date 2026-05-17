@@ -28,12 +28,14 @@ Words that appear repeatedly across code, schema, and UI. Many are not self-expl
 
 ## Lead lifecycle
 
-- **Lead** (DB) ≡ **Inquiry** (UI) — Extracted prospect record from a conversation. Fields: brand, car_model, destination_country, color_quantity, qty_bucket, timeline, business_value, inquiry_quality, etc. **The UI calls them "inquiries"; the schema calls them "leads".** Don't rename either.
+- **Lead** (DB) ≡ **Inquiry** (UI) — Extracted prospect record from a conversation. **The UI calls them "inquiries"; the schema calls them "leads".** Don't rename either.
+  - **业务字段**（brand / car_model / destination_country / destination_port / loading_port / qty_bucket / color_quantity / company_name / buyer_type / timeline / product_name / sku_description / international_commercial_term 等，按 `product_lines.lead_fields` 配置驱动）全部存在 `leads.details` JSONB 列里，由产品线 lead_fields 决定具体 key 集.
+  - **评分/路由元数据**（inquiry_quality / business_value / route / score / conversation_intent / conversation_intent_summary / handoff_summary）继续作为 leads 表的顶层列存储，跨产品线通用、参与 dashboard 聚合.
+  - 早期版本 leads 表上还有 13 个硬编码业务列（同名于 details key），已 DEPRECATED 2026-05-17，等待 drop. 别再用，业务字段一律读写 `details->>'xxx'`.
 - **Inquiry quality** — Categorical score: `PROOF` / `QUALIFY` / `GOOD` / `BAD`. Set by Medici (`src/agents/medici/`) during lead extraction; enum lives in `src/agents/medici/output-schema.js::INQUIRY_QUALITY_ENUM`.
 - **Business value** — Categorical score: `HIGH` / `AVERAGE` / `LOW`.
-- **Lead-extractor** — `lib/lead-extractor.js` — LLM logic that parses conversation history → structured lead. Triggered by inbound messages and by `sync-leads` cron.
-- **Approval** — A lead can be manually `approved` (boolean), capturing the founder's confirmation; tracked with `approved_at`, `approved_by`.
-- **lead_key** — Dedup key (contact + brand + product, roughly) so re-extractions update the same row instead of creating duplicates.
+- **Lead-extractor** — `lib/lead-extractor.js` — LLM logic that parses conversation history → structured lead. Triggered by inbound messages.
+- **lead_key** — Dedup key (contact + brand + product, roughly — components now read from `details`) so re-extractions update the same row instead of creating duplicates.
 - **Inquiry dashboard** — `/api/inquiry-dashboard` queries `leads` directly for the dashboard data. `/api/inquiry-dashboard/summary` writes LLM-generated markdown summaries to `inquiry_dashboard_summaries` (7-day TTL, keyed by tenant + product_lines + period).
 
 ## Product lines
@@ -50,12 +52,11 @@ Words that appear repeatedly across code, schema, and UI. Many are not self-expl
   4. **`kb_knowledge_points`** — atomic Q&A-style chunks.
 - **KB chunk / knowledge point** — Generic name for an atomic searchable KB unit. Usually means a row in `kb_knowledge_points`.
 - **QA snippet** (`kb_qa_snippets`) — Pre-computed Q&A pair with embedding. Faster lookup than full KB search for common questions.
-- **Gap** (`kb_knowledge_gaps`) — A question the AI couldn't answer well from current KB. Tracked so the founder can teach the KB.
 - **Correction** (`kb_corrections`) — Founder-submitted fix to a KB answer. Used to override/augment LLM outputs.
 - **Pending review** (`kb_pending_review`) — Editorial buffer for KB writes that conflict with existing content (e.g. new product overlaps an existing one). Founder approves/rejects.
 - **Asset** (`kb_assets`) — Media item (image, etc.) extracted from KB docs. Has caption embedding for visual search. Tagged with `scenario`, `view`, `color`, `language`.
 - **Pricing rule** (`kb_pricing_rules`) — Pricing logic extracted from KB (used by quote generation). Read-only at runtime; managed offline.
-- ~~**KB glossary**~~ / ~~**KB test session / message**~~ — Tables exist (`kb_glossary`, `kb_test_sessions`, `kb_test_messages`) but no code references them. Pre-decision or shelved features. See `tables-actual-usage.md` §B.
+- ~~**KB glossary**~~ / ~~**KB test session / message**~~ / ~~**Gap** (`kb_knowledge_gaps`)~~ — Tables exist (`kb_glossary`, `kb_test_sessions`, `kb_test_messages`, `kb_knowledge_gaps`) but no code references them. Pre-decision or retired features. See `tables-actual-usage.md` §B.
 - **Teach** (`/api/knowledge/teach`) — Entry point for founder to add a knowledge point / answer a gap. Writes into `kb_knowledge_points` or `kb_corrections`.
 
 ## Campaign / orchestrator

@@ -11,10 +11,6 @@
  *   4. lookup_policy        (also handles QA snippets via free_text)
  *   5. find_asset
  *   6. check_constraint
- *
- * Every tool call is wrapped with a gap recorder: if a tool returns
- * not_found / needs_human / unknown, we log to kb_knowledge_gaps so the
- * Learning panel can surface it.
  */
 import {
   lookupProduct,
@@ -24,7 +20,6 @@ import {
   findAsset,
   checkConstraint,
 } from '../../kb-tools.service.js';
-import { recordGap } from '../../kb-gaps.service.js';
 import supabase from '../../../lib/supabase.js';
 
 // ── Capability detection ────────────────────────────────────────────
@@ -158,61 +153,7 @@ export async function buildKbTools({ tenantId, productLineId }) {
   return Object.values(TOOL_DEFS);
 }
 
-// ── Executor with gap-capture wrapper ───────────────────────────────
-
-const TOOL_TO_GAP_LAYER = {
-  lookup_product: 'product',
-  quote_price: 'product',
-  lookup_freight: 'logistics',
-  lookup_policy: null,
-  find_asset: null,
-  check_constraint: 'sales',
-};
-
-/**
- * Inspect a tool's typed result and return a gap_type if the result indicates
- * a knowledge gap. Returns null if the result is a success.
- */
-function gapTypeFromResult(toolName, result) {
-  if (!result || typeof result !== 'object') return null;
-
-  switch (toolName) {
-    case 'lookup_product':
-    case 'lookup_freight':
-      return result.found === false ? 'no_result' : null;
-    case 'quote_price':
-      if (result.ok === true) return null;
-      if (result.not_found) return 'no_result';
-      if (result.needs_human) return 'low_confidence';
-      return null;
-    case 'lookup_policy':
-      return result.found === false ? 'no_result' : null;
-    case 'find_asset':
-      return (!result.assets || result.assets.length === 0) ? 'no_result' : null;
-    case 'check_constraint':
-      return result.decision === 'unknown' ? 'no_result' : null;
-    default:
-      return null;
-  }
-}
-
-/**
- * Best-effort summary of the customer question for gap recording.
- * Falls back to JSON of input.
- */
-function questionFromToolInput(toolName, input) {
-  if (!input || typeof input !== 'object') return toolName;
-  return (
-    input.free_text ||
-    input.natural_language ||
-    input.sku ||
-    input.model ||
-    input.destination_port ||
-    input.topic ||
-    input.action ||
-    JSON.stringify(input)
-  );
-}
+// ── Executor ────────────────────────────────────────────────────────
 
 /**
  * Strip price-bearing fields from a tool result when the conversation hasn't
@@ -373,21 +314,6 @@ export async function executeKbTool(toolName, input, ctx = {}) {
         break;
       default:
         return JSON.stringify({ error: `Unknown KB tool: ${toolName}` });
-    }
-
-    // Gap capture — awaited so concurrent calls dedup cleanly via SELECT-then-
-    // UPDATE; the latency cost (~50ms) is negligible compared to the LLM turn.
-    const gapType = gapTypeFromResult(toolName, result);
-    if (gapType) {
-      await recordGap(
-        { tenantId: ctx.tenantId, productLineId: ctx.productLineId },
-        {
-          question: questionFromToolInput(toolName, input),
-          toolName,
-          gapType,
-          layer: TOOL_TO_GAP_LAYER[toolName] || null,
-        }
-      ).catch(() => { /* swallow — already logged in recorder */ });
     }
 
     return JSON.stringify(result);

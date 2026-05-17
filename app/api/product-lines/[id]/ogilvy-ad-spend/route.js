@@ -27,6 +27,7 @@ import { findProductLineById } from '../../../../../lib/repositories/product-lin
 import { getSupabaseAdmin } from '../../../../../lib/supabase-admin.js';
 import { getMetaAccountForUser } from '../../../../../src/agents/ogilvy/whatsapp-accounts.service.js';
 import { META_API_VERSION } from '../../../../../src/meta-ads.service.js';
+import { clampToCostFloor } from '../../../../../lib/cost-stats-floor.js';
 
 function isoToBjYmd(iso) {
   return new Date(iso).toLocaleDateString('en-CA', { timeZone: 'Asia/Shanghai' });
@@ -41,8 +42,23 @@ export async function GET(request, { params }) {
   if (!line) return Response.json({ error: 'Not found' }, { status: 404 });
 
   const { searchParams } = new URL(request.url);
-  const fromISO = searchParams.get('from') || null;
-  const toISO = searchParams.get('to') || null;
+  // 跟 cost-stats 同一硬下限,详见 lib/cost-stats-floor.js。
+  // 上限若整段在 floor 之前(empty=true)直接短路 —— 不发 Meta /insights。
+  const clamped = clampToCostFloor(
+    searchParams.get('from') || null,
+    searchParams.get('to') || null,
+  );
+  if (clamped.empty) {
+    return Response.json({
+      spend: 0, wa_conversations: 0, cpa: 0,
+      campaign_count: 0, ad_count: 0, source: 'before_cost_floor',
+    });
+  }
+  const fromISO = clamped.fromISO;
+  // 用户选 "全部时间" / lifetime 时 toISO=null,Meta 会跳过 time_range 走
+  // 历史全量,会把 floor 之前的花费也拉回来 —— 这里兜底成"现在",确保 Meta
+  // 端也受 floor 约束。
+  const toISO = clamped.toISO || new Date().toISOString();
 
   try {
     const admin = getSupabaseAdmin();

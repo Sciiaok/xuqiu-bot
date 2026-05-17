@@ -3,6 +3,7 @@
 import { useEffect, useState, useMemo } from 'react';
 import s from './CostStatsTab.module.css';
 import { DATE_PRESETS, resolveDateRange } from '../../../../../lib/date-range-presets';
+import { COST_STATS_FLOOR_LABEL } from '../../../../../lib/cost-stats-floor';
 
 /**
  * CostStatsTab — 产品线粒度成本分析。
@@ -170,20 +171,20 @@ export default function CostStatsTab({ productLineId }) {
             : showOgilvy ? '= Medici + Ogilvy' : '= 仅 Medici'}
         />
         <KpiCard
-          label="LLM Medici 类"
+          label="Medici"
           value={fmtUsd(mediciCost)}
           sub={<>{stats.medici.totals.count} 次调用 · {renderDelta(computeDelta(mediciCost, mediciPrev))}</>}
         />
         {showOgilvy && (
           <KpiCard
-            label="LLM Ogilvy 工作台"
+            label="Ogilvy"
             value={fmtUsd(ogilvyCost)}
             sub={`推理 ${fmtUsd(ogilvyReasoningCost)} · 图 ${stats.ogilvy.image_count}张 ${fmtUsd(ogilvyImageCost)}`}
           />
         )}
         {showAds && (
           <KpiCard
-            label="广告花费 (Ogilvy 创编)"
+            label="广告消耗"
             value={adError ? '—' : fmtUsd(adSpend)}
             sub={adError
               ? '数据不可用'
@@ -239,42 +240,48 @@ export default function CostStatsTab({ productLineId }) {
 // ── Range selector + view toggle ─────────────────────────────────────
 function RangeBar({ preset, setPreset, customFrom, setCustomFrom, customTo, setCustomTo, view, setView }) {
   return (
-    <div className={s.rangeBar}>
-      <div className={s.rangePills}>
-        {DATE_PRESETS.map(opt => (
-          <button
-            key={opt.key}
-            className={`${s.rangePill} ${preset === opt.key ? s.rangePillActive : ''}`}
-            onClick={() => {
-              setPreset(opt.key);
-              if (opt.key !== 'custom') { setCustomFrom(''); setCustomTo(''); }
-            }}
-          >
-            {opt.label}
-          </button>
-        ))}
-      </div>
-      {preset === 'custom' && (
-        <div className={s.customRange}>
-          <input type="date" value={customFrom} max={customTo || undefined}
-            onChange={e => setCustomFrom(e.target.value)} />
-          <span className={s.rangeSep}>→</span>
-          <input type="date" value={customTo} min={customFrom || undefined}
-            onChange={e => setCustomTo(e.target.value)} />
+    <>
+      <div className={s.rangeBar}>
+        <div className={s.rangePills}>
+          {DATE_PRESETS.map(opt => (
+            <button
+              key={opt.key}
+              className={`${s.rangePill} ${preset === opt.key ? s.rangePillActive : ''}`}
+              onClick={() => {
+                setPreset(opt.key);
+                if (opt.key !== 'custom') { setCustomFrom(''); setCustomTo(''); }
+              }}
+            >
+              {opt.label}
+            </button>
+          ))}
         </div>
-      )}
-      <div className={s.viewPills}>
-        {VIEW_OPTIONS.map(opt => (
-          <button
-            key={opt.key}
-            className={`${s.viewPill} ${view === opt.key ? s.viewPillActive : ''}`}
-            onClick={() => setView(opt.key)}
-          >
-            {opt.label}
-          </button>
-        ))}
+        {preset === 'custom' && (
+          <div className={s.customRange}>
+            <input type="date" value={customFrom} max={customTo || undefined}
+              onChange={e => setCustomFrom(e.target.value)} />
+            <span className={s.rangeSep}>→</span>
+            <input type="date" value={customTo} min={customFrom || undefined}
+              onChange={e => setCustomTo(e.target.value)} />
+          </div>
+        )}
+        <div className={s.viewPills}>
+          {VIEW_OPTIONS.map(opt => (
+            <button
+              key={opt.key}
+              className={`${s.viewPill} ${view === opt.key ? s.viewPillActive : ''}`}
+              onClick={() => setView(opt.key)}
+            >
+              {opt.label}
+            </button>
+          ))}
+        </div>
       </div>
-    </div>
+      <p className={s.floorHint}>
+        统计自 <b>{COST_STATS_FLOOR_LABEL} 00:00 (Asia/Shanghai)</b> 起 ——
+        更早的 LLM 调用与广告花费属早期联调脏数据,已在服务端硬剔除,不受上方时间窗影响。
+      </p>
+    </>
   );
 }
 

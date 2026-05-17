@@ -1,13 +1,13 @@
 # Tables · Actual Usage (hand-maintained)
 
-DB has 49 tables (see `schema.md`), of which **~35 are referenced by runtime code** (`app/`, `lib/`, `src/`, `scripts/`, `proxy.js`). The remaining 14 are orphans from past pivots — kept for backward-compat / data preservation, and as of 2026-05-15 each carries a `COMMENT ON TABLE … 'DEPRECATED'` marker (see `2026-05-15-deprecate-orphan-tables-and-rpcs.sql`).
+DB has 49 tables (see `schema.md`), of which **~34 are referenced by runtime code** (`app/`, `lib/`, `src/`, `scripts/`, `proxy.js`). The remaining 15 are orphans from past pivots — kept for backward-compat / data preservation, each carrying a `COMMENT ON TABLE … 'DEPRECATED'` marker (see `2026-05-15-deprecate-orphan-tables-and-rpcs.sql` + `2026-05-17-deprecate-lead-sync.sql`).
 
 Update this file when:
 - Adding a new table → list which columns the code actually touches
 - Dropping or renaming a code path → re-check the column list for affected tables
 - A "Used" or "Orphan" classification flips
 
-Last manually verified against live DB: **2026-05-15**.
+Last manually verified against live DB: **2026-05-17**.
 
 ---
 
@@ -40,8 +40,7 @@ For each table: which columns the runtime actually touches and which are dead we
 
 | Table | Used cols | Dead cols | Notes |
 |---|---|---|---|
-| `leads` | all 36 cols | — | 36 columns including `details` JSONB for custom lead_fields. Approval flow uses `approved`, `approved_at`, `approved_by`. Dedup via `lead_key`. |
-| `lead_sync_logs` | all 13 cols | — | External CRM push tracking. |
+| `leads` | 33 of 36 cols | approved, approved_at, approved_by | 36 columns including `details` JSONB for custom lead_fields. Approval columns shelved with the REVO sync removal (2026-05-17). Dedup via `lead_key`. |
 | `agents` | id, tenant_id, product_line, name, display_label | system_prompt, output_schema, wa_phone_number_id, is_active, ad_context_map, qualification_config, created_at, updated_at | **Read-only legacy bridge** — runtime never writes. `system_prompt` / `output_schema` etc. ignored by current code; seeded once and never re-read. Used as 1:1 join partner for `product_lines` by slug. |
 
 ### Meta / WhatsApp integration
@@ -63,7 +62,6 @@ For each table: which columns the runtime actually touches and which are dead we
 | `kb_shipping_routes` | id, agent_id, tenant_id, product_line_id, destination_port, destination_country, shipping_method, cost_per_unit_usd, transit_days, effective_date, expiry_date, confidence, source_doc_id, created_at, updated_at | origin_port, notes, doc_id | `doc_id` superseded by `source_doc_id`. |
 | `kb_assets` | id, agent_id, asset_type, filename, storage_path, mime_type, description, description_en, linked_skus, view, color, scenario, language, is_sendable, caption_embedding, source_doc_id, tenant_id, product_line_id, created_at | file_size_bytes, layer, tags, expiry_date | `layer` + `tags` never queried; `expiry_date` not enforced. |
 | `kb_corrections` | id, tenant_id, product_line_id, conversation_id, medici_original_answer, human_corrected_answer, status, created_by, resolved_by, resolved_at, adopted_target_id, created_at | message_id, customer_question, diff_summary, suggested_kb_action, suggested_payload | Diff/suggest fields unused — sales just submits the corrected answer. **0 rows in DB.** |
-| `kb_knowledge_gaps` | id, tenant_id, product_line_id, agent_id, query, status, gap_type, occurrence_count, last_occurred_at, question_signature, question_examples, example_message_ids, tool_name, created_at | layer, resolved_by, suggested_resolution, addressed_by_ref | Resolution-suggestion features never wired. |
 | `kb_pending_review` | all 15 cols | — | Conflict / low-confidence approval queue. **0 rows in DB** but actively wired. |
 | `kb_qa_snippets` | id, tenant_id, product_line_id, questions, questions_embedding, answer, applicable_when, priority, is_active, created_by, created_at, updated_at | — | Hand-curated sales Q&A; checked before main KB search. **0 rows in DB.** |
 | `kb_pricing_rules` | id, rule_name, rule_type, conditions, calculation, requires_approval, is_active, effective_from, effective_until, priority, tenant_id, product_line_id | agent_id, doc_id | **Read-only at runtime** — no insert/update path. 1 row in DB. |
@@ -78,6 +76,7 @@ For each table: which columns the runtime actually touches and which are dead we
 | `ai_reports` | all 14 cols | — | Daily / weekly / monthly rollup. |
 | `llm_usage_logs` | all 13 cols | — | Every LLM call writes a row (fire-and-forget) for cost dashboard. |
 | `inquiry_dashboard_summaries` | all 8 cols | — | LLM-generated markdown summary cache for `/api/inquiry-dashboard/summary`. Keyed by `(tenant_id, product_lines, period_key)`. 7-day TTL. Backs the AI summary panel on `/analytics`. |
+| `webhook_dumps` | id, received_at, payload | — | Raw WhatsApp webhook POST bodies. Observability only — written fire-and-forget from `/api/webhook` via admin client; **never read on the main message path**. RLS on / no policies (admin writes, manual reads via dev SQL). |
 
 ### Legacy but kept on by health check
 
@@ -91,7 +90,7 @@ For each table: which columns the runtime actually touches and which are dead we
 
 These exist in the public schema but no `.from(...)` / `.rpc(...)` call in `app/`, `lib/`, `src/`, `scripts/`, or `proxy.js` mentions them. They're remnants of past iterations. Row counts at last check shown for forensic context — `0` means abandoned at design, non-zero means actually got used at some point.
 
-**All rows below carry `COMMENT ON TABLE … 'DEPRECATED 2026-05-15 …'`** (see `2026-05-15-deprecate-orphan-tables-and-rpcs.sql`). Visible in supabase dashboard and `pg_dump`.
+**All rows below carry `COMMENT ON TABLE … 'DEPRECATED …'`** (see `2026-05-15-deprecate-orphan-tables-and-rpcs.sql` + `2026-05-17-deprecate-lead-sync.sql`). Visible in supabase dashboard and `pg_dump`.
 
 | Table | Rows | Replaced by / why orphaned |
 |---|---:|---|
@@ -101,6 +100,7 @@ These exist in the public schema but no `.from(...)` / `.rpc(...)` call in `app/
 | `orchestrator_messages` | 11 771 | Same. |
 | `kb_test_sessions` | 19 | "Test the AI with current KB" sandbox feature shelved. |
 | `kb_test_messages` | 57 | Same. |
+| `kb_knowledge_gaps` | — | "Medici 答不上的问题" 聚合面板 retired 2026-05-17. Table kept (history preserved); UI / API / recorder all removed. |
 | `kb_glossary` | 4 | Per-tenant term dictionary never wired into search. |
 | `kb_product_assets` | 0 | M:N join table — current code denormalizes `linked_skus` onto `kb_assets`. |
 | `fix_knowledge` | 53 | Old auto-fix experiment with embeddings of error patterns. |
@@ -109,6 +109,7 @@ These exist in the public schema but no `.from(...)` / `.rpc(...)` call in `app/
 | `product_specs` | 3 | Pre-KB structured specs. |
 | `product_embeddings` | 7 | Pre-KB chunk embeddings. |
 | `product_doc_operations` | 15 | Pre-KB operation audit log. |
+| `lead_sync_logs` | 4 613 | External SCM push tracking. REVO endpoint died ~2026-03; only ever reached 4 successes / 4609 failures; no UI ever surfaced approval, so no upstream feeder. Removed 2026-05-17 (`leads.approved*` columns shelved too). |
 
 **Do not delete blindly.** Some still hold historical data the founder might want to inspect via the dev-tools SQL page. But:
 - Don't add new code that reads or writes them.

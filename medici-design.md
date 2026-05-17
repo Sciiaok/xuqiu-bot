@@ -201,10 +201,6 @@ Medici 的 system 是 **3 个 cache block** 拼接的，这是它的成本与质
 
 **模型行为约束**（skill-host-patch §10.3）：看到 `_price_locked` → 不许输出任何价格数字 / 区间 / "$X 起" / ballpark / "大概 $X"，只能列配置名问选哪个；客户硬推 → 转人工。
 
-### 6.4 Gap 捕获
-
-每个 KB 工具返回 `not_found` / `needs_human` / `unknown` 时，`executeKbTool` 自动写一条 `kb_knowledge_gaps` 行（带 `question_signature` 做去重），并按工具映射 `layer`（product / logistics / sales）。这是产品线详情页"知识空缺"面板的数据源——告诉用户"客户问了这些你 KB 答不上"。
-
 ---
 
 ## 7. 主流程：`runMedici()`
@@ -303,7 +299,6 @@ sequenceDiagram
         M->>KB: lookup_product / quote_price / lookup_freight ...
         KB->>DB: 查 kb_products / kb_qa_snippets / kb_pricing_rules
         KB-->>M: 决定形结果（含 _price_locked 闸口）
-        KB->>DB: 写 kb_knowledge_gaps（未命中时）
     end
 
     M-->>QP: { next_message, route, leads[], attachments[], inquiry_quality, business_value, conversation_intent }
@@ -373,8 +368,6 @@ erDiagram
     kb_documents ||--o{ kb_assets : "extracted"
     kb_documents ||--o{ kb_pricing_rules : "extracted"
 
-    leads ||--o{ lead_sync_logs : "synced via"
-
     contacts {
         uuid id PK
         text wa_id UK
@@ -419,7 +412,6 @@ erDiagram
         text route "CONTINUE|FAQ_END|HUMAN_NOW"
         jsonb details "自定义 lead_fields 落在这"
         jsonb color_quantity "颜色×数量"
-        boolean approved
     }
     product_lines {
         text id PK "slug"
@@ -504,7 +496,6 @@ product_lines 里 `lead_fields[]` 每条都有 `required_for: 'GOOD' | 'QUALIFY'
 - **trace_id**：webhook 生成、贯穿整条调用链；`lib/core-trace.js::createTraceLogger`；查日志按 trace_id grep 一次性看完一条消息全过程
 - **`llm_usage_logs.call_site`**：`medici.qualify`（主调用） / `kb.search.*`（KB 内部 embedding）
 - **`onToolEvent`**：Medici 模拟器把每次 tool_call / tool_result 推到 SSE，UI 实时显示"AI 现在在查 lookup_product"
-- **`kb_knowledge_gaps`**：sales 视角的"KB 该补哪儿"
 - **`messages.metadata`**：保留 `kb_asset_id` / `wa_media_id` / `score_delta` / `risk_flags`，方便 LeadHub 时间线复盘
 
 ---

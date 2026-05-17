@@ -137,18 +137,18 @@ async function fetchSupplyChainBreakdown(tenantId, fromISO, toISO) {
 async function fetchCountryDistribution(tenantId, fromISO, toISO) {
   const { data, error } = await supabase
     .from('leads')
-    .select('destination_country, inquiry_quality')
+    .select('details, inquiry_quality')
     .eq('tenant_id', tenantId)
     .gte('created_at', fromISO)
     .lte('created_at', toISO)
-    .not('destination_country', 'is', null)
+    .not('details->>destination_country', 'is', null)
     .limit(10000);
 
   if (error) throw error;
 
   const countries = {};
   for (const lead of data || []) {
-    const c = lead.destination_country;
+    const c = lead.details?.destination_country;
     if (!c) continue;
     if (!countries[c]) countries[c] = { total: 0, PROOF: 0 };
     countries[c].total += 1;

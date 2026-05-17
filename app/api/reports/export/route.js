@@ -83,10 +83,7 @@ async function getLeadsRows(fromISO, toISO) {
       inquiry_quality,
       business_value,
       route,
-      destination_country,
-      car_model,
-      product_name,
-      qty_bucket,
+      details,
       contact:contacts(
         name,
         company_name,
@@ -102,9 +99,9 @@ async function getLeadsRows(fromISO, toISO) {
 
   return (data || []).map((lead) => ({
     Contact: resolveLeadContact(lead),
-    Country: lead.destination_country || '',
-    Product: lead.car_model || lead.product_name || '',
-    Quantity: lead.qty_bucket || '',
+    Country: lead.details?.destination_country || '',
+    Product: lead.details?.car_model || lead.details?.product_name || '',
+    Quantity: lead.details?.qty_bucket || '',
     Quality: lead.inquiry_quality || '',
     'Business Value': lead.business_value || '',
     Route: lead.route || '',

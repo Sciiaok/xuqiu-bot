@@ -1,7 +1,9 @@
 .backdrop {
   position: fixed;
   inset: 0;
-  background: rgba(0, 0, 0, 0.55);
+  background: rgba(15, 23, 42, 0.5);
+  backdrop-filter: blur(4px);
+  -webkit-backdrop-filter: blur(4px);
   z-index: 9999;
   display: flex;
   align-items: center;
@@ -11,128 +13,177 @@
 
 .panel {
   --preview-w: 360px;
-  --preview-h: 720px;
-  /* Chrome around the iframe: header (~50) + format tabs (~46) + body padding (28) */
-  --chrome-h: 124px;
-  background: var(--bg, #fff);
+  --preview-h: 600px;
+  /* Header (title + subtitle ~62) + tab row (~44) + body padding (32) */
+  --chrome-h: 138px;
+  /* `--bg2` is the elevated surface in this theme (white in light mode,
+   * slightly-lifted gray in dark mode). `--bg` is the page background, which
+   * is light gray — using it here would make the modal blend into the
+   * backdrop rather than feeling like a surface above it. */
+  background: var(--bg2, #fff);
   color: var(--text, #111);
-  border-radius: 12px;
-  /* Width: enough to fit the preview + body padding (14px each side), capped at viewport. */
-  width: min(calc(var(--preview-w) + 28px), calc(100vw - 48px));
-  /* Height: chrome + preview, capped at viewport. */
+  border-radius: 14px;
+  width: min(calc(var(--preview-w) + 32px), calc(100vw - 48px));
   max-height: min(calc(var(--preview-h) + var(--chrome-h)), calc(100vh - 48px));
   display: flex;
   flex-direction: column;
-  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.35);
+  box-shadow:
+    0 1px 0 rgba(15, 23, 42, 0.04) inset,
+    0 30px 60px -20px rgba(15, 23, 42, 0.35),
+    0 0 0 1px rgba(15, 23, 42, 0.06);
   overflow: hidden;
   transition: width 0.18s ease, max-height 0.18s ease;
 }
 
 .head {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: space-between;
-  padding: 14px 18px;
-  border-bottom: 1px solid var(--border, #e5e7eb);
+  padding: 16px 20px 10px;
+  gap: 12px;
+}
+
+.titleStack {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
 }
 
 .title {
   font-size: 14px;
   font-weight: 600;
-  display: flex;
-  align-items: center;
-  gap: 8px;
+  letter-spacing: 0.01em;
+  color: var(--text, #111);
 }
 
 .adId {
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-family: var(--font-dm-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
   font-size: 11px;
-  background: var(--bg3, rgba(0, 0, 0, 0.06));
-  padding: 2px 8px;
-  border-radius: 4px;
-  color: var(--text2, #374151);
+  color: var(--text3, #6b7280);
+  letter-spacing: 0.02em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .closeBtn {
   background: transparent;
   border: none;
-  font-size: 22px;
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  font-size: 18px;
   line-height: 1;
   color: var(--text3, #6b7280);
   cursor: pointer;
-  padding: 0 6px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  transition: background 0.12s, color 0.12s;
 }
 
-.closeBtn:hover { color: var(--text, #111); }
+.closeBtn:hover {
+  color: var(--text, #111);
+  background: var(--bg3, rgba(0, 0, 0, 0.06));
+}
 
+/* Underline-style tabs — secondary nav, not primary CTAs. The active tab is
+ * marked by a bottom accent rail; inactive tabs are plain text. Matches the
+ * "tab" mental model better than the previous filled-pill style. */
 .formats {
   display: flex;
   gap: 4px;
-  padding: 10px 14px;
-  border-bottom: 1px solid var(--border, #e5e7eb);
+  padding: 4px 12px 0;
   overflow-x: auto;
+  position: relative;
 }
-
 .formats::-webkit-scrollbar { height: 0; }
+.formats::after {
+  content: '';
+  position: absolute;
+  left: 12px;
+  right: 12px;
+  bottom: 0;
+  height: 1px;
+  background: var(--border, #e5e7eb);
+}
 
 .formatBtn {
   flex-shrink: 0;
-  padding: 6px 12px;
-  border: 1px solid var(--border, #e5e7eb);
-  background: var(--bg, #fff);
-  color: var(--text2, #374151);
-  font-size: 12px;
-  border-radius: 6px;
+  position: relative;
+  padding: 9px 10px 11px;
+  border: none;
+  background: transparent;
+  color: var(--text3, #6b7280);
+  font-size: 12.5px;
+  font-weight: 500;
   cursor: pointer;
-  transition: background 0.15s, color 0.15s, border-color 0.15s;
+  border-radius: 0;
+  transition: color 0.12s;
 }
 
 .formatBtn:hover:not(.formatBtnActive) {
-  background: var(--bg3, rgba(0, 0, 0, 0.04));
+  color: var(--text, #111);
 }
 
 .formatBtnActive {
+  color: var(--accent, #2563eb);
+  font-weight: 600;
+}
+
+.formatBtnActive::after {
+  content: '';
+  position: absolute;
+  left: 8px;
+  right: 8px;
+  bottom: 0;
+  height: 2px;
   background: var(--accent, #2563eb);
-  color: #fff;
-  border-color: var(--accent, #2563eb);
+  border-radius: 1.5px 1.5px 0 0;
+  z-index: 1;
 }
 
 .body {
   flex: 1;
   min-height: 0;
-  padding: 14px;
+  padding: 18px 18px 22px;
   display: flex;
   align-items: center;
   justify-content: center;
-  background: var(--bg2, #f3f4f6);
+  /* Page-bg gray sits one tone below the white panel, creating a viewport
+   * "well" for the iframe. Meta's own gray newsfeed bg (inside the iframe)
+   * blends in instead of reading as an unintended color block. */
+  background: var(--bg, #f4f6fa);
   overflow: hidden;
 }
 
+/* Wrap the iframe in a hairline "viewport" — communicates "this is what the
+ * customer will see on their device" without faking a phone bezel. */
 .frame {
-  /* Sized to comfortably hold Meta's preview at its natural width.
-   * Inner iframe scrolls if its content is taller than the wrapper. */
   width: var(--preview-w);
   max-width: 100%;
   height: var(--preview-h);
   max-height: 100%;
-  border: none;
-  border-radius: 8px;
-  background: #fff;
-  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.08);
+  border: 1px solid var(--border, #e5e7eb);
+  border-radius: 10px;
+  background: var(--bg2, #fff);
   display: block;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
 }
 
 .state {
   color: var(--text3, #6b7280);
   font-size: 13px;
   align-self: center;
-  padding: 40px 0;
+  padding: 60px 0;
 }
 
 .stateError {
   color: var(--red, #dc2626);
   font-size: 13px;
   align-self: center;
-  padding: 40px 12px;
+  padding: 60px 12px;
   text-align: center;
 }

@@ -45,7 +45,7 @@ export default function LeadDetail({ leads = [], leadFields = [] }) {
             value: formatLeadFieldValue(resolveLeadFieldValue(lead, f.key)),
           }))
           .filter((r) => r.value !== '');
-        const title = lead.product_name || lead.car_model || lead.brand || '—';
+        const title = lead.details?.product_name || lead.details?.car_model || lead.details?.brand || '—';
 
         return (
           <div key={lead.id || i} className={s.card}>
@@ -82,13 +82,11 @@ function normalizeEnum(raw, fallback, labels) {
   return { lower: upper.toLowerCase(), label: labels[upper] || upper };
 }
 
-/** Top-level column first, then details JSONB. Empty-ish → null. */
 function resolveLeadFieldValue(lead, key) {
-  const top = lead[key];
-  if (top !== undefined && top !== null && top !== '' && !(Array.isArray(top) && top.length === 0)) return top;
-  const det = lead.details?.[key];
-  if (det !== undefined && det !== null && det !== '' && !(Array.isArray(det) && det.length === 0)) return det;
-  return null;
+  const v = lead.details?.[key];
+  if (v === undefined || v === null || v === '') return null;
+  if (Array.isArray(v) && v.length === 0) return null;
+  return v;
 }
 
 /** Display formatting. Returns '' for empty values. */

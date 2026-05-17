@@ -179,7 +179,7 @@ flowchart LR
 | `supabase/migrations/` | append-only DB migration（永不修改历史文件） |
 | `.claude/index/` | 代码索引（MAP / glossary / 自动生成的 schema / routes） |
 | `scripts/` | 部署 / 索引构建 / dev 启动器 |
-| `ecosystem.config.cjs` | PM2 配置（lead-sync-cron / queue-cron 长程进程） |
+| `ecosystem.config.cjs` | PM2 配置（queue-cron 长程进程 + Next.js 主进程） |
 
 ---
 
@@ -277,7 +277,6 @@ app/api/.../route.js  (Next.js Route Handler)
 | `cron/process-queue` | 周期 | 兜底跑 queue（防 setTimeout 漏） |
 | `cron/recover-stale-kb-docs` | 周期 | 卡住的 KB 文档重跑解析 |
 | `cron/release-takeovers` | 周期 | 人工接管到点自动释放 AI |
-| `cron/sync-leads` | 周期 | 已审批的 lead 同步到外部 SCM（REVO） |
 
 长程进程通过 PM2 跑（`ecosystem.config.cjs`），cron 是兜底。
 
@@ -441,9 +440,6 @@ flowchart LR
     C4 -- order_intent --> D3[Feishu 推送 + 人工接管]
     D2 --> C3
     D3 --> E1[销售人工跟进]
-    E1 --> E2[审批 lead]
-    E2 --> E3[cron sync-leads]
-    E3 --> F1[同步到外部 SCM]
 ```
 
 ---
@@ -556,7 +552,6 @@ erDiagram
     product_lines ||--o{ kb_qa_snippets : owns
     product_lines ||--o{ kb_assets : owns
     product_lines ||--o{ kb_pricing_rules : owns
-    product_lines ||--o{ kb_knowledge_gaps : tracks
     product_lines ||--o{ kb_corrections : tracks
     product_lines ||--o{ kb_pending_review : tracks
 
@@ -638,14 +633,6 @@ erDiagram
         jsonb calculation
         boolean requires_approval
     }
-    kb_knowledge_gaps {
-        uuid id PK
-        text product_line_id FK
-        text query
-        text gap_type
-        text question_signature
-        text status
-    }
     kb_corrections {
         uuid id PK
         text product_line_id FK
@@ -672,7 +659,6 @@ erDiagram
     conversations ||--o{ messages : has
     conversations ||--o{ leads : extracts
     conversations ||--o{ message_queue : buffers
-    leads ||--o{ lead_sync_logs : "synced via"
     contacts ||--o{ contact_notes : has
     product_lines ||--o{ conversations : scopes
     product_lines ||--o{ leads : scopes
@@ -716,7 +702,6 @@ erDiagram
         text inquiry_quality
         text business_value
         text route
-        boolean approved
         jsonb details
         jsonb color_quantity
     }
@@ -733,13 +718,6 @@ erDiagram
         timestamptz process_after
         text status
         text locked_by
-    }
-    lead_sync_logs {
-        uuid id PK
-        uuid lead_id FK
-        text status
-        text external_id
-        int retry_count
     }
 ```
 
@@ -875,7 +853,6 @@ npm run build        # 构建
 npm start            # 生产模式（3002）
 npm run lint
 npm run deploy       # sh ./scripts/deploy.sh（生产部署）
-npm run cron:start   # PM2 起 lead-sync-cron
 npm run queue:start  # PM2 起 queue-cron
 npm run index        # 重建 .claude/index/{schema,routes}
 ```

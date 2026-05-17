@@ -22,6 +22,11 @@ import { getTenantContext } from '../../../../../lib/tenant-context.js';
 import { findProductLineById } from '../../../../../lib/repositories/product-line.repository.js';
 import { getSupabaseAdmin } from '../../../../../lib/supabase-admin.js';
 import { resolveDateRange, resolvePrevDateRange, PRESET_DAYS } from '../../../../../lib/date-range-presets.js';
+import {
+  COST_STATS_FLOOR_ISO,
+  COST_STATS_FLOOR_LABEL,
+  clampToCostFloor,
+} from '../../../../../lib/cost-stats-floor.js';
 
 // 区分 medici-class vs ogilvy-class 的 call_site 前缀
 const OGILVY_CALL_SITE_PREFIX = 'ogilvy.';
@@ -247,21 +252,50 @@ export async function GET(request, { params }) {
   const { searchParams } = new URL(request.url);
   const range = parseRange(searchParams);
 
+  // 硬下限 —— 优先级高于用户选择的时间窗。详见 lib/cost-stats-floor.js。
+  const curr = clampToCostFloor(range.from, range.to);
+  const prevClamp = range.prev_from && range.prev_to
+    ? clampToCostFloor(range.prev_from, range.prev_to)
+    : { empty: true };
+  // 下限抬升后,前一年/三十天的 days 数字已与实际可绘制天数不符 —— 让前端
+  // 跳过"按 N 天补零"分支,直接画返回的天数。
+  const effectiveRange = {
+    ...range,
+    from: curr.fromISO,
+    to: curr.toISO,
+    days: curr.floored ? null : range.days,
+    floor_iso: COST_STATS_FLOOR_ISO,
+    floor_label: COST_STATS_FLOOR_LABEL,
+    floored: curr.floored,
+  };
+
   try {
     const admin = getSupabaseAdmin();
+    const emptyLlmTotals = { medici_cost_usd: 0, ogilvy_cost_usd: 0 };
     const [split, prev, volume] = await Promise.all([
-      aggregateLlmSplit({ admin, tenantId: ctx.tenantId, productLine: id, fromISO: range.from, toISO: range.to }),
-      // 'all' / 'custom' 上期没有意义 —— resolvePrevDateRange 会返空,这里
-      // 直接给 0 兜底,免去前端空判分支。
-      range.prev_from && range.prev_to
-        ? aggregateLlmTotals({ admin, tenantId: ctx.tenantId, productLine: id, fromISO: range.prev_from, toISO: range.prev_to })
-        : Promise.resolve({ medici_cost_usd: 0, ogilvy_cost_usd: 0 }),
-      aggregateVolume({ admin, tenantId: ctx.tenantId, productLine: id, fromISO: range.from, toISO: range.to }),
+      curr.empty
+        ? Promise.resolve({
+            medici: { totals: emptyTotals(), by_call_site: {}, by_model: {}, by_day: [] },
+            ogilvy: {
+              totals: emptyTotals(), reasoning_usd: 0, reasoning_count: 0,
+              image_usd: 0, image_count: 0,
+              by_call_site: {}, by_model: {}, by_day: [],
+            },
+          })
+        : aggregateLlmSplit({ admin, tenantId: ctx.tenantId, productLine: id, fromISO: curr.fromISO, toISO: curr.toISO }),
+      // 'all' / 'custom' 上期没意义,prev_from/to 为空 → empty=true → 直接 0。
+      // 同样,如果上期窗口整段在 floor 之前(目前常态),也回 0。
+      prevClamp.empty
+        ? Promise.resolve(emptyLlmTotals)
+        : aggregateLlmTotals({ admin, tenantId: ctx.tenantId, productLine: id, fromISO: prevClamp.fromISO, toISO: prevClamp.toISO }),
+      curr.empty
+        ? Promise.resolve({ conversations: 0, msgs_in: 0, msgs_out: 0, leads_qualified: 0, kb_docs: 0 })
+        : aggregateVolume({ admin, tenantId: ctx.tenantId, productLine: id, fromISO: curr.fromISO, toISO: curr.toISO }),
     ]);
 
     return Response.json({
       product_line: id,
-      range,
+      range: effectiveRange,
       medici: split.medici,
       ogilvy: split.ogilvy,
       medici_prev: { cost_usd: prev.medici_cost_usd },
