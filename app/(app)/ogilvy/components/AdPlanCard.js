@@ -4,6 +4,36 @@ import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import s from '../ogilvy.module.css';
 import AdCreativePreview from './AdCreativePreview';
+import { deriveSessionStatus, summarizeAdStatuses as sharedSummarize } from '../lib/session-status';
+
+// Re-export for backwards-compat with anything that imports from AdPlanCard.
+export { sharedSummarize as summarizeAdStatuses };
+
+// Dayparting display: group windows that share `days` so "Mon-Fri 08-09 +
+// Mon-Fri 12-13 + Mon-Fri 17-18" reads as one line, not three. Common
+// shortcuts (whole week / weekdays / weekends) render in plain Chinese
+// instead of "周一二三四五".
+function formatSchedule(schedule) {
+  const dayNames = ['日', '一', '二', '三', '四', '五', '六'];
+  const fmtMin = (m) => `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`;
+  const fmtDays = (days) => {
+    const sorted = [...new Set(days)].sort((a, b) => a - b);
+    const key = sorted.join(',');
+    if (sorted.length === 7) return '每天';
+    if (key === '1,2,3,4,5') return '工作日';
+    if (key === '0,6') return '周末';
+    return '周' + sorted.map((d) => dayNames[d]).join('');
+  };
+  const groups = new Map();
+  for (const w of schedule.windows) {
+    const key = [...new Set(w.days)].sort((a, b) => a - b).join(',');
+    if (!groups.has(key)) groups.set(key, { days: w.days, times: [] });
+    groups.get(key).times.push(`${fmtMin(w.start_minute)}-${fmtMin(w.end_minute)}`);
+  }
+  return [...groups.values()]
+    .map((g) => `${fmtDays(g.days)} ${g.times.join('/')}`)
+    .join('；');
+}
 
 /**
  * AdPlanCard — the central artifact of /ogilvy.
@@ -19,46 +49,6 @@ import AdCreativePreview from './AdCreativePreview';
  * to change it, the user asks the AI to redraft. Keeps the card's job:
  * display + confirm + launch.
  */
-// ── Meta effective_status → coarse buckets the UI cares about ──────────
-// Meta's enum is long (15+ values); we collapse to 5 buckets, ordered worst
-// → best for aggregation: 被拒 / 有问题 outranks 审核中 outranks 投放中.
-// Source: https://developers.facebook.com/docs/marketing-api/reference/ad-account/ads
-const META_STATUS_BUCKET = {
-  ACTIVE:                'active',
-  IN_PROCESS:            'review',
-  PENDING_REVIEW:        'review',
-  DISAPPROVED:           'rejected',
-  WITH_ISSUES:           'issue',
-  PENDING_BILLING_INFO:  'issue',
-  ADSET_PAUSED:          'paused',
-  CAMPAIGN_PAUSED:       'paused',
-  PAUSED:                'paused',
-  ARCHIVED:              'paused',
-  DELETED:               'paused',
-};
-const BUCKET_LABEL = {
-  active:   '投放中',
-  review:   '审核中',
-  rejected: '被拒',
-  issue:    '有问题',
-  paused:   '已暂停',
-};
-// Severity for picking the "worst" bucket as the headline label.
-const BUCKET_SEVERITY = { rejected: 4, issue: 3, review: 2, paused: 1, active: 0 };
-
-export function summarizeAdStatuses(ads = []) {
-  if (!Array.isArray(ads) || ads.length === 0) return null;
-  const counts = { active: 0, review: 0, rejected: 0, issue: 0, paused: 0 };
-  for (const ad of ads) {
-    const b = META_STATUS_BUCKET[ad?.effective_status] || 'paused';
-    counts[b] += 1;
-  }
-  const worst = Object.entries(counts)
-    .filter(([, n]) => n > 0)
-    .sort((a, b) => BUCKET_SEVERITY[b[0]] - BUCKET_SEVERITY[a[0]])[0]?.[0] || 'active';
-  return { counts, worst, total: ads.length };
-}
-
 export default function AdPlanCard({
   plan,
   onLaunch,
@@ -141,29 +131,18 @@ export default function AdPlanCard({
   const liveOnMeta = isLaunched || isPaused;
   const canLaunch = !streaming && !isBusy && !isLaunched && !isPaused && !missingImages;
 
-  // Headline tone: when launched with real Meta data, the worst-bucket from
-  // effective_status overrides the simple "launched" green — a rejected ad is
-  // not a green-light state. Without data, fall back to the configured-status
-  // tone.
-  const liveBucket = isLaunched && adStatuses?.summary ? adStatuses.summary.worst : null;
-  const statusTone =
-    liveBucket === 'rejected' ? 'failed'
-    : liveBucket === 'issue' ? 'failed'
-    : liveBucket === 'review' ? 'busy'
-    : isLaunched ? 'launched'
-    : isPaused ? 'paused'
-    : isBusy ? 'busy'
-    : isFailed ? 'failed'
-    : streaming ? 'streaming'
-    : 'draft';
-  const statusLabel = {
-    launched: '投放中',
-    paused:   '已暂停',
-    busy:     plan.status === 'staged' ? '激活中…' : '创建中…',
-    failed:   '启动失败',
-    streaming: '生成中…',
-    draft:    '草稿',
-  }[statusTone];
+  // Single source of truth for the status pill / dot. When live on Meta with
+  // an effective_status summary, the helper overrides the configured label
+  // (e.g. "投放中" becomes "被拒" if any ad is DISAPPROVED) — same logic as
+  // the grid card + modal header, so all 3 surfaces show identical state.
+  // hasPlan: true because this component only renders when a plan exists.
+  const { tone: statusTone, label: statusLabel } = deriveSessionStatus({
+    planStatus: plan.status,
+    hasPlan: true,
+    adStatuses,
+    launchProgress,
+    streaming,
+  });
 
   // ── Render ───────────────────────────────────────────────────────
   return (
@@ -252,6 +231,9 @@ export default function AdPlanCard({
             {activeAdSet.targeting?.interests?.length > 0 && (
               <> · {activeAdSet.targeting.interests.slice(0, 3).join('、')}</>
             )}
+            {activeAdSet.schedule?.windows?.length > 0 && (
+              <> · 时段 {formatSchedule(activeAdSet.schedule)}</>
+            )}
           </div>
 
           {/* Creative tabs — only show when there's more than one */}
@@ -302,34 +284,9 @@ export default function AdPlanCard({
       <footer className={s.planFoot}>
         <div className={s.footStatus}>
           <span className={`${s.statusDot} ${s[`statusDot_${statusTone}`]}`} />
-          <span className={s.statusText}>
-            {(() => {
-              // When launched and we have effective_status from Meta, show
-              // the *worst* bucket as the headline — "投放中" stays only if
-              // every ad really is ACTIVE. Without the data, fall back to the
-              // configured-status label.
-              if (isLaunched && adStatuses?.summary) {
-                return BUCKET_LABEL[adStatuses.summary.worst] || statusLabel;
-              }
-              return statusLabel;
-            })()}
-          </span>
-          {liveOnMeta && adStatuses?.summary && adStatuses.summary.total > 1 && (
-            <span className={s.statusDetail}>
-              {Object.entries(adStatuses.summary.counts)
-                .filter(([, n]) => n > 0)
-                .map(([b, n]) => `${n} ${BUCKET_LABEL[b]}`)
-                .join(' · ')}
-            </span>
-          )}
-          {liveOnMeta && adStatuses?.error && (
-            <span className={s.statusDetail}>状态获取失败：{adStatuses.error}</span>
-          )}
+          <span className={s.statusText}>{statusLabel}</span>
           {launchProgress?.detail && (
             <span className={s.statusDetail}>{launchProgress.detail}</span>
-          )}
-          {streaming && (
-            <span className={s.statusDetail}>方案生成中，完成后可启动</span>
           )}
           {isFailed && plan.failed_reason && (
             <span className={s.statusDetail}>{plan.failed_reason}</span>

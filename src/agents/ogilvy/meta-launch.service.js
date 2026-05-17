@@ -81,6 +81,42 @@ async function metaUploadImage(imageUrl, { ad_account_id, access_token }) {
 // ── Plan → Meta payload builders ───────────────────────────────────────
 
 /**
+ * Build the adset-level dayparting fields. Returns `{}` when the plan has no
+ * schedule, so caller can spread it unconditionally.
+ *
+ * Meta's contract:
+ *   - `pacing_type: ['day_parting']` opts the adset out of even pacing and
+ *     into time-window pacing. Without this, `adset_schedule` is silently
+ *     ignored.
+ *   - `adset_schedule` is an array of windows. Each window's
+ *     `timezone_type` is per-window in Meta's API but functionally we keep
+ *     it uniform across the adset (mixing USER + ADVERTISER inside one
+ *     adset has no real use case and confuses reporting).
+ *   - `start_minute`/`end_minute` are minutes-from-midnight (0-1440).
+ *   - `days` uses 0=Sunday..6=Saturday, same convention as ISO/Meta.
+ *
+ * Budget note: Meta historically required lifetime_budget for dayparting,
+ * but as of v21 daily_budget on CBO campaigns is accepted (verified via
+ * scripts/test-meta-dayparting.mjs on a real ad account, May 2026).
+ * Any future Meta-side rejection surfaces through metaPost with
+ * `step: "adset …"`.
+ */
+function buildAdsetScheduleFields(schedule) {
+  const windows = Array.isArray(schedule?.windows) ? schedule.windows : [];
+  if (windows.length === 0) return {};
+  const tz = schedule?.timezone_type === 'ADVERTISER' ? 'ADVERTISER' : 'USER';
+  return {
+    pacing_type: ['day_parting'],
+    adset_schedule: windows.map(w => ({
+      start_minute: w.start_minute,
+      end_minute: w.end_minute,
+      days: [...w.days],
+      timezone_type: tz,
+    })),
+  };
+}
+
+/**
  * Build the `page_welcome_message` JSON blob that Meta expects on CTWA ad
  * creatives. MVP: plain text only (no ice_breakers, no quick_replies).
  * This matches what Meta's own Ad Manager produces when you leave every
@@ -225,6 +261,7 @@ export async function* stageCampaigns(plan, { userId }) {
           // live ad (adset 120243642835730034).
           targeting_automation: { advantage_audience: 0 },
         },
+        ...buildAdsetScheduleFields(adSet.schedule),
         status: 'PAUSED',
       };
       const { id: adsetId } = await metaPost(

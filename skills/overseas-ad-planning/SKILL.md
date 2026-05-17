@@ -474,7 +474,7 @@ AI 每次 web_search 时,根据数据类型动态判断时效性要求:
 | 06 | 漏斗结构与关键转化节点 | **按业务模式分支选漏斗结构**(B2C:广告→WhatsApp→试驾→订单;B2B:广告→WhatsApp→询价→报价→样车订单);**WhatsApp 首响策略要点**(welcome_message 调性方向、客服 SLA、对话脚本)融入此章 |
 | 07 | 素材规划方向 + A/B 测试框架 | 素材数量、调性方向、A/B 变量(创意方向,不写具体文案——具体文案归阶段 4) |
 | 08 | 数据观测重点 | **仅 CAPI Conversation 事件**(不写 Pixel 落地页转化、不写 GTM/GA4);UTM 命名规范方向 |
-| 09 | 排期 + KPI 预测 + ROI 测算 | 三段式排期(测试 / 放大 / 优化)+ **CTW 指标预测**(CPM / CTR / cost per conversation / conversation→hot lead 率)+ ROI 敏感性分析 |
+| 09 | 排期 + KPI 预测 + ROI 测算 | 三段式排期(测试 / 放大 / 优化)+ **每日最优投放时段**(给出的时段必须在阶段 5 写入 `plan_json` 的 `ad_set.schedule`,字段定义见 `meta-api-template.md` §3.1.1;多市场必用 `timezone_type=USER`)+ **CTW 指标预测**(CPM / CTR / cost per conversation / conversation→hot lead 率)+ ROI 敏感性分析 |
 | 10 | 附录 | 多语言文案方向(具体文案落阶段 4)/ 命名 / 风险预案 / 数据来源 |
 
 ### 6.3 用户角色分支额外产出(写在策划案末尾,简短即可)
@@ -673,6 +673,7 @@ generate_ad_creative({
 - WhatsApp 配置字段(`whatsapp_phone_number_id` / `page_id`)从宿主自动注入读取
 - 每个 ad 必须有 welcome_message 文本(来自阶段 4)
 - 每个 ad 必须有真实 image_url(来自阶段 4 generate_ad_creative 调用结果)
+- **若阶段 3 章节 09 有「每日最优投放时段」结论**,必须把这些时段写入对应 ad_set 的 `schedule` 字段——结构见 `meta-api-template.md` §3.1.1;多市场必用 `timezone_type=USER`;省略 schedule 字段则 24h 全天投放
 
 ### 8.4 后台操作手册结构
 

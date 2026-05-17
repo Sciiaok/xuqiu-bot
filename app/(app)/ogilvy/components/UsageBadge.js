@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import s from '../ogilvy.module.css';
 
 /**
@@ -21,9 +21,26 @@ import s from '../ogilvy.module.css';
  * 注意 llm-client.js 的落表是 fire-and-forget，会有几百 ms 延迟。我们在
  * refreshKey 变化时延迟 800ms 再 fetch，避免拿到 stale 数据。
  */
-export default function UsageBadge({ sessionId, refreshKey = 0 }) {
+export default function UsageBadge({ sessionId, refreshKey = 0, inline = false }) {
   const [usage, setUsage] = useState(null);
   const [open, setOpen] = useState(false);
+  const rootRef = useRef(null);
+
+  // Close on outside click or ESC. Listener only attaches when open is true
+  // so we don't pay listener cost in the common closed state.
+  useEffect(() => {
+    if (!open) return;
+    function onDocClick(e) {
+      if (rootRef.current && !rootRef.current.contains(e.target)) setOpen(false);
+    }
+    function onKey(e) { if (e.key === 'Escape') setOpen(false); }
+    document.addEventListener('mousedown', onDocClick);
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('mousedown', onDocClick);
+      document.removeEventListener('keydown', onKey);
+    };
+  }, [open]);
 
   useEffect(() => {
     if (!sessionId) {
@@ -58,12 +75,18 @@ export default function UsageBadge({ sessionId, refreshKey = 0 }) {
   const tone = pct < 50 ? 'ok' : pct < 80 ? 'warn' : 'danger';
 
   return (
-    <div
-      className={s.usageBadge}
+    <button
+      ref={rootRef}
+      type="button"
+      className={`${s.usageBadge} ${inline ? s.usageBadgeInline : ''}`}
       data-tone={tone}
-      onMouseEnter={() => setOpen(true)}
-      onMouseLeave={() => setOpen(false)}
-      aria-label={`当前上下文 ${fmtTokens(used)} / ${fmtTokens(ctx)} (${pct}%)`}
+      // Click-only toggle. Hover-trigger removed:was racing with click
+      // (mouseenter → setOpen(true) → click → toggle → setOpen(false),
+      // so a normal click flashed and closed). Click is also discoverable
+      // on touch devices where hover doesn't fire.
+      onClick={(e) => { e.stopPropagation(); setOpen(v => !v); }}
+      aria-expanded={open}
+      aria-label={`当前上下文 ${fmtTokens(used)} / ${fmtTokens(ctx)} (${pct}%) · 点击查看详情`}
     >
       <span className={s.usageBadgeNums}>
         {fmtTokens(used)} / {fmtTokens(ctx)}
@@ -72,11 +95,15 @@ export default function UsageBadge({ sessionId, refreshKey = 0 }) {
       <span className={s.usageBadgePct}>· {fmtCost(usage.totals.cost_usd)}</span>
 
       {open && (
-        <div className={s.usagePopover} role="tooltip">
+        <div
+          className={s.usagePopover}
+          role="tooltip"
+          onClick={(e) => e.stopPropagation()}
+        >
           <UsagePopover usage={usage} />
         </div>
       )}
-    </div>
+    </button>
   );
 }
 

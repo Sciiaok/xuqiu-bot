@@ -147,7 +147,38 @@
 | `targeting.interest_keywords` | 否 | 关键词数组 | **关键词,不是 ID**;ID 转换由宿主处理 |
 | `targeting.behavior_keywords` | 否 | 关键词数组 | 同上 |
 | `start_time` / `end_time` | 是 | ISO 8601 格式 | 阶段一周期 |
+| `schedule` | 否 | 见 §3.1.1 | **dayparting**——指定每日/每周投放时段;省略=24h 全天投放 |
 | `status` | 是 | `PAUSED` | 默认暂停 |
+
+### 3.1.1 schedule(dayparting,可选)
+
+当阶段 3 章节 09 的「最优投放时段」表格有结论时,**必须**把那些时段写入对应 ad_set 的 `schedule` 字段;否则 24h 全天投放,会与策略文档不一致。
+
+```json
+"schedule": {
+  "timezone_type": "USER",
+  "windows": [
+    { "days": [1, 2, 3, 4], "start_minute": 480,  "end_minute": 540 },
+    { "days": [1, 2, 3, 4], "start_minute": 720,  "end_minute": 780 },
+    { "days": [1, 2, 3, 4], "start_minute": 1020, "end_minute": 1080 }
+  ]
+}
+```
+
+| 字段 | 必填 | 说明 |
+|---|---|---|
+| `timezone_type` | 否 | `USER`(按受众本地时间,**多市场首选**)或 `ADVERTISER`(按广告账户时区);省略默认 `USER` |
+| `windows` | 是 | 时间窗数组,1-24 条 |
+| `windows[].days` | 是 | 生效星期数组,`0=Sun, 1=Mon, ..., 6=Sat`。例 `[1,2,3,4,5]`=工作日 |
+| `windows[].start_minute` | 是 | 当日起始分钟数,0-1440。`08:00=480, 12:00=720, 17:00=1020` |
+| `windows[].end_minute` | 是 | 当日结束分钟数,必须严格 > start_minute |
+
+**为什么需要 timezone_type=USER**:菲律宾 PHT 08:00 与哈萨克斯坦 ALMT 08:00 是**不同物理时刻**;`USER` 让 Meta 按每个受众所在地的本地时间应用 windows,多市场 ad_set 投放一致。如果统一按广告账户所在时区切窗,各市场感受到的实际投放时段会错开。
+
+**前置条件**:
+- `pacing_type` 由宿主自动注入 `["day_parting"]`,**不要在 plan_json 里手填**
+- 单日预算 `< $200` 不建议开 dayparting——Meta 学习期需稳定流量,切窗会拖长 learning phase
+- 仅时段控制,**不控制具体日期**(例「5/15 不投」)。具体日期的暂停由章节 09 的"暂停"行通过宿主 cron / 人工 pause 处理,与 schedule 字段无关
 
 ### 3.2 关键说明:targeting interest/behavior 输出关键词,不输出 ID
 

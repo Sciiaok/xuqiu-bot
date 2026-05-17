@@ -1,359 +1,1380 @@
 /* ─── Shell ─────────────────────────────────────────────────────── */
 /*
- * The outer app layout (app/(app)/layout.js) wraps us in a <main
- * overflowY: auto>, which means if our content ever exceeds the parent's
- * height, the whole page scrolls and the composer gets pushed out of view.
+ * /ogilvy is a scrollable card grid at the page level. The modal that opens
+ * on card click owns its own fixed-position root, so the underlying grid
+ * doesn't need to manage chat composer visibility anymore.
  *
- * Two defenses here:
- *   1. `height: 100%` (not 100vh) so we fill exactly our parent cell
- *   2. `overflow: hidden` so we can't push the outer <main> into scroll mode
- *
- * Then inside, every nested flex child that owns its own scroll needs
- * `min-height: 0` — otherwise `flex: 1 + overflow-y: auto` silently breaks
- * because the default `min-height: auto` lets content push the track bigger
- * than the parent.
+ * Background gets a faint radial accent in the upper-left and a hairline
+ * dot grid — gives the page some atmosphere without distracting from cards,
+ * and gives elevated cards something to push off of.
  */
 .root {
-  display: grid;
-  /* 260px sidebar | 1fr chat | 400px plan panel */
-  grid-template-columns: 260px 1fr 400px;
-  height: 100%;
-  min-height: 0;
-  overflow: hidden;
-  background: var(--bg2);
-  color: var(--text);
-  font-family: var(--font-inter), system-ui, -apple-system, sans-serif;
-}
-
-/* ─── Sidebar ───────────────────────────────────────────────────── */
-.sidebar {
-  border-right: 1px solid var(--border);
   display: flex;
   flex-direction: column;
-  background: var(--bg);
-  min-width: 0;
-  min-height: 0; /* let .sessionList own the scroll, not the sidebar */
-  height: 100%;
+  gap: 22px;
+  padding: 28px 28px 36px;
+  min-height: 100%;
+  /* Toned down: radial accents now sit below the wordmark visibility threshold
+   * so they don't compete with the brand mark on first impression. */
+  background:
+    radial-gradient(ellipse 800px 520px at 14% -6%, color-mix(in srgb, var(--accent) 3.5%, transparent) 0%, transparent 65%),
+    radial-gradient(ellipse 640px 380px at 100% 22%, color-mix(in srgb, var(--accent) 2.5%, transparent) 0%, transparent 60%),
+    var(--bg2);
+  color: var(--text);
+  font-family: var(--font-inter), system-ui, -apple-system, sans-serif;
+  position: relative;
 }
-.sidebarHead {
-  padding: 18px 14px 10px;
+.root::before {
+  /* Dot grid for page texture. Round 2 attempt had a top-to-bottom mask
+   * that hid the dots exactly where cards were absent (page edges). That
+   * was backwards. Now: mask LEFT and RIGHT only, leaving the top band
+   * (behind the wordmark / digest, where no card competes) fully visible —
+   * so the brand surface actually has texture, not just card stacks. */
+  content: '';
+  position: absolute;
+  inset: 0;
+  background-image: radial-gradient(circle, color-mix(in srgb, var(--text3) 32%, transparent) 1px, transparent 1.4px);
+  background-size: 22px 22px;
+  background-position: 0 0;
+  opacity: 0.6;
+  pointer-events: none;
+  mask-image:
+    linear-gradient(90deg, transparent 0%, black 4%, black 96%, transparent 100%),
+    linear-gradient(180deg, black 0%, black 50%, color-mix(in srgb, black 40%, transparent) 100%);
+  -webkit-mask-image:
+    linear-gradient(90deg, transparent 0%, black 4%, black 96%, transparent 100%),
+    linear-gradient(180deg, black 0%, black 50%, color-mix(in srgb, black 40%, transparent) 100%);
+  mask-composite: intersect;
+  -webkit-mask-composite: source-in;
+  z-index: 0;
+}
+.root > * { position: relative; z-index: 1; }
+
+/* ─── Grid header ──────────────────────────────────────────────── */
+/*
+ * Promoted from a single "Ogilvy" lockup + subtitle to a real dashboard
+ * banner. Left side: Syne wordmark with an orb mark (echoes the empty-state
+ * orb so the brand has one consistent generative-AI signature). Right side
+ * of left cluster: live status digest pulled from the tone helper, so the
+ * banner can't disagree with the cards below it.
+ */
+.gridHeader {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 24px;
+  padding: 4px 4px 6px;
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
+}
+.gridHeaderLeft {
+  display: flex;
+  align-items: flex-end;
+  gap: 28px;
+  min-width: 0;
+  flex-wrap: wrap;
+}
+.gridWordmark {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 14px;          /* was 10 — orb needed air from the next-door digest chip */
+  position: relative;
+  padding-right: 4px; /* extra breathing room before the digest chip cluster */
+}
+.gridWordmarkText {
+  font-family: var(--font-syne), var(--font-display, inherit);
+  font-size: 38px;
+  font-weight: 700;
+  line-height: 0.95;
+  letter-spacing: -0.025em;
+  color: var(--text);
+  background: linear-gradient(135deg, var(--text) 0%, color-mix(in srgb, var(--text) 60%, var(--accent)) 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+.gridWordmarkOrb {
+  width: 11px;
+  height: 11px;
+  border-radius: 50%;
+  background:
+    radial-gradient(circle at 32% 30%, rgba(255,255,255,0.92) 0%, rgba(255,255,255,0) 30%),
+    radial-gradient(circle at 50% 50%, #60a5fa 0%, var(--accent) 45%, #1d4ed8 100%);
+  box-shadow: 0 0 0 1px rgba(37, 99, 235, 0.28), 0 3px 12px rgba(37, 99, 235, 0.40);
+  transform: translateY(-2px);
+  animation: headerOrbPulse 4s ease-in-out infinite;
+}
+@keyframes headerOrbPulse {
+  0%, 100% { box-shadow: 0 0 0 1px rgba(37, 99, 235, 0.28), 0 3px 12px rgba(37, 99, 235, 0.40); }
+  50%      { box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.34), 0 4px 18px rgba(37, 99, 235, 0.55); }
+}
+@media (prefers-reduced-motion: reduce) { .gridWordmarkOrb { animation: none; } }
+
+/* Status digest — toolbar of small chips, not a "second KPI strip". Was 22px
+ * mono numbers with hairline spines; that competed visually with the card-
+ * level 26px KPIs below. Now each stat is a pill (`数字 + 标签`) at 14/10px,
+ * tone-tinted background + same tone text — a quieter "what's moving"
+ * indicator instead of a hero metric. Same data, lower visual weight,
+ * cleaner relationship to wordmark.
+ */
+.gridHeaderStats {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding-bottom: 6px;
+  flex-wrap: wrap;
+}
+.headerStat {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  padding: 4px 11px 5px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--text) 4%, transparent);
+  border: 1px solid color-mix(in srgb, var(--text) 6%, transparent);
+}
+.headerStatN {
+  font-family: var(--font-dm-mono), monospace;
+  font-size: 14px;
+  font-weight: 700;
+  line-height: 1;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.005em;
+}
+.headerStatLabel {
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  color: var(--text3);
+}
+.headerStat_launched {
+  background: color-mix(in srgb, var(--green, #3fb950) 11%, transparent);
+  border-color: color-mix(in srgb, var(--green, #3fb950) 26%, transparent);
+}
+.headerStat_launched .headerStatN { color: color-mix(in srgb, var(--green, #3fb950) 75%, var(--text)); }
+.headerStat_launched .headerStatLabel { color: color-mix(in srgb, var(--green, #3fb950) 60%, var(--text3)); }
+
+.headerStat_paused {
+  /* Slightly weaker than launched — paused is an intentional "on hold"
+   * state, less visually demanding than the live one. */
+  background: color-mix(in srgb, var(--amber, #d29922) 8%, transparent);
+  border-color: color-mix(in srgb, var(--amber, #d29922) 20%, transparent);
+}
+.headerStat_paused .headerStatN { color: color-mix(in srgb, var(--amber, #d29922) 80%, var(--text)); }
+.headerStat_paused .headerStatLabel { color: color-mix(in srgb, var(--amber, #d29922) 65%, var(--text3)); }
+
+.headerStat_ready {
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  border-color: color-mix(in srgb, var(--accent) 24%, transparent);
+}
+.headerStat_ready .headerStatN { color: var(--accent); }
+.headerStat_ready .headerStatLabel { color: color-mix(in srgb, var(--accent) 60%, var(--text3)); }
+
+.headerStat_failed {
+  background: color-mix(in srgb, var(--red, #f85149) 12%, transparent);
+  border-color: color-mix(in srgb, var(--red, #f85149) 28%, transparent);
+}
+.headerStat_failed .headerStatN { color: var(--red, #f85149); }
+.headerStat_failed .headerStatLabel { color: color-mix(in srgb, var(--red, #f85149) 60%, var(--text3)); }
+
+.headerStat_draft .headerStatN { color: var(--text2); }
+/* ─── "+ 新项目" card (always first in the grid) ─────────────────
+ * Two visual modes:
+ *   - default: dashed-bordered tile with a "+" art + title + hint
+ *   - empty (sessions.length === 0): same tile, slightly amped art / copy,
+ *     functions as the empty state too — no separate empty surface
+ *   - pickerOpen: same tile footprint, but body becomes a product-line list
+ * The card sits flush with sibling SessionGridCards (same height, same
+ * border-radius) so the grid reads as one continuous shelf.
+ */
+/* Quieted: previously the new-project card used a strong accent gradient
+ * that visually dominated real session cards. Now it sits on the same
+ * paper-tone background as siblings, just with a dashed border + small
+ * accent puck — it's an entry-point, not a billboard. Hover wakes it up. */
+.newCard {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 20px 18px;
+  min-height: 240px;
+  background: var(--bg);
+  border: 1.5px dashed color-mix(in srgb, var(--accent) 28%, var(--border));
+  border-radius: 14px;
+  cursor: pointer;
+  text-align: center;
+  color: inherit;
+  font-family: inherit;
+  transition: border-color 0.18s, transform 0.18s cubic-bezier(0.2, 0.8, 0.2, 1),
+              box-shadow 0.18s, background 0.18s;
+  overflow: hidden;
+  box-shadow: 0 1px 1px rgba(15, 23, 42, 0.02);
+}
+.newCard:hover:not(.newCardDisabled) {
+  border-color: var(--accent);
+  border-style: solid;
+  transform: translateY(-2px);
+  background: color-mix(in srgb, var(--accent) 4%, var(--bg));
+  box-shadow:
+    0 1px 1px rgba(15, 23, 42, 0.03),
+    0 14px 36px -16px color-mix(in srgb, var(--accent) 55%, transparent);
+}
+.newCard:focus-visible {
+  outline: none;
+  border-style: solid;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 4px var(--accent-dim);
+}
+.newCardDisabled { opacity: 0.55; cursor: not-allowed; }
+
+/* Smaller puck — was 48px (billboard), now 40px sits as a peer to other
+ * cards' status chips. Still keeps the brand orb visual identity. */
+.newCardArt {
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  background:
+    radial-gradient(circle at 32% 28%, rgba(255,255,255,0.45) 0%, rgba(255,255,255,0) 35%),
+    var(--accent);
+  color: white;
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 6px;
+  justify-content: center;
+  box-shadow: 0 3px 10px rgba(37, 99, 235, 0.30), inset 0 1px 1px rgba(255, 255, 255, 0.32);
+  transition: transform 0.22s cubic-bezier(0.2, 0.8, 0.2, 1);
 }
-.sidebarHeadLabel {
+.newCard:hover:not(.newCardDisabled) .newCardArt { transform: scale(1.08) rotate(90deg); }
+
+.newCardSpinner {
+  width: 22px;
+  height: 22px;
+  border: 2.5px solid rgba(255, 255, 255, 0.35);
+  border-top-color: white;
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+.newCardTitle {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text);
+  font-family: var(--font-display, var(--font-syne), inherit);
+  letter-spacing: -0.005em;
+  line-height: 1.3;
+}
+.newCardHint {
+  font-size: 12px;
+  color: var(--text2);
+  line-height: 1.55;
+  max-width: 240px;
+}
+
+/* Empty-state variant amplifies the same elements rather than introducing a
+ * different surface — keeps the grid coherent even with zero sessions. */
+.newCardEmpty {
+  min-height: 280px;
+  padding: 32px 24px;
+}
+.newCardEmpty .newCardArt {
+  width: 60px;
+  height: 60px;
+}
+.newCardEmpty .newCardTitle {
+  font-size: 19px;
+}
+
+/* Picker mode — the card becomes a product-line picker in place. */
+.newCardPicker {
+  align-items: stretch;
+  justify-content: flex-start;
+  text-align: left;
+  padding: 18px;
+  cursor: default;
+  background: var(--bg);
+  border-color: var(--accent);
+  border-style: solid;
+  gap: 10px;
+}
+.newCardPicker:hover { transform: none; box-shadow: none; }
+.newCardPickerHead {
   font-size: 11px;
   font-weight: 600;
   color: var(--text3);
   letter-spacing: 0.08em;
   text-transform: uppercase;
 }
-.sidebarHeadCount {
-  font-family: var(--font-dm-mono), monospace;
-  font-size: 11px;
+.newCardPickerEmpty {
+  font-size: 12.5px;
   color: var(--text3);
-  background: var(--bg3);
-  padding: 1px 7px;
-  border-radius: 999px;
-  min-width: 20px;
-  text-align: center;
+  padding: 12px 0;
+  line-height: 1.55;
 }
-
-.newBtnWrap {
-  position: relative;
-  padding: 0 10px 10px;
-}
-.newBtn {
-  width: 100%;
-  padding: 10px 12px;
-  background: linear-gradient(180deg, var(--bg2) 0%, var(--bg2) 100%);
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  color: var(--text);
-  font-size: 13px;
-  font-weight: 500;
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 8px;
-  position: relative;
-  box-shadow: 0 1px 0 rgba(15, 23, 42, 0.02);
-  transition: background 0.12s, border-color 0.12s, box-shadow 0.12s, transform 0.12s;
-}
-.newBtn:hover {
-  background: var(--bg3);
-  border-color: var(--border2);
-  box-shadow: 0 1px 0 rgba(15, 23, 42, 0.02), 0 0 0 3px var(--accent-dim);
-}
-.newBtn:active { transform: translateY(0.5px); }
-.newBtn:disabled { opacity: 0.5; cursor: wait; box-shadow: none; }
-
-/* ── Product-line picker (新项目 dropdown) ─────────────────────────────── */
-.plPicker {
-  position: absolute;
-  top: 100%;
-  left: 10px;
-  right: 10px;
-  margin-top: 4px;
-  background: var(--bg2);
-  border: 1px solid var(--border2);
-  border-radius: 10px;
-  box-shadow: var(--shadow-lg);
-  z-index: 20;
-  padding: 6px;
+.newCardPickerList {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 4px;
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  max-height: 220px;
 }
-.plPickerHead {
-  font-size: 11px;
-  color: var(--text3);
-  padding: 6px 10px 4px;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-}
-.plPickerEmpty {
-  font-size: 12px;
-  color: var(--text3);
-  padding: 8px 10px;
-}
-.plPickerItem {
+.newCardPickerItem {
   display: flex;
   justify-content: space-between;
   align-items: center;
   gap: 10px;
-  padding: 8px 10px;
-  background: transparent;
-  border: none;
-  border-radius: 6px;
+  padding: 10px 12px;
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
   color: var(--text);
   font-size: 13px;
   cursor: pointer;
   text-align: left;
   font-family: inherit;
+  transition: background 0.12s, border-color 0.12s;
 }
-.plPickerItem:hover {
-  background: var(--bg3);
+.newCardPickerItem:hover:not(:disabled) {
+  background: var(--accent-dim);
+  border-color: var(--accent);
 }
-.plPickerItemDisabled {
+.newCardPickerItemDisabled {
   color: var(--text3);
   cursor: not-allowed;
-  opacity: 0.5;
+  opacity: 0.55;
 }
-.plPickerItemDisabled:hover {
-  background: transparent;
-}
-.plPickerName { font-weight: 500; }
-.plPickerHint {
+.newCardPickerItemDisabled:hover { background: var(--bg2); border-color: var(--border); }
+.newCardPickerName { font-weight: 500; }
+.newCardPickerHint {
   font-size: 11px;
   color: var(--text3);
   font-family: var(--font-mono);
 }
-
-/* ── Session card 产品线 chip ──────────────────────────────────────────── */
-.sessionCardPl {
-  font-size: 10.5px;
-  font-weight: 500;
-  padding: 1px 6px;
-  background: var(--accent-dim);
-  color: var(--accent);
-  border-radius: 4px;
-  font-family: var(--font-mono);
-}
-.newBtnIcon { color: var(--accent); flex-shrink: 0; }
-
-.sessionList {
-  flex: 1;
-  overflow-y: auto;
-  padding: 4px 8px 16px;
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-
-/* ─── Session card (left sidebar) ─────────────────────────────
- * Each session is a 2-line compact card with status dot, title,
- * countries/budget/time row. Hover reveals the delete ×.
- */
-.sessionCard {
-  position: relative;
-  padding: 9px 12px;
-  border-radius: 10px;
+.newCardPickerCancel {
+  align-self: flex-end;
+  padding: 6px 12px;
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text3);
+  font-size: 12px;
+  font-family: inherit;
   cursor: pointer;
-  display: flex;
-  flex-direction: column;
-  gap: 3px;
-  border: 1px solid transparent;
-  transition: background 0.12s, border-color 0.12s;
 }
-.sessionCard:hover { background: var(--bg3); }
-.sessionCardActive {
-  background: var(--accent-dim) !important;
-  border-color: rgba(37, 99, 235, 0.18) !important;
-}
-.sessionCardActive .sessionCardTitle { color: var(--accent); font-weight: 600; }
+.newCardPickerCancel:hover { background: var(--bg2); color: var(--text); }
 
-.sessionCardTop {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  min-width: 0;
-}
-.sessionCardTitle {
-  flex: 1;
-  min-width: 0;
-  font-size: 13px;
-  color: var(--text);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-/* Status dot — the visual anchor for scanning the list */
-.sessionDot {
-  width: 7px; height: 7px;
-  border-radius: 50%;
-  flex-shrink: 0;
-}
+/* ─── Status dot variants (shared between grid card and modal header) ── */
 .sessionDotDraft     { background: var(--text3); }
-.sessionDotBusy      { background: var(--amber); animation: sessionPulse 1.4s ease-in-out infinite; }
-.sessionDotLaunched  { background: var(--green); }
-.sessionDotPaused    { background: var(--amber); }
-.sessionDotFailed    { background: var(--red); }
-.sessionDotArchived  { background: transparent; border: 1px solid var(--border3); }
+.sessionDotBusy      { background: var(--amber, #d29922); animation: sessionPulse 1.4s ease-in-out infinite; }
+.sessionDotLaunched  { background: var(--green, #3fb950); }
+.sessionDotPaused    { background: var(--amber, #d29922); }
+.sessionDotFailed    { background: var(--red, #f85149); }
+.sessionDotArchived  { background: transparent; border: 1px solid var(--border3, var(--border)); }
 @keyframes sessionPulse {
   0%, 100% { opacity: 1; }
   50%      { opacity: 0.35; }
 }
 
-/* Meta row: countries · budget · time */
-.sessionCardMeta {
+/* ─── Card grid ────────────────────────────────────────────────── */
+.cardGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
+  gap: 18px;
+}
+
+/* The grid card: scannable at a glance, opens the modal on click.
+ *
+ * Material rules:
+ *   - Resting cards sit on a 1px hairline + a soft 12px shadow so they read
+ *     as paper on the page's atmospheric gradient (not flush like Excel).
+ *   - Hovered cards lift 2px and pick up an accent-tinted shadow; they DON'T
+ *     swap their tone border for the accent because the tone color already
+ *     carries meaning — overriding it would lose the status signal on hover.
+ *   - Active (focused-keyboard) cards get an accent ring outside the border
+ *     so accessibility focus is clear without disturbing the tone language.
+ */
+.gridCard {
+  position: relative;
   display: flex;
-  align-items: baseline;
+  flex-direction: column;
+  gap: 14px;
+  padding: 20px 20px 16px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  text-align: left;
+  cursor: pointer;
+  font-family: inherit;
+  color: inherit;
+  transition: transform 0.18s cubic-bezier(0.2, 0.8, 0.2, 1),
+              box-shadow 0.18s cubic-bezier(0.2, 0.8, 0.2, 1),
+              border-color 0.18s;
+  overflow: hidden;
+  box-shadow:
+    0 1px 1px rgba(15, 23, 42, 0.02),
+    0 4px 14px -8px rgba(15, 23, 42, 0.08);
+}
+.gridCard:hover {
+  transform: translateY(-2px);
+  /* z-index lift so the hovered card's shadow always sits above neighbors —
+   * previously the shadow could be clipped by the next card's opaque bg. */
+  z-index: 2;
+  box-shadow:
+    0 1px 1px rgba(15, 23, 42, 0.03),
+    0 14px 36px -16px color-mix(in srgb, var(--accent) 55%, rgba(15, 23, 42, 0.10));
+}
+.gridCard:focus-visible {
+  outline: none;
+  box-shadow:
+    0 1px 1px rgba(15, 23, 42, 0.03),
+    0 14px 36px -16px color-mix(in srgb, var(--accent) 55%, rgba(15, 23, 42, 0.10)),
+    0 0 0 3px color-mix(in srgb, var(--accent) 28%, transparent);
+}
+
+/* ─── Status-differentiated card variants ─────────────────────────
+ *
+ * Three layers stacked per tone:
+ *   1. Background wash — 6-10% color-mix tint of the status color so cards
+ *      read by hue at a glance without becoming a candy box.
+ *   2. Left "spine" — 3px solid status color on the left edge. Draws the
+ *      eye to whichever card needs attention (failed > paused > launched >
+ *      busy > ready > draft).
+ *   3. Status pill + dot — tone-colored.
+ *
+ * `draft` is intentionally the bare baseline: no spine, no wash, dashed
+ * border. So the grid's *colorful* cards are the ones that matter.
+ * `failed` runs at the highest saturation — a stuck campaign should not
+ * blend in with healthy ones.
+ *
+ * `launched` retains the top accent gradient stripe (green → blue) as a
+ * second visual signal for the "live & earning" state, since that's the
+ * one users come back to monitor.
+ */
+
+/* DRAFT: pure baseline */
+.gridCardTone_draft {
+  border-style: dashed;
+  border-color: var(--border);
+}
+
+/* READY: plan generated, awaiting launch — subtle accent-blue blueprint feel */
+.gridCardTone_ready {
+  background: color-mix(in srgb, var(--accent) 4%, var(--bg));
+  border-color: color-mix(in srgb, var(--accent) 18%, var(--border));
+}
+.gridCardTone_ready::before {
+  content: '';
+  position: absolute;
+  top: 0; bottom: 0; left: 0;
+  width: 3px;
+  background: var(--accent);
+}
+
+/* BUSY: staging / staged — amber wash with pulsing spine */
+.gridCardTone_busy {
+  background: color-mix(in srgb, var(--amber, #d29922) 6%, var(--bg));
+  border-color: color-mix(in srgb, var(--amber, #d29922) 25%, var(--border));
+}
+.gridCardTone_busy::before {
+  content: '';
+  position: absolute;
+  top: 0; bottom: 0; left: 0;
+  width: 3px;
+  background: var(--amber, #d29922);
+  animation: cardSpinePulse 1.5s ease-in-out infinite;
+}
+@keyframes cardSpinePulse {
+  0%, 100% { opacity: 1; }
+  50%      { opacity: 0.45; }
+}
+
+/* LAUNCHED: live & earning. Dropped the top gradient stripe — it was the
+ * 4th green signal on the card (chip + bg wash + spine + stripe), pure
+ * redundancy. Replaced with an ambient radial glow at top-right that
+ * breathes slowly — gives the card a "this is working right now" pulse
+ * the static stripe couldn't provide. */
+.gridCardTone_launched {
+  background: color-mix(in srgb, var(--green, #3fb950) 5%, var(--bg));
+  border-color: color-mix(in srgb, var(--green, #3fb950) 22%, var(--border));
+}
+.gridCardTone_launched::after {
+  content: '';
+  position: absolute;
+  top: -40%;
+  right: -30%;
+  width: 70%;
+  height: 110%;
+  border-radius: 50%;
+  background: radial-gradient(circle, color-mix(in srgb, var(--green, #3fb950) 22%, transparent) 0%, transparent 60%);
+  pointer-events: none;
+  animation: launchedAmbientBreath 5.5s ease-in-out infinite;
+  z-index: 0;
+}
+.gridCardTone_launched > * { position: relative; z-index: 1; }
+@keyframes launchedAmbientBreath {
+  0%, 100% { opacity: 0.55; transform: scale(1); }
+  50%      { opacity: 0.95; transform: scale(1.06); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .gridCardTone_launched::after { animation: none; opacity: 0.7; }
+}
+
+/* PAUSED: post-launch but on hold — muted amber wash (no spine to keep visual
+ * weight below LAUNCHED, since paused is the user's intentional state) */
+.gridCardTone_paused {
+  background: color-mix(in srgb, var(--amber, #d29922) 4%, var(--bg));
+  border-color: color-mix(in srgb, var(--amber, #d29922) 18%, var(--border));
+}
+.gridCardTone_paused::before {
+  content: '';
+  position: absolute;
+  top: 0; bottom: 0; left: 0;
+  width: 3px;
+  background: color-mix(in srgb, var(--amber, #d29922) 60%, transparent);
+}
+
+/* FAILED: maximum attention — saturated red, no subtlety, ring of red around */
+.gridCardTone_failed {
+  background: color-mix(in srgb, var(--red, #f85149) 7%, var(--bg));
+  border-color: color-mix(in srgb, var(--red, #f85149) 35%, var(--border));
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--red, #f85149) 12%, transparent);
+}
+.gridCardTone_failed::before {
+  content: '';
+  position: absolute;
+  top: 0; bottom: 0; left: 0;
+  width: 4px;
+  background: var(--red, #f85149);
+}
+.gridCardTone_failed:hover { border-color: var(--red, #f85149); }
+
+/* Status dot variants — match the spine / wash color, separately addressable
+ * so individual surfaces (modal header etc.) can color-coordinate without
+ * pulling the whole tone treatment. */
+/* Status dot inside the chip — small but the only "alive" indicator
+ * available to the chip. Launched gets a slow heart-beat pulse so the
+ * card reads as "this is actively working" even when its larger ambient
+ * glow is paused (e.g. user has prefers-reduced-motion). Busy gets the
+ * faster spine pulse it's been using. Failed gets a single hard ring. */
+.gridCardDot_draft     { background: var(--text3); }
+.gridCardDot_ready     { background: var(--accent); }
+.gridCardDot_busy      { background: var(--amber, #d29922); animation: cardSpinePulse 1.5s ease-in-out infinite; }
+.gridCardDot_launched  {
+  background: var(--green, #3fb950);
+  box-shadow: 0 0 0 0 color-mix(in srgb, var(--green, #3fb950) 60%, transparent);
+  animation: launchedDotHeartbeat 2.4s ease-in-out infinite;
+}
+@keyframes launchedDotHeartbeat {
+  0%, 100% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--green, #3fb950) 0%, transparent); }
+  50%      { box-shadow: 0 0 0 4px color-mix(in srgb, var(--green, #3fb950) 28%, transparent); }
+}
+.gridCardDot_paused    { background: var(--amber, #d29922); }
+.gridCardDot_failed    {
+  background: var(--red, #f85149);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--red, #f85149) 35%, transparent);
+}
+.gridCardDot_archived  { background: transparent; border: 1px solid var(--border); }
+@media (prefers-reduced-motion: reduce) {
+  .gridCardDot_busy, .gridCardDot_launched { animation: none; }
+}
+
+/* Status chip — tone-tinted background + tone-colored label. Strongest
+ * signal for failed (saturated red so a stuck campaign can't blend in). */
+.gridCardTone_failed   .gridCardStatus {
+  background: color-mix(in srgb, var(--red, #f85149) 14%, transparent);
+  color: var(--red, #f85149);
+}
+.gridCardTone_launched .gridCardStatus {
+  background: color-mix(in srgb, var(--green, #3fb950) 14%, transparent);
+  color: color-mix(in srgb, var(--green, #3fb950) 75%, var(--text));
+}
+.gridCardTone_ready    .gridCardStatus {
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  color: var(--accent);
+}
+.gridCardTone_paused   .gridCardStatus {
+  /* Weaker chip tint — paused is an intentional pause, not a danger state.
+   * Helps launched cards visually outrank paused at a glance. */
+  background: color-mix(in srgb, var(--amber, #d29922) 9%, transparent);
+  color: color-mix(in srgb, var(--amber, #d29922) 70%, var(--text2));
+}
+.gridCardTone_busy     .gridCardStatus {
+  background: color-mix(in srgb, var(--amber, #d29922) 14%, transparent);
+  color: color-mix(in srgb, var(--amber, #d29922) 80%, var(--text));
+}
+
+/* HEAD: status row + hover-only delete.
+ *
+ * Status is now a real chip — backdrop-blur pill with a tone-tinted
+ * background, not a 8px dot footnote. Promoted to the visual lead because
+ * the entire grid is organized around status (tone bg, left spine, etc.).
+ */
+.gridCardHead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+.gridCardStatus {
+  display: inline-flex;
+  align-items: center;
   gap: 6px;
-  padding-left: 13px;     /* align under title, past the dot+gap */
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  padding: 4px 10px 4px 8px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--text) 4%, transparent);
+  color: var(--text2);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+}
+.gridCardDot {
+  width: 6px; height: 6px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.gridCardStatusLabel { white-space: nowrap; }
+
+/* Hover-only action cluster (在新标签页打开 + 删除).
+ * Both buttons share `.gridCardAction` for hit-area & idle look; the delete
+ * button's hover state veers red via `.gridCardAction:last-child:hover`. */
+.gridCardActions {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  opacity: 0;
+  transition: opacity 0.12s;
+}
+.gridCard:hover .gridCardActions,
+.gridCard:focus-within .gridCardActions { opacity: 1; }
+
+.gridCardAction {
+  width: 24px; height: 24px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--text3);
+  cursor: pointer;
+  border-radius: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  text-decoration: none;
+  transition: background 0.12s, color 0.12s, border-color 0.12s;
+}
+.gridCardAction:hover {
+  background: var(--bg2);
+  color: var(--text);
+  border-color: var(--border);
+}
+/* Delete-specific hover tint — last child in the cluster is always 删除. */
+.gridCardActions > .gridCardAction:last-child:hover {
+  background: color-mix(in srgb, var(--red, #f85149) 12%, transparent);
+  color: var(--red, #f85149);
+  border-color: color-mix(in srgb, var(--red, #f85149) 30%, transparent);
+}
+
+/* TITLE: 2-line clamped summary.
+ * Bumped to Syne display face — gives every card a real headline, not body
+ * text. Slight negative letter-spacing tightens it; line-height 1.32 keeps
+ * 2 lines reading as one tight block. */
+.gridCardTitle {
+  font-family: var(--font-syne), var(--font-display, inherit);
+  font-size: 17px;
+  font-weight: 600;
+  line-height: 1.32;
+  color: var(--text);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  word-break: break-word;
+  letter-spacing: -0.014em;
+  min-height: calc(17px * 1.32 * 2);
+}
+
+/* META: product line + countries */
+.gridCardMeta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+.gridCardPl {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11.5px;
+  font-weight: 500;
+  padding: 3px 9px;
+  background: var(--accent-dim);
+  color: var(--accent);
+  border-radius: 999px;
+}
+.gridCardPlDot {
+  width: 5px; height: 5px;
+  border-radius: 50%;
+  background: var(--accent);
+}
+.gridCardCountries {
+  font-family: var(--font-dm-mono), monospace;
+  letter-spacing: 0.02em;
   font-size: 11px;
   color: var(--text3);
   overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+  flex: 1;
+}
+
+/* STATS WRAP — KPI strip OR empty-state hint, picked by the parent */
+.gridCardStatsWrap {
+  display: flex;
+  flex-direction: column;
+  /* Reserve consistent height even when the card has no metrics, so the grid
+   * doesn't get jagged between launched / draft cards. */
+  min-height: 80px;
+  justify-content: center;
+}
+
+/* KPI strip: 3 hero tiles (展示 / 点击 / 对话). Spend + derived metrics live
+ * in a smaller sub-row below so the 3 numbers users actually scan for stay
+ * uncrowded. */
+.gridCardStats {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 0;
+  padding: 14px 4px 10px;
+  border-top: 1px solid var(--border);
+  background: linear-gradient(180deg, var(--bg2) 0%, transparent 100%);
+  border-radius: 8px 8px 0 0;
+  margin: 0 -4px;
+}
+.metricTile {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 2px 8px;
+  border-right: 1px solid var(--border);
+  min-width: 0;
+}
+.metricTile:last-child { border-right: none; }
+.metricTileValue {
+  font-family: var(--font-syne), var(--font-display, var(--font-sans));
+  font-size: 26px;
+  font-weight: 700;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.028em;
+  line-height: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+}
+.metricTileLabel {
+  font-size: 10px;
+  color: var(--text3);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  font-weight: 600;
   white-space: nowrap;
 }
-.sessionCardCountries {
+/* "对话" used to win an extra green color. But on launched cards we already
+ * carry green via chip + bg wash + ambient glow. Painting "对话" green too
+ * was a 4th green signal — same redundancy we just removed elsewhere. Keep
+ * the number plain; emphasis comes from layout position (rightmost = climax)
+ * and the slightly wider tile via grid auto-flow. */
+.metricTileEmphasis .metricTileValue { color: var(--text); }
+.metricTileEmphasis .metricTileLabel { color: var(--text3); }
+
+/* Sub-row: 花费 / CTR / 单条对话 — secondary, hairline-bordered. */
+.gridCardStatsSub {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 4px 10px;
+  padding: 8px 4px 4px;
+  font-size: 11.5px;
+  color: var(--text3);
   font-family: var(--font-dm-mono), monospace;
-  letter-spacing: 0.02em;
+  border-top: 1px dashed var(--border);
+  margin: 0 -4px;
+}
+.gridCardStatsSub strong {
+  color: var(--text2);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+.gridCardStatsSubSep { color: var(--border2, var(--border)); }
+
+.gridCardStatsHint {
+  font-size: 12.5px;
+  color: var(--text3);
+  text-align: center;
+  padding: 16px 12px;
+  border-top: 1px dashed var(--border);
+  border-bottom: 1px dashed var(--border);
+  line-height: 1.5;
+}
+
+/* FOOT: budget chips + relative timestamps */
+.gridCardFoot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-width: 0;
+}
+.gridCardBudget {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  font-family: var(--font-dm-mono), monospace;
+  white-space: nowrap;
+  min-width: 0;
+}
+.gridCardBudgetTotal {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text);
+}
+.gridCardBudgetSub {
+  font-size: 11px;
+  color: var(--text3);
   overflow: hidden;
   text-overflow: ellipsis;
   min-width: 0;
 }
-.sessionCardBudget {
-  font-family: var(--font-dm-mono), monospace;
-  color: var(--text2);
-  flex-shrink: 0;
-}
-.sessionCardTime {
-  margin-left: auto;        /* push time to the right edge */
-  flex-shrink: 0;
+.gridCardBudgetEmpty {
+  font-size: 11.5px;
   color: var(--text3);
+  font-style: italic;
+  font-family: var(--font-sans);
+}
+.gridCardTimes {
+  display: inline-flex;
+  gap: 4px;
+  font-size: 11px;
+  color: var(--text3);
+  white-space: nowrap;
+  min-width: 0;
 }
 
-/* Delete × — hidden until card hover; absolute so it can overlay title tail */
-.sessionCardDel {
-  width: 20px; height: 20px;
-  border: none;
-  background: var(--bg);
-  color: var(--text3);
-  cursor: pointer;
-  font-size: 14px;
-  line-height: 1;
-  border-radius: 4px;
-  display: none;
-  align-items: center;
+/* ─── Modal ────────────────────────────────────────────────────── */
+.modalScrim {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  background: rgba(15, 23, 42, 0.55);
+  backdrop-filter: blur(2px);
+  display: flex;
+  align-items: stretch;
   justify-content: center;
-  flex-shrink: 0;
+  /* Full-bleed: no padding around the modal, shell fills viewport edge-to-edge.
+   * Previously 32px padding left a "card on backdrop" frame; user feedback
+   * was that the workspace needs all the real estate it can get. */
+  padding: 0;
+  animation: modalScrimIn 0.18s ease-out;
 }
-.sessionCard:hover .sessionCardDel { display: flex; }
-.sessionCardDel:hover { background: var(--bg5); color: var(--red); }
-
-.sidebarEmpty {
-  margin: 18px 12px;
-  padding: 22px 14px;
-  border: 1px dashed var(--border2);
-  border-radius: 12px;
-  color: var(--text3);
-  text-align: center;
+@keyframes modalScrimIn {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+.modalShell {
+  width: 100%;
+  max-width: none;
   background: var(--bg2);
-}
-.sidebarEmptyMark {
-  width: 36px;
-  height: 36px;
-  margin: 0 auto 10px;
-  border-radius: 10px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: var(--accent-dim);
-  color: var(--accent);
-}
-.sidebarEmptyTitle { font-size: 13px; font-weight: 600; color: var(--text2); margin-bottom: 2px; }
-.sidebarEmptyHint  { font-size: 11.5px; color: var(--text3); line-height: 1.5; }
-
-/* ── Sidebar skeleton (cold load) ────────────────────────────── */
-.sessionSkeletonList {
+  /* No border / radius when flush with viewport edges; saves 32px of
+   * non-content chrome top/bottom. */
+  border: none;
+  border-radius: 0;
+  box-shadow: none;
   display: flex;
   flex-direction: column;
-  gap: 6px;
-  padding: 6px 2px 0;
+  overflow: hidden;
+  /* transform-origin is set inline by OgilvyApp to the clicked card center,
+   * so the modal visually "grows" from that point. Cubic-bezier matches the
+   * card-hover lift timing for continuity. */
+  animation: modalShellIn 0.32s cubic-bezier(0.16, 0.84, 0.24, 1);
+  will-change: transform, opacity;
 }
-.sessionSkeleton {
-  padding: 8px 10px;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-.sessionSkeletonTop {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-.sessionSkeletonDot {
-  width: 7px; height: 7px;
-  border-radius: 50%;
-  background: var(--bg4);
-  flex-shrink: 0;
-  animation: ogilvyShimmer 1.6s ease-in-out infinite;
-}
-.sessionSkeletonTitle {
-  height: 10px;
-  border-radius: 5px;
-  background: linear-gradient(90deg, var(--bg4) 0%, var(--bg5) 50%, var(--bg4) 100%);
-  background-size: 200% 100%;
-  animation: ogilvyShimmer 1.6s ease-in-out infinite;
-}
-.sessionSkeletonMeta {
-  height: 8px;
-  margin-left: 15px;
-  border-radius: 4px;
-  background: linear-gradient(90deg, var(--bg4) 0%, var(--bg5) 50%, var(--bg4) 100%);
-  background-size: 200% 100%;
-  animation: ogilvyShimmer 1.6s ease-in-out infinite;
-  opacity: 0.7;
-}
-@keyframes ogilvyShimmer {
-  0%   { background-position: 200% 0; opacity: 0.85; }
-  50%  { opacity: 0.5; }
-  100% { background-position: -200% 0; opacity: 0.85; }
+@keyframes modalShellIn {
+  from {
+    opacity: 0;
+    transform: scale(0.35);
+    filter: blur(6px);
+  }
+  60% {
+    opacity: 1;
+    filter: blur(0);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+    filter: blur(0);
+  }
 }
 @media (prefers-reduced-motion: reduce) {
-  .sessionSkeletonDot,
-  .sessionSkeletonTitle,
-  .sessionSkeletonMeta { animation: none; }
+  .modalShell { animation: modalShellInReduced 0.18s ease-out; }
+}
+@keyframes modalShellInReduced {
+  from { opacity: 0; transform: scale(0.97); }
+  to   { opacity: 1; transform: scale(1); }
 }
 
-/* ─── Main chat area ────────────────────────────────────────────── */
+/* Exit — mirror of entry. Same transform-origin as the open(set inline),
+ * but reversed: scale 1 → 0.4, opacity 1 → 0, blur 0 → 6. Slightly faster
+ * than entry (260 vs 320ms) so close feels responsive,not draggy. Scrim
+ * also fades on close. */
+.modalShellClosing {
+  animation: modalShellOut 0.26s cubic-bezier(0.55, 0.08, 0.68, 0.53) forwards;
+  pointer-events: none;
+}
+@keyframes modalShellOut {
+  from { opacity: 1; transform: scale(1); filter: blur(0); }
+  to   { opacity: 0; transform: scale(0.4); filter: blur(6px); }
+}
+.modalScrimClosing {
+  animation: modalScrimOut 0.26s ease-out forwards;
+  pointer-events: none;
+}
+@keyframes modalScrimOut {
+  from { opacity: 1; }
+  to   { opacity: 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .modalShellClosing { animation: modalShellOutReduced 0.16s ease-out forwards; }
+}
+@keyframes modalShellOutReduced {
+  from { opacity: 1; transform: scale(1); }
+  to   { opacity: 0; transform: scale(0.97); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .modalScrim, .modalShell { animation: none; }
+}
+/* full-bleed at all widths now — no padding override */
+
+.modalHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 14px 20px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg);
+  min-height: 60px;
+}
+.modalHeaderLeft {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+  flex: 1;
+}
+.modalStatusDot {
+  width: 9px; height: 9px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.modalHeaderText {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  flex: 1;
+}
+.modalTitle {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text);
+  line-height: 1.3;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  letter-spacing: -0.005em;
+}
+.modalSubLine {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11.5px;
+  color: var(--text3);
+  min-width: 0;
+}
+.modalStatusLabel { font-weight: 500; letter-spacing: 0.04em; text-transform: uppercase; font-size: 10.5px; }
+.modalDotSep { color: var(--text3); }
+.modalPlChip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--accent);
+  background: var(--accent-dim);
+  padding: 2px 7px;
+  border-radius: 999px;
+}
+.modalCloseBtn {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  border: 1px solid var(--border);
+  background: var(--bg2);
+  color: var(--text2);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  transition: background 0.12s, color 0.12s, border-color 0.12s;
+}
+.modalCloseBtn:hover {
+  background: var(--bg3);
+  color: var(--text);
+  border-color: var(--border2);
+}
+
+/* Workspace shell: header on top, chat/plan grid fills the rest.
+ * Lives directly inside .modalShell now (no more .modalBody) so the
+ * SessionWorkspace can own its own header — that header reads plan +
+ * adStatuses, so it can show a status consistent with the AdPlanCard. */
+.workspaceFull {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.workspaceGrid {
+  flex: 1;
+  display: grid;
+  /* 创意素材中心 | 聊天 | 计划。 */
+  grid-template-columns: 420px 1fr 460px;
+  width: 100%;
+  min-height: 0;
+  overflow: hidden;
+}
+@media (max-width: 1320px) {
+  /* 中等宽度:藏掉素材中心,保留 chat + plan */
+  .workspaceGrid { grid-template-columns: 1fr 460px; }
+  .creativesPanel { display: none; }
+}
+@media (max-width: 900px) {
+  .workspaceGrid { grid-template-columns: 1fr; }
+  .planPanel { border-left: none !important; border-top: 1px solid var(--border); }
+}
+
+/* ─── Creatives Panel(最左列「创意素材中心」)──────────────── */
+/*
+ * Color hierarchy in the modal: sides recede (var(--bg2)) so the chat
+ * column (var(--bg), whiter) pops as the focal point. Border on the
+ * right keeps visual separation without making this panel feel like
+ * an iframe.
+ */
+.creativesPanel {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  height: 100%;
+  background: var(--bg2);
+  border-right: 1px solid var(--border);
+  overflow: hidden;
+}
+
+.creativesHead {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 14px 16px 10px;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+.creativesTitle {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+  letter-spacing: 0.01em;
+  font-family: var(--font-display, var(--font-syne), inherit);
+}
+.creativesSub {
+  font-size: 11px;
+  color: var(--text3);
+  font-family: var(--font-dm-mono), monospace;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.creativesTabs {
+  display: flex;
+  gap: 2px;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+.creativesTab {
+  flex: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  padding: 6px 10px;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  color: var(--text2);
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  font-family: inherit;
+  transition: background 0.12s, color 0.12s, border-color 0.12s;
+}
+.creativesTab:hover:not(.creativesTabActive) { background: var(--bg2); color: var(--text); }
+.creativesTabActive {
+  background: var(--accent-dim);
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 22%, transparent);
+}
+.creativesTabCount {
+  font-family: var(--font-dm-mono), monospace;
+  font-size: 10px;
+  padding: 0px 5px;
+  border-radius: 999px;
+  background: var(--bg);
+  color: var(--text3);
+  line-height: 1.5;
+}
+.creativesTabActive .creativesTabCount {
+  background: var(--accent);
+  color: white;
+}
+
+.creativesBody {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.creativesEmpty {
+  padding: 28px 16px;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--text3);
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  align-items: center;
+}
+.creativesRetry {
+  padding: 4px 12px;
+  font-size: 11.5px;
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text2);
+  cursor: pointer;
+  font-family: inherit;
+}
+.creativesRetry:hover { background: var(--bg3); color: var(--text); }
+
+/* ─── Search input ────────────────────────────────────────────
+ * Lives between tabs and the gallery. Client-side filters by title/prompt/
+ * description/linked_skus/tags. Icon-left, clear-right convention. */
+.creativesSearchWrap {
+  position: relative;
+  padding: 8px 14px 10px;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+.creativesSearchIcon {
+  position: absolute;
+  left: 23px;
+  top: 50%;
+  transform: translateY(calc(-50% - 1px));
+  color: var(--text3);
+  pointer-events: none;
+}
+.creativesSearchInput {
+  width: 100%;
+  padding: 6px 26px 6px 28px;
+  font-size: 12.5px;
+  font-family: inherit;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  color: var(--text);
+  outline: none;
+  transition: border-color 0.15s, box-shadow 0.15s;
+  -webkit-appearance: none;
+}
+.creativesSearchInput::placeholder { color: var(--text3); }
+.creativesSearchInput:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-dim);
+}
+.creativesSearchClear {
+  position: absolute;
+  right: 19px;
+  top: 50%;
+  transform: translateY(calc(-50% - 1px));
+  width: 18px;
+  height: 18px;
+  border: none;
+  background: var(--bg2);
+  color: var(--text2);
+  font-size: 13px;
+  line-height: 1;
+  border-radius: 50%;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.creativesSearchClear:hover { background: var(--bg3); color: var(--text); }
+
+/* ─── Gallery grid ──────────────────────────────────────────
+ * 2-column square tiles. At 360px panel(14px padding both sides, 332px
+ * content)→ each tile ~158px square,gap 8px。Hover shows overlay。 */
+.creativesGrid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  padding: 10px 12px 16px;
+}
+.creativeTile {
+  position: relative;
+  aspect-ratio: 1 / 1;
+  border-radius: 10px;
+  overflow: hidden;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  transition: transform 0.18s cubic-bezier(0.2, 0.8, 0.2, 1),
+              box-shadow 0.18s,
+              border-color 0.18s;
+}
+.creativeTile:hover {
+  transform: translateY(-1px);
+  border-color: color-mix(in srgb, var(--accent) 40%, var(--border));
+  box-shadow: 0 6px 20px -6px color-mix(in srgb, var(--accent) 35%, transparent);
+}
+.creativeTileMain {
+  width: 100%;
+  height: 100%;
+  display: block;
+  padding: 0;
+  border: none;
+  background: var(--bg2);
+  cursor: zoom-in;
+  position: relative;
+}
+.creativeTileImg {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+/* Source badge — small AI / KB chip top-left of tile, always visible at
+ * very low alpha so it doesn't dominate the image but stays identifiable. */
+.creativeTileBadge {
+  position: absolute;
+  top: 6px;
+  left: 6px;
+  font-family: var(--font-dm-mono), monospace;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: rgba(15, 23, 42, 0.55);
+  color: white;
+  text-transform: uppercase;
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+  z-index: 2;
+  pointer-events: none;
+}
+.creativeTileBadgeKb {
+  background: color-mix(in srgb, var(--green, #3fb950) 85%, rgba(15, 23, 42, 0.55));
+}
+
+/* Hover overlay — gradient bottom→top with text at bottom edge.
+ * Fades in on hover; pointer-events: none so click passes through to button. */
+.creativeTileOverlay {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(180deg, transparent 30%, rgba(15, 23, 42, 0.10) 50%, rgba(15, 23, 42, 0.90) 100%);
+  display: flex;
+  align-items: flex-end;
+  padding: 10px;
+  opacity: 0;
+  transition: opacity 0.2s ease-out;
+  pointer-events: none;
+}
+.creativeTile:hover .creativeTileOverlay,
+.creativeTile:focus-within .creativeTileOverlay { opacity: 1; }
+
+.creativeTileOverlayText {
+  font-size: 11.5px;
+  font-weight: 500;
+  line-height: 1.45;
+  color: white;
+  display: -webkit-box;
+  -webkit-line-clamp: 4;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  word-break: break-word;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.5);
+}
+
+/* Import button — top-right corner of tile, visible on hover. */
+.creativeTileImport {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 4px 8px;
+  font-size: 10.5px;
+  font-weight: 600;
+  border: none;
+  border-radius: 999px;
+  background: var(--accent);
+  color: white;
+  cursor: pointer;
+  opacity: 0;
+  font-family: inherit;
+  transition: opacity 0.2s, transform 0.15s, filter 0.12s;
+  box-shadow: 0 2px 8px rgba(37, 99, 235, 0.40);
+  z-index: 3;
+}
+.creativeTile:hover .creativeTileImport,
+.creativeTile:focus-within .creativeTileImport { opacity: 1; }
+.creativeTileImport:hover { filter: brightness(1.08); transform: scale(1.04); }
+.creativeTileImport:active { transform: scale(0.95); }
+
+/* ─── Main chat area ──────────────────────────────────────────────
+ * Whitest of the three columns — focal point where the user actually
+ * types. Composer continues the same bg (was --bg2 before, now matches
+ * main for a seamless surface). */
 .main {
   display: flex;
   flex-direction: column;
+  background: var(--bg);
   min-width: 0;
   min-height: 0;   /* required so .chatScroll's overflow-auto engages */
   height: 100%;
@@ -660,6 +1681,275 @@
 .aiMsg p { margin: 0 0 10px; }
 .aiMsg p:last-child { margin-bottom: 0; }
 
+/* ─── Ogilvy chat — editorial Markdown overrides ─────────────────
+ *
+ * AI responses here are strategy documents: tables, headings, multi-level
+ * lists. Default global Markdown styling is too generic for a "Ogilvy is
+ * giving you a strategy" feel. These rules scope ONLY to .aiMsg so other
+ * Markdown consumers (reports, lead summaries, etc.) keep their look.
+ *
+ * Design rules:
+ *   - h2/h3/h4 get real type scale + Syne so sections have a "magazine"
+ *     hierarchy, not just bold body text.
+ *   - tables become "report tables" — rounded container, tinted header,
+ *     zebra rows, no internal borders, tabular-nums for data cells.
+ *   - lists get more breathing room and a tone-tinted bullet so the
+ *     reader can scan items as decisions rather than bullet salad.
+ */
+
+.aiMsg h1, .aiMsg h2, .aiMsg h3, .aiMsg h4 {
+  font-family: var(--font-syne), var(--font-display, inherit);
+  color: var(--text);
+  letter-spacing: -0.01em;
+}
+.aiMsg h1 {
+  font-size: 22px;
+  font-weight: 700;
+  margin: 28px 0 12px;
+  letter-spacing: -0.018em;
+}
+.aiMsg h1:first-child { margin-top: 6px; }
+.aiMsg h2 {
+  font-size: 18px;
+  font-weight: 600;
+  margin: 24px 0 10px;
+  padding-left: 11px;
+  position: relative;
+}
+/* Tone-tinted left mark for h2 — gives every section a subtle anchor the
+ * eye can latch onto when scanning a 1000-word strategy doc. */
+.aiMsg h2::before {
+  content: '';
+  position: absolute;
+  left: 0; top: 0.18em; bottom: 0.22em;
+  width: 3px;
+  border-radius: 2px;
+  background: linear-gradient(180deg, var(--accent) 0%, color-mix(in srgb, var(--accent) 40%, transparent) 100%);
+}
+.aiMsg h2:first-child { margin-top: 6px; }
+.aiMsg h3 {
+  font-size: 15.5px;
+  font-weight: 600;
+  margin: 18px 0 8px;
+}
+.aiMsg h4 {
+  font-size: 13px;
+  font-weight: 600;
+  margin: 14px 0 6px;
+  color: var(--text2);
+  letter-spacing: 0.01em;
+}
+
+/* ─── Tables — strategy report style ──────────────────────────── */
+.aiMsg table {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+  font-size: 13.5px;
+  margin: 14px 0 18px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  overflow: hidden;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+}
+.aiMsg thead {
+  /* Deeper accent tint — Round 1's 5% was barely visible. Now solid enough
+   * to read as a header band but still soft enough not to fight content. */
+  background: color-mix(in srgb, var(--accent) 11%, var(--bg2));
+}
+.aiMsg thead th {
+  padding: 11px 14px;
+  text-align: left;
+  font-weight: 600;
+  color: color-mix(in srgb, var(--accent) 60%, var(--text));
+  font-size: 11.5px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  border: none;
+  border-bottom: 1px solid color-mix(in srgb, var(--accent) 22%, var(--border));
+}
+.aiMsg tbody td {
+  padding: 10px 14px;
+  color: var(--text);
+  border: none;
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
+  vertical-align: top;
+  line-height: 1.55;
+  font-variant-numeric: tabular-nums;
+}
+.aiMsg tbody tr:last-child td { border-bottom: none; }
+/* Zebra on even rows — deeper than Round 1 (was 50% mix, now uses raw bg2
+ * so rows truly separate). */
+.aiMsg tbody tr:nth-child(even) td {
+  background: var(--bg2);
+}
+.aiMsg tbody tr:hover td {
+  background: color-mix(in srgb, var(--accent) 6%, var(--bg));
+}
+/* First column is the label column — slight emphasis + vertical separator
+ * from the value column. */
+.aiMsg tbody td:first-child {
+  font-weight: 500;
+  color: var(--text2);
+  border-right: 1px solid color-mix(in srgb, var(--border) 50%, transparent);
+}
+
+/* ─── Lists — looser, more readable ───────────────────────────── */
+.aiMsg ul, .aiMsg ol {
+  padding-left: 22px;
+  margin: 8px 0 14px;
+}
+.aiMsg li {
+  margin-bottom: 6px;
+  line-height: 1.6;
+}
+.aiMsg li::marker { color: var(--text3); }
+/* Tighten nested lists. */
+.aiMsg li > ul, .aiMsg li > ol {
+  margin: 4px 0 4px;
+}
+
+/* ─── HR — subtler section break ───────────────────────────── */
+.aiMsg hr {
+  border: none;
+  height: 1px;
+  background: linear-gradient(90deg, transparent 0%, var(--border) 20%, var(--border) 80%, transparent 100%);
+  margin: 22px 0;
+}
+
+/* ─── Blockquote — let the AI's "callouts" stand out ─────────── */
+.aiMsg blockquote {
+  border-left: 3px solid color-mix(in srgb, var(--accent) 40%, var(--border));
+  padding: 8px 0 8px 14px;
+  background: color-mix(in srgb, var(--accent) 3%, transparent);
+  border-radius: 0 6px 6px 0;
+  margin: 12px 0;
+  color: var(--text);
+  font-style: normal;
+}
+.aiMsg blockquote p:last-child { margin-bottom: 0; }
+
+/* ─── Pattern-driven paragraph treatments (OgilvyMarkdown.js) ───────
+ *
+ * These classes are emitted by OgilvyMarkdown's custom <p> renderer when
+ * the paragraph matches one of three patterns AI uses constantly but
+ * markdown grammar can't express:
+ *
+ *   .aiCallout      — paragraph starts with ✅/❌/⚠️/💡/🎯/🔥/📌
+ *   .aiMicroHeading — paragraph is just <strong>…:</strong> (section label)
+ *   .aiEmojiLead    — paragraph starts with some other emoji (bullet-like)
+ */
+
+/* Callout — small notification box with tone-tinted bg + left accent rule.
+ * Padding leaves the emoji where it naturally sits in the text, so we don't
+ * have to strip + relayout the emoji (which would require touching children
+ * during render — fragile). */
+.aiCallout {
+  display: flex;
+  align-items: flex-start;
+  gap: 4px;
+  padding: 10px 14px 10px 14px;
+  border-radius: 8px;
+  border-left: 3px solid var(--border);
+  margin: 10px 0 14px;
+  font-size: 14px;
+  line-height: 1.55;
+  background: var(--bg2);
+}
+.aiCallout_success {
+  background: color-mix(in srgb, var(--green, #3fb950) 8%, transparent);
+  border-left-color: var(--green, #3fb950);
+  color: color-mix(in srgb, var(--green, #3fb950) 20%, var(--text));
+}
+.aiCallout_warn {
+  background: color-mix(in srgb, var(--amber, #d29922) 9%, transparent);
+  border-left-color: var(--amber, #d29922);
+  color: color-mix(in srgb, var(--amber, #d29922) 25%, var(--text));
+}
+.aiCallout_danger {
+  background: color-mix(in srgb, var(--red, #f85149) 9%, transparent);
+  border-left-color: var(--red, #f85149);
+  color: color-mix(in srgb, var(--red, #f85149) 25%, var(--text));
+}
+.aiCallout_tip {
+  background: color-mix(in srgb, var(--accent) 7%, transparent);
+  border-left-color: var(--accent);
+  color: color-mix(in srgb, var(--accent) 20%, var(--text));
+}
+
+/* Micro-heading — bold paragraph ending with colon promoted to a real
+ * section label. Sits in for the missing `### h3` the AI keeps not writing.
+ * The inner <strong> still bolds; we tune the wrapper p. */
+.aiMicroHeading {
+  font-size: 14.5px;
+  margin: 22px 0 8px;
+  padding-left: 11px;
+  position: relative;
+  line-height: 1.4;
+}
+.aiMicroHeading::before {
+  content: '';
+  position: absolute;
+  left: 0; top: 0.22em; bottom: 0.26em;
+  width: 3px;
+  border-radius: 2px;
+  background: linear-gradient(180deg, var(--accent) 0%, color-mix(in srgb, var(--accent) 30%, transparent) 100%);
+}
+.aiMicroHeading strong {
+  font-family: var(--font-syne), var(--font-display, inherit);
+  font-weight: 600;
+  font-size: 15.5px;
+  letter-spacing: -0.005em;
+  color: var(--text);
+}
+
+/* Emoji-lead paragraph — hanging indent so emoji column-aligns and text
+ * wraps under itself, not under the emoji. Effectively makes "📱 ..." /
+ * "🤵 ..." / "🤖 ..." read as a checklist without needing real `<ul>`. */
+.aiEmojiLead {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  margin: 6px 0;
+  padding: 6px 10px;
+  background: var(--bg2);
+  border-radius: 6px;
+  line-height: 1.55;
+}
+.aiEmojiLead + .aiEmojiLead {
+  margin-top: -2px;            /* visually group consecutive items */
+  border-top-left-radius: 0;
+  border-top-right-radius: 0;
+}
+.aiEmojiLead:has(+ .aiEmojiLead) {
+  margin-bottom: 0;
+  border-bottom-left-radius: 0;
+  border-bottom-right-radius: 0;
+}
+
+/* Same emoji-lead treatment but for `<li>` form. Used when AI writes
+ * `- 📱 ...` instead of free-floating `📱 ...`. Removes the default disc
+ * marker so the emoji becomes the bullet. */
+.aiEmojiLi {
+  list-style: none;
+  margin-left: -22px;           /* cancel parent ul/ol padding-left */
+  padding: 6px 10px;
+  margin-top: 0;
+  margin-bottom: 2px;
+  background: var(--bg2);
+  border-radius: 6px;
+  line-height: 1.55;
+}
+.aiEmojiLi + .aiEmojiLi {
+  margin-top: -2px;
+  border-top-left-radius: 0;
+  border-top-right-radius: 0;
+}
+.aiEmojiLi:has(+ .aiEmojiLi) {
+  border-bottom-left-radius: 0;
+  border-bottom-right-radius: 0;
+}
+
 /* ─── Inline ad-creative tile (rendered for generate_ad_creative tool rows) ─── */
 .creativeTile {
   align-self: flex-start;
@@ -705,35 +1995,12 @@
 }
 @keyframes spin { to { transform: rotate(360deg); } }
 
-/* ─── Floating "导出" button (top-right of chat column) ──────── */
-.exportBtn {
-  position: absolute;
-  top: 14px;
-  right: 18px;
-  z-index: 2;
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 6px 11px;
-  font-size: 12px;
-  font-weight: 500;
-  color: var(--text2);
-  background: var(--bg);
-  border: 1px solid var(--border);
-  border-radius: 999px;
-  cursor: pointer;
-  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
-  transition: background 0.12s, border-color 0.12s, color 0.12s, box-shadow 0.12s;
-}
-.exportBtn:hover {
-  color: var(--accent);
-  border-color: var(--accent);
-  background: var(--accent-dim);
-  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04), 0 0 0 3px var(--accent-dim);
-}
-.exportBtn svg { flex-shrink: 0; }
-
-/* ─── Usage badge (bottom-right of chat column, Claude Code statusline 风格) ─── */
+/* ─── Usage badge (Claude Code statusline 风格) ───────────────────
+ * Was absolute-positioned bottom:56 right:18 — floating above the composer,
+ * looking like it belonged to the plan panel. Now lives inline inside the
+ * composer footer (next to the "Click-to-WhatsApp 投放" tagline). The
+ * .usageBadgeInline modifier strips position:absolute. Default (absolute)
+ * preserved in case any other surface still wants it floated. */
 .usageBadge {
   position: absolute;
   bottom: 56px;
@@ -750,9 +2017,33 @@
   background: var(--bg);
   border: 1px solid var(--border);
   border-radius: 999px;
-  cursor: default;
+  /* Now a <button> — pointer by default; user-select none so the numbers
+   * inside don't get accidentally selected when clicking. */
+  cursor: pointer;
   box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
   user-select: none;
+  font-family: inherit;
+}
+.usageBadgeInline {
+  /* Was `position: static`, which left the popover unanchored — its
+   * `position: absolute` walked up to the chat <main> as its containing
+   * block, so the popover flew to the wrong corner. `relative` re-anchors
+   * the popover to the badge itself (where it always belonged). */
+  position: relative;
+  bottom: auto;
+  right: auto;
+  font-size: 11px;
+  padding: 3px 9px;
+  background: transparent;
+  border-color: color-mix(in srgb, var(--border) 60%, transparent);
+  box-shadow: none;
+  /* Reset button defaults so it still looks like a chip, not a button. */
+  font-family: inherit;
+  cursor: pointer;
+}
+.usageBadgeInline:hover {
+  background: var(--bg2);
+  border-color: var(--border);
 }
 .usageBadge[data-tone="warn"]   { color: #b45309; border-color: #fed7aa; }
 .usageBadge[data-tone="danger"] { color: #b91c1c; border-color: #fecaca; background: #fef2f2; }
@@ -948,7 +2239,10 @@
 .composer {
   padding: 12px 0 24px;
   border-top: 1px solid var(--border);
-  background: var(--bg2);
+  /* Matches the main column bg so chat + composer read as one continuous
+   * focal surface; was var(--bg2) which made the composer feel like a
+   * separate "footer panel". */
+  background: var(--bg);
   flex-shrink: 0; /* never yield height to .chatScroll's growing content */
 }
 .composerInner {
@@ -965,11 +2259,12 @@
   border: 1px solid var(--border);
   border-radius: 22px;
   padding: 6px 6px 6px 8px;
-  transition: border-color 0.15s, box-shadow 0.15s;
+  transition: border-color 0.2s cubic-bezier(0.2, 0.8, 0.2, 1),
+              box-shadow 0.2s cubic-bezier(0.2, 0.8, 0.2, 1);
 }
 .composerBox:focus-within {
-  border-color: var(--border2);
-  box-shadow: 0 0 0 4px var(--accent-dim);
+  border-color: var(--accent);
+  box-shadow: 0 0 0 4px var(--accent-dim), 0 4px 18px -8px color-mix(in srgb, var(--accent) 30%, transparent);
 }
 .composerIconBtn {
   width: 34px; height: 34px;
@@ -1032,6 +2327,103 @@
   justify-content: center;
 }
 .attachRemove:hover { background: rgba(0,0,0,0.8); }
+
+/* ─── Pending doc-attachment chip(in composer)──────────────────
+ * Used when user uploads a PDF/Word/MD/TXT/CSV — text has been extracted
+ * server-side and lives inline in the chip. No thumbnail (docs don't have
+ * one); instead show 📄 + filename + char count. Same hover × as image
+ * tiles. */
+.docAttachChip {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px 8px 10px;
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  max-width: 280px;
+  min-width: 160px;
+  flex: 0 0 auto;
+}
+.docAttachIcon {
+  font-size: 22px;
+  line-height: 1;
+  flex-shrink: 0;
+}
+.docAttachMeta {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+  flex: 1;
+}
+.docAttachName {
+  font-size: 12.5px;
+  font-weight: 500;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.docAttachStatus {
+  font-size: 11px;
+  color: var(--text3);
+  font-family: var(--font-dm-mono), monospace;
+}
+.docAttachRemove {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  border: none;
+  background: rgba(0, 0, 0, 0.55);
+  color: white;
+  font-size: 12px;
+  line-height: 1;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.docAttachRemove:hover { background: rgba(0, 0, 0, 0.8); }
+
+/* ─── User message — doc-attachment chip(persisted history)────── */
+.userDocs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+.userDocChip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 10px 5px 8px;
+  background: rgba(255, 255, 255, 0.20);
+  border: 1px solid rgba(255, 255, 255, 0.30);
+  border-radius: 8px;
+  font-size: 12px;
+  color: white;
+  max-width: 220px;
+}
+.userDocIcon { flex-shrink: 0; }
+.userDocName {
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+.userDocChars {
+  color: rgba(255, 255, 255, 0.65);
+  flex-shrink: 0;
+  font-family: var(--font-dm-mono), monospace;
+  font-size: 11px;
+}
+
 .composerTextarea {
   flex: 1;
   resize: none;
@@ -1045,32 +2437,65 @@
   max-height: 200px;
   color: var(--text);
 }
+/* Send button — was var(--text) dark-on-light (looked like "off" by default).
+ * Now defaults to accent so it reads as "the primary action of this surface".
+ * Hover gets brighter + a soft glow ring to match the rest of accent CTAs
+ * (grid card hover, new-project hover, launch button). Disabled state stays
+ * the same opacity. */
 .composerBtn {
-  width: 34px; height: 34px;
+  width: 36px; height: 36px;
   border-radius: 50%;
   border: none;
-  background: var(--text);
-  color: var(--bg2);
+  background: var(--accent);
+  color: white;
   cursor: pointer;
   display: flex;
   align-items: center;
   justify-content: center;
   flex-shrink: 0;
-  transition: background 0.12s, opacity 0.12s;
+  transition: filter 0.12s, box-shadow 0.18s, transform 0.12s;
+  box-shadow: 0 2px 6px rgba(37, 99, 235, 0.22);
 }
-.composerBtn:hover { background: var(--accent); }
-.composerBtn:disabled { opacity: 0.3; cursor: not-allowed; }
+.composerBtn:hover {
+  filter: brightness(1.06);
+  box-shadow: 0 2px 8px rgba(37, 99, 235, 0.30), 0 0 0 4px var(--accent-dim);
+}
+.composerBtn:active { transform: scale(0.95); }
+.composerBtn:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+  filter: none;
+  box-shadow: none;
+}
 
 .composerFoot {
   margin-top: 10px;
   font-size: 11px;
   color: var(--text3);
-  text-align: center;
   display: flex;
   align-items: center;
-  justify-content: center;
-  gap: 6px;
+  /* Was justify-content:center (tagline in middle). Now tagline left,
+   * usage badge right — a real "status bar" pattern that uses the full
+   * composer width and gives the badge a logical home. */
+  justify-content: space-between;
+  gap: 12px;
   letter-spacing: 0.01em;
+}
+/* Two-line stack on the left of the foot:
+ *   tagline    ← Click-to-WhatsApp 投放 · 优化最大化 WhatsApp 对话数
+ *   hint       ← 上传图片 / PDF / Word / Markdown / TXT / CSV · 最大 50MB
+ * Badge stays single-line on the right via composerFoot's space-between. */
+.composerFootStack {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.composerFootText {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
 }
 .composerFootDot {
   width: 5px; height: 5px;
@@ -1078,6 +2503,14 @@
   background: var(--green);
   box-shadow: 0 0 0 3px var(--green-dim);
   flex-shrink: 0;
+}
+.composerFootHint {
+  /* Spec line — what the user can upload. Slightly lighter color so it
+   * reads as supporting info under the main tagline. */
+  color: color-mix(in srgb, var(--text3) 80%, var(--text2));
+  font-size: 10.5px;
+  letter-spacing: 0.01em;
+  padding-left: 11px; /* align with text after the green dot */
 }
 
 /* ─── WhatsApp Gate Card ───────────────────────────────────────── */
@@ -1125,10 +2558,12 @@
 }
 .gateBtnPrimary:hover { filter: brightness(1.05); background: var(--accent); }
 
-/* ─── Right panel (plan column) ─────────────────────────────────── */
+/* ─── Right panel (plan column) ───────────────────────────────────
+ * Same recede treatment as the creatives panel (var(--bg2)) — sides
+ * frame the focal chat column. */
 .planPanel {
   border-left: 1px solid var(--border);
-  background: var(--bg);
+  background: var(--bg2);
   min-width: 0;
   min-height: 0;
   height: 100%;
@@ -1348,7 +2783,10 @@
  */
 
 .planCard {
-  background: var(--bg2);
+  /* Was var(--bg2) — same as plan panel after Round 3, so the card boundary
+   * disappeared. Bumped to var(--bg) (whiter) so the card sits ON the panel
+   * as a clear product surface. Added a layered shadow to match grid cards. */
+  background: var(--bg);
   border: 1px solid var(--border);
   border-radius: 14px;
   overflow: hidden;      /* clip section borders to rounded corners */
@@ -1356,6 +2794,9 @@
   flex-shrink: 0;        /* don't collapse inside the flex-column panel */
   display: flex;
   flex-direction: column;
+  box-shadow:
+    0 1px 1px rgba(15, 23, 42, 0.02),
+    0 4px 14px -8px rgba(15, 23, 42, 0.06);
 }
 
 /* ── Head ── */
@@ -1809,6 +3250,9 @@
   align-items: center;
   justify-content: space-between;
   gap: 12px;
+  /* Was var(--bg2) — but the planCard itself is now var(--bg), so the
+   * footer needs to invert back to var(--bg2) for visual separation from
+   * the body. The contrast is now correct: card body = bg, foot = bg2. */
   background: var(--bg2);
 }
 .footStatus {
@@ -1826,11 +3270,22 @@
   flex-shrink: 0;
 }
 .statusDot_draft     { background: var(--text3); }
+.statusDot_ready     { background: var(--accent); }
 .statusDot_streaming { background: var(--accent); animation: pulse 1.4s ease-in-out infinite; }
 .statusDot_busy      { background: var(--amber); animation: pulse 1.4s ease-in-out infinite; }
-.statusDot_launched  { background: var(--green); }
+.statusDot_launched  {
+  background: var(--green);
+  animation: launchedDotHeartbeat 2.4s ease-in-out infinite;
+}
 .statusDot_paused    { background: var(--amber); }
-.statusDot_failed    { background: var(--red); }
+.statusDot_failed    {
+  background: var(--red);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--red) 35%, transparent);
+}
+.statusDot_archived  { background: transparent; border: 1px solid var(--border); }
+@media (prefers-reduced-motion: reduce) {
+  .statusDot_streaming, .statusDot_busy, .statusDot_launched { animation: none; }
+}
 @keyframes pulse {
   0%, 100% { opacity: 1; }
   50%      { opacity: 0.35; }
@@ -1919,12 +3374,44 @@
   cursor: zoom-out;
   padding: 40px;
 }
+/* Lightbox stage — flex column holding image + caption together so they
+ * scale as a unit and the caption sits visually attached to the image
+ * rather than floating at the bottom of the viewport. */
+.lightboxStage {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 16px;
+  max-width: 92vw;
+  max-height: 92vh;
+  cursor: default;
+}
 .lightboxImg {
-  max-width: 90vw;
-  max-height: 90vh;
+  max-width: 92vw;
+  /* Reserve vertical room for the caption below — image gets ≤72vh, caption
+   * box gets ≤14vh, gap 16. Total fits 92vh comfortably. */
+  max-height: 72vh;
   object-fit: contain;
   border-radius: 8px;
   box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+}
+.lightboxCaption {
+  max-width: min(720px, 88vw);
+  padding: 14px 18px;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.10);
+  border-radius: 10px;
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+  max-height: 14vh;
+  overflow-y: auto;
+}
+.lightboxCaptionText {
+  font-size: 13px;
+  line-height: 1.6;
+  color: rgba(255, 255, 255, 0.92);
+  letter-spacing: 0.01em;
+  user-select: text;
 }
 .lightboxClose {
   position: absolute;

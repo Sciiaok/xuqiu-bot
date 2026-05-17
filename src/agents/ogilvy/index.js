@@ -153,6 +153,51 @@ const TOOLS = [
                         interests: { type: 'array', items: { type: 'string' } },
                       },
                     },
+                    schedule: {
+                      type: 'object',
+                      description:
+                        '**可选**。投放时段（dayparting）。不填则 24h 全天投放。' +
+                        '多市场场景必须用 timezone_type=USER 以匹配各受众本地时间——例如菲律宾 PHT 08:00 与哈萨克斯坦 ALMT 08:00 是不同物理时刻。' +
+                        '⚠️ 单日预算 < $200 时不建议开 dayparting：Meta 学习期需要稳定流量样本，切窗会拉长 learning phase。',
+                      required: ['windows'],
+                      properties: {
+                        timezone_type: {
+                          type: 'string',
+                          enum: ['USER', 'ADVERTISER'],
+                          description: 'USER=按受众本地时间（多市场首选）；ADVERTISER=按广告账户时区。省略则默认 USER。',
+                        },
+                        windows: {
+                          type: 'array',
+                          minItems: 1,
+                          maxItems: 24,
+                          description: '时间窗数组。每窗一个 [开始-结束] 区间，多个时段就拆多窗。',
+                          items: {
+                            type: 'object',
+                            required: ['days', 'start_minute', 'end_minute'],
+                            properties: {
+                              days: {
+                                type: 'array',
+                                items: { type: 'integer', minimum: 0, maximum: 6 },
+                                minItems: 1,
+                                description: '生效星期数组，0=周日 1=周一 ... 6=周六。例：[1,2,3,4,5]=工作日。',
+                              },
+                              start_minute: {
+                                type: 'integer',
+                                minimum: 0,
+                                maximum: 1440,
+                                description: '当日起始分钟数 (0=00:00, 480=08:00, 720=12:00, 1020=17:00)。',
+                              },
+                              end_minute: {
+                                type: 'integer',
+                                minimum: 0,
+                                maximum: 1440,
+                                description: '当日结束分钟数，必须严格大于 start_minute。',
+                              },
+                            },
+                          },
+                        },
+                      },
+                    },
                     ads: {
                       type: 'array',
                       minItems: 1,
@@ -995,6 +1040,37 @@ function validatePlanShape(campaigns) {
         : [];
       if (countries.length === 0) {
         issues.push(`${sTag}.targeting.countries 为空，至少要 1 个 ISO-2 国家码（例 "SA","AE"）`);
+      }
+
+      // schedule (dayparting) — optional. If present, must shape-check or Meta
+      // rejects with a vague "Invalid parameter".
+      const sched = as?.schedule;
+      if (sched !== undefined && sched !== null) {
+        const tz = sched.timezone_type;
+        if (tz !== undefined && tz !== null && tz !== 'USER' && tz !== 'ADVERTISER') {
+          issues.push(`${sTag}.schedule.timezone_type 必须是 "USER" 或 "ADVERTISER"（收到：${JSON.stringify(tz)}）`);
+        }
+        const wins = Array.isArray(sched.windows) ? sched.windows : null;
+        if (!wins || wins.length === 0) {
+          issues.push(`${sTag}.schedule.windows 必须是非空数组；如果不需要 dayparting，整个 schedule 字段省略即可。`);
+        } else if (wins.length > 24) {
+          issues.push(`${sTag}.schedule.windows 最多 24 条（收到 ${wins.length}）。如果时段重叠请合并。`);
+        } else {
+          for (const [wi, w] of wins.entries()) {
+            const wTag = `${sTag}.schedule.windows[${wi}]`;
+            const days = Array.isArray(w?.days) ? w.days : null;
+            if (!days || days.length === 0 ||
+                !days.every(d => Number.isInteger(d) && d >= 0 && d <= 6)) {
+              issues.push(`${wTag}.days 必须是非空数组，元素 ∈ [0,6]（0=Sun..6=Sat）（收到：${JSON.stringify(w?.days)}）`);
+            }
+            const s = w?.start_minute, e = w?.end_minute;
+            const validS = Number.isInteger(s) && s >= 0 && s <= 1440;
+            const validE = Number.isInteger(e) && e >= 0 && e <= 1440;
+            if (!validS || !validE || s >= e) {
+              issues.push(`${wTag}.start_minute/end_minute 必须为 0-1440 整数且 start < end（收到 start=${JSON.stringify(s)}, end=${JSON.stringify(e)}）`);
+            }
+          }
+        }
       }
 
       const ads = Array.isArray(as?.ads) ? as.ads : [];
