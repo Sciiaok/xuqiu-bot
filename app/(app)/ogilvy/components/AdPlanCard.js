@@ -125,11 +125,21 @@ export default function AdPlanCard({
   // Any ad missing its image_url means Meta will reject the launch; fail-fast.
   const missingImages = adSets.some(as => (as.ads || []).some(ad => !ad.creative?.image_url));
   const isBusy = plan.status === 'staging' || plan.status === 'staged' || launchProgress?.phase;
-  const isLaunched = plan.status === 'launched';
-  const isPaused = plan.status === 'paused';
   const isFailed = plan.status === 'failed';
-  const liveOnMeta = isLaunched || isPaused;
-  const canLaunch = !streaming && !isBusy && !isLaunched && !isPaused && !missingImages;
+  // liveOnMeta:DB 这边 plan.status 是 launched/paused —— 意味着 campaign /
+  // adset / ad 已经在 Meta 创建过,pause / resume 行为成立。这层 gating 始终
+  // 走 DB(不是 Meta state),因为"对象是否存在于 Meta"是 DB 真相。
+  const liveOnMeta = plan.status === 'launched' || plan.status === 'paused';
+  const canLaunch = !streaming && !isBusy && !liveOnMeta && !missingImages;
+
+  // Pause / resume button choice 走 Meta 真实状态(同 deriveSessionStatus 的
+  // override 规则),不走 DB。否则会撕裂:用户在 Meta 后台直接 pause 一条
+  // campaign,我们这里状态 pill 显示"已暂停",按钮却还写着"暂停投放"。
+  // adStatuses.summary 没拿到时(刚启动还没第一批数据回来)退回 DB 状态。
+  const metaPaused = adStatuses?.summary?.worst === 'paused'
+    || (!adStatuses?.summary && plan.status === 'paused');
+  const showPauseBtn = liveOnMeta && !metaPaused;
+  const showResumeBtn = liveOnMeta && metaPaused;
 
   // Single source of truth for the status pill / dot. When live on Meta with
   // an effective_status summary, the helper overrides the configured label
@@ -306,7 +316,7 @@ export default function AdPlanCard({
           </button>
         )}
 
-        {!isLaunched && !isPaused && (
+        {!liveOnMeta && (
           <button
             className={`${s.launchBtn} ${!canLaunch ? s.launchBtnDisabled : ''}`}
             onClick={() => onLaunch?.()}
@@ -322,7 +332,7 @@ export default function AdPlanCard({
           </button>
         )}
 
-        {isLaunched && onPause && (
+        {showPauseBtn && onPause && (
           <button
             className={`${s.launchBtn} ${s.launchBtnSecondary} ${controlBusy ? s.launchBtnDisabled : ''}`}
             onClick={() => onPause()}
@@ -333,7 +343,7 @@ export default function AdPlanCard({
           </button>
         )}
 
-        {isPaused && onResume && (
+        {showResumeBtn && onResume && (
           <button
             className={`${s.launchBtn} ${controlBusy ? s.launchBtnDisabled : ''}`}
             onClick={() => onResume()}

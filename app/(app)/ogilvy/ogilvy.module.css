@@ -796,7 +796,31 @@
 .metricTileEmphasis .metricTileValue { color: var(--text); }
 .metricTileEmphasis .metricTileLabel { color: var(--text3); }
 
-/* Sub-row: 花费 / CTR / 单条对话 — secondary, hairline-bordered. */
+/* 转化 tile 做成跳转入口时的 link 版本。卡片本体 hover 已经有 elevation 反馈,
+ * 这里只对 label 加 underline-on-hover 暗示"可点",同时变成强调色让用户
+ * 一眼看出来这一格跟其他两格不一样。border-radius 让 hover 背景不撑出卡片
+ * 圆角。cursor: pointer 也是必须的(<a> 默认就有,这里写显式更稳)。 */
+.metricTileLink {
+  cursor: pointer;
+  text-decoration: none;
+  color: inherit;
+  border-radius: 6px;
+  transition: background-color 120ms ease, transform 120ms ease;
+}
+.metricTileLink:hover {
+  background-color: color-mix(in srgb, var(--accent, #2563eb) 8%, transparent);
+}
+.metricTileLink:hover .metricTileLabel {
+  color: var(--accent, #2563eb);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+.metricTileLink:focus-visible {
+  outline: 2px solid var(--accent, #2563eb);
+  outline-offset: 1px;
+}
+
+/* Sub-row: 花费 / CTR / 单条转化 — secondary, hairline-bordered. */
 .gridCardStatsSub {
   display: flex;
   flex-wrap: wrap;

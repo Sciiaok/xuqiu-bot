@@ -10,7 +10,13 @@ import {
 } from '../../../../src/meta-ads.service.js';
 
 const CACHE_TTL_SECONDS = 10 * 60; // 10 minutes
-const MESSAGING_CONVERSATION_ACTION = 'onsite_conversion.messaging_conversation_started';
+// Click-to-WhatsApp 转化的 action_type。Meta v21 通常返回带 7d 后缀的形态,
+// 偶尔账号配置下也会返回不带后缀的通用形态;两个都吃,同时出现时取 max
+// 避免双倍计数(两个值表达的是同一组转化的不同归因窗口视图)。
+const MESSAGING_CONVERSATION_ACTIONS = new Set([
+  'onsite_conversion.messaging_conversation_started_7d',
+  'onsite_conversion.messaging_conversation_started',
+]);
 
 function createEmptyTotals() {
   return {
@@ -75,14 +81,13 @@ function toInteger(value) {
 
 function extractConversations(actions) {
   if (!Array.isArray(actions)) return 0;
-
-  return actions.reduce((total, action) => {
-    if (action?.action_type !== MESSAGING_CONVERSATION_ACTION) {
-      return total;
-    }
-
-    return total + toInteger(action.value);
-  }, 0);
+  let best = 0;
+  for (const action of actions) {
+    if (!MESSAGING_CONVERSATION_ACTIONS.has(action?.action_type)) continue;
+    const v = toInteger(action.value);
+    if (v > best) best = v;
+  }
+  return best;
 }
 
 function buildInsightsUrl({ adAccountId, accessToken, days, adIds, timeIncrement, startDate, endDate }) {

@@ -539,12 +539,15 @@ function fillMissingDays(days, rangeDays) {
   const out = [];
   // yesterday-aligned 跟 lib/date-range-presets.js 一致:UI 显示的 N 天柱图
   // = 昨天 → 昨天-(N-1),不含今天。今天 LLM 数据通常还没归集完。
-  const today = new Date();
-  today.setUTCHours(0, 0, 0, 0);
-  const yesterday = new Date(today.getTime() - 24 * 60 * 60 * 1000);
+  // 必须按 Asia/Shanghai 算 yesterday + 补零 key,否则跟服务端 dayBucket(也按
+  // 北京日历日)对不上 —— map.get 全 miss,补出来全是空格。
+  const TZ = 'Asia/Shanghai';
+  const todayBjStr = new Date().toLocaleDateString('en-CA', { timeZone: TZ });
+  const yesterday = new Date(`${todayBjStr}T00:00:00+08:00`);
+  yesterday.setUTCDate(yesterday.getUTCDate() - 1);
   for (let i = rangeDays - 1; i >= 0; i--) {
     const d = new Date(yesterday.getTime() - i * 24 * 60 * 60 * 1000);
-    const key = d.toISOString().slice(0, 10);
+    const key = d.toLocaleDateString('en-CA', { timeZone: TZ });
     out.push(map.get(key) || { day: key, cost_usd: 0, count: 0 });
   }
   return out;

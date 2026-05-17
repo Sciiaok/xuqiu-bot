@@ -61,10 +61,15 @@ function bumpBucket(b, row) {
   b.count += 1;
 }
 
+// 按 Asia/Shanghai(北京)日历日分桶。直接切 ISO 字符串(原来的做法)等价于
+// 按 UTC 日历日 group —— 但 floor 是 2026-05-17 00:00 北京 = 2026-05-16 16:00
+// UTC,落在 UTC 05-16 16:00 ~ 23:59(= 北京 05-17 00:00~07:59)的记录虽然
+// 通过了 floor 过滤,却会被错误地归到"05-16"那根柱子上(用户视角不应存在)。
 function dayBucket(createdAt) {
-  // YYYY-MM-DD 切片;dayBucket 算的是 UTC 日历日。UI 把柱图横轴标签转成
-  // 本地展示即可,聚合本身与时区无关。
-  return String(createdAt || '').slice(0, 10);
+  if (!createdAt) return '';
+  const d = new Date(createdAt);
+  if (Number.isNaN(d.getTime())) return '';
+  return d.toLocaleDateString('en-CA', { timeZone: 'Asia/Shanghai' });
 }
 
 const LLM_PAGE = 1000;

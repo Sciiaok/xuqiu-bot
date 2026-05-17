@@ -1,6 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import Link from 'next/link';
 import { useSearchParams } from 'next/navigation';
 import s from './ogilvy.module.css';
 import WhatsAppGateCard from './components/WhatsAppGateCard';
@@ -580,6 +581,17 @@ function SessionGridCard({ session, productLineName, metrics, metricsLoading, ad
   const isLaunched = session.status === 'launched' || session.status === 'paused';
   const hasMetrics = metrics?.has_data;
 
+  // 转化卡片做成跳转入口 —— 直接深链 leadhub,把 session 的所有 meta_ad_id
+  // 作为筛选条件传过去。meta_ad_ids 在 plan_json 里已经 precomputed(同 metrics
+  // route 用的那份),不用再走 /api/ads/by-campaign 解析一遍。无 ad_id 或转化
+  // 数为 0 时 href=null,MetricTile 退回普通 div,不出链接样式。
+  const metaAdIds = Array.isArray(session.plan_json?.meta_ad_ids)
+    ? session.plan_json.meta_ad_ids.filter(Boolean)
+    : [];
+  const inquiriesHref = metaAdIds.length > 0 && (metrics?.conversations || 0) > 0
+    ? `/leadhub?${metaAdIds.map(id => `metaAdId=${encodeURIComponent(id)}`).join('&')}`
+    : null;
+
   return (
     <div
       role="button"
@@ -658,7 +670,14 @@ function SessionGridCard({ session, productLineName, metrics, metricsLoading, ad
             <div className={s.gridCardStats}>
               <MetricTile label="展示" value={metrics.impressions} format="int" />
               <MetricTile label="点击" value={metrics.clicks} format="int" />
-              <MetricTile label="对话" value={metrics.conversations} format="int" emphasis />
+              <MetricTile
+                label="转化"
+                value={metrics.conversations}
+                format="int"
+                emphasis
+                href={inquiriesHref}
+                hint={inquiriesHref ? '在 LeadHub 查看这些询盘 →' : null}
+              />
             </div>
             {/* Spend + CTR live on a sub-row, smaller, since they're derived. */}
             <div className={s.gridCardStatsSub}>
@@ -672,7 +691,7 @@ function SessionGridCard({ session, productLineName, metrics, metricsLoading, ad
               {metrics.conversations > 0 && metrics.spend > 0 && (
                 <>
                   <span className={s.gridCardStatsSubSep}>·</span>
-                  <span>单条对话 <strong>${(metrics.spend / metrics.conversations).toFixed(2)}</strong></span>
+                  <span>单条转化 <strong>${(metrics.spend / metrics.conversations).toFixed(2)}</strong></span>
                 </>
               )}
             </div>
@@ -733,16 +752,33 @@ function HeaderStat({ n, label, tone }) {
  *   - format 'usd' → $1.23 with two decimals
  *   - emphasis    → highlights "对话" (the success metric the user cares about)
  */
-function MetricTile({ label, value, format, emphasis }) {
+function MetricTile({ label, value, format, emphasis, href, hint }) {
   const formatted = format === 'usd'
     ? `$${Number(value || 0).toFixed(2)}`
     : (Number(value || 0)).toLocaleString();
-  return (
-    <div className={`${s.metricTile} ${emphasis ? s.metricTileEmphasis : ''}`}>
+  const className = `${s.metricTile} ${emphasis ? s.metricTileEmphasis : ''} ${href ? s.metricTileLink : ''}`;
+  const inner = (
+    <>
       <div className={s.metricTileValue}>{formatted}</div>
       <div className={s.metricTileLabel}>{label}</div>
-    </div>
+    </>
   );
+  if (href) {
+    // stopPropagation:卡片本体 onClick / onKeyDown 都会打开 modal,链接得自己
+    // 截住事件 —— 不然点(或键盘 Enter)这块会同时打开 modal + 跳 leadhub。
+    return (
+      <Link
+        href={href}
+        className={className}
+        title={hint}
+        onClick={(e) => e.stopPropagation()}
+        onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') e.stopPropagation(); }}
+      >
+        {inner}
+      </Link>
+    );
+  }
+  return <div className={className}>{inner}</div>;
 }
 
 // ── Pure helpers ──────────────────────────────────────────────
