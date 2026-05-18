@@ -15,7 +15,7 @@
  * read LLM API keys from process.env.
  */
 import { config } from './config.js';
-import { calcCostUsd } from './llm-pricing.js';
+import { calcCostUsd, calcWhisperCostUsd } from './llm-pricing.js';
 import { getSupabaseAdmin } from '../lib/supabase-admin.js';
 
 // ── Model Registry ───────────────────────────────────────────────────
@@ -72,6 +72,17 @@ function logLlmCall({
   costUsdOverride,
 }) {
   const model = responseModel || models?.[0];
+
+  // 埋点丢失告警 —— 不抛错，但在 stderr 留 stack trace，方便回滚 grep 出来。
+  // 历史上 30d 窗口里有 334 行 call_site='unknown'/tenant_id=null，没人发现源头。
+  // 这里有 stack 之后下一次发生时能直接定位。
+  if (!callSite) {
+    console.warn(`[llm-client] callSite missing for ${method} ${model} — stack:\n${new Error().stack}`);
+  }
+  if (!tenantId) {
+    console.warn(`[llm-client] tenantId missing for ${method} ${model} call_site=${callSite || 'unknown'} — stack:\n${new Error().stack}`);
+  }
+
   const costUsd = costUsdOverride != null ? Number(costUsdOverride) : calcCostUsd({
     model,
     promptTokens,
@@ -428,25 +439,60 @@ const openrouter = {
 
   // ── OpenAI-compatible endpoints (embeddings + image generation) ────
   embeddings: {
-    async create(params, options) {
+    // meta = { tenantId, callSite, sessionId?, productLine?, timeout? }
+    // 2026-05-18：补埋点。embedding 没 completion，没 cache，usage 只有
+    // prompt_tokens。失败也按 messages.* 的口径写 finish_reason='error:...'，
+    // 这样 admin/llm-usage 能看到、能算延迟、能从均值里剔除。
+    async create(params, meta = {}) {
       if (!config.openrouter.baseURL || !config.openrouter.apiKey) {
         throw new Error('[llm-client] OPENROUTER_API_KEY required for embeddings');
       }
-      const timeoutMs = options?.timeout || 60_000;
-      const response = await fetchWithTimeout(
-        `${config.openrouter.baseURL}/embeddings`,
-        {
-          method: 'POST',
-          headers: openrouterHeaders(),
-          body: JSON.stringify(params),
-        },
-        timeoutMs,
-      );
-      if (!response.ok) {
-        const body = await response.text();
-        throw new Error(`OpenRouter embeddings error ${response.status}: ${body}`);
+      const timeoutMs = meta.timeout || 60_000;
+      const t0 = Date.now();
+      const logMeta = {
+        method: 'embeddings',
+        provider: 'openrouter',
+        models: params.model ? [params.model] : [],
+        tenantId: meta.tenantId,
+        callSite: meta.callSite,
+        sessionId: meta.sessionId,
+        productLine: meta.productLine,
+      };
+      try {
+        const response = await fetchWithTimeout(
+          `${config.openrouter.baseURL}/embeddings`,
+          {
+            method: 'POST',
+            headers: openrouterHeaders(),
+            body: JSON.stringify(params),
+          },
+          timeoutMs,
+        );
+        if (!response.ok) {
+          const body = await response.text();
+          throw new Error(`OpenRouter embeddings error ${response.status}: ${body}`);
+        }
+        const result = await response.json();
+        logLlmCall({
+          ...logMeta,
+          responseModel: result.model || params.model,
+          finishReason: 'embedding_returned',
+          promptTokens: result.usage?.prompt_tokens || 0,
+          completionTokens: 0,
+          cacheCreationInputTokens: 0,
+          cacheReadInputTokens: 0,
+          durationMs: Date.now() - t0,
+        });
+        return result;
+      } catch (err) {
+        logLlmCall({
+          ...logMeta,
+          responseModel: params.model,
+          finishReason: `error: ${err.message}`,
+          durationMs: Date.now() - t0,
+        });
+        throw err;
       }
-      return response.json();
     },
   },
   chat: {
@@ -482,27 +528,68 @@ const openrouter = {
 const openai = {
   audio: {
     transcriptions: {
-      async create(params) {
+      // 2026-05-18：补埋点 + 强制 verbose_json 拿到 duration。
+      // Whisper 按音频秒数计费（$0.006/min），caller 不知道音频时长，由
+      // OpenAI response.duration 给出。强行覆盖 response_format（caller
+      // 用 transcription.text，verbose_json 仍包含 text 字段，向后兼容）。
+      // meta = { tenantId, callSite, sessionId?, productLine? }
+      async create(params, meta = {}) {
+        const t0 = Date.now();
+        const logMeta = {
+          method: 'transcription',
+          provider: 'openai',
+          models: [params.model],
+          tenantId: meta.tenantId,
+          callSite: meta.callSite,
+          sessionId: meta.sessionId,
+          productLine: meta.productLine,
+        };
+
         const form = new FormData();
         form.append('file', params.file);
         form.append('model', params.model);
+        form.append('response_format', 'verbose_json');
         if (params.language) form.append('language', params.language);
         if (params.prompt) form.append('prompt', params.prompt);
 
-        const response = await fetchWithTimeout(
-          `https://api.openai.com/v1/audio/transcriptions`,
-          {
-            method: 'POST',
-            headers: { Authorization: `Bearer ${config.openai.apiKey}` },
-            body: form,
-          },
-          60_000,
-        );
-        if (!response.ok) {
-          const body = await response.text();
-          throw new Error(`OpenAI transcription error ${response.status}: ${body}`);
+        try {
+          const response = await fetchWithTimeout(
+            `https://api.openai.com/v1/audio/transcriptions`,
+            {
+              method: 'POST',
+              headers: { Authorization: `Bearer ${config.openai.apiKey}` },
+              body: form,
+            },
+            60_000,
+          );
+          if (!response.ok) {
+            const body = await response.text();
+            throw new Error(`OpenAI transcription error ${response.status}: ${body}`);
+          }
+          const result = await response.json();
+          const audioSeconds = Number(result.duration) || 0;
+          logLlmCall({
+            ...logMeta,
+            responseModel: params.model,
+            finishReason: 'transcription_returned',
+            promptTokens: 0,
+            completionTokens: 0,
+            cacheCreationInputTokens: 0,
+            cacheReadInputTokens: 0,
+            durationMs: Date.now() - t0,
+            costUsdOverride: calcWhisperCostUsd({ audioSeconds }),
+          });
+          return result;
+        } catch (err) {
+          logLlmCall({
+            ...logMeta,
+            responseModel: params.model,
+            finishReason: `error: ${err.message}`,
+            durationMs: Date.now() - t0,
+            costUsdOverride: 0,
+          });
+          throw err;
         }
-        return response.json();
       },
     },
   },

@@ -7,13 +7,18 @@
 import { generateEmbedding, translateToEnglish, detectLanguage } from './kb-search.service.js';
 import supabase from '../lib/supabase.js';
 
-async function embedQuestions(questions, tenantId) {
+// meta = { tenantId, productLineId } — tenant + product line 必传，用于埋点
+async function embedQuestions(questions, meta) {
   // Use joined questions for the embedding so similar phrasings cluster.
   const joined = (questions || []).filter(Boolean).join(' || ');
   if (!joined) return null;
   const lang = detectLanguage(joined);
-  const englishText = lang === 'en' ? joined : await translateToEnglish(joined, tenantId);
-  return generateEmbedding(englishText);
+  const englishText = lang === 'en' ? joined : await translateToEnglish(joined, meta.tenantId);
+  return generateEmbedding(englishText, {
+    tenantId: meta.tenantId,
+    callSite: 'kb.embedding.qa-snippet',
+    productLine: meta.productLineId,
+  });
 }
 
 export async function listQaSnippets({ tenantId, productLineId, includeInactive = false }) {
@@ -35,7 +40,7 @@ export async function createQaSnippet({ tenantId, productLineId, questions, answ
   const cleanQuestions = questions.map(q => String(q).trim()).filter(Boolean);
   if (cleanQuestions.length === 0) throw new Error('questions[] cannot be all empty');
 
-  const embedding = await embedQuestions(cleanQuestions, tenantId);
+  const embedding = await embedQuestions(cleanQuestions, { tenantId, productLineId });
   const { data, error } = await supabase
     .from('kb_qa_snippets')
     .insert({
@@ -61,7 +66,7 @@ export async function updateQaSnippet(snippetId, updates, ctx) {
     const cleanQuestions = updates.questions.map(q => String(q).trim()).filter(Boolean);
     if (cleanQuestions.length === 0) throw new Error('questions[] cannot be all empty');
     updates.questions = cleanQuestions;
-    embedding = await embedQuestions(cleanQuestions, ctx.tenantId);
+    embedding = await embedQuestions(cleanQuestions, { tenantId: ctx.tenantId, productLineId: ctx.productLineId });
   }
 
   const patch = {};

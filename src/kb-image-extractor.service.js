@@ -270,7 +270,9 @@ async function processOneImage(ctx, img, idx) {
   let captionEmbedding = null;
   try {
     if (enrichedCaption) {
-      captionEmbedding = await generateEmbedding(enrichedCaption);
+      captionEmbedding = await generateEmbedding(enrichedCaption, {
+        tenantId, callSite: 'kb.embedding.caption', productLine: productLineId,
+      });
     }
   } catch {
     // Embedding is best-effort — kb_assets row should still land

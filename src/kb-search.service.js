@@ -9,11 +9,14 @@ import supabase from '../lib/supabase.js';
 
 // ── Embedding ────────────────────────────────────────────────────────
 
-async function generateEmbedding(text) {
+// meta = { tenantId, callSite, productLine?, sessionId? }
+// 2026-05-18：必须传 meta —— admin/llm-usage 按 callSite × tenant 聚合 embedding 成本。
+// callSite 没给的话退回 'kb.embedding.unknown'，并在 llm-client 里 console.warn 报出来。
+async function generateEmbedding(text, meta = {}) {
   const response = await openrouter.embeddings.create({
     model: MODELS.EMBEDDING,
     input: text,
-  });
+  }, meta);
   return response.data[0].embedding;
 }
 

@@ -44,8 +44,13 @@ export async function POST(request) {
       const contentEn = (kp.content_en && String(kp.content_en).trim())
         || (sourceLang !== 'en' ? await translateToEnglish(content, ctx.tenantId) : content);
 
-      const embeddingEn = await generateEmbedding(contentEn);
-      const embeddingOrig = sourceLang !== 'en' ? await generateEmbedding(content) : embeddingEn;
+      const embedMeta = {
+        tenantId: ctx.tenantId,
+        callSite: 'kb.embedding.teach',
+        productLine: agent.product_line,
+      };
+      const embeddingEn = await generateEmbedding(contentEn, embedMeta);
+      const embeddingOrig = sourceLang !== 'en' ? await generateEmbedding(content, embedMeta) : embeddingEn;
 
       const { error } = await supabase
         .from('kb_knowledge_points')

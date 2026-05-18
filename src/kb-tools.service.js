@@ -381,7 +381,9 @@ export async function lookupPolicy({
   const layers = topic && TOPIC_TO_LAYERS[topic] ? TOPIC_TO_LAYERS[topic] : null;
   const queryLang = detectLanguage(searchQuery);
   const englishQuery = queryLang === 'en' ? searchQuery : await translateToEnglish(searchQuery, tenantId);
-  const embedding = await generateEmbedding(englishQuery);
+  const embedding = await generateEmbedding(englishQuery, {
+    tenantId, callSite: 'kb.embedding.search', productLine: productLineId,
+  });
 
   const { data, error } = await supabase.rpc('search_kb_knowledge_en', {
     p_tenant_id: tenantId,
@@ -423,7 +425,9 @@ export async function lookupPolicy({
 async function searchQaSnippet({ tenantId, productLineId, query, destinationCountry }) {
   const queryLang = detectLanguage(query);
   const englishQuery = queryLang === 'en' ? query : await translateToEnglish(query, tenantId);
-  const embedding = await generateEmbedding(englishQuery);
+  const embedding = await generateEmbedding(englishQuery, {
+    tenantId, callSite: 'kb.embedding.qa-snippet-lookup', productLine: productLineId,
+  });
 
   const { data, error } = await supabase.rpc('search_kb_qa_snippets', {
     p_tenant_id: tenantId,
@@ -501,7 +505,9 @@ export async function findAsset({
   if (naturalLanguage) {
     const queryLang = detectLanguage(naturalLanguage);
     const englishQuery = queryLang === 'en' ? naturalLanguage : await translateToEnglish(naturalLanguage, tenantId);
-    const embedding = await generateEmbedding(englishQuery);
+    const embedding = await generateEmbedding(englishQuery, {
+      tenantId, callSite: 'kb.embedding.find-asset', productLine: productLineId,
+    });
 
     // Manual nearest-neighbor (no RPC for this — small table, OK for now)
     const { data: candidates } = await supabase

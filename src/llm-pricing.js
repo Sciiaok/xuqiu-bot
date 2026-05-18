@@ -38,9 +38,10 @@ const PRICES = {
 const UNKNOWN = { input: 0, output: 0 };
 
 // 图片生成模型按 "每张" 计费，跟 token 表分开。Ogilvy 创意生成走的两条路径:
-//   - gpt-image-2 1024×1024 high quality:OpenAI token 计费 (input $8/M +
-//     output $30/M)。OpenAI calculator 给的 1024×1024 high ≈ $0.211/张，
-//     这里用 flat fee 近似落表（精确值要从 response.usage 推，目前未接）。
+//   - gpt-image-2 1024×1024 high quality:OpenAI token 计费 (image input $10/M
+//     + image output $40/M + text input $5/M)。当 response.usage 有
+//     input_tokens / output_tokens 时走 calcImageTokenCostUsd 精确算;否则
+//     回落到 flat fee $0.21/张近似。
 //   - gpt-image-1:已下线,留 key 兜底历史 aigc_assets 行的成本回看。
 //   - google/gemini-3.1-flash-image-preview:OpenRouter per-image flat ~$0.03。
 // 跟 token 表一样,模型版本/计费档变了直接改这里。
@@ -48,6 +49,13 @@ const IMAGE_PRICES_PER_CALL = {
   'gpt-image-2': 0.21,
   'gpt-image-1': 0.17,
   'google/gemini-3.1-flash-image-preview': 0.03,
+};
+
+// gpt-image-2 token 单价（USD per 1K tokens）。来自 OpenAI gpt-image-2 pricing 页。
+// 注意:input_tokens 是文本+图片合一,OpenAI 已经按混合扣费,这里就按统一 input 价。
+// 精度上比 $0.21 flat 大致改善 ±20%(简单短 prompt 可能 $0.10,复杂场景 $0.40+)。
+const IMAGE_TOKEN_PRICES = {
+  'gpt-image-2': { input: 0.005, output: 0.040 },
 };
 
 // Anthropic prompt cache 折扣系数（相对 input 价）。
@@ -118,4 +126,34 @@ function lookupImagePrice(model) {
  */
 export function calcImageCostUsd({ model, count = 1 }) {
   return Math.round(lookupImagePrice(model) * count * 1_000_000) / 1_000_000;
+}
+
+/**
+ * gpt-image-2 风格的 token 计费精确算法。如果 OpenAI Images API response.usage
+ * 给到 input_tokens / output_tokens，走这条算精确成本（含文本 prompt + 参考图
+ * 编码 + 输出图 token），否则 caller 自己回落到 calcImageCostUsd flat fee。
+ *
+ * 命中不到 IMAGE_TOKEN_PRICES 表的 model 直接回 null —— 让 caller 区分"没价位"
+ * 和"算出来 0"，再决定走 flat fee 兜底。
+ */
+export function calcImageTokenCostUsd({ model, inputTokens = 0, outputTokens = 0 }) {
+  if (!model) return null;
+  let price = IMAGE_TOKEN_PRICES[model];
+  if (!price) {
+    for (const key of Object.keys(IMAGE_TOKEN_PRICES)) {
+      if (model.startsWith(key)) { price = IMAGE_TOKEN_PRICES[key]; break; }
+    }
+  }
+  if (!price) return null;
+  const cost = (inputTokens / 1000) * price.input + (outputTokens / 1000) * price.output;
+  return Math.round(cost * 1_000_000) / 1_000_000;
+}
+
+// Whisper（OpenAI 直连）按音频时长计费：$0.006 / 分钟。
+// caller 传 audioSeconds（来自 verbose_json response.duration）后算精确成本。
+const WHISPER_PRICE_PER_SEC = 0.006 / 60;
+
+export function calcWhisperCostUsd({ audioSeconds = 0 }) {
+  const s = Number(audioSeconds) || 0;
+  return Math.round(s * WHISPER_PRICE_PER_SEC * 1_000_000) / 1_000_000;
 }

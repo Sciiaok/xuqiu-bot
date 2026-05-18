@@ -76,7 +76,8 @@
 
 .statRow {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  /* 4 cards 时正好 4 列；5 张（含 prompt cache）时 5 列等分，不再换行成孤儿。 */
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
   gap: 12px;
   margin-bottom: 28px;
 }
@@ -204,6 +205,39 @@
   margin-left: 6px;
 }
 
+/* 数据健康提示卡 —— 介于 .error（红）和 .empty（中性灰）之间的"黄牌"色调 */
+.healthBanner {
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--accent, #2d6cdf);
+  border-radius: var(--rl);
+  padding: 12px 16px;
+  margin-bottom: 20px;
+}
+.healthTitle {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--text2);
+  margin-bottom: 6px;
+}
+.healthList {
+  margin: 0;
+  padding-left: 18px;
+  font-size: 12px;
+  line-height: 1.7;
+  color: var(--text);
+}
+.healthList code {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text2);
+  background: var(--bg);
+  padding: 1px 5px;
+  border-radius: 3px;
+}
+
 .shareCell {
   display: inline-flex;
   align-items: center;
@@ -267,6 +301,7 @@
 .numCol { text-align: right; font-variant-numeric: tabular-nums; }
 .cost { font-weight: 600; }
 .cellMain { font-weight: 500; }
+.errCell { color: var(--red, #c44230); font-weight: 500; }
 
 .footnote {
   font-size: 11px;

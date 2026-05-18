@@ -484,9 +484,10 @@ async function processKnowledgePoint(ctx, docId, layer, point) {
   }
 
   // Generate embeddings for both versions
+  const embedMeta = { tenantId, callSite: 'kb.embedding.upload', productLine: productLineId };
   const [embeddingOriginal, embeddingEn] = await Promise.all([
-    generateEmbedding(originalContent),
-    sourceLang !== 'en' ? generateEmbedding(englishContent) : generateEmbedding(originalContent),
+    generateEmbedding(originalContent, embedMeta),
+    sourceLang !== 'en' ? generateEmbedding(englishContent, embedMeta) : generateEmbedding(originalContent, embedMeta),
   ]);
 
   // Store —— 同时写 agent_id (旧 NOT NULL 列) 和 product_line_id (新查询路径)

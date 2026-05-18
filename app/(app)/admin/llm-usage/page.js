@@ -107,7 +107,12 @@ export default function AdminLlmUsagePage() {
         <h1 className={s.title}>大模型成本</h1>
         <p className={s.subtitle}>
           按租户 / 调用部位 / 模型 / Provider 聚合的 token 用量、成本与延迟（仅 founder 可见）。
-          成本读自 <code>llm_usage_logs.cost_usd</code>，由 <code>src/llm-pricing.js</code> 静态价表在写入时估算，仅供参考。
+          时间桶按 <code>Asia/Shanghai</code>。成本读自 <code>llm_usage_logs.cost_usd</code>，
+          由 <code>src/llm-pricing.js</code> 静态价表在写入时估算，<b>仅供参考</b>。
+          <br />
+          覆盖范围：chat completions / embeddings / Whisper / 图片生成
+          （embeddings + Whisper 自 2026-05-18 起埋点；之前的历史调用不在表里）。
+          延迟均值 / 百分位 / 单次成本均剔除失败调用（<code>finish_reason</code> 以 <code>error:</code> 开头）。
         </p>
       </div>
 
@@ -134,16 +139,24 @@ export default function AdminLlmUsagePage() {
         <div className={s.empty}>该时间范围内没有 LLM 调用记录。</div>
       ) : (
         <>
+          <DataHealthBanner totals={data.totals} notes={data.notes} />
+
           <div className={s.statRow}>
             <Stat
               label="总成本 (USD)"
               value={fmtUsd(data.totals.cost_usd)}
-              sub={`${fmtUsd(data.totals.cost_per_day)} / 天 · ${fmtUsd(data.totals.avg_cost_per_call)} / 调用`}
+              sub={
+                data.totals.successful_calls > 0
+                  ? `${fmtUsd(data.totals.cost_per_day)} / 天 · ${fmtUsd(data.totals.avg_cost_per_call)} / 成功调用`
+                  : `${fmtUsd(data.totals.cost_per_day)} / 天 · 无成功调用`
+              }
             />
             <Stat
               label="调用次数"
               value={fmtInt(data.totals.calls)}
-              sub={`${data.totals.calls_per_day.toLocaleString()} / 天 · ${data.range.days} 天窗口`}
+              sub={data.totals.errors > 0
+                ? `${data.totals.calls_per_day.toLocaleString()} / 天 · 失败 ${fmtInt(data.totals.errors)}`
+                : `${data.totals.calls_per_day.toLocaleString()} / 天 · ${data.range.days} 天窗口`}
             />
             <Stat
               label="Token 总量"
@@ -154,7 +167,7 @@ export default function AdminLlmUsagePage() {
               label="平均延迟"
               value={fmtMs(data.totals.avg_duration_ms)}
               sub={data.totals.sampled_for_latency
-                ? `p50 ${fmtMs(data.totals.p50_duration_ms)} · p95 ${fmtMs(data.totals.p95_duration_ms)}`
+                ? `p50 ${fmtMs(data.totals.p50_duration_ms)} · p95 ${fmtMs(data.totals.p95_duration_ms)}（仅成功）`
                 : '无延迟数据'}
             />
             {data.hasCacheCols && (() => {
@@ -165,7 +178,7 @@ export default function AdminLlmUsagePage() {
                 <Stat
                   label="Prompt cache"
                   value={`${fmtCompact(read)} 命中`}
-                  sub={`${fmtCompact(write)} 写入 · 命中率 ${fmtPct(totalInput ? read / totalInput : 0)}`}
+                  sub={`${fmtCompact(write)} 写入 · 输入命中率 ${fmtPct(totalInput ? read / totalInput : 0)}`}
                 />
               );
             })()}
@@ -191,6 +204,7 @@ export default function AdminLlmUsagePage() {
             )}
             rowKey={r => r.tenant_id || '__null__'}
             showCache={data.hasCacheCols}
+            showErrors={data.totals.errors > 0}
           />
 
           <BreakdownTable
@@ -200,6 +214,7 @@ export default function AdminLlmUsagePage() {
             renderFirst={r => <code>{r.call_site}</code>}
             rowKey={r => r.call_site}
             showCache={data.hasCacheCols}
+            showErrors={data.totals.errors > 0}
           />
 
           <BreakdownTable
@@ -209,6 +224,7 @@ export default function AdminLlmUsagePage() {
             renderFirst={r => <code>{r.model}</code>}
             rowKey={r => r.model}
             showCache={data.hasCacheCols}
+            showErrors={data.totals.errors > 0}
           />
 
           <BreakdownTable
@@ -218,12 +234,14 @@ export default function AdminLlmUsagePage() {
             renderFirst={r => <code>{r.provider}</code>}
             rowKey={r => r.provider}
             showCache={data.hasCacheCols}
+            showErrors={data.totals.errors > 0}
           />
 
           <div className={s.footnote}>
             采样 {fmtInt(data.sampleSize)} 行
             {data.capped && <span className={s.warn}>（已达 50000 行上限，结果可能不完整）</span>}
             · 延迟样本 {fmtInt(data.totals.sampled_for_latency)} 行
+            {data.totals.errors > 0 && <> · 失败 {fmtInt(data.totals.errors)} 行（不参与延迟/单次成本均值）</>}
           </div>
         </>
       )}
@@ -231,7 +249,46 @@ export default function AdminLlmUsagePage() {
   );
 }
 
-function BreakdownTable({ title, rows, firstHeader, renderFirst, rowKey, showCache = false }) {
+// 数据健康提示：把 API notes 里能提示用户「数据不完整」的信息显式展示，
+// 避免用户把这个看板当作权威账单。
+function DataHealthBanner({ totals, notes }) {
+  if (!notes) return null;
+  const issues = [];
+  if (totals.errors > 0) {
+    issues.push(
+      <li key="err">
+        {fmtInt(totals.errors)} 条失败调用（占 {fmtPct(totals.calls ? totals.errors / totals.calls : 0)}）。
+        延迟均值 / p50 / p95 / 单次成本 已自动剔除。
+      </li>
+    );
+  }
+  if (notes.untagged_call_site_rows > 0 || notes.untagged_tenant_rows > 0) {
+    issues.push(
+      <li key="untagged">
+        未埋点：{fmtInt(notes.untagged_call_site_rows)} 行无 <code>call_site</code>，
+        {fmtInt(notes.untagged_tenant_rows)} 行无 <code>tenant_id</code>
+        （在「按租户」「按调用部位」表中分别落到 <code>(未埋点 / tenant 已删除)</code> 和 <code>unknown</code> 行）。
+      </li>
+    );
+  }
+  if (Array.isArray(notes.untracked_paths) && notes.untracked_paths.length > 0) {
+    issues.push(
+      <li key="untracked">
+        未追踪路径：{notes.untracked_paths.map(p => <code key={p} style={{ marginRight: 6 }}>{p}</code>)}
+        — 这部分成本不计入本看板。
+      </li>
+    );
+  }
+  if (issues.length === 0) return null;
+  return (
+    <div className={s.healthBanner}>
+      <div className={s.healthTitle}>数据完整性提示</div>
+      <ul className={s.healthList}>{issues}</ul>
+    </div>
+  );
+}
+
+function BreakdownTable({ title, rows, firstHeader, renderFirst, rowKey, showCache = false, showErrors = false }) {
   if (!rows || rows.length === 0) {
     return (
       <Section title={title}>
@@ -247,12 +304,13 @@ function BreakdownTable({ title, rows, firstHeader, renderFirst, rowKey, showCac
             <tr>
               <th>{firstHeader}</th>
               <th className={s.numCol}>调用</th>
+              {showErrors && <th className={s.numCol} title="finish_reason 以 error: 开头">失败</th>}
               <th className={s.numCol}>Prompt</th>
               <th className={s.numCol}>Completion</th>
               {showCache && <th className={s.numCol} title="cache_read / cache_creation tokens">Cache R/W</th>}
-              <th className={s.numCol}>平均延迟</th>
+              <th className={s.numCol} title="仅含成功调用（剔除 error 行）">平均延迟</th>
               <th className={s.numCol}>成本</th>
-              <th className={s.numCol}>占比</th>
+              <th className={s.numCol} title="本行成本 / 总成本">成本占比</th>
             </tr>
           </thead>
           <tbody>
@@ -260,6 +318,11 @@ function BreakdownTable({ title, rows, firstHeader, renderFirst, rowKey, showCac
               <tr key={rowKey(r)}>
                 <td>{renderFirst(r)}</td>
                 <td className={s.numCol}>{fmtInt(r.calls)}</td>
+                {showErrors && (
+                  <td className={`${s.numCol} ${r.errors > 0 ? s.errCell : ''}`}>
+                    {r.errors > 0 ? fmtInt(r.errors) : '—'}
+                  </td>
+                )}
                 <td className={s.numCol}>{fmtInt(r.prompt_tokens)}</td>
                 <td className={s.numCol}>{fmtInt(r.completion_tokens)}</td>
                 {showCache && (
@@ -296,15 +359,17 @@ function ShareBar({ value }) {
 function TrendTooltip({ active, payload }) {
   if (!active || !payload || !payload[0]) return null;
   const p = payload[0].payload;
-  // 'YYYY-MM-DD HH:00' (UTC) → 本地时间展示；'YYYY-MM-DD' 保持原样
-  const label = p.hour
-    ? new Date(p.hour.replace(' ', 'T') + ':00Z').toLocaleString()
-    : p.day;
+  // 桶 key 由后端按 Asia/Shanghai 切出，直接以字面值展示（不要再 toLocaleString，
+  // 否则浏览器时区不为 +08:00 时会二次偏移，标签和 X 轴对不上）。
+  const label = p.hour ? `${p.hour} (CN)` : p.day;
   return (
     <div className={s.tooltip}>
       <div className={s.tooltipDay}>{label}</div>
       <div className={s.tooltipRow}><span>成本</span><b>{fmtUsd(p.cost_usd)}</b></div>
       <div className={s.tooltipRow}><span>调用</span><b>{fmtInt(p.calls)}</b></div>
+      {p.errors > 0 && (
+        <div className={s.tooltipRow}><span>失败</span><b>{fmtInt(p.errors)}</b></div>
+      )}
       <div className={s.tooltipRow}><span>Tokens</span><b>{fmtCompact((p.prompt_tokens || 0) + (p.completion_tokens || 0))}</b></div>
     </div>
   );

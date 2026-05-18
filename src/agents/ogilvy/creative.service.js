@@ -12,7 +12,7 @@
 import { config } from '../../config.js';
 import supabase from '../../../lib/supabase.js';
 import { logLlmCall } from '../../llm-client.js';
-import { calcImageCostUsd } from '../../llm-pricing.js';
+import { calcImageCostUsd, calcImageTokenCostUsd } from '../../llm-pricing.js';
 
 // gpt-image-2 + quality=high + 1024×1024 经常 >2min,120s 不够会兜到 Gemini。
 const FETCH_TIMEOUT = 300_000;
@@ -120,7 +120,10 @@ async function callOpenAIImages(model, prompt, refUrls) {
   const b64 = data.data?.[0]?.b64_json;
   if (!b64) throw new Error('No image returned by model');
 
-  return { imageBuffer: Buffer.from(b64, 'base64'), model };
+  // gpt-image-2 自 2026-Q1 起在 response.usage 里返回 input_tokens / output_tokens
+  // (含参考图编码 + prompt 文本 + 输出图 token)。caller 据此走 token-based 精确
+  // 计费,否则回落 flat fee $0.21/张近似。
+  return { imageBuffer: Buffer.from(b64, 'base64'), model, usage: data.usage || null };
 }
 
 // ── Fallback: Gemini via OpenRouter chat/completions ────────────────────
@@ -162,7 +165,8 @@ async function callOpenRouterFallback(model, prompt, refUrls) {
   }
   if (!b64) throw new Error('No image returned by model');
 
-  return { imageBuffer: Buffer.from(b64, 'base64'), model: data.model || model };
+  // Gemini via OpenRouter 透传 usage 比较随机;有就用,没有 caller 回落 flat fee。
+  return { imageBuffer: Buffer.from(b64, 'base64'), model: data.model || model, usage: data.usage || null };
 }
 
 // Filter reference URLs by supported extensions so the model doesn't reject the request.
@@ -276,17 +280,24 @@ export async function generateAdCreative({
     const t0 = Date.now();
     try {
       const generated = await caller(model, prompt, refs);
-      // 图片成本落表 —— 单价表见 llm-pricing.js#IMAGE_PRICES_PER_CALL。
-      // 从 2026-05-17 起 ogilvy session 强绑 product_line,这里直接挂上,
-      // /product-lines/[id]/cost-stats 能看到本产品线的图片生成开销。
+      // 图片成本落表 —— gpt-image-2 在 response.usage 里给到 input_tokens/
+      // output_tokens 时走 token 精确计费(含参考图编码+输出图 token),没有
+      // 就回落 flat fee(单价见 llm-pricing.js#IMAGE_PRICES_PER_CALL)。
+      // 从 2026-05-17 起 ogilvy session 强绑 product_line,/product-lines/[id]
+      // /cost-stats 能看到本产品线的图片生成开销。
+      const inputTokens = Number(generated.usage?.input_tokens) || 0;
+      const outputTokens = Number(generated.usage?.output_tokens) || 0;
+      const tokenCost = (inputTokens || outputTokens)
+        ? calcImageTokenCostUsd({ model: generated.model, inputTokens, outputTokens })
+        : null;
       logLlmCall({
         method: 'image.edit',
         provider: label === 'primary' ? 'openai' : 'openrouter',
         models: [generated.model],
         responseModel: generated.model,
         finishReason: 'image_returned',
-        promptTokens: 0,
-        completionTokens: 0,
+        promptTokens: inputTokens,
+        completionTokens: outputTokens,
         cacheCreationInputTokens: 0,
         cacheReadInputTokens: 0,
         durationMs: Date.now() - t0,
@@ -294,7 +305,9 @@ export async function generateAdCreative({
         callSite: 'ogilvy.image-gen',
         sessionId,
         productLine,
-        costUsdOverride: calcImageCostUsd({ model: generated.model, count: 1 }),
+        costUsdOverride: tokenCost != null
+          ? tokenCost
+          : calcImageCostUsd({ model: generated.model, count: 1 }),
       });
       const asset = await saveAssetToStorage({
         imageBuffer: generated.imageBuffer,

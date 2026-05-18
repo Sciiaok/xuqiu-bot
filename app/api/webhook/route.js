@@ -66,6 +66,7 @@ async function buildQueuedMessage({
   metaToken,
   isTakeover,
   logger,
+  tenantId,
 }) {
   const messageType = message.type;
   const referral = normalizeReferral(message.referral);
@@ -84,7 +85,7 @@ async function buildQueuedMessage({
     };
 
     try {
-      userMessage = await transcribeWhatsAppAudio(mediaId, metaToken);
+      userMessage = await transcribeWhatsAppAudio(mediaId, metaToken, { tenantId });
       if (!userMessage) {
         if (!isTakeover) {
           await sendMessage(waId, "Sorry, I couldn't understand the voice message. Could you please type your message?", phoneNumberId);
@@ -236,6 +237,7 @@ export async function POST(request) {
           phoneNumberId,
           metaToken,
           isTakeover,
+          tenantId,
           logger: scopedLogger.child({ wa_message_id: message.id, message_type: message.type }),
         });
 
