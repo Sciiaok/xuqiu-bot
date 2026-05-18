@@ -1,61 +1,111 @@
+// ══════════════════════════════════════════════════════════════════════
+// OpenAI 直连价目表 —— 手动维护的静态常量
+// ══════════════════════════════════════════════════════════════════════
+//
+// 这一段是整个 llm-pricing.js 里唯一**必须手维护**的部分。OpenAI 不在
+// response 里返回 cost (跟 OpenRouter 的 usage.cost 不一样),只给 token
+// 数 / 音频秒数。下面常量 × API 返回的用量 = 我们落表的成本。
+//
+// OpenAI 涨/降价时 → 改下面的数字、把 `LAST_VERIFIED` 改成当天日期、commit。
+// 别的地方不用动 (calcWhisperCostUsd / calcImageTokenCostUsd 自己引这些常量)。
+//
+// 校准来源:
+//   - Whisper:       https://openai.com/api/pricing/ (Audio models 段)
+//   - gpt-image-2:   https://openai.com/api/pricing/ (Image generation 段)
+// 价表 last verified: 2026-05-18
+
+/** Whisper 转录,USD / 音频分钟。乘以 (response.duration 秒数 / 60) 落表。 */
+export const OPENAI_WHISPER_USD_PER_MIN = 0.006;
+
+/** gpt-image-2 token 计费,USD / 百万 tokens (= 直接对照 OpenAI 价格页数字)。
+ *  input = 文本 prompt + 参考图编码合一;output = 生成图 token。 */
+export const OPENAI_GPT_IMAGE_2_INPUT_USD_PER_M_TOKENS = 5;
+export const OPENAI_GPT_IMAGE_2_OUTPUT_USD_PER_M_TOKENS = 40;
+
+/** Flat fallback,USD / 张图。仅在 response.usage 缺 input/output_tokens 时
+ *  兜底。1024×1024 high quality 实测均值。usage 正常返回时不走这条。 */
+export const OPENAI_GPT_IMAGE_2_FLAT_USD_PER_IMAGE = 0.21;
+
+/** gpt-image-1 (已下线),USD / 张图。留 key 兜底历史 aigc_assets 行的成本回看。 */
+export const OPENAI_GPT_IMAGE_1_FLAT_USD_PER_IMAGE = 0.17;
+
+// ══════════════════════════════════════════════════════════════════════
+// 下方价表 = OpenRouter 路径的 fallback (正常情况下 usage.cost 直接落表)
+// ══════════════════════════════════════════════════════════════════════
+//
 // LLM 模型定价表 —— 单位 USD per 1K tokens
 //
-// 维护说明：模型上线/调价时直接改这里。命中不到的 model 走 UNKNOWN 兜底
-// （cost = 0），不影响调用，只是统计成本会偏低 —— 看到「成本=0 但调用数>0」
-// 就该来补这张表。
+// **重要变更(2026-05-18)**: 这张表现在是 *fallback only*。常规路径下,llm-client
+// 走 `usage: { include: true }` 让 OpenRouter 在 response.usage.cost 里返回它实
+// 际向账户扣的费,直接落表(=控制台 Spend By Model 完全一致)。这张价表只在
+// 以下场景触发:
+//   - OpenRouter 没返 usage.cost(老 provider / 缓存层 bug / 错误返回)
+//   - OpenAI 直连(Whisper / gpt-image-2)拿不到 usage.cost
+// 看 admin/llm-usage 日志里 cost_source='local-pricing-table' 的比例,正常应在
+// 个位数百分比内;持续高的话查 OpenRouter 健康状况。
 //
-// Anthropic prompt caching 三段计费（OpenRouter 透传 Anthropic 字段）：
-//   - 常规 prompt_tokens          ：input 价
-//   - cache_creation_input_tokens ：input × 1.25（写入 cache）
-//   - cache_read_input_tokens     ：input × 0.10（命中 cache）
-// 价格参考 OpenRouter pricing 页面（人工抄录，会随时间漂移）。
+// 维护说明: 模型上线/调价时**仍要更**,但不再是关键路径。校准方式见 README:
+//   1. curl https://openrouter.ai/api/v1/models | jq '.data[] | select(.id=="X") | .pricing'
+//   2. OpenRouter 的 pricing 是 per-token 单位,乘 1000 转成 per-1K-tokens 写进来
+//
+// Anthropic prompt caching 三段计费(OpenRouter 透传 Anthropic 字段):
+//   - 常规 prompt_tokens          : input 价
+//   - cache_creation_input_tokens : input × 1.25 (写入 cache, 5min TTL)
+//   - cache_read_input_tokens     : input × 0.10 (命中 cache)
 
-// 注意：请求方 model 字符串和 OpenRouter 返回的 model 字符串可能不一样。
-// 比如请求 'anthropic/claude-haiku-4.5'，返回的是 'anthropic/claude-4.5-haiku-20251001'。
-// 价表两种 key 都得覆盖，否则 cost 会被错算成 0。
+// 注意:请求方 model 字符串和 OpenRouter 返回的 model 字符串可能不一样。
+// 比如请求 'anthropic/claude-haiku-4.5',返回的是 'anthropic/claude-4.5-haiku-20251001'。
+// 价表两种 key 都得覆盖,否则 cost 会被错算成 0。
+//
+// 校准来源(2026-05-18): OpenRouter /api/v1/models
 const PRICES = {
   // Anthropic —— 请求方 key
   'anthropic/claude-sonnet-4.6':           { input: 0.003,   output: 0.015   },
-  'anthropic/claude-haiku-4.5':            { input: 0.00080, output: 0.00400 },
-  // Anthropic —— OpenRouter 实际返回的 key（数字在前 + 日期后缀）
+  'anthropic/claude-haiku-4.5':            { input: 0.001,   output: 0.005   },
+  // Anthropic —— OpenRouter 实际返回的 key(数字在前 + 日期后缀)
   'anthropic/claude-4.6-sonnet':           { input: 0.003,   output: 0.015   },
-  'anthropic/claude-4.5-haiku':            { input: 0.00080, output: 0.00400 },
+  'anthropic/claude-4.5-haiku':            { input: 0.001,   output: 0.005   },
 
   // OpenAI
-  'openai/gpt-5.4':                        { input: 0.00250, output: 0.01000 },
-  'openai/gpt-5.4-mini':                   { input: 0.00015, output: 0.00060 },
+  'openai/gpt-5.4':                        { input: 0.0025,  output: 0.015   },
+  'openai/gpt-5.4-mini':                   { input: 0.00075, output: 0.0045  },
+  'openai/gpt-5.4-nano':                   { input: 0.0002,  output: 0.00125 },
 
   // MiniMax
-  'minimax/minimax-m2.7':                  { input: 0.00030, output: 0.00130 },
+  'minimax/minimax-m2.7':                  { input: 0.000279, output: 0.0012 },
 
-  // Embeddings (OpenAI)
+  // Embeddings (OpenAI via OpenRouter or direct)
   'text-embedding-3-small':                { input: 0.00002, output: 0       },
 
-  // Whisper (OpenAI direct, 按分钟计价；近似换算这里跳过 —— 调用量小)
+  // Whisper (OpenAI direct, 按分钟计价; calcWhisperCostUsd 走 audioSeconds)
   'whisper-1':                             { input: 0,       output: 0       },
 };
 
 const UNKNOWN = { input: 0, output: 0 };
 
-// 图片生成模型按 "每张" 计费，跟 token 表分开。Ogilvy 创意生成走的两条路径:
-//   - gpt-image-2 1024×1024 high quality:OpenAI token 计费 (image input $10/M
-//     + image output $40/M + text input $5/M)。当 response.usage 有
-//     input_tokens / output_tokens 时走 calcImageTokenCostUsd 精确算;否则
-//     回落到 flat fee $0.21/张近似。
-//   - gpt-image-1:已下线,留 key 兜底历史 aigc_assets 行的成本回看。
-//   - google/gemini-3.1-flash-image-preview:OpenRouter per-image flat ~$0.03。
-// 跟 token 表一样,模型版本/计费档变了直接改这里。
+// 图片生成模型按 "每张" 计费的 fallback 兜底表。Ogilvy 创意生成正常情况下:
+//   1. gpt-image-2 (OpenAI 直连): response.usage.input_tokens/output_tokens
+//      走 calcImageTokenCostUsd 精确算(含参考图编码 + 输出图 token)
+//   2. google/gemini-3.1-flash-image-preview (OpenRouter): response.usage.cost
+//      是 OpenRouter 权威账单值(从 2026-05-18 起走 usage.include 拿到)
+//   3. usage 缺失才回这张表
+// gpt-image-{1,2} 价格 = 文件顶部 OPENAI_GPT_IMAGE_{1,2}_FLAT_USD_PER_IMAGE 常量。
+// Gemini 的 1.34 是 OpenRouter 路径兜底 (实际走 usage.cost);留这是为了 cost
+// 不会算成 0,但精度不重要。
 const IMAGE_PRICES_PER_CALL = {
-  'gpt-image-2': 0.21,
-  'gpt-image-1': 0.17,
-  'google/gemini-3.1-flash-image-preview': 0.03,
+  'gpt-image-2': OPENAI_GPT_IMAGE_2_FLAT_USD_PER_IMAGE,
+  'gpt-image-1': OPENAI_GPT_IMAGE_1_FLAT_USD_PER_IMAGE,
+  'google/gemini-3.1-flash-image-preview': 1.34,
 };
 
-// gpt-image-2 token 单价（USD per 1K tokens）。来自 OpenAI gpt-image-2 pricing 页。
-// 注意:input_tokens 是文本+图片合一,OpenAI 已经按混合扣费,这里就按统一 input 价。
-// 精度上比 $0.21 flat 大致改善 ±20%(简单短 prompt 可能 $0.10,复杂场景 $0.40+)。
+// gpt-image-2 token 单价(USD per 1K tokens) —— 由文件顶部 OPENAI_* 常量
+// (per-million 单位,直接对照 OpenAI 价格页)/ 1000 得到。
+// 注意: input_tokens 是文本+图片合一,OpenAI 已经按混合扣费,这里就按统一 input 价。
 const IMAGE_TOKEN_PRICES = {
-  'gpt-image-2': { input: 0.005, output: 0.040 },
+  'gpt-image-2': {
+    input: OPENAI_GPT_IMAGE_2_INPUT_USD_PER_M_TOKENS / 1000,
+    output: OPENAI_GPT_IMAGE_2_OUTPUT_USD_PER_M_TOKENS / 1000,
+  },
 };
 
 // Anthropic prompt cache 折扣系数（相对 input 价）。
@@ -149,9 +199,10 @@ export function calcImageTokenCostUsd({ model, inputTokens = 0, outputTokens = 0
   return Math.round(cost * 1_000_000) / 1_000_000;
 }
 
-// Whisper（OpenAI 直连）按音频时长计费：$0.006 / 分钟。
-// caller 传 audioSeconds（来自 verbose_json response.duration）后算精确成本。
-const WHISPER_PRICE_PER_SEC = 0.006 / 60;
+// Whisper(OpenAI 直连)按音频时长计费,单价来自文件顶部
+// OPENAI_WHISPER_USD_PER_MIN 常量。caller 传 audioSeconds (来自 verbose_json
+// response.duration)后算精确成本。
+const WHISPER_PRICE_PER_SEC = OPENAI_WHISPER_USD_PER_MIN / 60;
 
 export function calcWhisperCostUsd({ audioSeconds = 0 }) {
   const s = Number(audioSeconds) || 0;

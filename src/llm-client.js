@@ -68,8 +68,16 @@ function logLlmCall({
   method, provider, models, responseModel, tools, toolChoice, finishReason,
   promptTokens, completionTokens, cacheCreationInputTokens, cacheReadInputTokens,
   durationMs, tenantId, callSite, sessionId, productLine,
-  // 给图片生成这种非 token 计费用 —— 由 caller 算好直接落表，跳过 calcCostUsd。
+  // 由 caller 直接给定的成本(USD)。两类用途:
+  //   1. OpenRouter response 里 usage.cost (权威账单值,与控制台 spend 一致)
+  //   2. 图片生成 / Whisper 这类非 token 计费 —— caller 按音频秒数或图片张数算
+  // 优先级: costUsdOverride > calcCostUsd 本地价表 fallback。
   costUsdOverride,
+  // 该次成本的来源标识。落入 JSON 日志,部署后能从日志 grep "cost_source=local"
+  // 看哪些调用还在用本地价表(说明 OpenRouter 没返 usage.cost,或走的是 OpenAI
+  // 直连)。值范围: 'openrouter' (response.usage.cost) / 'openai-direct-calc'
+  // (Whisper/image 本地公式) / 'local-pricing-table' (兜底)。
+  costSource,
 }) {
   const model = responseModel || models?.[0];
 
@@ -83,13 +91,21 @@ function logLlmCall({
     console.warn(`[llm-client] tenantId missing for ${method} ${model} call_site=${callSite || 'unknown'} — stack:\n${new Error().stack}`);
   }
 
-  const costUsd = costUsdOverride != null ? Number(costUsdOverride) : calcCostUsd({
-    model,
-    promptTokens,
-    completionTokens,
-    cacheCreationInputTokens,
-    cacheReadInputTokens,
-  });
+  let costUsd;
+  let resolvedSource;
+  if (costUsdOverride != null) {
+    costUsd = Number(costUsdOverride);
+    resolvedSource = costSource || 'override';
+  } else {
+    costUsd = calcCostUsd({
+      model,
+      promptTokens,
+      completionTokens,
+      cacheCreationInputTokens,
+      cacheReadInputTokens,
+    });
+    resolvedSource = 'local-pricing-table';
+  }
 
   console.log(JSON.stringify({
     ts: new Date().toISOString(),
@@ -109,6 +125,7 @@ function logLlmCall({
     cache_creation_input_tokens: cacheCreationInputTokens || 0,
     cache_read_input_tokens: cacheReadInputTokens || 0,
     cost_usd: costUsd,
+    cost_source: resolvedSource,
     duration_ms: durationMs,
     tenant_id: tenantId || null,
     call_site: callSite || null,
@@ -120,9 +137,9 @@ function logLlmCall({
   // callSite 缺失时仍记一行，便于发现哪些调用点没埋点。
   //
   // 兼容性：cache_*_tokens 列在 2026-05-13 migration 才加上、session_id 在
-  // 2026-05-15 migration 才加上、product_line 在 2026-05-16 加上。任一 migration
-  // 没 apply 的环境，PostgREST 会回 42703 undefined_column；这时退回到 baseRow
-  // 老 schema，不丢日志。
+  // 2026-05-15 migration 才加上、product_line 在 2026-05-16 加上、cost_source
+  // 在 2026-05-18 加上。任一 migration 没 apply 的环境，PostgREST 会回 42703
+  // undefined_column；这时退回到 baseRow 老 schema，不丢日志。
   try {
     const baseRow = {
       tenant_id: tenantId || null,
@@ -141,6 +158,7 @@ function logLlmCall({
       cache_read_input_tokens: cacheReadInputTokens || 0,
       session_id: sessionId || null,
       product_line: productLine || null,
+      cost_source: resolvedSource,
     };
     const admin = getSupabaseAdmin();
     admin.from('llm_usage_logs').insert(rowWithExtras).then(({ error }) => {
@@ -157,6 +175,15 @@ function logLlmCall({
   } catch (err) {
     console.error('[llm-client] persist usage threw:', err?.message);
   }
+}
+
+// 让 OpenRouter 在 response.usage 里返回它实际向账户扣的费 (usage.cost)。
+// 这是和 OpenRouter 控制台 "Spend By Model" 完全一致的权威值,免去本地维护
+// 价表的全部漂移风险(模型涨/降价、cache 折扣调整、合作折扣等都自动跟上)。
+// 缺失或 false 时 OpenRouter 不会附 cost 字段,llm-client 回落到 calcCostUsd
+// 本地价表 fallback。幂等;尊重 caller 自带的 usage 形状。
+function withUsageInclude(params) {
+  return { ...params, usage: { ...(params.usage || {}), include: true } };
 }
 
 // Anthropic prompt-caching 的 usage 字段在 OpenRouter 透传时藏在不同位置，
@@ -373,7 +400,7 @@ const openrouter = {
         {
           method: 'POST',
           headers: openrouterHeaders(),
-          body: JSON.stringify(params),
+          body: JSON.stringify(withUsageInclude(params)),
         },
         120_000,
       );
@@ -384,6 +411,9 @@ const openrouter = {
       const result = await response.json();
 
       const { cacheCreate, cacheRead } = extractCacheTokens(result.usage);
+      // result.usage.cost 是 OpenRouter 给账户实际扣费的权威值。在则走 override
+      // 路径,本地价表彻底闭口;不在(老 provider / API 缓存层 bug)才回落 calcCost。
+      const orCost = result.usage?.cost;
       logLlmCall({
         ...logMeta,
         responseModel: result.model,
@@ -393,6 +423,8 @@ const openrouter = {
         cacheCreationInputTokens: cacheCreate,
         cacheReadInputTokens: cacheRead,
         durationMs: Date.now() - t0,
+        costUsdOverride: orCost != null ? orCost : null,
+        costSource: orCost != null ? 'openrouter' : null,
       });
       return result;
     },
@@ -415,10 +447,13 @@ const openrouter = {
         productLine: meta.productLine,
       };
 
-      const streamObj = createStream(params);
+      // SSE 最末一个 usage chunk 也带 cost(usage.include 已注入)。createStream
+      // 内部的 if(chunk.usage) usage=chunk.usage 会捕获到最终 usage 对象。
+      const streamObj = createStream(withUsageInclude(params));
 
       streamObj.finalMessage().then(result => {
         const { cacheCreate, cacheRead } = extractCacheTokens(result.usage);
+        const orCost = result.usage?.cost;
         logLlmCall({
           ...logMeta,
           responseModel: result.model,
@@ -428,6 +463,8 @@ const openrouter = {
           cacheCreationInputTokens: cacheCreate,
           cacheReadInputTokens: cacheRead,
           durationMs: Date.now() - t0,
+          costUsdOverride: orCost != null ? orCost : null,
+          costSource: orCost != null ? 'openrouter' : null,
         });
       }).catch(err => {
         logLlmCall({ ...logMeta, finishReason: `error: ${err.message}`, durationMs: Date.now() - t0 });
@@ -464,7 +501,7 @@ const openrouter = {
           {
             method: 'POST',
             headers: openrouterHeaders(),
-            body: JSON.stringify(params),
+            body: JSON.stringify(withUsageInclude(params)),
           },
           timeoutMs,
         );
@@ -473,6 +510,7 @@ const openrouter = {
           throw new Error(`OpenRouter embeddings error ${response.status}: ${body}`);
         }
         const result = await response.json();
+        const orCost = result.usage?.cost;
         logLlmCall({
           ...logMeta,
           responseModel: result.model || params.model,
@@ -481,6 +519,8 @@ const openrouter = {
           completionTokens: 0,
           cacheCreationInputTokens: 0,
           cacheReadInputTokens: 0,
+          costUsdOverride: orCost != null ? orCost : null,
+          costSource: orCost != null ? 'openrouter' : null,
           durationMs: Date.now() - t0,
         });
         return result;
@@ -578,6 +618,9 @@ const openai = {
             cacheReadInputTokens: 0,
             durationMs: Date.now() - t0,
             costUsdOverride: calcWhisperCostUsd({ audioSeconds }),
+            // OpenAI 直连,响应里不带 cost。按音频秒数 × $0.006/min 本地公式算。
+            // 如果未来 Whisper 涨/降价,需要同步改 calcWhisperCostUsd。
+            costSource: 'openai-direct-calc',
           });
           return result;
         } catch (err) {
@@ -587,6 +630,7 @@ const openai = {
             finishReason: `error: ${err.message}`,
             durationMs: Date.now() - t0,
             costUsdOverride: 0,
+            costSource: 'openai-direct-calc',
           });
           throw err;
         }

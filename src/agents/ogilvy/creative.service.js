@@ -143,6 +143,10 @@ async function callOpenRouterFallback(model, prompt, refUrls) {
     body: JSON.stringify({
       model,
       messages: [{ role: 'user', content: promptContent }],
+      // 拿 OpenRouter 实际扣的钱(usage.cost),caller 用它直接落表,绕过本地
+      // 价表(Gemini Flash Image 是 token 计费,我们的 IMAGE_PRICES_PER_CALL
+      // flat $0.03 跟实际差 ~45 倍)。
+      usage: { include: true },
     }),
     signal: AbortSignal.timeout(FETCH_TIMEOUT),
   });
@@ -280,16 +284,31 @@ export async function generateAdCreative({
     const t0 = Date.now();
     try {
       const generated = await caller(model, prompt, refs);
-      // 图片成本落表 —— gpt-image-2 在 response.usage 里给到 input_tokens/
-      // output_tokens 时走 token 精确计费(含参考图编码+输出图 token),没有
-      // 就回落 flat fee(单价见 llm-pricing.js#IMAGE_PRICES_PER_CALL)。
+      // 图片成本落表,三档优先级:
+      //   1. OpenRouter fallback 路径(Gemini): response.usage.cost 是账单权威值
+      //   2. OpenAI 直连(gpt-image-2): 拿 response.usage 里的 input_tokens/
+      //      output_tokens,走 calcImageTokenCostUsd 精确算(含参考图编码 + 输出图)
+      //   3. 兜底: flat per-call 价(见 llm-pricing.js#IMAGE_PRICES_PER_CALL)
       // 从 2026-05-17 起 ogilvy session 强绑 product_line,/product-lines/[id]
       // /cost-stats 能看到本产品线的图片生成开销。
+      const orCost = generated.usage?.cost;  // OpenRouter authoritative
       const inputTokens = Number(generated.usage?.input_tokens) || 0;
       const outputTokens = Number(generated.usage?.output_tokens) || 0;
       const tokenCost = (inputTokens || outputTokens)
         ? calcImageTokenCostUsd({ model: generated.model, inputTokens, outputTokens })
         : null;
+      let costUsdOverride;
+      let costSource;
+      if (orCost != null) {
+        costUsdOverride = orCost;
+        costSource = 'openrouter';
+      } else if (tokenCost != null) {
+        costUsdOverride = tokenCost;
+        costSource = 'openai-direct-calc';
+      } else {
+        costUsdOverride = calcImageCostUsd({ model: generated.model, count: 1 });
+        costSource = 'local-pricing-table';
+      }
       logLlmCall({
         method: 'image.edit',
         provider: label === 'primary' ? 'openai' : 'openrouter',
@@ -305,9 +324,8 @@ export async function generateAdCreative({
         callSite: 'ogilvy.image-gen',
         sessionId,
         productLine,
-        costUsdOverride: tokenCost != null
-          ? tokenCost
-          : calcImageCostUsd({ model: generated.model, count: 1 }),
+        costUsdOverride,
+        costSource,
       });
       const asset = await saveAssetToStorage({
         imageBuffer: generated.imageBuffer,
