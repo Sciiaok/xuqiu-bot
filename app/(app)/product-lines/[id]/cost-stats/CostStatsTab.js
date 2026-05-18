@@ -119,6 +119,7 @@ export default function CostStatsTab({ productLineId }) {
         customFrom={customFrom} setCustomFrom={setCustomFrom}
         customTo={customTo} setCustomTo={setCustomTo}
         view={view} setView={setView}
+        effectiveRange={null}
       />
       <div className={s.emptyBox}>请选择自定义日期范围</div>
     </div>
@@ -159,6 +160,7 @@ export default function CostStatsTab({ productLineId }) {
         customFrom={customFrom} setCustomFrom={setCustomFrom}
         customTo={customTo} setCustomTo={setCustomTo}
         view={view} setView={setView}
+        effectiveRange={stats.range}
       />
 
       {/* ── KPI strip ──────────────────────────────────────────────── */}
@@ -237,8 +239,47 @@ export default function CostStatsTab({ productLineId }) {
   );
 }
 
+// Asia/Shanghai 日历日字符串 (YYYY-MM-DD) —— ISO 直接切 UTC 段会比北京时区
+// 早 8h,跨日时把"5/17 早晨 7 点"打到"5/16",看起来像 floor 没生效。一律走
+// toLocaleDateString。
+function isoToBjDate(iso) {
+  if (!iso) return null;
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return null;
+  return d.toLocaleDateString('en-CA', { timeZone: 'Asia/Shanghai' });
+}
+
+/**
+ * Floor / 范围说明条 —— 当 API 返回的 effectiveRange.floored=true 或 preset='all'
+ * 时,把实际生效的时间范围显式打出来,避免用户把"自 floor 起的累计"误读成单日。
+ * 5/17 那次成本审查的根源就在这里。
+ */
+function RangeNotice({ preset, effectiveRange }) {
+  if (!effectiveRange) return null;
+  const fromBj = isoToBjDate(effectiveRange.from);
+  const toBj = isoToBjDate(effectiveRange.to);
+  const floored = effectiveRange.floored;
+  const floorLabel = effectiveRange.floor_label;
+  const isOpenEnded = !effectiveRange.to;
+
+  if (!floored && !isOpenEnded) return null;
+
+  let text;
+  if (preset === 'all') {
+    text = `数据范围:${fromBj || floorLabel} 起 → 现在（含今日,从 ${floorLabel} 硬下限累计）`;
+  } else if (floored && isOpenEnded) {
+    text = `数据范围:${fromBj || floorLabel} → 现在（选择窗口被 ${floorLabel} 硬下限截短,含今日）`;
+  } else if (floored) {
+    text = `数据范围:${fromBj || floorLabel} → ${toBj}（选择窗口被 ${floorLabel} 硬下限截短）`;
+  } else if (isOpenEnded) {
+    text = `数据范围:${fromBj} → 现在（含今日）`;
+  }
+
+  return <div className={s.rangeNotice}>{text}</div>;
+}
+
 // ── Range selector + view toggle ─────────────────────────────────────
-function RangeBar({ preset, setPreset, customFrom, setCustomFrom, customTo, setCustomTo, view, setView }) {
+function RangeBar({ preset, setPreset, customFrom, setCustomFrom, customTo, setCustomTo, view, setView, effectiveRange }) {
   return (
     <>
       <div className={s.rangeBar}>
@@ -277,6 +318,7 @@ function RangeBar({ preset, setPreset, customFrom, setCustomFrom, customTo, setC
           ))}
         </div>
       </div>
+      <RangeNotice preset={preset} effectiveRange={effectiveRange} />
       <p className={s.floorHint}>
         统计自 <b>{COST_STATS_FLOOR_LABEL} 00:00 (Asia/Shanghai)</b> 起 ——
         更早的 LLM 调用与广告花费属早期联调脏数据,已在服务端硬剔除,不受上方时间窗影响。

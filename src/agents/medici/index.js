@@ -342,6 +342,49 @@ function markHistoryForCache(history) {
   }
 }
 
+/**
+ * 在 tool-use 循环的第 2+ 次迭代前调用：把"最后一条 cache_control 在 messages
+ * 里"的标记从 history-tail 滚动到刚追加的最后一条 tool message。
+ *
+ * 为什么这么做：Anthropic 单次请求最多 4 个 cache_control 断点。Medici 固定用掉
+ * 了 3 个（skill / per-line / 最后一个 tool 定义），第 4 个原本钉在 history-tail
+ * 给跨回合复用。但在同一个回合内 tool 循环展开后,前轮的 asst tool_call +
+ * tool_result 全是 fresh token——下一次 LLM call 又重算一遍。把第 4 个断点
+ * 推到 last tool result 上,下一次迭代读 cache 时能覆盖到本轮已有的 tool 交换,
+ * 平均省 5-15K input tokens / 迭代。
+ *
+ * 副作用：history-tail 的 marker 被清掉,下一次跨回合调用不再能直接命中
+ * history 的缓存(但本回合内 system + tools 缓存仍然有效)。在多轮 tool 调用
+ * 的对话里(医ici 的典型场景),这笔交换是赚的。
+ */
+function rollCacheBreakpointToLastToolMessage(messages) {
+  // 先清掉 messages 里所有 cache_control（history-tail marker 必须清,否则
+  // 加上新 marker 后总数会变成 5,超过 Anthropic 上限）。system 块和 tools
+  // 数组上的 marker 不在 messages 里,不受影响。
+  for (const msg of messages) {
+    if (!Array.isArray(msg.content)) continue;
+    for (const block of msg.content) {
+      if (block && typeof block === 'object' && block.cache_control) {
+        delete block.cache_control;
+      }
+    }
+  }
+  // 在最后一条 role='tool' 的消息内容末尾打 marker。OpenRouter 把 OpenAI
+  // 格式的 tool 消息转换成 Anthropic 的 tool_result block,cache_control 透传。
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const msg = messages[i];
+    if (msg.role !== 'tool') continue;
+    if (typeof msg.content === 'string') {
+      msg.content = [
+        { type: 'text', text: msg.content, cache_control: { type: 'ephemeral' } },
+      ];
+    } else if (Array.isArray(msg.content) && msg.content.length > 0) {
+      msg.content[msg.content.length - 1].cache_control = { type: 'ephemeral' };
+    }
+    return;
+  }
+}
+
 async function buildMessages(conversationHistory, latestUserMessage, logger, metaToken = null) {
   const historyMessages = Array.isArray(conversationHistory) ? conversationHistory : [];
 
@@ -457,7 +500,7 @@ function markLastToolForCache(tools) {
 
 // ─── LLM transport (OpenRouter → Anthropic) ──────────────────────────
 
-function callClaude({ systemBlocks, messages, tools, toolChoice, tenantId, productLine }) {
+function callClaude({ systemBlocks, messages, tools, toolChoice, tenantId, productLine, conversationId }) {
   // Pass system as a structured content array so `cache_control` markers
   // reach Anthropic via OpenRouter. Flattening to a single string strips
   // them and forces OpenRouter's auto-prefix-cache, which only gives us
@@ -476,22 +519,41 @@ function callClaude({ systemBlocks, messages, tools, toolChoice, tenantId, produ
     models: [MODELS.SONNET],
     max_tokens: MAX_TOKENS,
     messages: [{ role: 'system', content: systemContent }, ...messages],
-    tools: tools.map((t) => ({
-      type: 'function',
-      function: { name: t.name, description: t.description || '', parameters: t.input_schema },
-    })),
+    tools: tools.map((t) => {
+      const wireTool = {
+        type: 'function',
+        function: { name: t.name, description: t.description || '', parameters: t.input_schema },
+      };
+      // 透传 cache_control 到 OpenAI 格式工具的顶层（OpenRouter 接受这个位置）。
+      // 不透传的话 markLastToolForCache / buildSubmitResponseTool 设的标记会被
+      // 吃掉,整个 tools 数组（~2.4K tokens,含 submit_response 单工具 755 tokens）
+      // 每次按 fresh input 计费——这是 2026-04 引入的回归(commit 26e522d9)。
+      if (t.cache_control) wireTool.cache_control = t.cache_control;
+      return wireTool;
+    }),
     // Pin to Anthropic direct — keeps cache_control semantics consistent
     // (Bedrock strips it).
     provider: { order: ['anthropic'], allow_fallbacks: false },
   };
   if (toolChoice?.type === 'auto') {
     payload.tool_choice = 'auto';
+  } else if (toolChoice?.type === 'any') {
+    // Anthropic 'any' == OpenAI 'required'：模型必须调某个工具，无所谓哪个。
+    // OpenRouter 走 OpenAI 兼容 schema，传字面量 'required'。
+    payload.tool_choice = 'required';
   } else if (toolChoice?.type === 'tool') {
     payload.tool_choice = { type: 'function', function: { name: toolChoice.name } };
   } else if (toolChoice) {
     payload.tool_choice = toolChoice;
   }
-  return openrouter.messages.create(payload, { tenantId, callSite: 'medici.qualify', productLine });
+  // sessionId = conversationId 时，admin/llm-usage 看板可按 conversation 维度
+  // 切片成本，配合 ④ 的 force-submit 诊断也能定位是哪条对话越界。
+  return openrouter.messages.create(payload, {
+    tenantId,
+    callSite: 'medici.qualify',
+    productLine,
+    sessionId: conversationId || null,
+  });
 }
 
 function safeParseJson(s) {
@@ -613,6 +675,7 @@ export async function runMedici({
   //    `attachments` envelope field (no extra tool round needed).
   const tenantId = agentConfig.tenant_id || null;
   const productLineId = agentConfig.product_line || null;
+  const conversationId = trace?.conversationId || null;
   const [agentTools, availableAssets] = await Promise.all([
     loadAgentTools({ tenantId, productLineId }, logger),
     loadAvailableAssets({ tenantId, productLineId }, logger),
@@ -655,7 +718,18 @@ export async function runMedici({
   //    turn ultimately ends with submit_response — if the model won't emit it,
   //    we pin one final forced turn after the loop.
   let parsed = null;
-  let response = await callClaude({ systemBlocks, messages, tools: toolsWithCache, toolChoice: { type: 'auto' }, tenantId, productLine: productLineId });
+  let response = await callClaude({
+    systemBlocks,
+    messages,
+    tools: toolsWithCache,
+    // tool_choice='required' 强制模型每轮必须调某个工具（KB 工具 / read_skill_reference
+    // / submit_response 之一）。物理上消除"返回纯文本 finish_reason='stop'"那条路径
+    // —— 历史数据里这条路径占 18% 调用、每条触发一次 force-submit 的额外 LLM call。
+    toolChoice: { type: 'any' },
+    tenantId,
+    productLine: productLineId,
+    conversationId,
+  });
   let iterations = 0;
 
   while (
@@ -700,18 +774,49 @@ export async function runMedici({
       });
     }
 
-    response = await callClaude({ systemBlocks, messages, tools: toolsWithCache, tenantId, productLine: productLineId });
+    // 滚动 cache 断点：把 messages 里的 cache_control 从 history-tail 推到
+    // 刚 append 的最后一条 tool message。下次迭代时本轮的 asst tool_call +
+    // tool_result 就能从 cache 读取,而不是按 fresh input 价付费。
+    rollCacheBreakpointToLastToolMessage(messages);
+
+    response = await callClaude({
+      systemBlocks,
+      messages,
+      tools: toolsWithCache,
+      // 同初次调用：所有 tool 循环迭代均保持 'any'，让模型最终必然以
+      // submit_response 收尾、消除 stop 路径。
+      toolChoice: { type: 'any' },
+      tenantId,
+      productLine: productLineId,
+      conversationId,
+    });
   }
 
   // 5. Force-submit fallback: loop exited without submit_response (hit
   //    MAX_TOOL_ITERATIONS, or model stopped with plain text). Pin the final
   //    turn with tool_choice=submit_response.
   if (!parsed) {
+    // tool_choice='any' 之后 finish_reason='stop' 不再可能（模型物理上必须调
+    // 工具）。force_submit 现在只剩两条路径：
+    //   1) iterations 撞 MAX_TOOL_ITERATIONS（=5）：模型陷在 KB 工具循环里，
+    //      可能是 prompt 没让它收敛、或是 KB tool_result 让它越调越多
+    //   2) 模型在 any 模式下却调了非 submit 工具但 history 已经过长——理论
+    //      上不会有，留作 defensive 兜底
+    // 把诊断信息打全，方便后续按 conversation_id 反查 messages 重放
+    const prevMsg = response.choices[0].message;
+    const lastToolNames = (prevMsg.tool_calls || []).map((tc) => tc.function?.name).filter(Boolean);
     logger.warn('medici.tool_use.force_submit', {
       stop_reason: response.choices[0].finish_reason,
       iterations,
+      max_iterations_hit: iterations >= MAX_TOOL_ITERATIONS,
+      last_tool_calls: lastToolNames,
+      // 偶发模型残留纯文本（理论上 'any' 下不应出现）的内容样本，截断到 500 字符
+      // 防止 trace log 体积爆炸
+      last_text_preview:
+        typeof prevMsg.content === 'string'
+          ? prevMsg.content.slice(0, 500)
+          : null,
     });
-    const prevMsg = response.choices[0].message;
     messages.push({ role: 'assistant', content: prevMsg.content, tool_calls: prevMsg.tool_calls });
     // Previous tool_calls need matching tool_results before the user turn,
     // otherwise the provider rejects the message list.
@@ -723,6 +828,11 @@ export async function runMedici({
       });
     }
     messages.push({ role: 'user', content: FORCE_SUBMIT_PROMPT });
+    // 同样滚动断点：force-submit 也是同一回合内的 LLM call,前面 push 的
+    // dummy tool_result 在下一次（如果有）应能命中 cache;即使只调一次,这里
+    // 也保持与循环行为一致,避免 history-tail 的旧 marker 加上其它新 marker
+    // 凑齐 5 个超过 Anthropic 上限。
+    rollCacheBreakpointToLastToolMessage(messages);
     response = await callClaude({
       systemBlocks,
       messages,
@@ -730,6 +840,7 @@ export async function runMedici({
       toolChoice: { type: 'tool', name: 'submit_response' },
       tenantId,
       productLine: productLineId,
+      conversationId,
     });
     const submitTool = (response.choices[0].message.tool_calls || []).find(
       (tc) => tc.function.name === 'submit_response',
