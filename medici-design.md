@@ -22,7 +22,7 @@ Meta Webhook → message_queue → queue-processor → loadMediciConfig
         │  business_value + handoff_summary            │
         └──────────────────────────────────────────────┘
               ↓                          ↓
-       WhatsApp 出站消息            leads upsert（lead_key 去重）
+       WhatsApp 出站消息            replaceConversationLeads（删旧批+插新批）
        attachment 单独发图          Feishu 推送 + 人工接管
 ```
 
@@ -305,7 +305,7 @@ sequenceDiagram
 
     M-->>QP: { next_message, route, leads[], attachments[], inquiry_quality, business_value, conversation_intent }
 
-    QP->>DB: 写 messages（assistant turn）+ upsert leads（lead_key 去重）
+    QP->>DB: 写 messages（assistant turn）+ replaceConversationLeads（删旧批+插新批）
     QP->>WA: sendMessage(waId, next_message, phone_number_id)
     WA-->>Meta: Graph API /messages
 
@@ -336,7 +336,7 @@ sequenceDiagram
 - **Strategy C**：phone_number_id 没绑 product_line → 不调 Medici，发"已收到，工作时间会回复"占位 + 在 DB 留消息。
 - **takeover 抑制**：`conversations.is_human_takeover=true` 且未过 1h TTL → 跳过 Medici，只存消息；下次入站消息走 `checkAndExpireTakeover` 即时检测过期、`release-takeovers` cron 端点做批量兜底（**当前未挂 PM2**，inline 已覆盖正常路径）。
 - **FAQ_END 静默期**：Medici 判 `FAQ_END` 后 `conversations.faq_ended_at` 被置位；之后所有客户消息只入 messages 表、不再喂 Medici、不再回复（防 spam 循环烧钱）。**新 CTWA referral 进来视作新意图自动解封**；其他场景靠 3 天 idle 起新会话。
-- **lead 去重**：`leads` 上唯一索引 `(conversation_id, lead_key) WHERE route='CONTINUE'`——同会话同 `(product, country, ...)` 永远只占一行，复盘重抽就 UPDATE。
+- **lead 替换语义**：每轮 Medici 输出后 `replaceConversationLeads`（[lib/repositories/lead.repository.js](lib/repositories/lead.repository.js)）对该会话执行"删旧批 + 插新批"全量替换，整对话天然就一组活 leads（按 `lead.id` 区分多 leads）。早期 `lead_key` + partial unique 索引设计已 DEPRECATED 2026-05-18（生产从未写入），等阶段 3 drop。
 - **Plan A：落库后不重试**：`processMessageForConversation` 写完 messages/leads 后置 `aiReplyPersisted=true`；后续 sendMessage / sendMediciAttachments / executeConversationRouting 任何一步抛错都走 `markAsCompleted` 截断、记 `queue.delivery_failed_post_persist` 给 ops 兜底——避免重试时 Medici 再算一遍 + inbox 双写 + WhatsApp 双发。takeover / unbound-phone / FAQ_END 三个旁路也共用同样的"部分落库即截断"语义（见 `persistMessagesOnly`）。
 
 ---
@@ -409,7 +409,6 @@ erDiagram
         uuid conversation_id FK
         uuid contact_id FK
         text product_line FK
-        text lead_key UK_with_conv "去重键"
         text brand
         text car_model
         text destination_country

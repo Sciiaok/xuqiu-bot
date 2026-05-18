@@ -232,7 +232,7 @@ async function buildAttributionData(tenantId, fromISO, toISO) {
   const leads = await fetchLeadsByConversationIds(
     tenantId,
     Array.from(conversationMetaAdMap.keys()),
-    'id, conversation_id, inquiry_quality, business_value, route, details, agent_id, created_at, agent:agents(id, product_line)'
+    'id, conversation_id, inquiry_quality, business_value, route, details, product_line, created_at'
   );
 
   for (const lead of leads) {
@@ -241,7 +241,7 @@ async function buildAttributionData(tenantId, fromISO, toISO) {
 
     const bucket = ensureAttributionBucket(attributionMap, metaAdId);
     const quality = normalizeQuality(lead.inquiry_quality);
-    const agentLabel = lead.agent?.product_line || lead.agent_id || 'UNASSIGNED';
+    const agentLabel = lead.product_line || 'UNASSIGNED';
 
     bucket.leadCount += 1;
     incrementMap(bucket.qualityCounts, quality);

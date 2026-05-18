@@ -54,8 +54,8 @@ const DETAIL_TABS = [
   { key: 'notes', label: '备注' },
 ];
 
-// Sentinel for "no product-line filter". Backend's inquiries route already
-// accepts product_line slugs (not just UUIDs) as agentIds — see resolveAgentIdsFilter.
+// Sentinel for "no product-line filter". Backend filters by leads.product_line;
+// conversations.agent_id has been deprecated since 2026-04.
 const SUPPLY_CHAIN_ALL = '全部产品线';
 const QUALITY_ALL = '全部质量';
 const BUSINESS_VALUE_ALL = '全部价值';
@@ -209,10 +209,10 @@ export default function LeadHubPage() {
   }, [search]);
 
   // Fetch active product lines → supply-chain dropdown options (mount once).
-  // Backend's inquiries route accepts product_line slugs as `agentIds`, so we
-  // send the slug (line.id) as the filter value. Routed through the prefetch
-  // store so the post-login preloader can warm this; a synchronous cache hit
-  // populates the dropdown with no spinner.
+  // Backend's inquiries route filters by leads.product_line, so we send the
+  // slug (line.id) as the filter value. Routed through the prefetch store so
+  // the post-login preloader can warm this; a synchronous cache hit populates
+  // the dropdown with no spinner.
   useEffect(() => {
     let cancelled = false;
     const cached = readCache(KEYS.PRODUCT_LINES_ACTIVE);
@@ -242,7 +242,7 @@ export default function LeadHubPage() {
   const buildQs = useCallback((cursor = null) => {
     const qs = new URLSearchParams();
     qs.set('limit', '20');
-    if (supplyChain !== SUPPLY_CHAIN_ALL) qs.append('agentIds', supplyChain);
+    if (supplyChain !== SUPPLY_CHAIN_ALL) qs.append('productLines', supplyChain);
     if (quality !== QUALITY_ALL) qs.append('inquiryQuality', quality);
     if (businessValue !== BUSINESS_VALUE_ALL) qs.append('businessValue', businessValue);
     if (routeFilter !== 'all') qs.set('resolvedRoute', routeFilter);

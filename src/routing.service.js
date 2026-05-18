@@ -365,7 +365,7 @@ export async function executeConversationRouting(route, conversationId, waId, ha
   const results = [];
   for (const lead of leads) {
     const result = await executeLeadRouting(route, lead, handoffSummary, traceContext);
-    results.push({ leadId: lead.id, leadKey: lead.lead_key, ...result });
+    results.push({ leadId: lead.id, ...result });
   }
 
   if (route === 'FAQ_END') {

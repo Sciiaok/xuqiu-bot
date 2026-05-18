@@ -36,7 +36,7 @@ Words that appear repeatedly across code, schema, and UI. Many are not self-expl
 - **Inquiry quality** — Categorical score: `PROOF` / `QUALIFY` / `GOOD` / `BAD`. Set by Medici (`src/agents/medici/`) during lead extraction; enum lives in `src/agents/medici/output-schema.js::INQUIRY_QUALITY_ENUM`.
 - **Business value** — Categorical score: `HIGH` / `AVERAGE` / `LOW`.
 - **Lead-extractor** — `lib/lead-extractor.js` — LLM logic that parses conversation history → structured lead. Triggered by inbound messages.
-- **lead_key** — Dedup key (contact + brand + product, roughly — components now read from `details`) so re-extractions update the same row instead of creating duplicates.
+- **Lead 去重 / 替换** — Medici 每轮输出后 `replaceConversationLeads`（[lib/repositories/lead.repository.js](../../lib/repositories/lead.repository.js)）对该会话执行"删旧批 + 插新批"全量替换，整对话天然就一组活 leads（按 `lead.id` 区分多 leads），不依赖业务键。早期 `lead_key` 列与 `idx_unique_lead_key` partial unique 索引曾设计为去重键，2026-05-18 已 DEPRECATED（全表 2617 行仅 2 行非 null，生产代码从未写入），等阶段 3 drop。
 - **Inquiry dashboard** — `/api/inquiry-dashboard` queries `leads` directly for the dashboard data. `/api/inquiry-dashboard/summary` writes LLM-generated markdown summaries to `inquiry_dashboard_summaries` (7-day TTL, keyed by tenant + product_lines + period).
 
 ## Product lines

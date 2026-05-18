@@ -192,7 +192,7 @@ export function mapGroupToCard(group) {
     route: meta.route || '',
     value: value.lower,
     valueLabel: value.label,
-    chain: meta.agent_product_line || '',
+    chain: meta.product_line || '',
     waPhoneNumberId: meta.wa_phone_number_id || '',
     metaAdId: meta.meta_ad_id || '',
     leadCount: leads.length,

@@ -40,7 +40,7 @@ For each table: which columns the runtime actually touches and which are dead we
 
 | Table | Used cols | Dead cols | Notes |
 |---|---|---|---|
-| `leads` | 33 of 36 cols | approved, approved_at, approved_by | 36 columns including `details` JSONB for custom lead_fields. Approval columns shelved with the REVO sync removal (2026-05-17). Dedup via `lead_key`. |
+| `leads` | 15 of 35 cols | 20 DEPRECATED 列（见 Notes） | 活字段：id, tenant_id, conversation_id, contact_id, product_line, meta_ad_id, route, inquiry_quality, business_value, conversation_intent, conversation_intent_summary, handoff_summary, created_at, updated_at, **details**（业务字段统一存这）。<br/>DEPRECATED 20 列等阶段 3 drop：13 业务列（brand/car_model/destination_*/loading_port/qty_bucket/color_quantity/buyer_type/timeline/incoterm/company_name/product_name/sku_description）→ 已迁 details；agent_id → 产品线归属切到 leads.product_line；score → 设计未落地（全表 0 值）；lead_key → 生产从未写入；approved/_at/_by → REVO 同步功能 2026-05-17 整体下线；extra_data → 全表 0 行非空。<br/>每会话 leads 走"删旧批+插新批"全量替换（`replaceConversationLeads`）。 |
 | `agents` | id, tenant_id, product_line, name, display_label | system_prompt, output_schema, wa_phone_number_id, is_active, ad_context_map, qualification_config, created_at, updated_at | **Read-only legacy bridge** — runtime never writes. `system_prompt` / `output_schema` etc. ignored by current code; seeded once and never re-read. Used as 1:1 join partner for `product_lines` by slug. |
 
 ### Meta / WhatsApp integration

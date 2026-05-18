@@ -72,29 +72,24 @@ function periodToISO(periodStart, periodEnd) {
   return { fromISO, toISO, fromDate, toDate: endDate };
 }
 
-async function fetchConversationSummaries(tenantId, fromISO, toISO, agentIds) {
-  let query = supabase
+async function fetchConversationSummaries(tenantId, fromISO, toISO) {
+  const { data, error } = await supabase
     .from('leads')
-    .select('conversation_intent_summary, agent_id')
+    .select('conversation_intent_summary')
     .eq('tenant_id', tenantId)
     .gte('created_at', fromISO)
     .lte('created_at', toISO)
     .not('conversation_intent_summary', 'is', null)
     .limit(10000);
 
-  if (agentIds && agentIds.length > 0) {
-    query = query.in('agent_id', agentIds);
-  }
-
-  const { data, error } = await query;
   if (error) throw error;
   return (data || []).map(r => r.conversation_intent_summary).filter(Boolean);
 }
 
-async function fetchHandoffSummaries(tenantId, fromISO, toISO, agentIds) {
-  let query = supabase
+async function fetchHandoffSummaries(tenantId, fromISO, toISO) {
+  const { data, error } = await supabase
     .from('leads')
-    .select('handoff_summary, agent_id')
+    .select('handoff_summary')
     .eq('tenant_id', tenantId)
     .gte('created_at', fromISO)
     .lte('created_at', toISO)
@@ -102,11 +97,6 @@ async function fetchHandoffSummaries(tenantId, fromISO, toISO, agentIds) {
     .not('handoff_summary', 'is', null)
     .limit(10000);
 
-  if (agentIds && agentIds.length > 0) {
-    query = query.in('agent_id', agentIds);
-  }
-
-  const { data, error } = await query;
   if (error) throw error;
   return (data || []).map(r => r.handoff_summary).filter(Boolean);
 }
@@ -114,7 +104,7 @@ async function fetchHandoffSummaries(tenantId, fromISO, toISO, agentIds) {
 async function fetchSupplyChainBreakdown(tenantId, fromISO, toISO) {
   const { data, error } = await supabase
     .from('leads')
-    .select('inquiry_quality, agent:agents(product_line)')
+    .select('inquiry_quality, product_line')
     .eq('tenant_id', tenantId)
     .gte('created_at', fromISO)
     .lte('created_at', toISO)
@@ -124,7 +114,7 @@ async function fetchSupplyChainBreakdown(tenantId, fromISO, toISO) {
 
   const chains = {};
   for (const lead of data || []) {
-    const line = lead.agent?.product_line || 'Unknown';
+    const line = lead.product_line || 'Unknown';
     if (!chains[line]) chains[line] = { total: 0, PROOF: 0, QUALIFY: 0, GOOD: 0, BAD: 0 };
     chains[line].total += 1;
     const q = String(lead.inquiry_quality || '').toUpperCase();
@@ -318,8 +308,8 @@ async function collectReportInput(tenantId, type, periodStart, periodEnd, agentI
   // Weekly/monthly/manual: add conversation summaries
   if (type !== 'daily') {
     const [intentSummaries, handoffSummaries] = await Promise.all([
-      fetchConversationSummaries(tenantId, fromISO, toISO, agentIds),
-      fetchHandoffSummaries(tenantId, fromISO, toISO, agentIds),
+      fetchConversationSummaries(tenantId, fromISO, toISO),
+      fetchHandoffSummaries(tenantId, fromISO, toISO),
     ]);
     input.intentSummaries = intentSummaries;
     input.handoffSummaries = handoffSummaries;

@@ -46,11 +46,11 @@ const FORCE_SUBMIT_PROMPT =
 // 顶层保留的字段集 —— 系统字段 + 评分类元数据。
 // 其他字段（业务字段、产品线自定义 lead_fields）全部进 details JSONB。
 const TOP_LEVEL_RETAIN = new Set([
-  'id', 'conversation_id', 'contact_id', 'tenant_id', 'agent_id',
-  'product_line', 'meta_ad_id', 'lead_key',
-  'created_at', 'updated_at', 'approved', 'approved_at', 'approved_by',
+  'id', 'conversation_id', 'contact_id', 'tenant_id',
+  'product_line', 'meta_ad_id',
+  'created_at', 'updated_at',
   'inquiry_quality', 'business_value', 'conversation_intent',
-  'conversation_intent_summary', 'route', 'score', 'handoff_summary',
+  'conversation_intent_summary', 'route', 'handoff_summary',
 ]);
 
 // ─── Skill bundle + host patch (loaded once, cached at module scope) ─

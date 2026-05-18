@@ -18,22 +18,20 @@ const MAX_LIMIT = 50;
 const FULL_SCAN_BATCH_SIZE = 200;
 const CONTACT_ID_BATCH = 1000;
 
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
+// 产品线归属的事实真源是 leads.product_line。conversations.agent_id 自 2026-04-24
+// 起停止写入，agent:agents join 因此读不出任何东西，已剥除。
 const LEADS_SELECT = `
   id, conversation_id, inquiry_quality, business_value,
   conversation_intent, conversation_intent_summary,
   route, handoff_summary, updated_at,
-  details, agent_id,
-  agent:agents(id, product_line)
+  details, product_line
 `;
 
 const CONVERSATION_SELECT = `
   id, status, last_message_at, message_count,
-  contact_id, agent_id, is_human_takeover, wa_phone_number_id, meta_ad_id,
+  contact_id, is_human_takeover, wa_phone_number_id, meta_ad_id,
   resolved_route,
-  contact:contacts!inner(wa_id, company_name, name),
-  agent:agents(id, product_line)
+  contact:contacts!inner(wa_id, company_name, name)
 `;
 
 /* ─────────────────────────  small utilities  ───────────────────────── */
@@ -49,25 +47,6 @@ function makeLikePattern(raw) {
 }
 
 /* ─────────────────────────  param parsing  ───────────────────────── */
-
-async function resolveAgentIdsFilter(supabase, tenantId, rawAgentIds) {
-  if (!rawAgentIds?.length) return [];
-  const uuids = [];
-  const productLines = [];
-  for (const value of rawAgentIds) {
-    (UUID_RE.test(value) ? uuids : productLines).push(value);
-  }
-  if (!productLines.length) return uuids;
-
-  const { data } = throwIfError(
-    await supabase
-      .from('agents')
-      .select('id')
-      .eq('tenant_id', tenantId)
-      .in('product_line', productLines)
-  );
-  return Array.from(new Set([...uuids, ...(data || []).map((row) => row.id)]));
-}
 
 function parseHumanTakeover(sp) {
   const raw = sp.get('humanTakeover');
@@ -115,7 +94,9 @@ function parseFilters(sp) {
     // conversation-level filters
     dateFrom: Number.isNaN(Date.parse(dateFrom)) ? '' : dateFrom,
     dateTo: Number.isNaN(Date.parse(dateTo)) ? '' : dateTo,
-    agentIds: sp.getAll('agentIds').filter(Boolean),
+    // 产品线归属走 leads.product_line（非 conversations.agent_id），所以这是
+    // lead-scoped filter；values 是 product_line slug（e.g. 'vehicle'）。
+    productLines: sp.getAll('productLines').filter(Boolean),
     humanTakeover: parseHumanTakeover(sp),
     // Accept either ?metaAdId=X or repeated ?metaAdId=X&metaAdId=Y
     metaAdIds: sp.getAll('metaAdId').map((v) => v.trim()).filter(Boolean),
@@ -144,6 +125,7 @@ function hasLeadScopedFilter(f) {
     f.inquiryQualities.length > 0 ||
     f.businessValues.length > 0 ||
     f.routes.length > 0 ||
+    f.productLines.length > 0 ||
     (f.country && f.country !== 'all') ||
     (f.model && f.model !== 'all')
   );
@@ -159,7 +141,6 @@ function applyConversationFilters(query, filters, { foreignTable } = {}) {
     const expr = 'is_human_takeover.is.null,is_human_takeover.eq.false';
     query = foreignTable ? query.or(expr, { foreignTable }) : query.or(expr);
   }
-  if (filters.agentIds.length > 0) query = query.in(col('agent_id'), filters.agentIds);
   if (filters.dateFrom) query = query.gte(col('last_message_at'), filters.dateFrom);
   if (filters.dateTo) query = query.lte(col('last_message_at'), filters.dateTo);
   if (filters.metaAdIds.length === 1) {
@@ -239,6 +220,7 @@ function applyLeadFilters(query, filters, prefix = 'leads.') {
   if (filters.inquiryQualities.length > 0) query = query.in(col('inquiry_quality'), filters.inquiryQualities);
   if (filters.businessValues.length > 0) query = query.in(col('business_value'), filters.businessValues);
   if (filters.routes.length > 0) query = query.in(col('route'), filters.routes);
+  if (filters.productLines.length > 0) query = query.in(col('product_line'), filters.productLines);
   if (filters.country !== 'all') query = query.eq(col('details->>destination_country'), filters.country);
   if (filters.model !== 'all') query = query.eq(col('details->>car_model'), filters.model);
   return query;
@@ -316,7 +298,7 @@ function buildLeadCountQuery(supabase, tenantId, filters) {
   let query = supabase.from('leads').select(`
     id,
     contact:contacts!inner(id),
-    conversation:conversations!inner(id, agent_id, is_human_takeover, last_message_at)
+    conversation:conversations!inner(id, is_human_takeover, last_message_at)
   `, { count: 'exact', head: true })
     .eq('tenant_id', tenantId);
 
@@ -416,8 +398,7 @@ function mapLead(lead, contact) {
   out.inquiry_quality = lead.inquiry_quality || 'GOOD';
   out.business_value = lead.business_value || 'LOW';
   out.details = lead.details || {};
-  out.agent_id = lead.agent_id || lead.agent?.id || null;
-  out.agent_product_line = lead.agent?.product_line || null;
+  out.product_line = lead.product_line || null;
   out.lead_data = {
     destination_country: d.destination_country || null,
     destination_port: d.destination_port || null,
@@ -450,8 +431,7 @@ function mapConversationGroup(conversation) {
   // (e.g. 历史 test fixture)，退化到原 JS 推断保险。
   const resolvedRoute = conversation.resolved_route
     || (conversation.is_human_takeover ? 'HUMAN_NOW' : (latest?.route || 'CONTINUE'));
-  const productLine =
-    conversation.agent?.product_line || latest?.agent_product_line || null;
+  const productLine = latest?.product_line || null;
 
   return {
     meta: {
@@ -465,7 +445,7 @@ function mapConversationGroup(conversation) {
       conversation_intent_summary: latest?.conversation_intent_summary || null,
       route: resolvedRoute,
       handoff_summary: latest?.handoff_summary || null,
-      agent_product_line: productLine,
+      product_line: productLine,
       is_human_takeover: !!conversation.is_human_takeover,
       wa_phone_number_id: conversation.wa_phone_number_id || null,
       meta_ad_id: conversation.meta_ad_id || null,
@@ -575,14 +555,6 @@ export async function GET(request) {
     const filters = parseFilters(searchParams);
     const limit = parseLimit(searchParams);
     const cursor = parseCursor(searchParams);
-
-    const rawAgentIds = searchParams.getAll('agentIds').filter(Boolean);
-    filters.agentIds = await resolveAgentIdsFilter(supabase, tenantId, rawAgentIds);
-
-    // Supply-chain token that maps to zero agents → no conversation can match.
-    if (rawAgentIds.length > 0 && filters.agentIds.length === 0) {
-      return emptyResponse();
-    }
 
     // Resolve free-text customer search into a conversation_id set so downstream
     // queries can union contact-field matches with leads.destination_country

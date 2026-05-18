@@ -14,15 +14,14 @@ conversations(id uuid, contact_id → contacts.id, agent_id → agents.id,
   wa_phone_number_id, meta_ad_id, closed_reason, created_at, updated_at)
 messages(id uuid, conversation_id → conversations.id, role, content, sent_at,
   sent_by, metadata jsonb)
-leads(id uuid, conversation_id → conversations.id, contact_id → contacts.id,
-  agent_id → agents.id, meta_ad_id,
-  car_model, brand, product_name, sku_description,
-  destination_country, destination_port, loading_port,
-  qty_bucket, color_quantity jsonb,
+leads(id uuid, tenant_id, conversation_id → conversations.id, contact_id → contacts.id,
+  product_line → product_lines.id, meta_ad_id,
   inquiry_quality, business_value, conversation_intent, conversation_intent_summary,
-  route, handoff_summary, buyer_type, timeline, incoterm, company_name,
-  stage, score, approved, approved_at, details jsonb,
-  created_at, updated_at)
+  route, handoff_summary, details jsonb, created_at, updated_at)
+  -- Business fields (brand, car_model, destination_country, destination_port,
+  --   loading_port, qty_bucket, color_quantity, buyer_type, timeline,
+  --   international_commercial_term, company_name, product_name, sku_description)
+  --   live inside leads.details JSONB — query with details->>'brand' etc.
 agents(id uuid, name, product_line, ...)
 message_queue(id, conversation_id, contact_id, wa_id, content, message_type,
   metadata jsonb, wa_message_id, status, process_after, locked_by, locked_at)

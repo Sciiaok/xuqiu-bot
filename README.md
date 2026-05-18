@@ -319,7 +319,7 @@ sequenceDiagram
 
     M-->>QP: { next_message, route, leads[], attachments[], inquiry_quality, business_value }
 
-    QP->>DB: 写 messages + upsert leads（lead_key 去重）
+    QP->>DB: 写 messages + replaceConversationLeads（删旧批+插新批）
     QP->>WA: sendMessage
     WA->>Meta: Graph API
     opt attachments
@@ -700,7 +700,6 @@ erDiagram
         uuid conversation_id FK
         uuid contact_id FK
         text product_line FK
-        text lead_key "(conversation_id, lead_key) 唯一"
         text brand
         text car_model
         text destination_country
@@ -824,7 +823,7 @@ erDiagram
 | **每轮强制 submit_response（Medici）** | 是 | 调用方永远拿到 schema 验证过的 JSON |
 | **6 个 KB tool 决定形结果** | 是 | agent 走 if-else，不对相似度分数软判断 |
 | **报价闸口 `_price_locked`** | 是 | leads 未齐 / SKU 未收敛 → 工具层抽掉价格字段；模型再聪明也吐不出 |
-| **lead_key 唯一索引** | 是 | 同会话同主产品永远只一行；复盘重抽 UPSERT |
+| **leads 全量替换语义** | 是 | 每轮 Medici 输出后 `replaceConversationLeads` 删旧批+插新批；整对话天然一组活 leads，按 `lead.id` 区分多 leads |
 | **Skill references 内联 vs 按需** | Medici 按需（read_skill_reference 工具），Ogilvy 内联 | Medici 长会话多轮、references 不一定都用到；Ogilvy 单会话短但每轮要用 |
 | **2 个 cache breakpoint（Ogilvy）/ 3 个（Medici）** | 是 | Medici 多了"per-line context"（30+ assets）跨会话共享 |
 | **Ogilvy 仅 CTW + 仅单 campaign** | 是 | 收窄到最确定的形态；其它形态在 host-patch 显式拒 |
