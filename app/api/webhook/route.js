@@ -288,7 +288,9 @@ export async function POST(request) {
 
       // 单一窗口 per POST：所有消息共享同一 deadline + 同一个 setTimeout，
       // 与 acquire_queue_messages "ANY 成熟则锁全部 pending" 的语义自然吻合。
+      // processAfter 在循环前算一次,避免每条 enqueue 重新算 Date.now() 漂移。
       const aggregationWindowMs = pickAggregationWindowMs();
+      const aggregationDeadline = new Date(Date.now() + aggregationWindowMs);
 
       for (const message of inboundMessages) {
         await markAsRead(message.id, phoneNumberId);
@@ -323,7 +325,7 @@ export async function POST(request) {
             trace_id: traceId,
           },
           waMessageId: message.id,
-          aggregationWindowMs,
+          processAfter: aggregationDeadline,
         });
 
         // Meta 重投同一 wa_message_id 时 enqueueMessage 返回带 _duplicate
@@ -364,10 +366,14 @@ export async function POST(request) {
       }
 
       if (queuedCount > 0) {
-        scheduleProcessing(context.conversation_id, aggregationWindowMs);
+        // setTimeout 延迟用绝对 deadline 反推，确保 acquire 触发时刻 = 行的
+        // process_after 时刻，跟循环耗时无关。
+        const delayMs = Math.max(0, aggregationDeadline.getTime() - Date.now());
+        scheduleProcessing(context.conversation_id, delayMs);
         scopedLogger.info('webhook.processing.scheduled', {
           queued_count: queuedCount,
           aggregation_window_ms: aggregationWindowMs,
+          actual_delay_ms: delayMs,
         });
       }
 

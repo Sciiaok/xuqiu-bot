@@ -1,6 +1,6 @@
 # Schema Snapshot (auto-generated)
 
-Generated: 2026-05-17T04:53:21.887Z
+Generated: 2026-05-18T07:04:08.258Z
 
 Live snapshot of `public` schema from Supabase. **Do not edit by hand** — run `node scripts/build-index.mjs` to refresh.
 
@@ -320,6 +320,7 @@ Tables: **51**. Listed alphabetically.
 | `product_line` | text | Y |  |
 | `tenant_id` | uuid | N | `'00000000-0000-0000-0000-000000000001':…` |
 | `feishu_notified_at` | timestamp with time zone | Y |  |
+| `faq_ended_at` | timestamp with time zone | Y |  |
 
 **Foreign keys:**
 - `agent_id` → `agents.id`
