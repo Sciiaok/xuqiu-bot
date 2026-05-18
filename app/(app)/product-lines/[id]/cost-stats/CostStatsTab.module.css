@@ -372,6 +372,12 @@
   letter-spacing: 0.04em;
 }
 
+.volumeHint {
+  color: var(--text3);
+  opacity: 0.6;
+  cursor: help;
+}
+
 .volumeValue {
   font-size: 18px;
   font-weight: 600;

@@ -487,12 +487,20 @@ function VolumeSection({ volume, llmCost, adSpend }) {
     <div className={s.section}>
       <h3 className={s.sectionTitle}>量化指标 · 单位成本</h3>
       <div className={s.volumeGrid}>
-        <Cell label="本期新开对话" value={volume.conversations} />
+        <Cell
+          label="本期新开对话"
+          value={volume.conversations}
+          hint="按对话开启时间（started_at）统计。与 LeadHub「时间」筛选不同——后者按最近消息时间，所以同一天数字可能略低。"
+        />
         <Cell label="本期入站消息" value={volume.msgs_in} />
         <Cell label="本期出站消息" value={volume.msgs_out} />
         <Cell label="本期合格线索 GOOD+" value={volume.leads_qualified} />
         <Cell label="本期 KB 新增文档" value={volume.kb_docs} />
-        <Cell label="单新开对话成本" value={fmtUsd(costPerConv)} />
+        <Cell
+          label="单新开对话成本"
+          value={fmtUsd(costPerConv)}
+          hint="分母为本期新开对话数（按 started_at）。"
+        />
         <Cell label="单合格线索成本" value={fmtUsd(costPerLead)} />
         <Cell label="单入站消息 LLM 成本" value={fmtUsd(llmPerInbound)} />
       </div>
@@ -500,10 +508,13 @@ function VolumeSection({ volume, llmCost, adSpend }) {
   );
 }
 
-function Cell({ label, value }) {
+function Cell({ label, value, hint }) {
   return (
-    <div className={s.volumeCell}>
-      <div className={s.volumeLabel}>{label}</div>
+    <div className={s.volumeCell} title={hint || undefined}>
+      <div className={s.volumeLabel}>
+        {label}
+        {hint ? <span className={s.volumeHint} aria-hidden="true"> ⓘ</span> : null}
+      </div>
       <div className={s.volumeValue}>{value}</div>
     </div>
   );

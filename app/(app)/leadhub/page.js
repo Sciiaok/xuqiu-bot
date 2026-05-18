@@ -784,7 +784,12 @@ export default function LeadHubPage() {
     }
     if (datePreset !== 'all') {
       const opt = DATE_PRESETS.find((p) => p.key === datePreset);
-      chips.push({ key: 'date', label: `时间：${opt?.label || datePreset}`, clear: () => { setDatePreset('all'); setCustomFrom(''); setCustomTo(''); } });
+      chips.push({
+        key: 'date',
+        label: `时间：${opt?.label || datePreset}`,
+        title: '按最近消息时间（last_message_at）筛选。与产品线「成本分析」的「本期新开对话」口径不同——后者按对话开启时间，所以数字可能略高。',
+        clear: () => { setDatePreset('all'); setCustomFrom(''); setCustomTo(''); },
+      });
     }
     if (debouncedSearch) {
       chips.push({ key: 'search', label: `搜索：${debouncedSearch}`, clear: () => setSearch('') });
@@ -907,7 +912,7 @@ export default function LeadHubPage() {
                   setDatePreset(v);
                   if (v !== 'custom') { setCustomFrom(''); setCustomTo(''); }
                 }}
-                title="时间范围以昨日 23:59（北京时间）为终点，与 analytics / 报表对齐"
+                title="按最近消息时间（last_message_at）筛选，以昨日 23:59（北京时间）为终点。与产品线「成本分析」的「本期新开对话」口径不同——后者按对话开启时间。"
               >
                 {DATE_PRESETS.map(p => (
                   <option key={p.key} value={p.key}>{p.label}</option>
@@ -975,7 +980,7 @@ export default function LeadHubPage() {
                   type="button"
                   className={s.filterChip}
                   onClick={chip.clear}
-                  title="点击移除该筛选"
+                  title={chip.title ? `${chip.title}\n\n点击移除该筛选` : '点击移除该筛选'}
                 >
                   <span>{chip.label}</span>
                   <span className={s.filterChipX}>×</span>
