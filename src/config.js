@@ -35,6 +35,10 @@ export const config = {
     apiTimeoutMs: 30_000,
     // 多租户：所有租户的 token 必须属于这个 App，订阅 webhook 才会推到我们后端
     appId: "1436127511218148",
+    // App Secret —— webhook POST 用 HMAC-SHA256(body) 校验，header 名
+    // X-Hub-Signature-256。未配置时 webhook POST 直接拒（无法做来源校验
+    // 就别处理），避免静默裸跑被任何知道 phone_number_id 的人伪造消息。
+    appSecret: process.env.META_APP_SECRET,
   },
 
   // Firecrawl — website scraping / extraction
@@ -55,7 +59,12 @@ export const config = {
   // 写在 config.js 顶层会让 Edge Runtime（proxy.js）import 时直接 build fail。
   // 由唯一消费方 lib/repositories/queue.repository.js 自己读 process.pid。
   queue: {
-    aggregationWindowMs: 2000,
+    // 每次 burst 取 [min, max) 之间的随机毫秒数做聚合窗口。固定值会让回复
+    // 节奏过于机械，且 2s 太短，碎片消息（"I" / "want" / "info"）容易被拆成
+    // 多次 Medici 调用。15~30s 既能把同一意图的连发拼成一次，也让 AI 回复
+    // 看起来像"人类正在打字"而非毫秒级响应。
+    aggregationWindowMinMs: 15000,
+    aggregationWindowMaxMs: 30000,
     maxRetries: 3,
     // 90s = medici 单次调用的隐式上限。锁超时后 release_stale_queue_locks 会
     // 把行释放回 pending，另一个 worker 可能抢同一会话并发跑 —— 所以
@@ -90,7 +99,6 @@ export const config = {
   // App runtime flags & URLs
   app: {
     baseUrl: 'https://www.promeengine.com',
-    takeoverAutoExpireDisabled: 'off' === 'off',
   },
 
   // Internal API secrets (cron jobs, partner APIs)
@@ -98,3 +106,14 @@ export const config = {
     cron: process.env.CRON_SECRET,
   },
 };
+
+/**
+ * Pick a random aggregation window in [min, max) ms. Called once per inbound
+ * webhook POST (production) or per simulator batch — all messages within the
+ * same burst share the same deadline.
+ */
+export function pickAggregationWindowMs() {
+  const lo = config.queue.aggregationWindowMinMs;
+  const hi = config.queue.aggregationWindowMaxMs;
+  return Math.floor(lo + Math.random() * (hi - lo));
+}

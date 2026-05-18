@@ -19,10 +19,6 @@ export async function GET(request) {
   }
 
   try {
-    if (config.app.takeoverAutoExpireDisabled) {
-      return NextResponse.json({ released: 0, skipped: 'TAKEOVER_AUTO_EXPIRE=off' });
-    }
-
     const expiredIds = await findExpiredTakeovers();
 
     if (expiredIds.length === 0) {

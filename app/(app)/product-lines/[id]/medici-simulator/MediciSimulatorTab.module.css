@@ -291,6 +291,15 @@
   cursor: not-allowed;
 }
 
+.aggregationHint {
+  padding: 6px 14px 10px;
+  background: var(--bg2);
+  font-family: var(--font-sans);
+  font-size: 11px;
+  color: var(--text2);
+  border-top: 1px dashed var(--border);
+}
+
 .attachBtn {
   padding: 0 12px;
   background: var(--bg);

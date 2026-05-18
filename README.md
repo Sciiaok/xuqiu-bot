@@ -299,11 +299,12 @@ sequenceDiagram
     participant DB as Supabase
     participant FS as Feishu
 
-    Meta->>WH: POST 入站消息
+    Meta->>WH: POST 入站消息（带 X-Hub-Signature-256）
+    WH->>WH: HMAC 校验（appSecret），不通过 → 401
     WH->>WH: 按 phone_number_id 解析 tenant
     WH->>DB: upsert contacts / conversations
-    WH->>Q: enqueueMessage（按 wa_message_id 去重）
-    WH->>QP: scheduleProcessing(2-5s)
+    WH->>Q: enqueueMessage（insert-or-skip，wa_message_id 撞 23505 不覆盖）
+    WH->>QP: scheduleProcessing（15-30s 随机窗口，整 POST 共享）
     Note over WH,QP: 200 OK 立即返回
 
     QP->>Q: 取批量待处理消息（FOR UPDATE SKIP LOCKED）
@@ -329,6 +330,7 @@ sequenceDiagram
     end
     opt route=FAQ_END
         QP->>WA: 发 faq_message
+        QP->>DB: faq_ended_at=NOW（后续客户消息进静默期）
     end
     QP->>Q: 标记完成
 ```
@@ -679,7 +681,10 @@ erDiagram
         text wa_phone_number_id
         text meta_ad_id
         boolean is_human_takeover
+        timestamptz human_takeover_at "1h TTL"
         timestamptz feishu_notified_at
+        timestamptz faq_ended_at "FAQ_END 静默期"
+        integer message_count "原子自增"
         text status
     }
     messages {
@@ -829,6 +834,9 @@ erDiagram
 | **append-only migrations** | 是 | 永不编辑过去的 migration；保证回放 |
 | **direct DB inspection** | 是 | dev-tools/sql 只读 + AI 写 SQL；不为读数据现编 API |
 | **Meta token envelope 加密** | 是 | `META_TOKEN_ENCRYPTION_KEY` env；只在最里层 service 解密 |
+| **Webhook HMAC 校验** | 是 | `META_APP_SECRET` env；POST 必须带 `X-Hub-Signature-256`，否则 401。不配 = 直接拒所有入站（裸跑等于任何人能伪造消息） |
+| **聚合后不重试**（Plan A） | 是 | `processMessageForConversation` 写完即设 `aiReplyPersisted`；之后任何步骤抛错都 `markAsCompleted` 截断、记 `queue.delivery_failed_post_persist`——避免 retry 双发 WhatsApp / 双写 inbox |
+| **enqueue insert-or-skip** | 是 | Meta 重投 webhook 撞 23505 时**绝不覆盖**已存在行的 status，防"行被锁住时被翻回 pending → 双 worker 并发跑" |
 | **forward-compat schema** | 是 | 只增不删；老列保留至少一个版本周期 |
 
 ---

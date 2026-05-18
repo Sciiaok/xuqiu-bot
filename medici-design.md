@@ -280,10 +280,12 @@ sequenceDiagram
     participant FS as Feishu
 
     Meta->>WH: 入站消息（含 phone_number_id, referral）
+    WH->>WH: verifyMetaSignature（X-Hub-Signature-256，HMAC-SHA256/appSecret）
+    Note over WH: 签名缺失/不匹配 → 401，绝不进 queue
     WH->>WH: resolveTenantByPhoneNumberId
     WH->>DB: upsert contacts + conversations
-    WH->>DB: enqueueMessage → message_queue（按 wa_message_id 去重）
-    WH->>QP: scheduleProcessing(conversationId) 定时 2-5s
+    WH->>DB: enqueueMessage → message_queue（insert-or-skip，wa_message_id 撞 23505 不覆盖）
+    WH->>QP: scheduleProcessing(conversationId) 定时 15-30s 随机
     Note over WH,QP: 200 OK 立刻返回给 Meta
 
     QP->>Q: acquirePendingMessages（FOR UPDATE SKIP LOCKED）
@@ -319,6 +321,7 @@ sequenceDiagram
     end
     alt route == FAQ_END
         QP->>WA: sendFAQResources（faq_message 或默认）
+        QP->>DB: markFaqEnded（conversations.faq_ended_at=NOW）
     end
 
     QP->>DB: markAsCompleted（message_queue.status=completed）
@@ -326,11 +329,15 @@ sequenceDiagram
 
 ### 关键约束
 
-- **聚合窗口** 2–5s（`config.queue.aggregationWindowMs`）：客户连发 3 条短消息，Medici 只跑一次回复"这 3 句合起来"，避免逐句回复打断节奏。
-- **分布式锁**：`acquire_queue_messages(p_conversation_id, p_instance_id)` Postgres RPC 用 `FOR UPDATE SKIP LOCKED`，多实例 / 跨 dev+prod 安全；过期锁由 cron 释放。
+- **聚合窗口** 15-30s 随机（`config.queue.aggregationWindowMinMs/MaxMs` + `pickAggregationWindowMs`，每次 burst 摇一次共享 deadline）：客户连发 3 条碎片消息，Medici 只跑一次回复"这 3 句合起来"，节奏更像人类打字。
+- **分布式锁**：`acquire_queue_messages(p_conversation_id, p_instance_id)` Postgres RPC 用 `FOR UPDATE SKIP LOCKED`，多实例 / 跨 dev+prod 安全；过期锁由 `release_stale_queue_locks(90s)` cron 释放。
+- **enqueue 防 Meta 重投**：webhook redelivery（同 `wa_message_id`）走 insert-or-skip，**绝不覆盖**已存在行的 status/process_after，防止"行被锁住时被翻回 pending → 双 worker 并发跑 → 双发 WhatsApp"。
+- **签名校验**：`/api/webhook` POST 必须带 Meta 签发的 `X-Hub-Signature-256`，否则 401。`META_APP_SECRET` 是 Meta App 后台 Settings → Basic 里的 App Secret。
 - **Strategy C**：phone_number_id 没绑 product_line → 不调 Medici，发"已收到，工作时间会回复"占位 + 在 DB 留消息。
-- **takeover 抑制**：`conversations.is_human_takeover=true` 且未过 TTL（默认 2h）→ 跳过 Medici，只存消息；cron `release-takeovers` 到点恢复 AI。
+- **takeover 抑制**：`conversations.is_human_takeover=true` 且未过 1h TTL → 跳过 Medici，只存消息；下次入站消息走 `checkAndExpireTakeover` 即时检测过期、`release-takeovers` cron 端点做批量兜底（**当前未挂 PM2**，inline 已覆盖正常路径）。
+- **FAQ_END 静默期**：Medici 判 `FAQ_END` 后 `conversations.faq_ended_at` 被置位；之后所有客户消息只入 messages 表、不再喂 Medici、不再回复（防 spam 循环烧钱）。**新 CTWA referral 进来视作新意图自动解封**；其他场景靠 3 天 idle 起新会话。
 - **lead 去重**：`leads` 上唯一索引 `(conversation_id, lead_key) WHERE route='CONTINUE'`——同会话同 `(product, country, ...)` 永远只占一行，复盘重抽就 UPDATE。
+- **Plan A：落库后不重试**：`processMessageForConversation` 写完 messages/leads 后置 `aiReplyPersisted=true`；后续 sendMessage / sendMediciAttachments / executeConversationRouting 任何一步抛错都走 `markAsCompleted` 截断、记 `queue.delivery_failed_post_persist` 给 ops 兜底——避免重试时 Medici 再算一遍 + inbox 双写 + WhatsApp 双发。takeover / unbound-phone / FAQ_END 三个旁路也共用同样的"部分落库即截断"语义（见 `persistMessagesOnly`）。
 
 ---
 
@@ -385,6 +392,8 @@ erDiagram
         boolean is_human_takeover
         timestamptz human_takeover_at
         timestamptz feishu_notified_at
+        timestamptz faq_ended_at "FAQ_END 静默期标记"
+        integer message_count "原子自增 RPC"
         text status
     }
     messages {
@@ -443,7 +452,7 @@ erDiagram
 | route | 宿主动作 |
 |---|---|
 | `CONTINUE` | 把 `next_message` 发出去就完了 |
-| `FAQ_END` | 发完 `next_message` 后再发一条 `faq_message`（product_line 自定义或默认） |
+| `FAQ_END` | 发完 `next_message` 后再发一条 `faq_message`（product_line 自定义或默认）；置 `conversations.faq_ended_at` → 后续客户消息进入"只入库不喂 AI"静默期，直到新 CTWA referral 解封 |
 | `HUMAN_NOW` | 跳过 next_message 发送（如果有的话），按 leads 一条条 `routeLeadToSales` → Feishu 推送 + `startHumanTakeover` |
 
 特殊路由覆盖（skill-host-patch §5）：

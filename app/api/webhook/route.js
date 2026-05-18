@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
-import { config } from '../../../src/config.js';
+import crypto from 'node:crypto';
+import { config, pickAggregationWindowMs } from '../../../src/config.js';
 import { sendMessage, markAsRead } from '../../../src/whatsapp.service.js';
 import { transcribeWhatsAppAudio } from '../../../src/whisper.service.js';
 import {
@@ -9,7 +10,7 @@ import {
 } from '../../../src/whatsapp-media.service.js';
 import { getOrCreateRoutedConversationContext } from '../../../lib/conversation-context.service.js';
 import { enqueueMessage, hasPendingMessages } from '../../../lib/repositories/queue.repository.js';
-import { isHumanTakeover } from '../../../lib/repositories/conversation.repository.js';
+import { isHumanTakeover, clearFaqEnded } from '../../../lib/repositories/conversation.repository.js';
 import { processConversationQueue } from '../../../lib/queue-processor.js';
 import { updateContactMetadata } from '../../../lib/repositories/contact.repository.js';
 import { resolveTenantByPhoneNumberId } from '../../../lib/tenant-context.js';
@@ -44,10 +45,38 @@ export async function GET(request) {
 }
 
 /**
- * Trigger queue processing after aggregation window
- * @param {string} conversationId - Conversation UUID
+ * Verify Meta's X-Hub-Signature-256 over the raw request body.
+ * Returns true iff the header is present AND HMAC-SHA256(body, appSecret)
+ * matches in constant time. Anything else → false → POST 401.
+ *
+ * 没配 appSecret 时直接拒 —— 裸跑 webhook 等于任何知道 phone_number_id 的人
+ * 都能伪造客户消息 / 烧 Medici 配额。
  */
-function scheduleProcessing(conversationId) {
+function verifyMetaSignature(rawBody, headerValue) {
+  const appSecret = config.meta.appSecret;
+  if (!appSecret) return false;
+  if (!headerValue || typeof headerValue !== 'string') return false;
+  if (!headerValue.startsWith('sha256=')) return false;
+
+  const expected = 'sha256=' + crypto
+    .createHmac('sha256', appSecret)
+    .update(rawBody)
+    .digest('hex');
+
+  // timingSafeEqual 要等长 Buffer，否则直接 throw —— 长度先比一次避免抛错。
+  const got = Buffer.from(headerValue);
+  const want = Buffer.from(expected);
+  if (got.length !== want.length) return false;
+  return crypto.timingSafeEqual(got, want);
+}
+
+/**
+ * Trigger queue processing after the aggregation window matures.
+ * @param {string} conversationId - Conversation UUID
+ * @param {number} delayMs - Same window used for the matching enqueue, so
+ *   the timer fires right when the row becomes acquirable.
+ */
+function scheduleProcessing(conversationId, delayMs) {
   setTimeout(async () => {
     try {
       const hasReady = await hasPendingMessages(conversationId);
@@ -56,7 +85,7 @@ function scheduleProcessing(conversationId) {
     } catch (error) {
       console.error('Error processing queue:', error);
     }
-  }, config.queue.aggregationWindowMs);
+  }, delayMs);
 }
 
 async function buildQueuedMessage({
@@ -145,22 +174,51 @@ async function buildQueuedMessage({
 /**
  * POST /api/webhook - Receive incoming WhatsApp messages
  * Messages are queued for aggregated processing
+ *
+ * 必须先读 raw body 做 HMAC 校验（Node Request body 只能消费一次，所以是
+ * text → 校验 → JSON.parse 这个顺序，不能用 request.json()）。
  */
 export async function POST(request) {
-  // Immediately acknowledge receipt to WhatsApp
+  const receivedAt = new Date();
+  const traceId = generateTraceId('wa');
+  const logger = createTraceLogger({
+    component: 'webhook',
+    trace_id: traceId,
+  });
+
+  // 1) raw body
+  let rawBody;
+  try {
+    rawBody = await request.text();
+  } catch (err) {
+    logger.error('webhook.body_read_failed', { error: err.message });
+    return new Response('Bad Request', { status: 400 });
+  }
+
+  // 2) HMAC 签名校验 —— 配置 / header / 签名任一不对都 401
+  const signatureHeader = request.headers.get('x-hub-signature-256');
+  if (!verifyMetaSignature(rawBody, signatureHeader)) {
+    logger.warn('webhook.signature.invalid', {
+      has_header: Boolean(signatureHeader),
+      app_secret_configured: Boolean(config.meta.appSecret),
+    });
+    return new Response('Unauthorized', { status: 401 });
+  }
+
+  // 3) parse JSON 一次，校验通过后再解析
+  let body;
+  try {
+    body = JSON.parse(rawBody);
+  } catch (err) {
+    logger.error('webhook.body_parse_failed', { error: err.message });
+    return new Response('Bad Request', { status: 400 });
+  }
+
+  // 4) 立刻 200，剩下的异步跑
   const responsePromise = NextResponse.json({ status: 'ok' }, { status: 200 });
 
-  // Process asynchronously after returning 200
   (async () => {
-    const traceId = generateTraceId('wa');
-    const logger = createTraceLogger({
-      component: 'webhook',
-      trace_id: traceId,
-    });
-
     try {
-      const receivedAt = new Date();
-      const body = await request.json();
 
       // Observability-only raw payload archive. Fire-and-forget — never gates
       // the message-processing path; failures are logged but swallowed.
@@ -228,6 +286,10 @@ export async function POST(request) {
       let shouldUpdateContactMetadata = false;
       let queuedCount = 0;
 
+      // 单一窗口 per POST：所有消息共享同一 deadline + 同一个 setTimeout，
+      // 与 acquire_queue_messages "ANY 成熟则锁全部 pending" 的语义自然吻合。
+      const aggregationWindowMs = pickAggregationWindowMs();
+
       for (const message of inboundMessages) {
         await markAsRead(message.id, phoneNumberId);
 
@@ -261,7 +323,20 @@ export async function POST(request) {
             trace_id: traceId,
           },
           waMessageId: message.id,
+          aggregationWindowMs,
         });
+
+        // Meta 重投同一 wa_message_id 时 enqueueMessage 返回带 _duplicate
+        // 的现有行，绝不重置其状态。dup 不计入 queuedCount —— 避免给已经
+        // 处理完 / 处理中的会话再起一个 setTimeout。
+        if (queuedMsg._duplicate) {
+          scopedLogger.info('webhook.message.duplicate', {
+            queue_id: queuedMsg.id,
+            wa_message_id: message.id,
+            existing_status: queuedMsg.status,
+          });
+          continue;
+        }
 
         queuedCount += 1;
         scopedLogger.info('webhook.message.queued', {
@@ -280,12 +355,19 @@ export async function POST(request) {
           has_last_referral: Boolean(contactMetadata.last_referral),
           last_referral_ad_id: contactMetadata.last_referral?.ad_id || null,
         });
+
+        // 客户带着新 referral 进来 → 视作新意图，解除 FAQ_END 静默（如果之前
+        // 被 mute 过）。clearFaqEnded 自带 WHERE faq_ended_at IS NOT NULL，
+        // 无 set 时是 no-op。失败不阻断主流程。
+        clearFaqEnded(context.conversation_id).catch(err =>
+          scopedLogger.warn('webhook.faq_ended.clear_failed', { error: err.message }));
       }
 
       if (queuedCount > 0) {
-        scheduleProcessing(context.conversation_id);
+        scheduleProcessing(context.conversation_id, aggregationWindowMs);
         scopedLogger.info('webhook.processing.scheduled', {
           queued_count: queuedCount,
+          aggregation_window_ms: aggregationWindowMs,
         });
       }
 

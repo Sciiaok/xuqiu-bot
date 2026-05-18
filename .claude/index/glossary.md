@@ -23,7 +23,8 @@ Words that appear repeatedly across code, schema, and UI. Many are not self-expl
 - **Contact** — A WhatsApp contact (phone-number-identified, but also supports `bsuid` / `username` since IG/Instagram-like sources got added).
 - **Conversation** — Message thread with one contact. Scoped to a `product_line`. Has a `status` (active / archived) and AI takeover state.
 - **Message** — Individual WhatsApp/IM message in a conversation. May be tied to a `lead_id` if it triggered extraction.
-- **Takeover** — Manual pause of AI auto-reply on a conversation. Released after timeout by `release-takeovers` cron, or manually. See `/api/conversations/[id]/takeover`.
+- **Takeover** — Manual pause of AI auto-reply on a conversation (`conversations.is_human_takeover`). 1-hour TTL: auto-released inline by `checkAndExpireTakeover` on the next inbound message, or in bulk by `release-takeovers` cron. See `/api/conversations/[id]/takeover`.
+- **FAQ_END mute** — After Medici routes a turn to `FAQ_END`, `conversations.faq_ended_at` gets set; subsequent customer messages bypass Medici (only persisted to `messages` table). Auto-cleared when a new CTWA referral arrives (= fresh business intent); otherwise stays muted until the 3-day idle timeout opens a new conversation.
 - **Routing** — `src/routing.service.js` decides what AI does on each inbound message: FAQ-reply, lead-extract, handoff, ignore.
 
 ## Lead lifecycle
@@ -76,6 +77,6 @@ Words that appear repeatedly across code, schema, and UI. Many are not self-expl
 
 - **Tenant context** (`lib/tenant-context.js`) — Server-side helper that resolves the current request's tenant. Returns `{ tenantId, userId, supabase }`.
 - **Service role** — Supabase service-role key. Bypasses RLS. Used for admin ops, cron, webhook ingestion (before tenant resolved). Lives in `lib/supabase-admin.js`.
-- **Queue** — `message_queue` table + `lib/queue-processor.js` consumer. Aggregates rapid inbound messages (2s window) so AI replies to a burst, not each message.
+- **Queue** — `message_queue` table + `lib/queue-processor.js` consumer. Aggregates rapid inbound messages (per-burst random 15–30s window, see `pickAggregationWindowMs`) so AI replies to a burst, not each fragment. Post-persist failures are caught and don't retry to avoid duplicate Medici calls / double WhatsApp sends — see Plan A comments in `queue-processor.js`.
 - **Dev exec SQL** — `dev_exec_sql(query text)` Postgres RPC. Read-only, founder-only. Powers the dev-tools SQL page and `scripts/build-index.mjs`.
 - **LLM usage log** — `llm_usage_logs` — every LLM call writes a row with model, tokens, cost. Drives the LLM cost dashboard.

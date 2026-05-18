@@ -13,6 +13,7 @@ import {
   getFeishuNotifiedAt,
   markFeishuNotified,
   startHumanTakeover,
+  markFaqEnded,
 } from '../lib/repositories/conversation.repository.js';
 import { sendFeishuMessage } from './feishu.service.js';
 import { createTraceLogger } from '../lib/core-trace.js';
@@ -369,6 +370,14 @@ export async function executeConversationRouting(route, conversationId, waId, ha
 
   if (route === 'FAQ_END') {
     await sendFAQResources(waId, phoneNumberId, traceContext);
+    // 进入 FAQ_END 静默期：客户继续发消息时 queue-processor 只入库不调
+    // Medici，避免 spam 循环烧钱 + 重发 FAQ 资源。webhook 检测到新 CTWA
+    // referral（客户重新点广告）会清空 → 重新放开 AI 接待。
+    try {
+      await markFaqEnded(conversationId);
+    } catch (markErr) {
+      logger.warn('routing.faq.mark_ended_failed', { error: markErr.message });
+    }
   }
 
   if (route === 'HUMAN_NOW' && results.some(r => r.success)) {

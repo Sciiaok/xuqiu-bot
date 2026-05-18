@@ -4,6 +4,14 @@ import { useEffect, useRef, useState } from 'react';
 import LeadDetail from '../../../../components/LeadDetail/LeadDetail';
 import s from './MediciSimulatorTab.module.css';
 
+// 与 src/config.js queue.aggregationWindow{Min,Max}Ms 保持一致 —— 客户端不能
+// import server config（process.env 读不到），这里手动镜像一份。改动时两处同改。
+const AGG_WINDOW_MIN_MS = 15000;
+const AGG_WINDOW_MAX_MS = 30000;
+function pickAggregationWindowMs() {
+  return Math.floor(AGG_WINDOW_MIN_MS + Math.random() * (AGG_WINDOW_MAX_MS - AGG_WINDOW_MIN_MS));
+}
+
 /**
  * MediciSimulatorTab — embedded version of the Medici 调试台.
  *
@@ -32,6 +40,20 @@ export default function MediciSimulatorTab({ productLineSlug }) {
   // 让同一 session 里既能测"触发转人工"又能测"接管释放后继续聊"。下一条
   // 客户消息发出后或清空对话后重置。
   const [resumed, setResumed] = useState(false);
+
+  // —— 聚合窗口（镜像 production webhook 行为）——
+  // 用户点"发送"不立刻调 Medici：先把消息放进 pendingBatch，等 deadline 到
+  // 了再把整批拼成单次调用。期间继续点"发送"会追加进同一 batch（不延长 deadline，
+  // 与生产侧"earliest 成熟即触发"的语义对齐）。
+  const [pendingBatch, setPendingBatch] = useState([]);  // 待聚合的用户消息
+  const [batchDeadlineAt, setBatchDeadlineAt] = useState(0); // epoch ms；0 表示无 pending
+  const [countdownSec, setCountdownSec] = useState(0);
+  const batchTimerRef = useRef(null);
+  // setTimeout 回调要读"最新"的 batch / history / turns / selectedAd —— 直接
+  // 闭包会拿到调度那一刻的旧值。把数据存 ref + 用 flushRef 调最新版函数，
+  // 避免依赖 useCallback + reschedule 的复杂度。
+  const batchRef = useRef({ messages: [], historySnapshot: [] });
+  const flushRef = useRef(null);
 
   const chatRef = useRef(null);
   const traceRef = useRef(null);
@@ -104,6 +126,23 @@ export default function MediciSimulatorTab({ productLineSlug }) {
     traceRef.current?.scrollTo({ top: traceRef.current.scrollHeight });
   }, [history, turns]);
 
+  // 1Hz 倒计时刻度 —— 仅在有 deadline 时跑，给 send 按钮渲染剩余秒数。
+  useEffect(() => {
+    if (!batchDeadlineAt) {
+      setCountdownSec(0);
+      return undefined;
+    }
+    const tick = () => setCountdownSec(Math.max(0, Math.ceil((batchDeadlineAt - Date.now()) / 1000)));
+    tick();
+    const id = setInterval(tick, 250);
+    return () => clearInterval(id);
+  }, [batchDeadlineAt]);
+
+  // 卸载时清理悬挂的 setTimeout —— 否则切走再回来可能触发已废弃 batch 的 fetch。
+  useEffect(() => () => {
+    if (batchTimerRef.current) clearTimeout(batchTimerRef.current);
+  }, []);
+
   const selectedAd = ads.find((a) => a.id === selectedAdId) || null;
   const lastTurn = turns.length > 0 ? turns[turns.length - 1] : null;
   const lastRoute = lastTurn?.summary?.route || null;
@@ -121,6 +160,13 @@ export default function MediciSimulatorTab({ productLineSlug }) {
     && !locked;
 
   function handleReset() {
+    if (batchTimerRef.current) {
+      clearTimeout(batchTimerRef.current);
+      batchTimerRef.current = null;
+    }
+    batchRef.current = { messages: [], historySnapshot: [] };
+    setPendingBatch([]);
+    setBatchDeadlineAt(0);
     setHistory([]);
     setTurns([]);
     setSendError('');
@@ -151,7 +197,9 @@ export default function MediciSimulatorTab({ productLineSlug }) {
     setTimeout(() => URL.revokeObjectURL(url), 0);
   }
 
-  async function handleSend() {
+  // 把这一条 draft 放进 pending batch。第一次 push 时摇一个 15~30s 随机
+  // deadline + 起 setTimeout；后续 push 直接追加同一批，不延长 deadline。
+  function handleSend() {
     if (!canSend) return;
     const message = draft.trim();
     const imagePayload = pendingImage;
@@ -162,12 +210,51 @@ export default function MediciSimulatorTab({ productLineSlug }) {
           image: { data_url: imagePayload.data_url, filename: imagePayload.filename },
         }
       : { role: 'user', content: message };
-    const nextHistory = [...history, userTurn];
-    setHistory(nextHistory);
+
+    const isFirstInBatch = batchRef.current.messages.length === 0;
+    if (isFirstInBatch) {
+      batchRef.current.historySnapshot = history;
+    }
+    batchRef.current.messages = [
+      ...batchRef.current.messages,
+      { content: message, image: imagePayload },
+    ];
+    setPendingBatch(batchRef.current.messages);
+
+    setHistory((prev) => [...prev, userTurn]);
     setDraft('');
     setPendingImage(null);
-    setSending(true);
     setSendError('');
+
+    if (isFirstInBatch) {
+      const windowMs = pickAggregationWindowMs();
+      setBatchDeadlineAt(Date.now() + windowMs);
+      batchTimerRef.current = setTimeout(() => flushRef.current?.(), windowMs);
+    }
+  }
+
+  async function flushBatch() {
+    batchTimerRef.current = null;
+    const batch = batchRef.current.messages;
+    const historySnapshot = batchRef.current.historySnapshot;
+    if (batch.length === 0 || !selectedAd) {
+      setBatchDeadlineAt(0);
+      setPendingBatch([]);
+      return;
+    }
+
+    // Snapshot 之后立刻清 ref —— flush 进行中如果用户又点发送，开新 batch。
+    batchRef.current = { messages: [], historySnapshot: [] };
+    setPendingBatch([]);
+    setBatchDeadlineAt(0);
+    setSending(true);
+
+    // production 侧 aggregated_content = messages.map(m => m.content).join('\n')。
+    // 图片仅取 batch 内第一张：simulator 后端单图字段，做不到多图聚合，且生产
+    // 链路里多图同 burst 实际极少。
+    const aggregatedMessage = batch.map((b) => b.content).join('\n');
+    const firstImage = batch.find((b) => b.image)?.image || null;
+    const aggregatedPreview = aggregatedMessage.slice(0, 80);
 
     // The simulator has no DB. Pass back the latest emitted lead so the
     // backend can compute qualify_missing_fields against accumulated state
@@ -195,21 +282,21 @@ export default function MediciSimulatorTab({ productLineSlug }) {
             media_type:    selectedAd.media_type,
             thumbnail_url: selectedAd.thumbnail_url,
           },
-          history: history.map(({ role, content, attachments }) => ({
+          history: historySnapshot.map(({ role, content, attachments }) => ({
             role,
             content,
             ...(Array.isArray(attachments) && attachments.length > 0
               ? { attachments: attachments.map((a) => ({ asset_id: a.asset_id, filename: a.filename })) }
               : {}),
           })),
-          message,
+          message: aggregatedMessage,
           ...(priorLead ? { priorLead } : {}),
-          ...(imagePayload
+          ...(firstImage
             ? {
                 image: {
-                  data_url: imagePayload.data_url,
-                  mime_type: imagePayload.mime_type,
-                  size_bytes: imagePayload.size_bytes,
+                  data_url: firstImage.data_url,
+                  mime_type: firstImage.mime_type,
+                  size_bytes: firstImage.size_bytes,
                 },
               }
             : {}),
@@ -236,7 +323,8 @@ export default function MediciSimulatorTab({ productLineSlug }) {
       }));
       setTurns((prev) => [...prev, {
         turn: prev.length + 1,
-        userPreview: message.slice(0, 80),
+        userPreview: aggregatedPreview,
+        aggregatedCount: batch.length,
         trace: data.trace || [],
         summary: data.response ? {
           intent: data.response.conversation_intent,
@@ -253,13 +341,15 @@ export default function MediciSimulatorTab({ productLineSlug }) {
       setSendError(err.message);
       setTurns((prev) => [...prev, {
         turn: prev.length + 1,
-        userPreview: message.slice(0, 80),
+        userPreview: aggregatedPreview,
+        aggregatedCount: batch.length,
         trace: [{ t: 0, kind: 'err', msg: err.message }],
       }]);
     } finally {
       setSending(false);
     }
   }
+  flushRef.current = flushBatch;
 
   return (
     <div className={s.root}>
@@ -326,7 +416,9 @@ export default function MediciSimulatorTab({ productLineSlug }) {
               ) : turns.map((turn) => (
                 <div key={turn.turn} className={s.traceTurn}>
                   <div className={s.traceTurnHead}>
-                    ── Turn #{turn.turn} · user: "{turn.userPreview}" ──
+                    ── Turn #{turn.turn}
+                    {turn.aggregatedCount > 1 ? ` · 聚合 ×${turn.aggregatedCount}` : ''}
+                    {' '}· user: "{turn.userPreview}" ──
                   </div>
                   {turn.trace.map((line, i) => {
                     const kindClass =
@@ -537,9 +629,18 @@ export default function MediciSimulatorTab({ productLineSlug }) {
               rows={1}
             />
             <button type="button" className={s.sendBtn} onClick={handleSend} disabled={!canSend}>
-              {sending ? '处理中…' : '发送'}
+              {sending
+                ? '处理中…'
+                : batchDeadlineAt
+                  ? `聚合中 ${countdownSec}s${pendingBatch.length > 1 ? ` · ×${pendingBatch.length}` : ''}`
+                  : '发送'}
             </button>
           </div>
+          {batchDeadlineAt > 0 && !sending && (
+            <div className={s.aggregationHint}>
+              已收 {pendingBatch.length} 条 — {countdownSec}s 后聚合发给 Medici。继续输入会追加进同一批，模拟客户碎片化连发。
+            </div>
+          )}
         </div>
       </div>
     </div>

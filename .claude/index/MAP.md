@@ -91,7 +91,7 @@ Goal: when Claude Code picks up a task touching feature X, read this file first 
 - **Cron**: `/api/cron/meta-health-check`
 - **Tables**: `meta_connections`, `meta_phone_numbers`, `meta_ad_accounts`
 - **Storage bucket**: `chat-media`
-- **Notes**: Tokens encrypted at rest. BM resolver routes inbound webhooks to the right tenant + product-line by WABA phone number. Outbound goes via `whatsapp.service.js`; auto-reply controlled by takeover state on the conversation.
+- **Notes**: Tokens encrypted at rest. BM resolver routes inbound webhooks to the right tenant + product-line by WABA phone number. Outbound goes via `whatsapp.service.js`; auto-reply controlled by takeover state on the conversation. **Webhook POST is HMAC-verified** against `X-Hub-Signature-256` with `META_APP_SECRET` — missing / mismatched signature → 401 (see `verifyMetaSignature` in `app/api/webhook/route.js`).
 
 ### Reports & Analytics
 - **UI**: `app/(app)/reports/page.js`, `app/(app)/reports/[id]/page.js`, `app/(app)/analytics/page.js`
@@ -125,7 +125,7 @@ Goal: when Claude Code picks up a task touching feature X, read this file first 
 - `meta-health-check` — token refresh + connection health
 - `process-queue` — message_queue aggregation worker (also runs in-process; PM2 hosts a long-runner via `ecosystem.config.cjs`)
 - `recover-stale-kb-docs` — re-runs stalled KB document parsing
-- `release-takeovers` — auto-resumes AI after takeover timeout
+- `release-takeovers` — auto-resumes AI after takeover timeout (1h TTL). **Not currently in PM2 ecosystem.config.cjs**; inline `checkAndExpireTakeover` on next inbound webhook is the actual mechanism. The cron endpoint is a manual bulk-cleanup tool.
 
 ### Process-level background workers
 - **Queue processor**: `lib/queue-processor.js` runs in-process (see `app/api/cron/process-queue/route.js` for the entrypoint signature) and also as a PM2 daemon (`ecosystem.config.cjs`). The cron is a backup trigger.
