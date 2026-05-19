@@ -220,6 +220,16 @@
   margin: -6px 0 0 0;
 }
 
+.sectionHintSep {
+  color: var(--text3);
+  opacity: 0.6;
+}
+
+.sectionHintMuted {
+  color: var(--text3);
+  font-style: italic;
+}
+
 /* ── Table ────────────────────────────────────────────────────────── */
 .table {
   width: 100%;
@@ -307,17 +317,42 @@
   height: 100%;
   justify-content: flex-end;
   min-width: 0;
+  /* 让 <button> 与原 <div> 视觉一致 */
+  background: transparent;
+  border: none;
+  padding: 0;
+  margin: 0;
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+  border-radius: 4px;
 }
 
 .trendBar {
   background: var(--accent);
   border-radius: 2px 2px 0 0;
   min-height: 1px;
-  transition: opacity 0.15s;
+  transition: opacity 0.15s, background 0.15s;
 }
 
 .trendBarCol:hover .trendBar {
-  opacity: 0.75;
+  opacity: 0.78;
+}
+
+.trendBarCol:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* 当前已经过滤到这一天 —— 高亮选中柱 */
+.trendBarColActive .trendBar {
+  background: var(--accent-hover);
+  box-shadow: 0 0 0 2px var(--bg2), 0 0 0 4px var(--accent);
+  opacity: 1;
+}
+
+.trendBarColActive:hover .trendBar {
+  opacity: 1;
 }
 
 .trendAxis {

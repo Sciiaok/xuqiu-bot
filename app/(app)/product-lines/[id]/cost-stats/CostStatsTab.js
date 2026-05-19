@@ -205,7 +205,17 @@ export default function CostStatsTab({ productLineId }) {
       </div>
 
       {/* ── Daily trend ────────────────────────────────────────────── */}
-      <DailyTrend days={combinedByDay} rangeDays={stats.range.days} preset={preset} />
+      <DailyTrend
+        days={combinedByDay}
+        rangeDays={stats.range.days}
+        preset={preset}
+        selectedDay={preset === 'custom' && customFrom && customFrom === customTo ? customFrom : null}
+        onPickDay={(day) => {
+          setPreset('custom');
+          setCustomFrom(day);
+          setCustomTo(day);
+        }}
+      />
 
       {/* ── AI by call_site ────────────────────────────────────────── */}
       <CallSiteTable bySite={combinedByCallSite} grandTotal={grandTotal} />
@@ -297,7 +307,7 @@ function KpiCard({ label, value, sub }) {
 }
 
 // ── Daily trend ──────────────────────────────────────────────────────
-function DailyTrend({ days, rangeDays, preset }) {
+function DailyTrend({ days, rangeDays, preset, selectedDay, onPickDay }) {
   // custom / all 下没有固定 rangeDays,直接按返回的 days 长度展示
   const fullDays = useMemo(() => {
     if (preset === 'custom' || preset === 'all' || !rangeDays) return days;
@@ -317,14 +327,29 @@ function DailyTrend({ days, rangeDays, preset }) {
   return (
     <div className={s.section}>
       <h3 className={s.sectionTitle}>LLM 每日成本</h3>
-      <p className={s.sectionHint}>当期共 {fmtUsd(fullDays.reduce((a, d) => a + d.cost_usd, 0))} · 峰值 {fmtUsd(maxCost)}</p>
+      <p className={s.sectionHint}>
+        当期共 {fmtUsd(fullDays.reduce((a, d) => a + d.cost_usd, 0))} · 峰值 {fmtUsd(maxCost)}
+        <span className={s.sectionHintSep}> · </span>
+        <span className={s.sectionHintMuted}>点击柱子查看当天</span>
+      </p>
       <div className={s.trendWrap}>
         <div className={s.trendBars}>
-          {fullDays.map(d => (
-            <div key={d.day} className={s.trendBarCol} title={`${d.day} · ${fmtUsd(d.cost_usd)} · ${d.count} 次`}>
-              <div className={s.trendBar} style={{ height: `${Math.max(2, (d.cost_usd / maxCost) * 100)}%` }} />
-            </div>
-          ))}
+          {fullDays.map(d => {
+            const active = selectedDay === d.day;
+            return (
+              <button
+                type="button"
+                key={d.day}
+                className={`${s.trendBarCol} ${active ? s.trendBarColActive : ''}`}
+                title={`${d.day} · ${fmtUsd(d.cost_usd)} · ${d.count} 次 — 点击切到这一天`}
+                aria-label={`${d.day} 成本 ${fmtUsd(d.cost_usd)},${d.count} 次调用,点击筛选到这一天`}
+                aria-pressed={active}
+                onClick={() => onPickDay?.(d.day)}
+              >
+                <div className={s.trendBar} style={{ height: `${Math.max(2, (d.cost_usd / maxCost) * 100)}%` }} />
+              </button>
+            );
+          })}
         </div>
         <div className={s.trendAxis}>
           {fullDays.map((d, i) => (
