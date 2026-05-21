@@ -173,7 +173,7 @@ flowchart LR
 | `src/agents/medici/` | 接待 Agent |
 | `src/agents/ogilvy/` | 投放 Agent |
 | `src/agents/skills-runtime/` | Skill bundle 加载器（被 Medici/Ogilvy 共用） |
-| `skills/` | Anthropic Skill 包（`ai-reception-deal` / `overseas-ad-planning`） |
+| `skills/` | Anthropic Skill 包（`ai-reception-deal` / `PromeEngine-ads-skill`） |
 | `lib/` | 基础设施：Supabase 客户端、repositories、Redis、SSE、租户上下文 |
 | `lib/repositories/*.repository.js` | 数据访问层；每张主表一个文件 |
 | `supabase/migrations/` | append-only DB migration（永不修改历史文件） |

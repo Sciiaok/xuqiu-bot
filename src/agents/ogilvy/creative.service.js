@@ -5,10 +5,16 @@
  * 模型),输出在 message.images[]。primary = openai/gpt-5.4-image-2,失败兜
  * 底 Gemini 3.1 Flash Image。
  *
- * Scope for MVP:
- *   - Square 1024×1024 image for Meta feed
+ * Scope:
+ *   - Single-image generation. carousel/video creative_type values from the
+ *     v2 schema still resolve to a single image, but the result carries a
+ *     `placeholder: true` flag so callers know the multi-frame format is not
+ *     yet produced.
+ *   - Three aspect ratios: 1:1 (1024×1024), portrait (1024×1536), landscape
+ *     (1536×1024). 4:5 and 9:16 both map to 1024×1536 — the closest portrait
+ *     gpt-image-2 supports; the prompt nudges composition toward the target.
+ *   - cta_style switches the bottom-right CTA chip rendered into the image.
  *   - Uses user-uploaded product images as reference (mandatory — Meta CTWA needs fidelity)
- *   - No best-of-N scoring, no language routing logic, no PDF parsing
  *   - Returns { url, storage_path, model } on success, { error } on failure
  */
 import { config } from '../../config.js';
@@ -45,10 +51,44 @@ const SUPPORTED_REF_EXTS = new Set(['.png', '.jpg', '.jpeg', '.webp']);
 
 // ── Prompt builder ──────────────────────────────────────────────────────
 
-function buildCreativePrompt({ productName, productDescription, headline, targetCountries, language }) {
+// Aspect-ratio → framing hint。两条生图路径(OpenRouter chat-completions)
+// 都不接受 size 参数,目标画幅完全靠 prompt 引导。v2 schema 暴露 4 个比例,
+// 文案明确指出要按目标比例构图。
+const ASPECT_FRAMING = {
+  '1:1':  'Square 1:1 framing.',
+  '4:5':  'Portrait 4:5 vertical framing — composition should still read on a slightly taller 4:5 crop; subject placement upper-center.',
+  '9:16': 'Vertical 9:16 framing for Reels / Stories / TikTok — composition centered vertically; main subject upper-center, leave bottom 25% safer for platform overlays.',
+  '16:9': 'Landscape 16:9 framing for horizontal placements — composition wide and cinematic, subject left-of-center.',
+};
+
+// cta_style → image-overlay description. V_1.0 default is whatsapp; the other
+// values are schema-level placeholders for future non-CTW formats.
+const CTA_OVERLAY = {
+  whatsapp:    'A WhatsApp-style CTA button at bottom right (green, recognizable WhatsApp logo) — this is a Click-to-WhatsApp ad.',
+  signup:      'A "Sign Up" CTA button at bottom right (solid, brand-neutral).',
+  shop:        'A "Shop Now" CTA button at bottom right (solid, brand-neutral).',
+  install:     'An "Install" CTA button at bottom right (app-store-style chip).',
+  learn_more:  'A "Learn More" CTA button at bottom right (subtle, neutral).',
+  call_now:    'A "Call Now" CTA button at bottom right (with a phone icon).',
+};
+
+function buildCreativePrompt({
+  productName,
+  productDescription,
+  headline,
+  targetCountries,
+  language,
+  aspectRatio = '1:1',
+  ctaStyle = 'whatsapp',
+}) {
   const lang = language || 'English';
   const sceneBrief = (productDescription || '').trim();
-  return `Generate a professional advertising image (1024x1024 square, exactly 1024 pixels wide and 1024 pixels tall) for a B2B WhatsApp-conversion ad.
+  const framing = ASPECT_FRAMING[aspectRatio] || ASPECT_FRAMING['1:1'];
+  const ctaLine = CTA_OVERLAY[ctaStyle] || CTA_OVERLAY.whatsapp;
+  return `Generate a professional advertising image for a B2B ad.
+
+## Framing
+${framing}
 
 ## Scene & composition (FOLLOW EXACTLY — this is the creative brief)
 ${sceneBrief || '(no scene brief provided — fall back to a clean studio shot of the product)'}
@@ -78,11 +118,11 @@ Do NOT invent product features not shown in the reference.
 - Commercial-photography quality, studio-grade lighting, photorealistic
 
 ## Text overlay rules
-- A WhatsApp-style CTA button or icon at bottom right (green, recognizable)
+- ${ctaLine}
 - No Chinese/CJK characters unless language is Chinese
 - No phone numbers, no email addresses, no URLs in the image
 - No emojis in text overlay
-- The ONLY text on the image is the headline above + the WhatsApp CTA — do not add taglines, sub-headers, or feature callouts unless the scene brief explicitly asks for them`;
+- The ONLY text on the image is the headline above + the CTA chip — do not add taglines, sub-headers, or feature callouts unless the scene brief explicitly asks for them`;
 }
 
 // ── Image generation via OpenRouter chat/completions ────────────────────
@@ -196,9 +236,9 @@ async function saveAssetToStorage({ imageBuffer, prompt, model, productInfo, use
 /**
  * Generate one ad image from product info + reference images.
  *
- * Primary path: OpenAI Images API (gpt-image-2). On failure, falls back once
- * to Gemini via OpenRouter. Returns { url, storage_path, model } on success,
- * { error, message } on failure.
+ * Primary: openai/gpt-5.4-image-2 via OpenRouter chat-completions. On failure,
+ * falls back once to google/gemini-3.1-flash-image-preview. Returns
+ * { url, storage_path, model, ... } on success, { error, message } on failure.
  */
 export async function generateAdCreative({
   productName,
@@ -207,6 +247,9 @@ export async function generateAdCreative({
   referenceImageUrls = [],
   targetCountries = [],
   language = 'English',
+  aspectRatio = '1:1',
+  ctaStyle = 'whatsapp',
+  creativeType = 'single_image',
   sessionId = null,
   userId = null,
   tenantId = null,
@@ -228,7 +271,15 @@ export async function generateAdCreative({
     };
   }
 
-  const prompt = buildCreativePrompt({ productName, productDescription, headline, targetCountries, language });
+  const prompt = buildCreativePrompt({
+    productName,
+    productDescription,
+    headline,
+    targetCountries,
+    language,
+    aspectRatio,
+    ctaStyle,
+  });
 
   // 入口埋点 —— 没出问题也能看到这次到底用了几张参考图、目标语言/国家、prompt
   // 多大，跟下面每个 attempt 的成败配对就能完整还原一次生图过程。事件名用
@@ -304,12 +355,19 @@ export async function generateAdCreative({
       });
       // headline + product_name echoed back so the chat transcript can
       // caption the image without a cross-row lookup against the tool_use args.
+      // aspect_ratio / cta_style / creative_type echoed so the model can
+      // confirm what was actually produced; `placeholder` flags non-single_image
+      // requests as a synthetic single image (carousel/video not yet real).
       return {
         url: asset.url,
         storage_path: asset.storage_path,
         model: generated.model,
         headline: headline || null,
         product_name: productName || null,
+        aspect_ratio: aspectRatio,
+        cta_style: ctaStyle,
+        creative_type: creativeType,
+        placeholder: creativeType !== 'single_image',
       };
     } catch (err) {
       const durationMs = Date.now() - t0;
