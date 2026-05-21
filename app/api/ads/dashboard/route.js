@@ -5,7 +5,7 @@ import { getTenantContext } from '../../../../lib/tenant-context.js';
 import { resolveMetaContextForTenant } from '../../../../lib/meta-tenant-context.js';
 import { getRedis } from '../../../../lib/redis.js';
 import { config } from '../../../../src/config.js';
-import { fetchAllPages, META_API_VERSION } from '../../../../src/meta-ads.service.js';
+import { fetchAllPages, META_API_VERSION, META_API_TIMEOUT_MS, META_PROXY_AGENT } from '../../../../src/meta-ads.service.js';
 import { formatDateInTimeZone, shiftDateString, localDateToUtcIso } from '../../../../lib/inquiry-dashboard.js';
 
 const STATUS_ACTIVE = 'ACTIVE';

@@ -1,6 +1,6 @@
 # Schema Snapshot (auto-generated)
 
-Generated: 2026-05-18T07:04:08.258Z
+Generated: 2026-05-21T10:45:31.619Z
 
 Live snapshot of `public` schema from Supabase. **Do not edit by hand** — run `node scripts/build-index.mjs` to refresh.
 
@@ -974,6 +974,7 @@ Tables: **51**. Listed alphabetically.
 | `cache_read_input_tokens` | integer | N | `0` |
 | `session_id` | uuid | Y |  |
 | `product_line` | text | Y |  |
+| `cost_source` | text | Y |  |
 
 **Foreign keys:**
 - `tenant_id` → `tenants.id`
