@@ -7,23 +7,19 @@
 // 数 / 音频秒数。下面常量 × API 返回的用量 = 我们落表的成本。
 //
 // OpenAI 涨/降价时 → 改下面的数字、把 `LAST_VERIFIED` 改成当天日期、commit。
-// 别的地方不用动 (calcWhisperCostUsd / calcImageTokenCostUsd 自己引这些常量)。
+// 别的地方不用动 (calcWhisperCostUsd 自己引这些常量)。
 //
 // 校准来源:
 //   - Whisper:       https://openai.com/api/pricing/ (Audio models 段)
 //   - gpt-image-2:   https://openai.com/api/pricing/ (Image generation 段)
 // 价表 last verified: 2026-05-18
 
-/** Whisper 转录,USD / 音频分钟。乘以 (response.duration 秒数 / 60) 落表。 */
+/** Whisper 转录,USD / 音频分钟。乘以 (response.duration 秒数 / 60) 落表。
+ *  2026-05-22 起 Whisper 切到 OpenRouter,这里只在 OR 没返 usage.cost 时兜底。 */
 export const OPENAI_WHISPER_USD_PER_MIN = 0.006;
 
-/** gpt-image-2 token 计费,USD / 百万 tokens (= 直接对照 OpenAI 价格页数字)。
- *  input = 文本 prompt + 参考图编码合一;output = 生成图 token。 */
-export const OPENAI_GPT_IMAGE_2_INPUT_USD_PER_M_TOKENS = 5;
-export const OPENAI_GPT_IMAGE_2_OUTPUT_USD_PER_M_TOKENS = 40;
-
-/** Flat fallback,USD / 张图。仅在 response.usage 缺 input/output_tokens 时
- *  兜底。1024×1024 high quality 实测均值。usage 正常返回时不走这条。 */
+/** Flat fallback,USD / 张图。仅在 response.usage.cost 缺失时兜底。
+ *  1024×1024 high quality 实测均值。usage 正常返回时不走这条。 */
 export const OPENAI_GPT_IMAGE_2_FLAT_USD_PER_IMAGE = 0.21;
 
 /** gpt-image-1 (已下线),USD / 张图。留 key 兜底历史 aigc_assets 行的成本回看。 */
@@ -84,28 +80,18 @@ const PRICES = {
 const UNKNOWN = { input: 0, output: 0 };
 
 // 图片生成模型按 "每张" 计费的 fallback 兜底表。Ogilvy 创意生成正常情况下:
-//   1. gpt-image-2 (OpenAI 直连): response.usage.input_tokens/output_tokens
-//      走 calcImageTokenCostUsd 精确算(含参考图编码 + 输出图 token)
-//   2. google/gemini-3.1-flash-image-preview (OpenRouter): response.usage.cost
-//      是 OpenRouter 权威账单值(从 2026-05-18 起走 usage.include 拿到)
-//   3. usage 缺失才回这张表
-// gpt-image-{1,2} 价格 = 文件顶部 OPENAI_GPT_IMAGE_{1,2}_FLAT_USD_PER_IMAGE 常量。
-// Gemini 的 1.34 是 OpenRouter 路径兜底 (实际走 usage.cost);留这是为了 cost
-// 不会算成 0,但精度不重要。
+//   1. response.usage.cost (OpenRouter 权威账单值,2026-05-22 起 primary 也走
+//      OR/chat-completions,两条路径同口径)
+//   2. usage.cost 缺失才回这张表(<5%)
+// 'gpt-image-2' / 'gpt-image-1' 保留 key 是为了老 aigc_assets 行回看;
+// 当前路径都用前缀键('openai/...')。
 const IMAGE_PRICES_PER_CALL = {
+  // legacy direct-OpenAI keys —— 历史 row 回看用,新调用不会写
   'gpt-image-2': OPENAI_GPT_IMAGE_2_FLAT_USD_PER_IMAGE,
   'gpt-image-1': OPENAI_GPT_IMAGE_1_FLAT_USD_PER_IMAGE,
+  // 当前 OR 路径
+  'openai/gpt-5.4-image-2': OPENAI_GPT_IMAGE_2_FLAT_USD_PER_IMAGE,
   'google/gemini-3.1-flash-image-preview': 1.34,
-};
-
-// gpt-image-2 token 单价(USD per 1K tokens) —— 由文件顶部 OPENAI_* 常量
-// (per-million 单位,直接对照 OpenAI 价格页)/ 1000 得到。
-// 注意: input_tokens 是文本+图片合一,OpenAI 已经按混合扣费,这里就按统一 input 价。
-const IMAGE_TOKEN_PRICES = {
-  'gpt-image-2': {
-    input: OPENAI_GPT_IMAGE_2_INPUT_USD_PER_M_TOKENS / 1000,
-    output: OPENAI_GPT_IMAGE_2_OUTPUT_USD_PER_M_TOKENS / 1000,
-  },
 };
 
 // Anthropic prompt cache 折扣系数（相对 input 价）。
@@ -178,30 +164,9 @@ export function calcImageCostUsd({ model, count = 1 }) {
   return Math.round(lookupImagePrice(model) * count * 1_000_000) / 1_000_000;
 }
 
-/**
- * gpt-image-2 风格的 token 计费精确算法。如果 OpenAI Images API response.usage
- * 给到 input_tokens / output_tokens，走这条算精确成本（含文本 prompt + 参考图
- * 编码 + 输出图 token），否则 caller 自己回落到 calcImageCostUsd flat fee。
- *
- * 命中不到 IMAGE_TOKEN_PRICES 表的 model 直接回 null —— 让 caller 区分"没价位"
- * 和"算出来 0"，再决定走 flat fee 兜底。
- */
-export function calcImageTokenCostUsd({ model, inputTokens = 0, outputTokens = 0 }) {
-  if (!model) return null;
-  let price = IMAGE_TOKEN_PRICES[model];
-  if (!price) {
-    for (const key of Object.keys(IMAGE_TOKEN_PRICES)) {
-      if (model.startsWith(key)) { price = IMAGE_TOKEN_PRICES[key]; break; }
-    }
-  }
-  if (!price) return null;
-  const cost = (inputTokens / 1000) * price.input + (outputTokens / 1000) * price.output;
-  return Math.round(cost * 1_000_000) / 1_000_000;
-}
-
-// Whisper(OpenAI 直连)按音频时长计费,单价来自文件顶部
-// OPENAI_WHISPER_USD_PER_MIN 常量。caller 传 audioSeconds (来自 verbose_json
-// response.duration)后算精确成本。
+// Whisper 按音频时长计费,单价来自文件顶部 OPENAI_WHISPER_USD_PER_MIN
+// 常量。2026-05-22 起 OR 路径优先用 response.usage.cost;这里只在缺失时
+// 兜底,caller 传 audioSeconds(来自 verbose_json response.duration)。
 const WHISPER_PRICE_PER_SEC = OPENAI_WHISPER_USD_PER_MIN / 60;
 
 export function calcWhisperCostUsd({ audioSeconds = 0 }) {

@@ -1,7 +1,9 @@
 /**
  * Ogilvy creative service — single-image ad creative generation.
  *
- * Self-contained: all OpenAI Images API + Supabase persistence lives here.
+ * Self-contained: 两条生图路径都走 OpenRouter /chat/completions(image-out
+ * 模型),输出在 message.images[]。primary = openai/gpt-5.4-image-2,失败兜
+ * 底 Gemini 3.1 Flash Image。
  *
  * Scope for MVP:
  *   - Square 1024×1024 image for Meta feed
@@ -12,10 +14,9 @@
 import { config } from '../../config.js';
 import supabase from '../../../lib/supabase.js';
 import { logLlmCall } from '../../llm-client.js';
-import { calcImageCostUsd, calcImageTokenCostUsd } from '../../llm-pricing.js';
+import { calcImageCostUsd } from '../../llm-pricing.js';
 
-// gpt-image-2 + quality=high + 1024×1024 经常 >2min,120s 不够会兜到 Gemini。
-const FETCH_TIMEOUT = 300_000;
+const FETCH_TIMEOUT = 120_000;
 const STORAGE_BUCKET = 'aigc-assets';
 
 // Prefix every legitimate creative URL produced by saveAssetToStorage starts
@@ -31,13 +32,11 @@ export function isAllowedCreativeUrl(url) {
   return typeof url === 'string' && url.startsWith(ALLOWED_CREATIVE_URL_PREFIX);
 }
 
-const PRIMARY_MODEL = 'gpt-image-2';
+const PRIMARY_MODEL = 'openai/gpt-5.4-image-2';
 const FALLBACK_MODEL = 'google/gemini-3.1-flash-image-preview';
-const OPENAI_IMAGES_EDITS_URL = 'https://api.openai.com/v1/images/edits';
 
-// OpenAI Images API only accepts png / jpg / webp for reference uploads.
-// Stricter set wins (the fallback path could take .gif via OpenRouter, but
-// we keep one filter to avoid asymmetric refs between primary and fallback).
+// 两条路径都把参考图当 image_url 塞 message content,过滤一道扩展名避免
+// 模型端 invalid_request。两个 provider 都允许 png/jpg/webp。
 const SUPPORTED_REF_EXTS = new Set(['.png', '.jpg', '.jpeg', '.webp']);
 
 // ── Prompt builder ──────────────────────────────────────────────────────
@@ -82,53 +81,13 @@ Do NOT invent product features not shown in the reference.
 - The ONLY text on the image is the headline above + the WhatsApp CTA — do not add taglines, sub-headers, or feature callouts unless the scene brief explicitly asks for them`;
 }
 
-// ── Primary: OpenAI Images API ──────────────────────────────────────────
+// ── Image generation via OpenRouter chat/completions ────────────────────
+//
+// 适用 image-out 模型 (openai/gpt-5.4-image-2、google/gemini-3.1-flash-
+// image-preview 等)。OR 不暴露 /v1/images/edits,这些模型统一走 chat-
+// completions 输出 message.images[]。参考图当 image_url part 塞进去。
 
-async function callOpenAIImages(model, prompt, refUrls) {
-  // Fetch reference images as Blobs for multipart upload.
-  const refBlobs = await Promise.all(
-    refUrls.map(async (url, i) => {
-      const r = await fetch(url, { signal: AbortSignal.timeout(FETCH_TIMEOUT) });
-      if (!r.ok) throw new Error(`Failed to fetch reference image ${url}: HTTP ${r.status}`);
-      const buf = Buffer.from(await r.arrayBuffer());
-      const ext = new URL(url, 'http://x').pathname.match(/\.(\w+)$/)?.[1]?.toLowerCase() || 'png';
-      const mime = ext === 'jpg' ? 'image/jpeg' : `image/${ext}`;
-      return { blob: new Blob([buf], { type: mime }), filename: `ref_${i}.${ext}` };
-    }),
-  );
-
-  const form = new FormData();
-  form.append('model', model);
-  form.append('prompt', prompt);
-  form.append('n', '1');
-  form.append('size', '1024x1024');
-  form.append('quality', 'high');
-  // gpt-image-2 要求多参考图用 image[] 数组语法;单图也兼容。
-  for (const { blob, filename } of refBlobs) {
-    form.append('image[]', blob, filename);
-  }
-
-  const res = await fetch(OPENAI_IMAGES_EDITS_URL, {
-    method: 'POST',
-    headers: { 'Authorization': `Bearer ${config.openai.apiKey}` },
-    body: form,
-    signal: AbortSignal.timeout(FETCH_TIMEOUT),
-  });
-  const data = await res.json();
-  if (data.error) throw new Error(data.error.message || 'Image generation failed');
-
-  const b64 = data.data?.[0]?.b64_json;
-  if (!b64) throw new Error('No image returned by model');
-
-  // gpt-image-2 自 2026-Q1 起在 response.usage 里返回 input_tokens / output_tokens
-  // (含参考图编码 + prompt 文本 + 输出图 token)。caller 据此走 token-based 精确
-  // 计费,否则回落 flat fee $0.21/张近似。
-  return { imageBuffer: Buffer.from(b64, 'base64'), model, usage: data.usage || null };
-}
-
-// ── Fallback: Gemini via OpenRouter chat/completions ────────────────────
-
-async function callOpenRouterFallback(model, prompt, refUrls) {
+async function callOpenRouterImageGen(model, prompt, refUrls) {
   const url = `${config.openrouter.baseURL.replace(/\/$/, '')}/chat/completions`;
   const promptContent = [
     ...refUrls.map(u => ({ type: 'image_url', image_url: { url: u } })),
@@ -143,9 +102,8 @@ async function callOpenRouterFallback(model, prompt, refUrls) {
     body: JSON.stringify({
       model,
       messages: [{ role: 'user', content: promptContent }],
-      // 拿 OpenRouter 实际扣的钱(usage.cost),caller 用它直接落表,绕过本地
-      // 价表(Gemini Flash Image 是 token 计费,我们的 IMAGE_PRICES_PER_CALL
-      // flat $0.03 跟实际差 ~45 倍)。
+      // OpenRouter 实际扣费(usage.cost)。caller 直接落表,绕过本地价表
+      // (token 计费的模型本地价表偏差最大可达 45 倍)。
       usage: { include: true },
     }),
     signal: AbortSignal.timeout(FETCH_TIMEOUT),
@@ -156,9 +114,9 @@ async function callOpenRouterFallback(model, prompt, refUrls) {
   const message = data.choices?.[0]?.message;
   if (!message) throw new Error('No message in response');
 
-  // Gemini via OpenRouter returns the image on message.images[] (not
-  // message.content[]) — content is null on image responses. Each item is
-  // { type: 'image_url', image_url: { url: 'data:image/...;base64,...' } }.
+  // image-out 模型的图在 message.images[] (不是 message.content[]) ——
+  // content 在图响应里是 null。每项形如:
+  //   { type: 'image_url', image_url: { url: 'data:image/...;base64,...' } }
   let b64 = null;
   for (const part of Array.isArray(message.images) ? message.images : []) {
     if (part?.type === 'image_url') {
@@ -169,7 +127,6 @@ async function callOpenRouterFallback(model, prompt, refUrls) {
   }
   if (!b64) throw new Error('No image returned by model');
 
-  // Gemini via OpenRouter 透传 usage 比较随机;有就用,没有 caller 回落 flat fee。
   return { imageBuffer: Buffer.from(b64, 'base64'), model: data.model || model, usage: data.usage || null };
 }
 
@@ -255,11 +212,8 @@ export async function generateAdCreative({
   if (!tenantId) {
     return { error: 'tenant_required', message: 'tenantId is required' };
   }
-  if (!config.openai.apiKey) {
-    return { error: 'config_missing', message: 'OPENAI_API_KEY is not configured' };
-  }
   if (!config.openrouter.apiKey) {
-    return { error: 'config_missing', message: 'OPENROUTER_API_KEY is not configured (needed for fallback)' };
+    return { error: 'config_missing', message: 'OPENROUTER_API_KEY is not configured' };
   }
   // CTWA ads need photorealistic product fidelity — reference images are mandatory.
   const refs = filterSupportedRefs(referenceImageUrls).slice(0, 3);
@@ -293,45 +247,32 @@ export async function generateAdCreative({
   }));
 
   // Primary → fallback. We log each failure to stderr but return the
-  // aggregate error only after both paths fail.
+  // aggregate error only after both paths fail. 两条路径同一 caller,只换 model。
   const attempts = [
-    { label: 'primary',  caller: callOpenAIImages,       model: PRIMARY_MODEL  },
-    { label: 'fallback', caller: callOpenRouterFallback, model: FALLBACK_MODEL },
+    { label: 'primary',  model: PRIMARY_MODEL  },
+    { label: 'fallback', model: FALLBACK_MODEL },
   ];
 
   let lastErr;
-  for (const { label, caller, model } of attempts) {
+  for (const { label, model } of attempts) {
     const t0 = Date.now();
     try {
-      const generated = await caller(model, prompt, refs);
-      // 图片成本落表,三档优先级:
-      //   1. OpenRouter fallback 路径(Gemini): response.usage.cost 是账单权威值
-      //   2. OpenAI 直连(gpt-image-2): 拿 response.usage 里的 input_tokens/
-      //      output_tokens,走 calcImageTokenCostUsd 精确算(含参考图编码 + 输出图)
-      //   3. 兜底: flat per-call 价(见 llm-pricing.js#IMAGE_PRICES_PER_CALL)
+      const generated = await callOpenRouterImageGen(model, prompt, refs);
+      // 图片成本两档:
+      //   1. response.usage.cost (OpenRouter 权威账单值)
+      //   2. 兜底 flat per-call(usage 缺失时,见 llm-pricing.js#IMAGE_PRICES_PER_CALL)
       // 从 2026-05-17 起 ogilvy session 强绑 product_line,/product-lines/[id]
       // /cost-stats 能看到本产品线的图片生成开销。
-      const orCost = generated.usage?.cost;  // OpenRouter authoritative
+      const orCost = generated.usage?.cost;
       const inputTokens = Number(generated.usage?.input_tokens) || 0;
       const outputTokens = Number(generated.usage?.output_tokens) || 0;
-      const tokenCost = (inputTokens || outputTokens)
-        ? calcImageTokenCostUsd({ model: generated.model, inputTokens, outputTokens })
-        : null;
-      let costUsdOverride;
-      let costSource;
-      if (orCost != null) {
-        costUsdOverride = orCost;
-        costSource = 'openrouter';
-      } else if (tokenCost != null) {
-        costUsdOverride = tokenCost;
-        costSource = 'openai-direct-calc';
-      } else {
-        costUsdOverride = calcImageCostUsd({ model: generated.model, count: 1 });
-        costSource = 'local-pricing-table';
-      }
+      const costUsdOverride = orCost != null
+        ? orCost
+        : calcImageCostUsd({ model: generated.model, count: 1 });
+      const costSource = orCost != null ? 'openrouter' : 'local-pricing-table';
       logLlmCall({
         method: 'image.edit',
-        provider: label === 'primary' ? 'openai' : 'openrouter',
+        provider: 'openrouter',
         models: [generated.model],
         responseModel: generated.model,
         finishReason: 'image_returned',
@@ -386,7 +327,7 @@ export async function generateAdCreative({
       // 完全看不出 primary 是否被尝试过、为什么挂。cost_usd=0 因为失败不扣费。
       logLlmCall({
         method: 'image.edit',
-        provider: label === 'primary' ? 'openai' : 'openrouter',
+        provider: 'openrouter',
         models: [model],
         responseModel: model,
         finishReason: 'error',

@@ -10,13 +10,6 @@ export const config = {
     baseURL: 'https://openrouter.ai/api/v1',
   },
 
-  // OpenAI Direct —— 当前仅 gpt-image-2 直连(OpenRouter 没 /v1/images/edits
-  // 端点，chat-completions 包装版本被区域 403 拦)。Whisper / embeddings 都走
-  // OpenRouter。如果未来 gpt-image-2 也能切到 OR，可删除此节 + env 变量。
-  openai: {
-    apiKey: process.env.OPENAI_API_KEY,
-  },
-
   // Supabase — URL + publishable/anon key (safe to include in client bundles)
   // serviceRoleKey 仅 server 端可见 —— 创建 auth 用户、绕 RLS 等管理操作用。
   supabase: {
