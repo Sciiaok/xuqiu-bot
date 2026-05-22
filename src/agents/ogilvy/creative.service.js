@@ -16,7 +16,11 @@ import supabase from '../../../lib/supabase.js';
 import { logLlmCall } from '../../llm-client.js';
 import { calcImageCostUsd } from '../../llm-pricing.js';
 
-const FETCH_TIMEOUT = 120_000;
+// gpt-5.4-image-2 通过 OR chat-completions 路径出图 1024×1024 实测 >2min,
+// 120s 不够会全量兜到 Gemini —— 跟老 commit 913e008 在直连路径上踩过的坑
+// 一致(切到 OR 不改变模型本身的出图时间)。aws-test 实测 primary 120003ms
+// 命中 timeout × N 次后才确认。
+const FETCH_TIMEOUT = 300_000;
 const STORAGE_BUCKET = 'aigc-assets';
 
 // Prefix every legitimate creative URL produced by saveAssetToStorage starts
