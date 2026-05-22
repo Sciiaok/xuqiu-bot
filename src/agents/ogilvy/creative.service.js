@@ -272,6 +272,26 @@ export async function generateAdCreative({
 
   const prompt = buildCreativePrompt({ productName, productDescription, headline, targetCountries, language });
 
+  // 入口埋点 —— 没出问题也能看到这次到底用了几张参考图、目标语言/国家、prompt
+  // 多大，跟下面每个 attempt 的成败配对就能完整还原一次生图过程。事件名用
+  // 'creative.start' 跟 llm-client 的 'llm.call' 区分开，pm2 logs 可直接 grep。
+  console.log(JSON.stringify({
+    ts: new Date().toISOString(),
+    level: 'info',
+    event: 'creative.start',
+    component: 'ogilvy/creative',
+    session_id: sessionId,
+    tenant_id: tenantId,
+    product_line: productLine,
+    primary_model: PRIMARY_MODEL,
+    fallback_model: FALLBACK_MODEL,
+    ref_count: refs.length,
+    target_countries: targetCountries,
+    language,
+    headline_len: (headline || '').length,
+    prompt_len: prompt.length,
+  }));
+
   // Primary → fallback. We log each failure to stderr but return the
   // aggregate error only after both paths fail.
   const attempts = [
@@ -347,7 +367,42 @@ export async function generateAdCreative({
         product_name: productName || null,
       };
     } catch (err) {
-      console.warn(`[ogilvy/creative] ${label} (${model}) failed: ${err.message}`);
+      const durationMs = Date.now() - t0;
+      // 结构化 stdout —— 让 pm2 logs / 日志聚合平台都能 grep "creative.attempt.fail"。
+      console.log(JSON.stringify({
+        ts: new Date().toISOString(),
+        level: 'warn',
+        event: 'creative.attempt.fail',
+        component: 'ogilvy/creative',
+        session_id: sessionId,
+        tenant_id: tenantId,
+        product_line: productLine,
+        attempt: label,
+        model,
+        duration_ms: durationMs,
+        error_message: err?.message || String(err),
+      }));
+      // 同时落 llm_usage_logs —— 没这一行的话整次会话只有 fallback 的成功记录，
+      // 完全看不出 primary 是否被尝试过、为什么挂。cost_usd=0 因为失败不扣费。
+      logLlmCall({
+        method: 'image.edit',
+        provider: label === 'primary' ? 'openai' : 'openrouter',
+        models: [model],
+        responseModel: model,
+        finishReason: 'error',
+        promptTokens: 0,
+        completionTokens: 0,
+        cacheCreationInputTokens: 0,
+        cacheReadInputTokens: 0,
+        durationMs,
+        tenantId,
+        callSite: 'ogilvy.image-gen',
+        sessionId,
+        productLine,
+        costUsdOverride: 0,
+        costSource: 'no-charge-failed',
+        errorMessage: err?.message || String(err),
+      });
       lastErr = err;
     }
   }

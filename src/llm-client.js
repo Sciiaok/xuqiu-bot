@@ -78,6 +78,10 @@ function logLlmCall({
   // 直连)。值范围: 'openrouter' (response.usage.cost) / 'openai-direct-calc'
   // (Whisper/image 本地公式) / 'local-pricing-table' (兜底)。
   costSource,
+  // 失败时的 provider 错误文本（OpenAI/OpenRouter error.message 或本地 throw）。
+  // 配合 finishReason='error' 使用 —— caller 在 catch 块也调 logLlmCall 时填，
+  // 落入 llm_usage_logs.error_message，事后 SQL 直接查到失败原因。
+  errorMessage,
 }) {
   const model = responseModel || models?.[0];
 
@@ -131,6 +135,7 @@ function logLlmCall({
     call_site: callSite || null,
     session_id: sessionId || null,
     product_line: productLine || null,
+    error_message: errorMessage || null,
   }));
 
   // Fire-and-forget 落表，不 await、不抛错 —— 写不进去也不应该影响 LLM 返回。
@@ -138,8 +143,9 @@ function logLlmCall({
   //
   // 兼容性：cache_*_tokens 列在 2026-05-13 migration 才加上、session_id 在
   // 2026-05-15 migration 才加上、product_line 在 2026-05-16 加上、cost_source
-  // 在 2026-05-18 加上。任一 migration 没 apply 的环境，PostgREST 会回 42703
-  // undefined_column；这时退回到 baseRow 老 schema，不丢日志。
+  // 在 2026-05-18 加上、error_message 在 2026-05-22 加上。任一 migration 没
+  // apply 的环境，PostgREST 会回 42703 undefined_column；这时退回到 baseRow
+  // 老 schema，不丢日志。
   try {
     const baseRow = {
       tenant_id: tenantId || null,
@@ -159,6 +165,7 @@ function logLlmCall({
       session_id: sessionId || null,
       product_line: productLine || null,
       cost_source: resolvedSource,
+      error_message: errorMessage || null,
     };
     const admin = getSupabaseAdmin();
     admin.from('llm_usage_logs').insert(rowWithExtras).then(({ error }) => {
