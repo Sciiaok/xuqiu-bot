@@ -126,14 +126,44 @@
 | **ID 印尼** | Halal 认证(若适用)+ Bahasa Indonesia |
 | **MY 马来西亚** | 右舵 + 马来语 / 英语 |
 
-### 2.6 欧洲发达(V_1.0 不主投,留作扩展)
+### 2.6 欧洲发达 + 英美澳 + 日韩(★ CTW 实测可行性低)
+
+**首要提示**:本组市场对 Meta CTW(Click-to-WhatsApp)有以下**实测限制**,
+skill 在阶段 2 推荐路径时**应优先非 CTW 形式**:
+
+| 限制项 | 影响 |
+|---|---|
+| **GDPR explicit consent** | WhatsApp 触达前需获取明确同意,审核难度大幅上升 |
+| **DSA 透明性要求** | 创意必带"为什么投给我",素材空间被压缩 |
+| **审核通过率实测** | 较新兴市场低 30-60%(各国差异大,需 web_search 当下数据) |
+| **CPM 实测** | 较新兴市场高 2-5 倍(France ~$9.67、Germany ~$11、UK ~$13) |
+| **WhatsApp 渗透率** | 法/德/英 B2B 商务沟通仍以 Email + LinkedIn 为主,WhatsApp 非首选 |
+
+**阶段 2 推荐的替代路径**(skill 务必给出):
+
+| 替代形式 | 适用 | LeadEngine V_1.0 支持落地? |
+|---|---|---|
+| **Meta Lead Form**(Instant Form) | EU B2B 询盘主流;GDPR consent 内置在表单 | ❌ 等 V_2.0 |
+| **Meta Website Conversions + Pixel** | 有自家落地页 + Pixel 时;转化追踪完整 | ❌ 等 V_2.0 |
+| **LinkedIn** | EU/英美 B2B 强势渠道 | ❌ 等 V_2.0 |
+| **Google Search / UAC** | 高意图询盘 | ❌ 等 V_2.0 |
+| **Meta CTW(慎用)** | 仅当用户明确接受风险 | ✅ V_1.0 当前唯一可执行 |
+
+**SKILL.md §0.3 + §4.3 + §8.1 已规定**:推荐 CTW 给此类市场时必须明示风险 + 让用户拍板;
+推荐非 CTW 时必须告知用户阶段 6 蒸馏 lose 什么。
+
+### 2.6.1 各国专项规则(任何路径都要遵守)
 
 | 国家 | 关键要求 |
 |---|---|
-| DE | 续航必标 WLTP;价格用 "ab" 或 "UVP";WhatsApp GDPR |
-| FR | 2022 起所有汽车广告含 3 强制语之一;CO₂ 必标;ARPP |
-| UK | ASA CAP Code;续航 WLTP;价格含 OTR |
-| 欧盟 | DSA 广告标"为什么投给我";GDPR |
+| DE 德国 | 续航必标 WLTP;价格用 "ab" 或 "UVP";WhatsApp 触达受 GDPR 强约束 |
+| FR 法国 | 2022 起所有汽车广告含 3 强制语之一;CO₂ 必标;ARPP 行业自律 |
+| UK 英国 | ASA CAP Code;续航 WLTP;价格含 OTR |
+| IT/ES 意西 | DSA + 当地消费者保护法;价格含 IVA |
+| US 美国 | 各州法规差异大(CCPA/CPRA);FTC 真实广告 |
+| 欧盟通用 | DSA 广告标"为什么投给我";GDPR explicit consent |
+| 日本 | 个人情报保护法;医药品广告法(涉及健康类) |
+| 韩国 | 信息通信网法;广告标识规范 |
 
 ---
 

@@ -20,42 +20,46 @@
 
 ## 2. 阶段 6 收口：CTW 蒸馏
 
-阶段 1-5 完整产出后，**用户在对话里明确确认**，再蒸馏成单个 CTW 投放计划调
-`draft_ad_plan` 提交。
+> **设计哲学**:阶段 1-5 是真实广告顾问思考(不预设广告形式);阶段 6 才把方案
+> 蒸馏到 LeadEngine V_1.0 唯一可执行的 Meta CTW。**冲突时本补丁为准**(skill §8.1
+> 已对齐这套规则,这里是宿主侧硬约束兜底)。
 
-⚠️ 触发时机限定：**仅阶段 6（plan_json 输出）后**触发，不在阶段 1-5 单独完成后触发。
+⚠️ `draft_ad_plan` 触发时机限定:**仅阶段 6 plan_json 输出后**,不在阶段 1-5
+单独完成后触发。
 
-蒸馏规则：
+### 2.1 进入阶段 6 时先做蒸馏决策
 
-1. **单 campaign** —— 多市场用同 campaign 下多 ad_set 切分（按 `targeting.countries`）
-2. **`objective` 锁定 `WHATSAPP_CONVERSATIONS`** —— 覆盖 skill §4.3 / platforms/meta
-   §5.1 给的 `WHATSAPP_CONVERSATIONS` 取值即可；这是 LeadEngine launch 路径
-   实际接受的值
-3. **`channel` / `ad_format` 顶层字段** —— V_1.0 默认填 `"fb"` / `"ctw"`；其余
-   dim5 取值是框架预留，遇到 Google/TikTok 请求一律回退到 Meta CTW
-4. **每条 ad 必填 `welcome_message`** —— 含产品名 + 一个开放式问题；按目标
-   市场使用当地语言或英语；字符上限按 web_search 拉到的 Meta 当前限制
-   （过往实测撞过 `(#100)` 拒绝，**不固定 300**）
+按阶段 2 推荐路径 + 目标市场分类:
+
+| Case | 阶段 2 推荐 | 目标市场 | 阶段 6 行为 |
+|---|---|---|---|
+| **A** | Meta CTW | 价敏新兴/中东/拉美/东南亚 等 CTW 友好 | 直接走标准 CTW 蒸馏 |
+| **B** | Meta CTW | 欧洲发达/英美澳/日韩 等 CTW 不友好 | 蒸馏 + 末尾带 ⚠️ 警告 banner |
+| **C** | 非 CTW(Lead Form / Web Conv / Google / TikTok) | 任何 | **必须先告诉用户蒸馏 lose 什么**,等用户确认 a/b 才落 plan_json |
+
+Case C 的拍板交互写在 skill §8.1。用户没明确确认前**不能**调 `draft_ad_plan`。
+
+### 2.2 蒸馏后的 plan_json 字段约束
+
+1. **单 campaign** —— 多市场用同 campaign 下多 ad_set 切分(按 `targeting.countries`)
+2. **`channel` / `ad_format`** —— 锁定 `"fb"` / `"ctw"`(V_1.0 只能这俩)
+3. **`objective`** —— 锁定 `WHATSAPP_CONVERSATIONS`(host launch 路径要求)
+4. **每条 ad 必填 `welcome_message`** —— 含产品名 + 开放式问题;按目标市场用当地
+   语言或英语;字符上限按阶段 2 web_search 锁定的 Meta 当前限制(**不固定 300**)
 5. **每条 ad 可填 `creative_typology_id` + `first_contact_binding`** —— 取自
-   `industries/{行业}.md` 的图片类型清单与首响映射；让宿主可审计"图片承诺-
-   WhatsApp 兑现"一致性
-6. **`whatsapp.phone_number_id`** —— 从动态段「当前账户可用 WhatsApp 号码」
-   挑；多号码按目标市场地理/语言匹配；`waba_id` / `page_id` 由宿主在 handler
-   自动补全，**不要**问用户技术 ID
+   `industries/{行业}.md`,让宿主可审计"图片承诺-WhatsApp 兑现"一致性
+6. **`whatsapp.phone_number_id`** —— 从动态段挑;`waba_id` / `page_id` 由 handler
+   自动补全,**不要**问用户技术 ID
 7. **`creative.image_url`** —— 逐字复制 `generate_ad_creative` 返回的 url
-8. **`daily_budget_cents` 单位为分** —— $50/天 = 5000；放 **campaign 层（CBO）**，
-   不要放 ad_set 层
-9. **`targeting`** —— 每个 ad_set 必须有 `countries`（ISO-2）、`age_min`、
-   `age_max`；`interests` 可选
-10. **`schedule`（可选 dayparting）** —— 若阶段 3 给了"每日最优投放时段"结论，
-    填入对应 ad_set 的 `schedule.windows`（`days` 0=Sun..6=Sat，
-    `start_minute`/`end_minute` 0-1440）；多市场必填 `timezone_type: "USER"`；
-    不写则 24h 全天投放。`pacing_type` 由宿主自动注入，**不要**自己写
+8. **`daily_budget_cents` 单位为分** —— $50/天 = 5000;放 **campaign 层(CBO)**
+9. **`targeting`** —— 每个 ad_set 必须有 `countries`(ISO-2)、`age_min`、`age_max`
+10. **`schedule`(可选 dayparting)** —— 若阶段 4 有"每日最优投放时段"结论则填;
+    多市场必填 `timezone_type: "USER"`;`pacing_type` 由 handler 注入,**不要**自己写
 
 ⚠️ 阶段 5 没出现过成功的 `generate_ad_creative` 调用就调 `draft_ad_plan` 会被
-拒（sanity check）。
+拒(sanity check)。
 
-调用成功后用一句中文复述：**方案已落库，请点击右侧"启动投放"按钮上线。
+调用成功后用一句中文复述:**方案已落库,请点击右侧"启动投放"按钮上线。
 不要自己尝试启动投放**——上线由用户在 UI 触发。
 
 ## 3. 动态段消费规则
