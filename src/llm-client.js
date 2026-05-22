@@ -9,7 +9,10 @@
  *                       .messages.create / .messages.stream  (/chat/completions, OpenAI format)
  *                       .embeddings.create                   (/embeddings)
  *                       .chat.completions.create             (/chat/completions, raw passthrough)
- *   - `openai`       → OpenAI Direct (Whisper only)
+ *                       .audio.transcriptions.create         (/audio/transcriptions, Whisper)
+ *   - `openai`       → OpenAI Direct (gpt-image-2 only —— OpenRouter 没有
+ *                       /v1/images/edits 端点，chat-completions 包装版本又被
+ *                       区域 403 拦掉，所以这条路径暂时只能直连)
  *
  * Every business file imports its client from here — no other file may
  * read LLM API keys from process.env.
@@ -569,22 +572,27 @@ const openrouter = {
 };
 
 // ══════════════════════════════════════════════════════════════════════
-// OpenAI client (Direct) — Whisper only
+// OpenAI Whisper transcription —— 走 OpenRouter
 // ══════════════════════════════════════════════════════════════════════
+//
+// 2026-05-22：从 OpenAI 直连切到 OpenRouter `/audio/transcriptions`，
+// 形态完全兼容(multipart + whisper-1 model id 不变)，账单统一进 OR 控制台。
+// 实测 POST openrouter.ai/api/v1/audio/transcriptions 端点存在且可用。
+// 仍挂在 `openai.audio.transcriptions` namespace 下保持 caller 兼容；export
+// 名 `openai` 现在的语义是「OpenAI 旗下模型的非 chat 接口」而非"直连"。
+//
+// 成本：优先用 response.usage.cost(OR 权威账单值, costSource='openrouter')，
+// 兜底用音频秒数 × $0.006/min 本地公式(costSource='local-pricing-table')。
+// meta = { tenantId, callSite, sessionId?, productLine? }
 
 const openai = {
   audio: {
     transcriptions: {
-      // 2026-05-18：补埋点 + 强制 verbose_json 拿到 duration。
-      // Whisper 按音频秒数计费（$0.006/min），caller 不知道音频时长，由
-      // OpenAI response.duration 给出。强行覆盖 response_format（caller
-      // 用 transcription.text，verbose_json 仍包含 text 字段，向后兼容）。
-      // meta = { tenantId, callSite, sessionId?, productLine? }
       async create(params, meta = {}) {
         const t0 = Date.now();
         const logMeta = {
           method: 'transcription',
-          provider: 'openai',
+          provider: 'openrouter',
           models: [params.model],
           tenantId: meta.tenantId,
           callSite: meta.callSite,
@@ -595,49 +603,56 @@ const openai = {
         const form = new FormData();
         form.append('file', params.file);
         form.append('model', params.model);
+        // 强制 verbose_json 拿到 duration —— OR 没返 usage.cost 时回落本地秒数计费。
+        // caller 只用 transcription.text，verbose_json 仍含 text 字段，向后兼容。
         form.append('response_format', 'verbose_json');
         if (params.language) form.append('language', params.language);
         if (params.prompt) form.append('prompt', params.prompt);
 
         try {
+          if (!config.openrouter.apiKey) {
+            throw new Error('[llm-client] OPENROUTER_API_KEY required for transcription');
+          }
           const response = await fetchWithTimeout(
-            `https://api.openai.com/v1/audio/transcriptions`,
+            `${config.openrouter.baseURL}/audio/transcriptions`,
             {
               method: 'POST',
-              headers: { Authorization: `Bearer ${config.openai.apiKey}` },
+              headers: { Authorization: `Bearer ${config.openrouter.apiKey}` },
               body: form,
             },
             60_000,
           );
           if (!response.ok) {
             const body = await response.text();
-            throw new Error(`OpenAI transcription error ${response.status}: ${body}`);
+            throw new Error(`OpenRouter transcription error ${response.status}: ${body}`);
           }
           const result = await response.json();
+          const orCost = result.usage?.cost;
           const audioSeconds = Number(result.duration) || 0;
+          const costUsdOverride = orCost != null ? Number(orCost) : calcWhisperCostUsd({ audioSeconds });
+          const costSource = orCost != null ? 'openrouter' : 'local-pricing-table';
           logLlmCall({
             ...logMeta,
-            responseModel: params.model,
+            responseModel: result.model || params.model,
             finishReason: 'transcription_returned',
             promptTokens: 0,
             completionTokens: 0,
             cacheCreationInputTokens: 0,
             cacheReadInputTokens: 0,
             durationMs: Date.now() - t0,
-            costUsdOverride: calcWhisperCostUsd({ audioSeconds }),
-            // OpenAI 直连,响应里不带 cost。按音频秒数 × $0.006/min 本地公式算。
-            // 如果未来 Whisper 涨/降价,需要同步改 calcWhisperCostUsd。
-            costSource: 'openai-direct-calc',
+            costUsdOverride,
+            costSource,
           });
           return result;
         } catch (err) {
           logLlmCall({
             ...logMeta,
             responseModel: params.model,
-            finishReason: `error: ${err.message}`,
+            finishReason: 'error',
             durationMs: Date.now() - t0,
             costUsdOverride: 0,
-            costSource: 'openai-direct-calc',
+            costSource: 'no-charge-failed',
+            errorMessage: err?.message || String(err),
           });
           throw err;
         }
