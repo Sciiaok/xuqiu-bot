@@ -128,3 +128,10 @@
   color: var(--text3);
   margin-top: 24px;
 }
+.version {
+  margin-top: 4px;
+  font-size: 10px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  color: var(--text3);
+  opacity: 0.7;
+}

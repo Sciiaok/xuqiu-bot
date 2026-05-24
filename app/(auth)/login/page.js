@@ -102,6 +102,9 @@ export default function V5LoginPage() {
 
         <div className={s.copyright}>
           © {new Date().getFullYear()} Prome Engine
+          {process.env.NEXT_PUBLIC_COMMIT_SHA ? (
+            <div className={s.version}>build {process.env.NEXT_PUBLIC_COMMIT_SHA.slice(0, 7)}</div>
+          ) : null}
         </div>
       </div>
     </div>
