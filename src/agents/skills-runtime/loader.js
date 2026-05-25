@@ -65,11 +65,27 @@ function loadFromDir(dirPath, expectedName) {
   const refDir = path.join(dirPath, 'references');
   const hash = crypto.createHash('sha256').update(skillRaw);
   if (fs.existsSync(refDir) && fs.statSync(refDir).isDirectory()) {
-    const files = fs.readdirSync(refDir).filter(f => f.endsWith('.md')).sort();
-    for (const f of files) {
-      const content = fs.readFileSync(path.join(refDir, f), 'utf8');
-      references.set(path.basename(f, '.md'), content);
-      hash.update('\0').update(f).update('\0').update(content);
+    // Recursive walk: bundle v2 reorganized references into `platforms/`,
+    // `industries/`, `playbooks/` subdirs + a few top-level docs. Keys are
+    // relative paths without the `.md` suffix using forward slashes
+    // (e.g. `platforms/meta`, `industries/automotive`, `data-sources`).
+    // Sorted for deterministic sha256.
+    const files = [];
+    const walk = (dir) => {
+      for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+        const full = path.join(dir, entry.name);
+        if (entry.isDirectory()) walk(full);
+        else if (entry.isFile() && entry.name.endsWith('.md')) files.push(full);
+      }
+    };
+    walk(refDir);
+    files.sort();
+    for (const full of files) {
+      const rel = path.relative(refDir, full).split(path.sep).join('/');
+      const key = rel.slice(0, -3); // strip ".md"
+      const content = fs.readFileSync(full, 'utf8');
+      references.set(key, content);
+      hash.update('\0').update(rel).update('\0').update(content);
     }
   }
   const sha256 = hash.digest('hex').slice(0, 16);

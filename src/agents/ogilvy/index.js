@@ -9,11 +9,11 @@
  * One LLM call per turn, one tool-use loop, streaming back to the browser
  * as SSE. New tools register here; the loop structure stays stable.
  *
- * Agent prompt 来源是 overseas-ad-planning skill (`skills/overseas-ad-planning/`)；
- * skill 内部分子阶段(1.0 / 1.5 / §4.C / 2 / 3 / 4 / 5)由 skill 自洽。
- * Click-to-WhatsApp 收口约束写在 `skill-host-patch.md` 里追加到 skill prompt
- * 之后。skill 内容可直接编辑文件热替换，宿主代码改动只在 SYSTEM_STATIC、
- * TOOLS 数组、dispatcher 三处。
+ * Agent prompt 来源是 PromeEngine-ads-skill (`skills/PromeEngine-ads-skill/`)；
+ * skill 内部 6 主阶段(业务理解→路径选择→市场分析→投放策略→创意策略→方案输出)
+ * 由 skill 自洽。Click-to-WhatsApp 收口约束写在 `skill-host-patch.md` 里追加到
+ * skill prompt 之后。skill 内容可直接编辑文件热替换，宿主代码改动只在
+ * SYSTEM_STATIC、TOOLS 数组、dispatcher 三处。
  */
 import fs from 'node:fs';
 import path from 'node:path';
@@ -46,7 +46,7 @@ const MAX_ITERATIONS = 10;
 // Top-level await loads the skill bundle synchronously at first import. The
 // loader memoizes by directory path, so subsequent imports are free.
 // Restart the Next.js server to pick up edits to the skill bundle.
-const SKILL = await loadSkill('overseas-ad-planning');
+const SKILL = await loadSkill('PromeEngine-ads-skill');
 // Resolve sibling skill-host-patch.md via import.meta.url so the path holds
 // regardless of process cwd (dev / standalone build / serverless).
 const HOST_PATCH = fs.readFileSync(
@@ -54,35 +54,12 @@ const HOST_PATCH = fs.readFileSync(
   'utf8',
 );
 
-// References are inlined into the cached system prompt (see SYSTEM_STATIC below).
-// Past iterations exposed a `read_skill_reference` tool that streamed a single
-// reference's content into the conversation as a tool_result — but each call
-// added 10–20K characters of permanent history bloat. Inlining all four ~once,
-// inside the ephemeral-cached static prefix, costs the bundle once per cache
-// window (5min) at 0.1× input price on cache reads, and removes the per-call
-// tool round-trip entirely.
-const REFERENCES_INLINED = (() => {
-  const order = [
-    'data-sources',
-    'strategy-template',
-    'meta-creative-specs',
-    'meta-api-template',
-    'compliance-blacklist',
-    'creative-prompt-patterns',
-  ];
-  const parts = ['## 附录 · 参考资料（已内联，无需调用工具）\n'];
-  for (const key of order) {
-    const content = SKILL.references.get(key);
-    if (!content) continue;
-    parts.push(`### references/${key}.md\n\n${content.trim()}\n`);
-  }
-  // Any reference not in `order` (forward-compat for future skill bundles)
-  for (const [key, content] of SKILL.references) {
-    if (order.includes(key)) continue;
-    parts.push(`### references/${key}.md\n\n${(content || '').trim()}\n`);
-  }
-  return parts.join('\n');
-})();
+// References are loaded on-demand via the `read_skill_reference` tool. v2 bundle
+// reorganized references into platforms/ industries/ playbooks/ + top-level
+// docs — 15 files / ~40K tokens total. Inlining everything would balloon the
+// cached prefix; lazy fetch keeps the prefix small and only pulls the few
+// references the model actually consults this session.
+const REFERENCE_KEYS = Array.from(SKILL.references.keys()).sort();
 
 // ── Tool schemas ────────────────────────────────────────────────────────
 
@@ -91,7 +68,7 @@ const TOOLS = [
     name: 'draft_ad_plan',
     description:
       '产出一份 Click-to-WhatsApp 广告计划草稿。当用户给出足够的产品信息、目标国家和预算后调用。' +
-      '计划中所有广告的 objective 固定为 OUTCOME_ENGAGEMENT，优化目标为 CONVERSATIONS（最大化 WhatsApp 对话数）。' +
+      '计划中所有广告的 objective 固定为 WHATSAPP_CONVERSATIONS，优化目标为 CONVERSATIONS（最大化 WhatsApp 对话数）。' +
       '每个 ad 必须包含一条纯文本的 welcome_message（用户进入 WhatsApp 后看到的第一句）。' +
       'phone_number_id 必须来自 system prompt 里列出的可用号码之一。',
     input_schema: {
@@ -99,6 +76,16 @@ const TOOLS = [
       required: ['whatsapp', 'campaigns', 'summary'],
       properties: {
         summary: { type: 'string', description: '一句话总结这个计划，显示在卡片顶部' },
+        channel: {
+          type: 'string',
+          enum: ['fb', 'ig', 'google', 'tiktok'],
+          description: 'v2 新增。广告系统。V_1.0 默认锁 Meta CTW (fb), 其他取值是 dim5 框架预留。可选, 缺省按 "fb" 处理。',
+        },
+        ad_format: {
+          type: 'string',
+          enum: ['ctw', 'ctm', 'instant_form', 'uac', 'shopping', 'spark'],
+          description: 'v2 新增。广告形式。V_1.0 默认 ctw (Click-to-WhatsApp), 其他取值是预留。可选, 缺省按 "ctw" 处理。',
+        },
         whatsapp: {
           type: 'object',
           required: ['phone_number_id'],
@@ -206,6 +193,18 @@ const TOOLS = [
                         required: ['name', 'creative', 'welcome_message'],
                         properties: {
                           name: { type: 'string' },
+                          creative_typology_id: {
+                            type: 'string',
+                            description:
+                              'v2 新增。图片类型 ID, 如 "#1-inventory-yard" / "#4-stock-data-card", ' +
+                              '取自 industries/{行业}.md 的图片类型清单。用于审计承诺-兑现一致性。可选。',
+                          },
+                          first_contact_binding: {
+                            type: 'string',
+                            description:
+                              'v2 新增。首响绑定标识, 如 "spot-inventory-confirm" / "logistics-quote"。' +
+                              '与 creative_typology_id 配对, 让宿主可校验"图片承诺-WhatsApp 兑现"一致性。可选。',
+                          },
                           creative: {
                             type: 'object',
                             required: ['headline', 'primary_text'],
@@ -269,6 +268,26 @@ const TOOLS = [
     },
   },
   {
+    name: 'read_skill_reference',
+    description:
+      '按 name 读取 skill bundle 内的 reference 文档。v2 bundle 把 reference 分四层组织:' +
+      '`platforms/{meta,google,tiktok}` 平台规范、`industries/{automotive,agri-machinery,solar,generic}` ' +
+      '行业知识、`playbooks/{budget-and-bidding,targeting-and-audience,b2b-long-funnel}` 投放手册、' +
+      'top-level `data-sources` / `compliance` / `creative-prompts`。' +
+      'skill 主文档会指明各阶段需要读哪个 reference, 按需调用即可,不要一次性全拉。' +
+      '同一 reference 单次会话内一般只需调一次, 重复调用会浪费 context。',
+    input_schema: {
+      type: 'object',
+      required: ['name'],
+      properties: {
+        name: {
+          type: 'string',
+          description: '相对 references/ 的路径(不含 .md 后缀), 如 "platforms/meta" / "industries/automotive" / "data-sources"',
+        },
+      },
+    },
+  },
+  {
     name: 'web_search',
     description:
       '联网搜索市场信息。用于快速了解目标国家的市场规模、消费习惯、竞品投放情况等，帮助你做 targeting 和文案决策。' +
@@ -297,7 +316,7 @@ const TOOLS = [
   {
     name: 'generate_ad_creative',
     description:
-      '生成一张 1080×1080 广告图。必须有用户上传的参考图。' +
+      '生成一张广告图。必须有用户上传的参考图。' +
       '为方案里每一条 ad 分别调一次——**不同 ad 的 headline / product_description 要不同**，' +
       '让生成的图在视觉构图、文字重点、场景氛围上有明显差异（A/B 测试才有意义）。' +
       '⚠️ 关键约束：本工具的输入必须**逐字对应**阶段四「素材清单」里那一条 CR 的字段——' +
@@ -337,6 +356,27 @@ const TOOLS = [
           minItems: 1,
           description: '引用 system prompt 中"用户已上传的产品图"列表的序号（1-based）。例 [1,2]。不要传 URL。',
         },
+        aspect_ratio: {
+          type: 'string',
+          enum: ['1:1', '4:5', '9:16', '16:9'],
+          description:
+            'v2 新增。画幅:1:1=FB Feed/IG Feed(默认), 4:5=IG Feed 竖屏, 9:16=IG Reels/Stories/TikTok, 16:9=横屏视频/Google UAC。' +
+            '底层模型仅原生支持 1024×1024 / 1024×1536(竖) / 1536×1024(横), 4:5 与 9:16 都映射到 1024×1536, prompt 内会指明目标比例。可选, 缺省 1:1。',
+        },
+        cta_style: {
+          type: 'string',
+          enum: ['whatsapp', 'signup', 'shop', 'install', 'learn_more', 'call_now'],
+          description:
+            'v2 新增。图上 CTA 按钮风格。V_1.0 默认 whatsapp(绿色 WhatsApp 风格按钮)。' +
+            '其它取值仅适配未来非 CTW 形式, V_1.0 路径仍应填 whatsapp。可选, 缺省 whatsapp。',
+        },
+        creative_type: {
+          type: 'string',
+          enum: ['single_image', 'carousel_placeholder', 'video_placeholder'],
+          description:
+            'v2 新增。素材类型。V_1.0 仅真正生成 single_image, carousel/video 仅作 schema 占位 — ' +
+            '即使填占位值, 实际返回仍是单图 url, 但工具结果会带 placeholder 标记供下游识别。可选, 缺省 single_image。',
+        },
       },
     },
   },
@@ -344,30 +384,34 @@ const TOOLS = [
 
 // ── System prompt ───────────────────────────────────────────────────────
 //
-// Composed of four parts:
-//   1. SKILL  — overseas-ad-planning skill body (loaded from skills/<name>/).
-//      Defines the 5-stage SOP (needs intake → market analysis → strategy →
-//      creative → Meta launch docs).
+// Composed of three parts:
+//   1. SKILL — PromeEngine-ads-skill body (loaded from skills/<name>/). Defines
+//      the 6-stage SOP (business intake → path selection → market analysis →
+//      strategy → creative → plan output).
 //   2. HOST_PATCH — CTW collar prose. Tells the model: no filesystem, tool
 //      whitelist, distill to single CTW campaign before calling draft_ad_plan,
-//      etc. Lives in skill-host-patch.md.
-//   3. REFERENCES_INLINED — full content of skills/.../references/*.md, joined
-//      with section headers. ~16K tokens. Previously pulled lazily via the
-//      now-removed `read_skill_reference` tool; inlining removes the tool
-//      round-trip and lets the cache absorb the cost: at 0.1× input price on
-//      cache hits this is ~$0.0003 per cached read vs ~$0.05+ each time the
-//      old tool roundtripped a 10-20k char tool_result into history.
-//   4. DYNAMIC — per-session facts (WA numbers + uploaded image list). Built
-//      per-turn in buildDynamicSystemPrompt(). NOT part of the cached prefix.
+//      WHATSAPP_CONVERSATIONS objective override. Lives in skill-host-patch.md.
+//   3. DYNAMIC — per-session facts (WA numbers + page_id + uploaded images).
+//      Built per-turn in buildDynamicSystemPrompt(). NOT cached.
 //
-// Static segment (1 + 2 + 3) is stable across turns and gets cache_control.
+// References (skills/<name>/references/**/*.md, 15 files / ~40K tokens) are no
+// longer inlined — pulled on demand via the read_skill_reference tool.
+// Available reference keys are appended to the static prefix so the model can
+// discover them without a directory probe.
+//
+// Static segment (1 + 2 + reference index) is stable across turns and gets
+// cache_control.
+
+const REFERENCE_INDEX_NOTE =
+  `## skill 可用 reference (用 read_skill_reference 工具按 name 读)\n\n` +
+  REFERENCE_KEYS.map(k => `- ${k}`).join('\n');
 
 const SYSTEM_STATIC = [
   SKILL.systemPrompt,
   '---',
   HOST_PATCH,
   '---',
-  REFERENCES_INLINED,
+  REFERENCE_INDEX_NOTE,
 ].join('\n\n');
 
 /**
@@ -413,10 +457,19 @@ function buildDynamicSystemPrompt(waNumbers, uploadedImageUrls = [], pageId = nu
     ? uploadedImageUrls.map((_, i) => `  ${i + 1}. [image ${i + 1}]`).join('\n')
     : '  (尚未上传)';
 
+  // Google / TikTok account injection — schema-only stub. LeadEngine has no
+  // data source for these yet (only `meta_phone_numbers` exists); a real
+  // binding flow + encrypted token storage would be a separate feature. The
+  // stub is here so the skill's dim5 framework can detect "non-Meta channel
+  // requested but unbound" and route the user back to Meta CTW per V_1.0
+  // boundary.
+  const googleLine = '## 当前账户 Google Ads 账号\n  (未绑定 — 当前 LeadEngine 仅支持 Meta;若需 Google 投放,请联系产品方排期。skill 应按 Meta CTW 继续。)\n\n';
+  const tiktokLine = '## 当前账户 TikTok Ads 账号\n  (未绑定 — 当前 LeadEngine 仅支持 Meta;若需 TikTok 投放,请联系产品方排期。skill 应按 Meta CTW 继续。)\n\n';
+
   return `## 当前账户可用 WhatsApp 号码
 ${numbersBlock}
 
-${pageLine}## 用户已上传的产品图（用序号引用，不要复制 URL）
+${pageLine}${googleLine}${tiktokLine}## 用户已上传的产品图（用序号引用，不要复制 URL）
 ${uploadsBlock}
 
 调 generate_ad_creative 时，reference_image_ids 必须是上面列表的 1-based 序号子集（例 [1,2]）。dispatcher 会把序号映射到真实 URL。列表为空时不要调该工具。`;
@@ -797,6 +850,17 @@ async function executeTool(name, input, ctx) {
       return draftAdPlan(input, ctx);
     case 'persist_stage_output':
       return persistStageOutput(input, ctx);
+    case 'read_skill_reference': {
+      const refName = typeof input?.name === 'string' ? input.name.trim() : '';
+      if (!refName) {
+        return { error: 'name_required', message: 'name 必填', available: REFERENCE_KEYS };
+      }
+      const content = SKILL.references.get(refName);
+      if (!content) {
+        return { error: 'not_found', message: `reference "${refName}" 不存在`, available: REFERENCE_KEYS };
+      }
+      return { name: refName, content };
+    }
     case 'web_search':
       return webSearch(input, { tenantId: ctx.tenantId, sessionId: ctx.sessionId, productLine: ctx.productLine });
     case 'read_webpage':
@@ -853,6 +917,9 @@ async function executeTool(name, input, ctx) {
         referenceImageUrls:  resolved,
         targetCountries:     input.target_countries || [],
         language:            input.language,
+        aspectRatio:         input.aspect_ratio || '1:1',
+        ctaStyle:            input.cta_style || 'whatsapp',
+        creativeType:        input.creative_type || 'single_image',
         sessionId:           ctx.sessionId,
         userId:              ctx.userId,
         tenantId:            ctx.tenantId,
@@ -973,6 +1040,11 @@ async function draftAdPlan(input, { sessionId, waNumbers }) {
 
   const plan = {
     version: 1,
+    // v2 schema:顶层 channel / ad_format 描述这个 plan 该往哪个平台/形式投。
+    // V_1.0 锁 Meta CTW(fb / ctw),缺省按这个走;下游 launch 路径不消费这两个
+    // 字段,仅供未来多平台扩展 + 审计使用。
+    channel: input.channel || 'fb',
+    ad_format: input.ad_format || 'ctw',
     summary: input.summary || '',
     whatsapp: {
       phone_number_id: chosen.phone_number_id,
@@ -982,6 +1054,8 @@ async function draftAdPlan(input, { sessionId, waNumbers }) {
       waba_id: chosen.waba_id,
     },
     objective: 'WHATSAPP_CONVERSATIONS',
+    // campaigns 直接透传 — v2 在 ads[] 项内带 creative_typology_id /
+    // first_contact_binding 审计字段,launch 链路不读,只随 plan_json 落库。
     campaigns: input.campaigns || [],
     estimated_metrics: input.estimated_metrics || null,
     status: 'draft',

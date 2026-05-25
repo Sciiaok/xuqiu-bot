@@ -206,8 +206,8 @@ ChatGPT 风格的对话界面：
 ```
 你 ：我想给重型卡车在尼日利亚做一波广告，预算 200 USD/天
 AI ：好的，先理解几个前提...（追问目标受众、卖点、素材偏好）
-AI ：[按 overseas-ad-planning v1.1 SOP 走 5 阶段：调研 → 策略 → 受众 → 素材 → 投放结构]
-AI ：[输出完整 10 章策划案 + plan_json，每阶段独立可重跑]
+AI ：[按 PromeEngine-ads-skill v1.0 SOP 走 6 主阶段：业务理解 → 路径选择 → 市场分析 → 投放策略 → 创意策略 → 方案输出]
+AI ：[输出完整方案 + plan_json，每阶段独立可重跑]
 你 ：把第二个素材的标题改成"质保 3 年"
 AI ：[更新 plan，重新预览]
 你 ：好，发布
@@ -218,7 +218,7 @@ AI ：[一键 stage & launch 到 Meta，返回 campaign_id]
 - 上传 PDF / 网址作为素材参考
 - AI 自动调 Meta Graph API 检索 ad account / page / WhatsApp 号
 - 全程 SSE 流式回复，每步工具调用过程可见
-- skill 包驱动（`skills/overseas-ad-planning/`），输出契约固定为 10 章 + CTW 收口，可单独跳到任一阶段重跑而不必从头来过
+- skill 包驱动（`skills/PromeEngine-ads-skill/`），输出契约固定为 6 主阶段 + CTW 收口，可单独跳到任一阶段重跑而不必从头来过
 
 #### b) Medici · AI 外贸员（自动后台运行，无需 UI 操作）
 

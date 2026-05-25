@@ -78,10 +78,10 @@ Goal: when Claude Code picks up a task touching feature X, read this file first 
 ### Ogilvy — overseas ad planning skill
 - **UI**: `app/(app)/ogilvy/page.js` (+ `components/`, `hooks/`)
 - **API**: `/api/ogilvy/*`
-- **Skill**: `skills/overseas-ad-planning/SKILL.md` (v1.1, 10 chapters w/ stage-independent calls)
+- **Skill**: `skills/PromeEngine-ads-skill/SKILL.md` (v1.0, 6 主阶段 SOP — dim5 维度抽象 + Meta CTW 收口)
 - **Repositories**: `lib/repositories/ogilvy.repository.js`
 - **Tables**: `autopilot_sessions` (one row per conversation, `plan_json` holds the draft) + `autopilot_messages` (turn-by-turn transcript) + `aigc_assets` (generated images). Table names retain the `autopilot_*` prefix for back-compat; the code calls them "Ogilvy sessions".
-- **Notes**: Front-end to the overseas-ad-planning skill. Soft-delete via `autopilot_sessions.deleted_at`.
+- **Notes**: Front-end to the PromeEngine-ads-skill. Soft-delete via `autopilot_sessions.deleted_at`.
 
 ### Meta / WhatsApp Integration
 - **UI**: `app/(app)/settings/meta-connection/page.js`
