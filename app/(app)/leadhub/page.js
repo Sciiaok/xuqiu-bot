@@ -517,7 +517,9 @@ export default function LeadHubPage() {
         if (data) setIsHumanTakeover(!!data.is_human_takeover);
       });
 
-    // Subscribe to new messages in real-time
+    // Subscribe to new messages + takeover-state changes in real-time.
+    // Without the conversations UPDATE 订阅，TTL 自动到期/cron 释放后，UI 还
+    // 显示「人工接管中」、输入框还可用——操作员发消息时 AI 已经接手了。
     const channel = supabase
       .channel(`leadhub-msgs-${selectedId}`)
       .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'messages', filter: `conversation_id=eq.${selectedId}` },
@@ -527,6 +529,13 @@ export default function LeadHubPage() {
             if (prev.some(m => m.id === payload.new.id)) return prev;
             return [...prev, payload.new];
           });
+        }
+      )
+      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'conversations', filter: `id=eq.${selectedId}` },
+        (payload) => {
+          if (cancelled) return;
+          const next = payload.new?.is_human_takeover;
+          if (typeof next === 'boolean') setIsHumanTakeover(next);
         }
       )
       .subscribe();

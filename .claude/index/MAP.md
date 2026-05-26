@@ -125,7 +125,6 @@ Goal: when Claude Code picks up a task touching feature X, read this file first 
 - `meta-health-check` — token refresh + connection health
 - `process-queue` — message_queue aggregation worker (also runs in-process; PM2 hosts a long-runner via `ecosystem.config.cjs`)
 - `recover-stale-kb-docs` — re-runs stalled KB document parsing
-- `release-takeovers` — auto-resumes AI after takeover timeout (1h TTL). **Not currently in PM2 ecosystem.config.cjs**; inline `checkAndExpireTakeover` on next inbound webhook is the actual mechanism. The cron endpoint is a manual bulk-cleanup tool.
 
 ### Process-level background workers
 - **Queue processor**: `lib/queue-processor.js` runs in-process (see `app/api/cron/process-queue/route.js` for the entrypoint signature) and also as a PM2 daemon (`ecosystem.config.cjs`). The cron is a backup trigger.

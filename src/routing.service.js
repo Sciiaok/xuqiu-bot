@@ -387,8 +387,8 @@ export async function executeConversationRouting(route, conversationId, waId, ha
       logger.warn('routing.feishu.mark_notified_failed', { error: markErr.message });
     }
     // 进入"接管周期"——把会话置为 is_human_takeover=true，queue-processor 下轮
-    // 客户消息就会走 checkAndExpireTakeover 短路分支（lib/queue-processor.js:116），
-    // 不再喂给 Medici。release-takeovers cron 按 TTL 自动释放，founder 也可手动结束。
+    // 客户消息就会走 checkAndExpireTakeover 短路分支（lib/queue-processor.js:165），
+    // 12h 内任何客户新消息会顺手触发 TTL 自动释放，founder 也可手动结束。
     try {
       await startHumanTakeover(conversationId);
     } catch (takeoverErr) {

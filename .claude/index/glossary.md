@@ -23,7 +23,7 @@ Words that appear repeatedly across code, schema, and UI. Many are not self-expl
 - **Contact** — A WhatsApp contact (phone-number-identified, but also supports `bsuid` / `username` since IG/Instagram-like sources got added).
 - **Conversation** — Message thread with one contact. Scoped to a `product_line`. Has a `status` (active / archived) and AI takeover state.
 - **Message** — Individual WhatsApp/IM message in a conversation. May be tied to a `lead_id` if it triggered extraction.
-- **Takeover** — Manual pause of AI auto-reply on a conversation (`conversations.is_human_takeover`). 1-hour TTL: auto-released inline by `checkAndExpireTakeover` on the next inbound message, or in bulk by `release-takeovers` cron. See `/api/conversations/[id]/takeover`.
+- **Takeover** — Manual pause of AI auto-reply on a conversation (`conversations.is_human_takeover`). 12-hour TTL anchored to `human_takeover_at`, refreshed every time the operator sends a message. Auto-released inline by `checkAndExpireTakeover` on the next inbound customer message after the TTL lapses. See `/api/conversations/[id]/takeover`.
 - **FAQ_END mute** — After Medici routes a turn to `FAQ_END`, `conversations.faq_ended_at` gets set; subsequent customer messages bypass Medici (only persisted to `messages` table). Auto-cleared when a new CTWA referral arrives (= fresh business intent); otherwise stays muted until the 3-day idle timeout opens a new conversation.
 - **Routing** — `src/routing.service.js` decides what AI does on each inbound message: FAQ-reply, lead-extract, handoff, ignore.
 

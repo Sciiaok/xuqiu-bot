@@ -1,12 +1,12 @@
 # Routes (auto-generated)
 
-Generated: 2026-05-17T09:29:02.867Z
+Generated: 2026-05-26T08:15:42.113Z
 
 Filesystem-derived list of API endpoints and UI pages. **Do not edit** — run `node scripts/build-index.mjs` to refresh.
 
 ## API Endpoints
 
-Total: **78**
+Total: **77**
 
 | Path | Methods | File |
 | --- | --- | --- |
@@ -34,7 +34,6 @@ Total: **78**
 | `/api/cron/meta-health-check` | POST | [app/api/cron/meta-health-check/route.js](../../app/api/cron/meta-health-check/route.js) |
 | `/api/cron/process-queue` | GET | [app/api/cron/process-queue/route.js](../../app/api/cron/process-queue/route.js) |
 | `/api/cron/recover-stale-kb-docs` | GET | [app/api/cron/recover-stale-kb-docs/route.js](../../app/api/cron/recover-stale-kb-docs/route.js) |
-| `/api/cron/release-takeovers` | GET | [app/api/cron/release-takeovers/route.js](../../app/api/cron/release-takeovers/route.js) |
 | `/api/dev-tools/ai-sql` | POST | [app/api/dev-tools/ai-sql/route.js](../../app/api/dev-tools/ai-sql/route.js) |
 | `/api/dev-tools/sql` | POST | [app/api/dev-tools/sql/route.js](../../app/api/dev-tools/sql/route.js) |
 | `/api/health` | GET | [app/api/health/route.js](../../app/api/health/route.js) |
@@ -118,4 +117,3 @@ Total: **16**
 - `/api/cron/meta-health-check` → [app/api/cron/meta-health-check/route.js](../../app/api/cron/meta-health-check/route.js)
 - `/api/cron/process-queue` → [app/api/cron/process-queue/route.js](../../app/api/cron/process-queue/route.js)
 - `/api/cron/recover-stale-kb-docs` → [app/api/cron/recover-stale-kb-docs/route.js](../../app/api/cron/recover-stale-kb-docs/route.js)
-- `/api/cron/release-takeovers` → [app/api/cron/release-takeovers/route.js](../../app/api/cron/release-takeovers/route.js)
