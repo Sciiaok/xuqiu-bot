@@ -34,6 +34,7 @@ import { getMetaAccountForUser, getWhatsAppNumberById } from './whatsapp-account
 import { findProductLineById } from '../../../lib/repositories/product-line.repository.js';
 import { webSearch, readWebpage } from './tools.service.js';
 import { generateAdCreative, isAllowedCreativeUrl } from './creative.service.js';
+import { collectKnownUrls, repairAssistantUrls } from './url-repair.js';
 
 // Tool-use loop cap. 30-day usage data shows real chain depth maxes out at 6
 // (p90=4, avg=1.7), so 10 gives ~67% headroom while bounding the blast radius
@@ -235,10 +236,12 @@ const TOOLS = [
     name: 'persist_stage_output',
     description:
       '把刚刚产出的一段长内容归档到会话存档，并在后续对话历史里以 200 字摘要替代原文，' +
-      '避免 context window 被反复堆叠的长方案撑爆（200K 上限）。' +
-      '何时调：你刚输出了一段超过 3000 字 / token 的方案、报告、策划案、操作手册等' +
-      '"成形可独立交付"的产出，且预期不会立即被用户大改时。如果用户在下一轮请求修改这段，' +
-      '你基于上次结论生成新版后再次调用此工具（同一 label 多版本是允许的）。' +
+      '避免 context window 被反复堆叠的长方案撑爆（1M 上限但 token 成本与长度线性相关）。' +
+      '何时调：你刚输出了一段超过 **1500 字 / token** 的方案、报告、策划案、操作手册等' +
+      '"成形可独立交付"的产出，且预期不会立即被用户大改时。' +
+      '★ 强触发：阶段 3 完整市场分析 / 阶段 4 完整投放策略 / 阶段 5 素材清单 / 阶段 6 plan_json 文本 ' +
+      '产出后，**同一轮必须紧接着调一次 persist_stage_output**，再回应用户。' +
+      '如果用户在下一轮请求修改这段，你基于上次结论生成新版后再次调用此工具（同一 label 多版本是允许的）。' +
       '不要拿这个工具压缩短消息、对话片段或临时澄清——这是为"完整产出"准备的。',
     input_schema: {
       type: 'object',
@@ -290,8 +293,13 @@ const TOOLS = [
   {
     name: 'web_search',
     description:
-      '联网搜索市场信息。用于快速了解目标国家的市场规模、消费习惯、竞品投放情况等，帮助你做 targeting 和文案决策。' +
-      '每次搜索只返回摘要和最多 5 条相关链接。如果需要深入读某条链接的正文，继续调 read_webpage。',
+      '联网搜索市场信息。返回结构: {summary, results[{title,url}], citations[{url,title,content_snippet}]}。\n' +
+      '★ citations 是最高优先级的事实溯源 —— content_snippet 是源页面的原文片段(每条最长 600 字),' +
+      '没经过二次摘要。任何具体数字 / 日期 / 价格 / 销量 / 发布事件等"硬事实",' +
+      '必须基于 citations 里能字面找到的内容,并以 markdown 链接 `[字面值](url)` 形式 inline 引用对应 citation 的 url。\n' +
+      '✗ summary 只是 Haiku 二次摘要,可能丢失原文上下文(例:把新闻稿 dateline 误解成产品发布日期)' +
+      '——只能用 summary 帮自己快速 orient,不能用 summary 作为事实出处。\n' +
+      '✗ 如果 citations 里找不到支撑某事实,不要写具体数字 / 日期,改用区间或定性描述。',
     input_schema: {
       type: 'object',
       required: ['query'],
@@ -303,8 +311,11 @@ const TOOLS = [
   {
     name: 'read_webpage',
     description:
-      '读取指定 URL 的网页正文并返回摘要。当用户提供了产品官网或 web_search 找到了重要链接时调用。' +
-      '每次只能读一个 URL，返回 content 控制在 6000 字内。',
+      '读取指定 URL 的网页正文并返回完整文本。\n' +
+      '⚠️ 当前上游 web_fetch 不稳定(经常返回 500),会得到 `error: "read_webpage_unavailable"`。' +
+      '看到这个错误时不要重试同一个或其它 URL —— 改用 web_search 拿 citations 做事实溯源 ' +
+      '(citations[].content_snippet 已含源页面原文片段,足以覆盖大多数事实需求)。\n' +
+      '仅当需要超出 citations 600 字限制的长内容时才尝试 read_webpage。',
     input_schema: {
       type: 'object',
       required: ['url'],
@@ -730,7 +741,21 @@ export async function* runOgilvy(sessionId, userText, attachments = [], userId =
       // attach the rest of the tool_use rows. Each tool call is its own DB
       // row so getMessagesForLLM can reconstruct the OpenAI message list.
       const nextIdx = await getNextMessageIndex(sessionId);
-      const flushedText = pendingAssistantText || null;
+      // URL self-heal against citations the agent has actually seen this
+      // session. See ./url-repair.js for rationale (the 2026-05-25 case
+      // had Sonnet writing "discord" instead of "diesel" mid-URL).
+      const knownUrls = collectKnownUrls(history);
+      const { text: repairedText, repaired, unverified } =
+        pendingAssistantText
+          ? repairAssistantUrls(pendingAssistantText, knownUrls)
+          : { text: pendingAssistantText, repaired: [], unverified: [] };
+      if (repaired.length || unverified.length) {
+        console.log(
+          `[ogilvy] url-repair session=${sessionId}: repaired=${repaired.length} unverified=${unverified.length}`,
+          repaired.map(r => `${r.from} → ${r.to}`).join('; '),
+        );
+      }
+      const flushedText = repairedText || null;
       pendingAssistantText = '';
       await addMessages(sessionId, toolCalls.map((tc, i) => ({
         message_index: nextIdx + i,
@@ -767,12 +792,21 @@ export async function* runOgilvy(sessionId, userText, attachments = [], userId =
 
       const nextIdx = await getNextMessageIndex(sessionId);
       if (pendingAssistantText) {
+        const knownUrls = collectKnownUrls(history);
+        const { text: repairedText, repaired, unverified } =
+          repairAssistantUrls(pendingAssistantText, knownUrls);
+        if (repaired.length || unverified.length) {
+          console.log(
+            `[ogilvy] url-repair session=${sessionId}: repaired=${repaired.length} unverified=${unverified.length}`,
+            repaired.map(r => `${r.from} → ${r.to}`).join('; '),
+          );
+        }
         await addMessage(sessionId, {
           message_index: nextIdx,
           role: 'assistant',
-          content: pendingAssistantText,
+          content: repairedText,
         });
-        history.push({ role: 'assistant', content: pendingAssistantText });
+        history.push({ role: 'assistant', content: repairedText });
         pendingAssistantText = '';
       }
       yield { event: 'done', data: { message_index: nextIdx } };

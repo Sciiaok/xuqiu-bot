@@ -133,6 +133,51 @@ function CustomListItem({ node, children, ...rest }) {
   return <li {...rest}>{children}</li>;
 }
 
+/**
+ * <a> renderer — open external links in a new tab + harden rel.
+ *
+ * Why: under the post-2026-05-25 citation discipline, the Agent inline-cites
+ * web_search source URLs as `[字面值](url)`. Without target="_blank" the user
+ * has to context-switch away from their Ogilvy session to verify a number; the
+ * default `rel` also leaks referrer + lets the opened page navigate back via
+ * `window.opener`. Add target + rel + a subtle ↗ glyph so users can spot
+ * cited values visually at a glance.
+ *
+ * `#unverified` fragment: the server-side url-repair pass (see
+ * `src/agents/ogilvy/url-repair.js`) appends this marker to any URL the agent
+ * wrote but didn't match a known citation (and couldn't safely repair). We
+ * strip it for the actual navigation but render the link with a warning
+ * class + tooltip so the user knows the URL is suspect — likely a transcription
+ * typo, possibly a 404.
+ */
+function CustomAnchor({ node, href, children, ...rest }) {
+  const isExternal = typeof href === 'string' && /^https?:\/\//i.test(href);
+  if (!isExternal) {
+    return <a href={href} {...rest}>{children}</a>;
+  }
+  const unverified = href.endsWith('#unverified');
+  const cleanHref = unverified ? href.slice(0, -'#unverified'.length) : href;
+  const className = unverified
+    ? `${s.aiCitationLink} ${s.aiCitationLinkUnverified}`
+    : s.aiCitationLink;
+  const title = unverified
+    ? `⚠️ 此 URL 未在本次会话的 citations 里找到 — 可能是 agent 转写时手误,点击前请核对:\n${cleanHref}`
+    : cleanHref;
+  return (
+    <a
+      href={cleanHref}
+      target="_blank"
+      rel="noopener noreferrer nofollow"
+      className={className}
+      title={title}
+      data-verified={unverified ? 'false' : 'true'}
+      {...rest}
+    >
+      {children}
+    </a>
+  );
+}
+
 export default function OgilvyMarkdown({ children }) {
   if (!children) return null;
   return (
@@ -141,6 +186,7 @@ export default function OgilvyMarkdown({ children }) {
       components={{
         p: CustomParagraph,
         li: CustomListItem,
+        a: CustomAnchor,
       }}
     >
       {children}

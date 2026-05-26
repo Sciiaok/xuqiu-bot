@@ -1951,6 +1951,53 @@
   border-bottom-right-radius: 0;
 }
 
+/* Inline citation link — used by the Markdown <a> renderer for any external
+ * link. Under post-2026-05-25 citation discipline, Ogilvy embeds source URLs
+ * as `[字面值](https://…)` next to every hard fact. We surface them with a
+ * subtle underline + a hover "↗" glyph so the user can tell at a glance which
+ * numbers are sourced (and click through to verify). Keep it understated —
+ * cites can be dense in a market-analysis table; no chrome should overpower
+ * the surrounding prose. */
+.aiCitationLink {
+  color: var(--accent);
+  text-decoration: underline;
+  text-decoration-color: color-mix(in srgb, var(--accent) 35%, transparent);
+  text-underline-offset: 2px;
+  text-decoration-thickness: 1px;
+  transition: text-decoration-color 120ms ease;
+}
+.aiCitationLink:hover {
+  text-decoration-color: var(--accent);
+}
+.aiCitationLink::after {
+  content: ' ↗';
+  font-size: 0.85em;
+  opacity: 0.55;
+  margin-left: 1px;
+}
+
+/* `#unverified` link variant — see CustomAnchor in OgilvyMarkdown.js. The
+ * server's url-repair pass appended this marker when the agent's URL
+ * couldn't be safely matched back to a known citation. Visually distinct
+ * (amber + ⚠) so the user notices before clicking through to a likely 404. */
+.aiCitationLinkUnverified {
+  color: #b3661a;
+  text-decoration-color: color-mix(in srgb, #b3661a 35%, transparent);
+  background: color-mix(in srgb, #b3661a 8%, transparent);
+  padding: 0 3px;
+  border-radius: 3px;
+  cursor: help;
+}
+.aiCitationLinkUnverified:hover {
+  text-decoration-color: #b3661a;
+}
+.aiCitationLinkUnverified::after {
+  content: ' ⚠';
+  font-size: 0.85em;
+  opacity: 0.8;
+  margin-left: 1px;
+}
+
 /* Same emoji-lead treatment but for `<li>` form. Used when AI writes
  * `- 📱 ...` instead of free-floating `📱 ...`. Removes the default disc
  * marker so the emoji becomes the bullet. */

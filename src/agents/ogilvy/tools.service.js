@@ -141,13 +141,16 @@ export async function webSearch({ query }, { tenantId, sessionId, productLine } 
 }
 
 /**
- * Fetch and summarize a specific URL. Use after web_search finds a promising
- * link (product page, competitor site) that warrants a deeper read.
+ * Fetch and read a specific URL's full content.
  *
- * Note: this path stays on Anthropic web_fetch + Haiku for now. Tavily's
- * /extract endpoint covers the same use case but isn't wired here yet — the
- * call volume is materially lower than web_search (last 30d: 20 read_webpage
- * vs 624 web_search per the usage log), so the ROI is in the search path.
+ * Path priority:
+ *   1. Tavily /extract (if TAVILY_API_KEY configured) — direct page extraction,
+ *      no LLM middleman.
+ *   2. Anthropic web_fetch_20250910 via OpenRouter — observed broken (HTTP 500
+ *      for all URLs, including example.com, as of 2026-05-25 case
+ *      dd2299cf-e06f-42a2-afde-2507eef0dc6f). Kept as fallback for when the
+ *      upstream recovers; failures now return a structured degradation message
+ *      so the Agent stops banging on the tool and pivots to web_search citations.
  */
 export async function readWebpage({ url }, { tenantId, sessionId, productLine } = {}) {
   if (!url || typeof url !== 'string') {
@@ -159,6 +162,18 @@ export async function readWebpage({ url }, { tenantId, sessionId, productLine } 
   } catch {
     return { error: `Invalid URL: ${url}` };
   }
+
+  // Path 1 — Tavily /extract. No LLM hop; returns raw_content directly.
+  if (config.tavily?.apiKey) {
+    try {
+      return await tavilyExtract(url);
+    } catch (err) {
+      console.warn(`[ogilvy/tools] tavily extract failed for ${url}: ${err.message}`);
+      // fall through to Anthropic — both broken means structured-error return.
+    }
+  }
+
+  // Path 2 — Anthropic web_fetch fallback (likely broken; see header note).
   try {
     const response = await openrouter.messages.create({
       models: [MODELS.HAIKU],
@@ -188,7 +203,21 @@ export async function readWebpage({ url }, { tenantId, sessionId, productLine } 
       content: (parsed?.content || text || '').slice(0, 6000),
     };
   } catch (err) {
-    return { error: `Read error: ${err.message}`, content: '' };
+    // Structured degradation — tell the Agent the path failed AND what to do
+    // instead. Without this hint, observed behaviour in the 2026-05-25 case
+    // was the Agent retrying read_webpage 10 times across 10 different URLs,
+    // all of which returned the same upstream 500.
+    return {
+      error: 'read_webpage_unavailable',
+      message:
+        'read_webpage 工具当前不稳定（上游 500）。请改用 web_search 拿 ' +
+        'citations 作为事实溯源——每次 web_search 返回的 ' +
+        'citations[].content_snippet 是源页面原文片段（每条 ~600 字）, ' +
+        '足以引用大多数事实, 不需要再 read_webpage。',
+      content: '',
+      attempted_url: url,
+      upstream_error: err.message,
+    };
   }
 }
 
@@ -239,7 +268,49 @@ async function tavilySearch(query) {
       }))
     : [];
   const summary = (data.answer || '').slice(0, 2000);
-  return { query, summary, results };
+  // Surface `citations` with the same shape as the Anthropic path so the
+  // Agent quotes sources uniformly regardless of upstream provider.
+  const citations = results
+    .filter(r => r.content)
+    .map(r => ({ url: r.url, title: r.title, content_snippet: r.content.slice(0, 600) }));
+  return { query, summary, results, citations };
+}
+
+/**
+ * Call Tavily's /extract endpoint to get a single URL's full text content.
+ * Used by readWebpage as the primary path. Doc:
+ *   https://docs.tavily.com/docs/rest-api/api-reference/extract
+ *
+ * No LLM hop on this path — Tavily returns the page text directly extracted
+ * by their crawler, capped at 6000 chars (matches readWebpage legacy cap).
+ */
+async function tavilyExtract(url) {
+  const endpoint = `${config.tavily.baseURL}/extract`;
+  const res = await fetch(endpoint, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      api_key: config.tavily.apiKey,
+      urls: [url],
+      extract_depth: 'advanced',
+    }),
+    signal: AbortSignal.timeout(TAVILY_TIMEOUT_MS),
+  });
+  if (!res.ok) {
+    const body = await res.text().catch(() => '');
+    throw new Error(`Tavily extract ${res.status}: ${body.slice(0, 200)}`);
+  }
+  const data = await res.json();
+  const result = data?.results?.[0];
+  if (!result?.raw_content) {
+    const failure = data?.failed_results?.[0];
+    throw new Error(`No content extracted (${failure?.error || 'empty result'})`);
+  }
+  return {
+    url: result.url || url,
+    title: null, // Tavily extract doesn't return title; OK because content is what matters
+    content: String(result.raw_content).slice(0, 6000),
+  };
 }
 
 // ── Anthropic native fallback (legacy path) ─────────────────────────────
@@ -269,12 +340,37 @@ async function anthropicWebSearch(query, { tenantId, sessionId, productLine }) {
       ? parsedResults.slice(0, 5)
       : extractUrls(text).slice(0, 5).map(url => ({ title: url, url }));
 
+    // OpenRouter passes through Anthropic's source citations via
+    // `message.annotations[].url_citation` — each carries {url, title,
+    // content} where `content` is a ~100-300 char snippet quoted from the
+    // source page. Preserving these lets the main-loop Agent (Sonnet)
+    // quote primary text rather than trusting Haiku's compressed summary.
+    //
+    // Without this, the 2026-05-25 Tunland Peru case
+    // (session dd2299cf-e06f-42a2-afde-2507eef0dc6f) showed Sonnet write
+    // "V7/V9 2026年5月发布" from Haiku's "mayo de 2026" summary, never
+    // seeing that the source snippet was actually a press-release dateline
+    // ("Lima, mayo de 2026.- FOTON presenta...") — a publication date, not
+    // a product launch date.
+    const annotations = Array.isArray(response?.choices?.[0]?.message?.annotations)
+      ? response.choices[0].message.annotations
+      : [];
+    const citations = annotations
+      .filter(a => a?.type === 'url_citation' && a.url_citation?.url)
+      .slice(0, 12) // cap to bound tool_result size
+      .map(a => ({
+        url: a.url_citation.url,
+        title: (a.url_citation.title || '').slice(0, 200),
+        content_snippet: (a.url_citation.content || '').slice(0, 600),
+      }));
+
     return {
       query,
       summary: (parsed?.summary || text.slice(0, 2000)).slice(0, 2000),
       results,
+      citations,
     };
   } catch (err) {
-    return { error: `Search error: ${err.message}`, results: [] };
+    return { error: `Search error: ${err.message}`, results: [], citations: [] };
   }
 }
