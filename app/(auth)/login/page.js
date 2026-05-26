@@ -1,12 +1,21 @@
 'use client';
 
-import { useState } from 'react';
-import { useRouter } from 'next/navigation';
+import { Suspense, useState } from 'react';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { createClient } from '../../../lib/supabase-browser';
 import s from './page.module.css';
 
-export default function V5LoginPage() {
+// 只允许同源相对路径，防 open-redirect。
+function safeNext(raw) {
+  if (!raw) return null;
+  if (!raw.startsWith('/') || raw.startsWith('//')) return null;
+  return raw;
+}
+
+function V5LoginPageInner() {
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const next = safeNext(searchParams.get('next'));
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
@@ -26,9 +35,9 @@ export default function V5LoginPage() {
 
       if (signInError) throw signInError;
 
-      // 跳到根路径，由 app/(app)/page.js 分发：
-      //   founder → /admin/tenants，普通租户 → /analytics
-      router.push('/');
+      // 带 ?next= 时跳回用户原本想去的页；否则进根路径由
+      // app/(app)/page.js 分发（founder → /admin/tenants，普通租户 → /analytics）。
+      router.push(next || '/');
       router.refresh();
     } catch (err) {
       setError(err.message || '登录失败，请重试');
@@ -108,5 +117,13 @@ export default function V5LoginPage() {
         </div>
       </div>
     </div>
+  );
+}
+
+export default function V5LoginPage() {
+  return (
+    <Suspense>
+      <V5LoginPageInner />
+    </Suspense>
   );
 }

@@ -8,10 +8,9 @@ const PROTECTED_PREFIXES = [
   '/analytics',
   '/reports',
   '/product-lines',
-  '/ai-automation',
   '/campaign-studio',
   '/leadhub',
-  '/knowledge-base',
+  '/ogilvy',
   '/admin',
   '/dev-tools',
   '/settings',
@@ -96,6 +95,12 @@ export async function proxy(request) {
   if (!user) {
     const url = request.nextUrl.clone();
     url.pathname = '/login';
+    url.search = '';
+    // 把用户原本想去的路径塞进 ?next=,登录后跳回去。只允许同源相对路径,防 open-redirect。
+    const nextPath = pathname + request.nextUrl.search;
+    if (nextPath && nextPath !== '/' && nextPath.startsWith('/') && !nextPath.startsWith('//')) {
+      url.searchParams.set('next', nextPath);
+    }
     const redirectResponse = NextResponse.redirect(url);
     // 保留 supabase-ssr 在 refresh 失败时写入的清 cookie 指令，
     // 避免下一次请求继续用同一份失效 refresh_token 触发 AuthApiError。
@@ -130,10 +135,9 @@ export const config = {
     '/analytics/:path*',
     '/reports/:path*',
     '/product-lines/:path*',
-    '/ai-automation/:path*',
     '/campaign-studio/:path*',
     '/leadhub/:path*',
-    '/knowledge-base/:path*',
+    '/ogilvy/:path*',
     '/admin/:path*',
     '/dev-tools/:path*',
     '/settings/:path*',
