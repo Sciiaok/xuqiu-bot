@@ -3,6 +3,7 @@ import { sendMessage, sendMedia, validateMedia } from '../../../src/whatsapp.ser
 import supabase from '../../../lib/supabase.js';
 import { getTenantContext } from '../../../lib/tenant-context.js';
 import { addOperatorMessage, getSessionByConversationId } from '../../../lib/session.js';
+import { isHumanTakeover } from '../../../lib/repositories/conversation.repository.js';
 
 export async function POST(request) {
   try {
@@ -109,6 +110,21 @@ export async function POST(request) {
       });
       return NextResponse.json(
         { error: 'Conversation not bound to a WhatsApp number' },
+        { status: 409 }
+      );
+    }
+
+    // 防御：UI 上 banner 可能与服务端 takeover 状态漂移（Realtime 断线 / TTL 自动到
+    // 期未及时推送）。此时若放行 operator 消息，会出现「人工 + AI 同时回客户」。
+    // 用 409 + 显式 code 让前端能识别并强刷状态、提示用户重新接管。
+    const takeoverActive = await isHumanTakeover(conversationId);
+    if (!takeoverActive) {
+      return NextResponse.json(
+        {
+          error: 'Takeover not active',
+          code: 'TAKEOVER_NOT_ACTIVE',
+          message: '接管已自动释放，请重新点「接管对话」后再发送。',
+        },
         { status: 409 }
       );
     }

@@ -673,6 +673,12 @@ export default function LeadHubPage() {
       if (data.success) {
         setMsgText('');
         setSelectedFile(null);
+      } else if (res.status === 409 && data?.code === 'TAKEOVER_NOT_ACTIVE') {
+        // 后端发现 takeover 已被 TTL 自动释放 —— 把本地 banner 立刻强刷为 false，
+        // 让输入框禁用、UI 状态与服务端一致。Realtime 通常会先一步推过来，
+        // 但断线 / 漏推时这是兜底。
+        setIsHumanTakeover(false);
+        setError(data.message || '接管已自动释放，请重新点「接管对话」');
       } else {
         setError(data.message || '发送失败');
       }
@@ -1247,7 +1253,7 @@ export default function LeadHubPage() {
                       </span>
                       <span className={s.statusHint}>
                         {isHumanTakeover
-                          ? '现在你的消息会发给客户，AI 已暂停。'
+                          ? '现在你的消息会发给客户，AI 已暂停。最长保留 12 小时，每次手动发消息重新计时。'
                           : '客户消息由 AI 自动应答，需要时点「接管对话」介入。'}
                       </span>
                     </div>
@@ -1493,7 +1499,7 @@ export default function LeadHubPage() {
             </p>
             <p className={s.confirmBody}>
               {confirmAction.type === 'takeover'
-                ? 'AI 将暂停自动回复。之后客户发来的消息，由你手动回复；他还能正常发消息。'
+                ? 'AI 将暂停自动回复。之后客户发来的消息，由你手动回复；他还能正常发消息。接管最长保留 12 小时，每次你手动发消息会重新计时；超时后下一条客户消息会自动交还 AI。'
                 : 'AI 恢复自动回复。你将无法在此对话再手动发送消息，除非再次接管。'}
             </p>
             <div className={s.confirmActions}>
