@@ -637,6 +637,62 @@ Step 4 绑首响    每张图配对应的 welcome_message,承诺-兑现自检
 
 (汽车 × b2b-spot 的 12 类图片 + 5 市场原型矩阵完整内容在 `industries/automotive.md`)
 
+### 7.4.1 ★ 矩阵完整性硬约束(不可违反)
+
+历史观察(audit 2026-05):**22% 的 session 在 stage 5 第一批 generate_ad_creative
+调用数少于 plan 里的 ad 数** —— 部分被用户兜底("不是四个素材吗?怎么变成2个?"),
+部分进入 plan_json 时用复用 image_url 凑数(用户察觉不到,launched 后 AS-02 受众
+只能看到 AS-01 创意,A/B 测试失效)。
+
+**为了挡住这类失败,排矩阵前先做"数数自检",顺序硬约束**:
+
+**Step 2.0 — 从 stage 4 最终 plan 读出 N_total**
+
+回到本会话历史里 stage 4 最后确定的 plan(如果中途用户调整过 ad_set 数,以最后
+那次为准),数清楚:
+- `N_ad_sets` = 最终 ad_set 数(本 case 例:2)
+- `M_ads_per_set[i]` = 第 i 个 ad_set 里的 ad 数(本 case 例:[2, 2])
+- `N_total = Σ M_ads_per_set` = 你接下来在 stage 5 必须生成的素材总数(本 case 例:4)
+
+如果 stage 4 plan 不清晰(用户中途砍/加 ad_set 没明示最终数),**先回去和用户对齐
+ad_set 配置,不要凭印象排矩阵**。
+
+**Step 2.5 — 矩阵表必须正好 N_total 行**
+
+每行对应 plan 里的一个具体 ad,用 `ad_set_id + ad_id` 双标注。例(N_total=4):
+
+| CR-id | ad_set | ad_id | 图片类型 | 核心信息 |
+|---|---|---|---|---|
+| CR-01 | AS-01 经销商组 | Ad A | #2 单车主图 | ... |
+| CR-02 | AS-01 经销商组 | Ad B | #4 现货数据卡 | ... |
+| CR-03 | AS-02 车队组   | Ad A | #1 堆场图 | ... |
+| CR-04 | AS-02 车队组   | Ad B | #5 物流图 | ... |
+
+✗ 缺一行(如漏 AS-02 整组)= **重大违规**,审查不通过
+✗ 行数 < N_total = **重大违规**
+
+**Step 2.6 — 同创意复用必须显式声明**
+
+每条 ad 默认应该有**独立的 image_url**(独立调用 generate_ad_creative)。
+
+如果你想做"同创意 × 多受众"测试(2 个 ad 共用 1 张图,变量在 audience targeting),
+**必须在矩阵表里明示**:
+
+> "⚠️ AS-01.A 和 AS-02.A **故意复用** CR-01 同一张图,目的是做受众 A/B 测试
+> (变量是 targeting,不是 creative)。让用户确认这是想要的配置。"
+
+不写这个声明就让 2 个 ad 共用 image_url = **打死,违规**。
+用户看到 plan_json 里 6 个 ad 共 3 张图却没人告知意图,是不可接受的体验。
+
+**Step 2.7 — 第一批 generate_ad_creative 必须 = N_total**
+
+排完矩阵后,**同一轮**并行发起 N_total 次 generate_ad_creative 调用,**不要分批**
+(除非用户后续要求重做某几张)。
+
+✗ "先生成 3 张,稍后补"= 违规(用户会以为方案就 3 张)
+✗ 矩阵 4 行只发 2 次工具调用 = 违规
+✗ "继续生成后三张"作为自补救发生在第二轮 = 是事后补救,**应该一次到位**
+
 ### 7.5 Step 3 生图写文案
 
 每张素材一行任务清单,调用 `generate_ad_creative`:
