@@ -46,7 +46,14 @@ export async function POST(_request, { params }) {
   // The race-condition rationale (two POSTs in flight) is preserved by the
   // single allowed `staging` target — the second POST sees status=staging
   // and bounces below.
-  const plan = session.plan_json;
+  // Strip the previous-attempt failure tombstone before re-staging. Every
+  // downstream update uses `{ ...plan, ... }`, so without this purge any
+  // failed_* field set on the previous attempt would survive the entire
+  // staging → staged → launched lifecycle and end up on a "successfully
+  // launched" plan_json — confusing in the UI and a noisy false positive
+  // for anyone reading the row later.
+  const { failed_reason: _fr, failed_at: _fa, failed_phase: _fp, ...planClean } = session.plan_json || {};
+  const plan = planClean;
   const claim = await transitionSessionStatus(id, {
     from: ['active', 'failed'],
     to: 'staging',
