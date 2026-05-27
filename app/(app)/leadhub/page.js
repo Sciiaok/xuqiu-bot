@@ -1489,6 +1489,21 @@ export default function LeadHubPage() {
                             <span className={s.profileLabel}>WhatsApp</span>
                             <span className={s.profileValue}>{profile.contact?.wa_id || '—'}</span>
                           </div>
+                          {profile.contact?.bsuid && (
+                            <div className={s.profileField}>
+                              <span className={s.profileLabel} title="Business Solution User ID — Meta 给客户的稳定 ID，跟号码解耦">
+                                Meta ID
+                              </span>
+                              <span
+                                className={s.profileValue}
+                                style={{ fontFamily: 'var(--font-dm-mono, ui-monospace, SFMono-Regular, Menlo, monospace)', fontSize: '12px' }}
+                                title="点击复制"
+                                onClick={() => navigator.clipboard?.writeText(profile.contact.bsuid)}
+                              >
+                                {profile.contact.bsuid}
+                              </span>
+                            </div>
+                          )}
                           {profile.contact?.company_name && (
                             <div className={s.profileField}>
                               <span className={s.profileLabel}>公司</span>

@@ -162,6 +162,14 @@ async function buildQueuedMessage({
     messageMetadata.referral = referral;
   }
 
+  // 每条 inbound 都自带 from_user_id (= BSUID) —— 留在 message metadata 里做
+  // 现场证据。将来排查"为啥这俩 contact 合并/没合并"的 case 时能逐条回溯
+  // 当时归属于哪个 BSUID，而不是只有 contact 当前状态。
+  const fromBsuid = message.from_user_id || null;
+  if (fromBsuid) {
+    messageMetadata.from_bsuid = fromBsuid;
+  }
+
   return {
     skip: false,
     referral,
