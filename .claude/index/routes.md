@@ -1,12 +1,12 @@
 # Routes (auto-generated)
 
-Generated: 2026-05-26T08:15:42.113Z
+Generated: 2026-05-27T07:56:23.517Z
 
 Filesystem-derived list of API endpoints and UI pages. **Do not edit** — run `node scripts/build-index.mjs` to refresh.
 
 ## API Endpoints
 
-Total: **77**
+Total: **78**
 
 | Path | Methods | File |
 | --- | --- | --- |
@@ -30,6 +30,7 @@ Total: **77**
 | `/api/contacts/[id]/profile` | GET | [app/api/contacts/[id]/profile/route.js](../../app/api/contacts/[id]/profile/route.js) |
 | `/api/conversations/[id]/leads` | GET | [app/api/conversations/[id]/leads/route.js](../../app/api/conversations/[id]/leads/route.js) |
 | `/api/conversations/[id]/takeover` | POST, DELETE | [app/api/conversations/[id]/takeover/route.js](../../app/api/conversations/[id]/takeover/route.js) |
+| `/api/conversations/[id]/translate` | POST, DELETE | [app/api/conversations/[id]/translate/route.js](../../app/api/conversations/[id]/translate/route.js) |
 | `/api/cron/generate-reports` | GET, POST | [app/api/cron/generate-reports/route.js](../../app/api/cron/generate-reports/route.js) |
 | `/api/cron/meta-health-check` | POST | [app/api/cron/meta-health-check/route.js](../../app/api/cron/meta-health-check/route.js) |
 | `/api/cron/process-queue` | GET | [app/api/cron/process-queue/route.js](../../app/api/cron/process-queue/route.js) |

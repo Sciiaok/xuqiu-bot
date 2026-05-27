@@ -995,6 +995,45 @@
   font-variant-numeric: tabular-nums;
 }
 
+/* ── 翻译展示：原文下方分隔线 + 灰色小字 ──
+   设计意图：操作员可一眼扫到译文但不喧宾夺主；分隔线弱到几乎只起视觉断
+   句作用；译文比正文小一档（11px vs 13px），降低视觉权重；in/out 两种气
+   泡都适用（出气泡是蓝底白字，所以用 white+alpha；入气泡是浅灰，用文本
+   弱色）。 */
+.msgTranslateDivider {
+  margin: 7px 0 6px;
+  height: 1px;
+  width: 100%;
+  background: currentColor;
+  opacity: 0.18;
+}
+
+.msgTranslate {
+  font-size: 11.5px;
+  line-height: 1.55;
+  opacity: 0.78;
+  word-break: break-word;
+}
+
+/* 出气泡（AI / 人工）背景偏深 —— 用更明显的 alpha 让译文仍然可读 */
+.msgOut .msgTranslate {
+  color: rgba(255, 255, 255, 0.85);
+}
+
+.msgOut .msgTranslateDivider {
+  background: #fff;
+  opacity: 0.28;
+}
+
+.msgIn .msgTranslate {
+  color: var(--text2);
+}
+
+.msgOperator .msgTranslate {
+  color: var(--amber);
+  opacity: 0.75;
+}
+
 .attachBtn {
   height: 36px;
   padding: 0 12px;

@@ -152,6 +152,11 @@ export default function LeadHubPage() {
   const [sending, setSending] = useState(false);
   const [confirmAction, setConfirmAction] = useState(null);
   const [takeoverBusy, setTakeoverBusy] = useState(false);
+  // 翻译开关：会话级，存 conversations.translation_enabled。打开时所有非中
+  // 文消息批量回填，新消息自动翻；关闭时 UI 隐藏（缓存数据保留）。
+  const [translationEnabled, setTranslationEnabled] = useState(false);
+  const [translationBusy, setTranslationBusy] = useState(false);
+  const [translationStats, setTranslationStats] = useState(null);
   const [selectedFile, setSelectedFile] = useState(null);
   const [error, setError] = useState(null);
   const [notes, setNotes] = useState([]);
@@ -491,6 +496,8 @@ export default function LeadHubPage() {
     setLoadingMessages(true);
     setMessages([]);
     setIsHumanTakeover(false);
+    setTranslationEnabled(false);
+    setTranslationStats(null);
     setMsgText('');
 
     const supabase = createClient();
@@ -506,15 +513,22 @@ export default function LeadHubPage() {
         setLoadingMessages(false);
       });
 
-    // Fetch takeover status
+    // Fetch takeover + translation_enabled in one round-trip
     supabase
       .from('conversations')
-      .select('is_human_takeover')
+      .select('is_human_takeover, translation_enabled')
       .eq('id', selectedId)
       .single()
-      .then(({ data }) => {
+      .then(({ data, error }) => {
         if (cancelled) return;
-        if (data) setIsHumanTakeover(!!data.is_human_takeover);
+        if (data) {
+          setIsHumanTakeover(!!data.is_human_takeover);
+          // translation_enabled 列还没 migrate 上去时 data 里没这字段，回落 false
+          setTranslationEnabled(!!data.translation_enabled);
+        } else if (error?.code === '42703') {
+          // 列未 migrate —— 静默忽略，仅功能不可用
+          setTranslationEnabled(false);
+        }
       });
 
     // Subscribe to new messages + takeover-state changes in real-time.
@@ -531,11 +545,22 @@ export default function LeadHubPage() {
           });
         }
       )
+      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'messages', filter: `conversation_id=eq.${selectedId}` },
+        // 翻译写回时 metadata 更新会走这条 —— UI 实时把灰色译文渲出来。
+        (payload) => {
+          if (cancelled) return;
+          setMessages(prev => prev.map(m => (m.id === payload.new.id ? { ...m, ...payload.new } : m)));
+        }
+      )
       .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'conversations', filter: `id=eq.${selectedId}` },
         (payload) => {
           if (cancelled) return;
           const next = payload.new?.is_human_takeover;
           if (typeof next === 'boolean') setIsHumanTakeover(next);
+          // 翻译开关也可能从别处被改（如 DELETE 端点）—— 同步上来
+          if (typeof payload.new?.translation_enabled === 'boolean') {
+            setTranslationEnabled(payload.new.translation_enabled);
+          }
         }
       )
       .subscribe();
@@ -647,6 +672,54 @@ export default function LeadHubPage() {
       setError(action === 'takeover' ? '接管对话失败，请重试' : '结束接管失败，请重试');
     } finally {
       setTakeoverBusy(false);
+    }
+  }
+
+  // ── Translation toggle handler ──
+  // POST 时同步等返回（让用户看到 batch 翻译结果计数）；DELETE 立即生效（仅
+  // 翻转 UI 开关，不删 metadata 缓存，再次开启可秒亮）。
+  async function handleToggleTranslation() {
+    if (!selectedId || translationBusy) return;
+    const turningOn = !translationEnabled;
+    setTranslationBusy(true);
+    try {
+      const res = await fetch(`/api/conversations/${selectedId}/translate`, {
+        method: turningOn ? 'POST' : 'DELETE',
+      });
+      let data = null;
+      try { data = await res.json(); } catch {}
+      // 207 = 开关已开但本次回填失败 —— 仍把按钮置 ON
+      if (!res.ok && res.status !== 207) {
+        throw new Error(data?.message || data?.error || `HTTP ${res.status}`);
+      }
+      setTranslationEnabled(turningOn);
+      if (turningOn && data?.translated != null) {
+        setTranslationStats({
+          total: data.total,
+          translated: data.translated,
+          skipped: data.skipped,
+        });
+        // 3 秒后自动收起统计
+        setTimeout(() => setTranslationStats(null), 3000);
+      } else {
+        setTranslationStats(null);
+      }
+      // 翻译完成后服务端 update 了 metadata，依赖 Realtime UPDATE 订阅把新译文
+      // 推上来；但订阅偶发漏推（断线 / 短时窗口）—— 主动刷一次该会话消息兜底。
+      if (turningOn) {
+        const supabase = createClient();
+        const { data: refreshed } = await supabase
+          .from('messages')
+          .select('id, role, content, sent_at, sent_by, metadata')
+          .eq('conversation_id', selectedId)
+          .order('sent_at', { ascending: true });
+        if (refreshed) setMessages(refreshed);
+      }
+    } catch (err) {
+      console.error('Translation toggle error:', err);
+      setError(turningOn ? '开启翻译失败，请重试' : '关闭翻译失败，请重试');
+    } finally {
+      setTranslationBusy(false);
     }
   }
 
@@ -1145,6 +1218,23 @@ export default function LeadHubPage() {
                       </a>
                     )}
                     <Button
+                      variant={translationEnabled ? 'primary' : 'ghost'}
+                      size="sm"
+                      disabled={translationBusy}
+                      onClick={handleToggleTranslation}
+                      title={translationEnabled
+                        ? '关闭中文翻译（已翻译内容会保留）'
+                        : '把客户/AI 的非中文消息翻译为中文'}
+                    >
+                      {translationBusy
+                        ? '翻译中…'
+                        : translationEnabled
+                          ? (translationStats
+                              ? `已翻译 ${translationStats.translated}/${translationStats.total}`
+                              : '🌐 翻译已开')
+                          : '🌐 翻译'}
+                    </Button>
+                    <Button
                       variant={isHumanTakeover ? 'danger' : 'ghost'}
                       size="sm"
                       disabled={takeoverBusy}
@@ -1237,7 +1327,12 @@ export default function LeadHubPage() {
                               prevDay = day;
                             }
                             out.push(
-                              <ChatMessage key={msg.id} msg={msg} contactName={selected?.name || selected?.phone} />
+                              <ChatMessage
+                                key={msg.id}
+                                msg={msg}
+                                contactName={selected?.name || selected?.phone}
+                                translationEnabled={translationEnabled}
+                              />
                             );
                           }
                           return out;
