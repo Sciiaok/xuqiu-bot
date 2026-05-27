@@ -1,6 +1,7 @@
 import { getTenantContext } from '../../../../../../lib/tenant-context.js';
 import { getSession } from '../../../../../../lib/repositories/ogilvy.repository.js';
 import { fetchAdStatuses } from '../../../../../../src/agents/ogilvy/meta-launch.service.js';
+import { reconcileSessionFromMeta } from '../../../../../../src/agents/ogilvy/reconcile.service.js';
 
 /**
  * GET /api/ogilvy/conversations/[id]/ad-status
@@ -31,7 +32,29 @@ export async function GET(_request, { params }) {
 
   try {
     const ads = await fetchAdStatuses(adIds, { userId: ctx.user.id });
-    return Response.json({ ads, fetched_at: new Date().toISOString() });
+    // Drift sync: if user paused/deleted entities in Meta UI, mirror that
+    // back to our DB so /pause /resume gating doesn't get stuck. Best-effort:
+    // any error inside reconcile is logged but doesn't affect the response.
+    let reconcile = null;
+    try {
+      reconcile = await reconcileSessionFromMeta(session, ads);
+    } catch (recErr) {
+      console.log(JSON.stringify({
+        ts: new Date().toISOString(),
+        level: 'warn',
+        event: 'ogilvy.reconcile.failed',
+        component: 'ogilvy/ad-status',
+        session_id: id,
+        error: recErr.message,
+      }));
+    }
+    return Response.json({
+      ads,
+      fetched_at: new Date().toISOString(),
+      ...(reconcile?.status_changed ? { status_synced_from_meta: reconcile.status_changed } : {}),
+      ...(reconcile?.ids_stripped ? { ids_stripped: reconcile.ids_stripped } : {}),
+      ...(reconcile?.archived ? { archived: true } : {}),
+    });
   } catch (err) {
     console.log(JSON.stringify({
       ts: new Date().toISOString(),

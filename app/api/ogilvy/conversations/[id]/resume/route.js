@@ -5,6 +5,7 @@ import {
   transitionSessionStatus,
 } from '../../../../../../lib/repositories/ogilvy.repository.js';
 import { setCampaignsStatus } from '../../../../../../src/agents/ogilvy/meta-launch.service.js';
+import { reconcileForAction } from '../../../../../../src/agents/ogilvy/reconcile.service.js';
 
 /**
  * POST /api/ogilvy/conversations/[id]/resume
@@ -22,8 +23,32 @@ export async function POST(_request, { params }) {
     return Response.json({ error: 'Session not found' }, { status: 404 });
   }
 
-  const plan = session.plan_json || {};
-  const campaignIds = plan.meta_campaign_ids || session.meta_campaign_ids || [];
+  // Pre-action drift sync (mirror of /pause). If Meta UI already shows all
+  // ads ACTIVE while our DB still says 'paused', return ok after syncing
+  // — no need to re-POST what Meta already has. Archived means everything
+  // was deleted on Meta; resume no longer applies.
+  const { result: reconcileResult, effectiveStatus } = await reconcileForAction(session, { userId: ctx.user.id });
+  if (effectiveStatus === 'launched') {
+    return Response.json({
+      ok: true,
+      message: 'Meta 上已是投放中状态,已同步 DB,无需再操作',
+      reconciled_from_meta: reconcileResult.status_changed || true,
+    });
+  }
+  if (effectiveStatus === 'archived') {
+    return Response.json(
+      {
+        error: 'Meta 上的实体已被全部删除,session 已自动归档',
+        reconciled_from_meta: reconcileResult,
+      },
+      { status: 409 },
+    );
+  }
+
+  // Re-read plan after reconcile in case meta_ad_ids was pruned.
+  const freshSession = await getSession(id);
+  const plan = freshSession?.plan_json || {};
+  const campaignIds = plan.meta_campaign_ids || freshSession?.meta_campaign_ids || [];
   const adsetIds = plan.meta_adset_ids || [];
   const adIds = plan.meta_ad_ids || [];
   if (campaignIds.length === 0) {
@@ -37,7 +62,7 @@ export async function POST(_request, { params }) {
   if (claim?.conflict) {
     const cur = claim.conflict.current_status;
     return Response.json(
-      { error: `当前状态 ${cur} 无法恢复（只能恢复 paused 会话）` },
+      { error: `当前状态 ${cur} 无法恢复(只能恢复 paused 会话)` },
       { status: 409 },
     );
   }

@@ -15,6 +15,7 @@ import { getTenantContext } from '../../../../../lib/tenant-context.js';
 import { getRedis } from '../../../../../lib/redis.js';
 import { listSessions } from '../../../../../lib/repositories/ogilvy.repository.js';
 import { fetchAdStatuses } from '../../../../../src/agents/ogilvy/meta-launch.service.js';
+import { reconcileSessionFromMeta } from '../../../../../src/agents/ogilvy/reconcile.service.js';
 
 const CACHE_TTL_SECONDS = 3 * 60;
 
@@ -96,11 +97,48 @@ export async function GET() {
       (adsBySession[sId] ||= []).push(ad);
     }
 
-    // summarize 每个 session
+    // summarize + drift-sync per session.
+    // Drift sync: cache-miss path also reconciles DB.status / meta_ad_ids
+    // for each session against what Meta actually shows. Runs serially per
+    // session — at single-user volumes this is N <= 50 short DB calls.
     const statuses = {};
-    for (const [sId, ads] of Object.entries(adsBySession)) {
-      const summary = summarizeAdStatuses(ads);
-      if (summary) statuses[sId] = { summary };
+    const reconcileSummary = { synced: 0, ids_stripped: 0, archived: 0 };
+    for (const sess of sessions) {
+      if (!['launched', 'paused'].includes(sess.status)) continue;
+      const sessAds = adsBySession[sess.id] || [];
+
+      // Only reconcile sessions we actually queried (had ad_ids in meta_ad_ids).
+      const hadAdIds = Array.isArray(sess.plan_json?.meta_ad_ids) && sess.plan_json.meta_ad_ids.length > 0;
+      if (hadAdIds) {
+        try {
+          const r = await reconcileSessionFromMeta(sess, sessAds);
+          if (r.status_changed) reconcileSummary.synced += 1;
+          if (r.ids_stripped > 0) reconcileSummary.ids_stripped += r.ids_stripped;
+          if (r.archived) reconcileSummary.archived += 1;
+        } catch (recErr) {
+          console.log(JSON.stringify({
+            ts: new Date().toISOString(),
+            level: 'warn',
+            event: 'ogilvy.reconcile.failed',
+            component: 'ogilvy/sessions-ad-status',
+            session_id: sess.id,
+            error: recErr.message,
+          }));
+        }
+      }
+
+      const summary = summarizeAdStatuses(sessAds);
+      if (summary) statuses[sess.id] = { summary };
+    }
+    if (reconcileSummary.synced || reconcileSummary.ids_stripped || reconcileSummary.archived) {
+      console.log(JSON.stringify({
+        ts: new Date().toISOString(),
+        level: 'info',
+        event: 'ogilvy.sessions_ad_status.reconcile_summary',
+        component: 'ogilvy/sessions-ad-status',
+        tenant_id: ctx.tenantId,
+        ...reconcileSummary,
+      }));
     }
 
     const payload = { statuses, fetched_at: new Date().toISOString() };

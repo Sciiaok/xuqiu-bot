@@ -5,6 +5,7 @@ import {
   transitionSessionStatus,
 } from '../../../../../../lib/repositories/ogilvy.repository.js';
 import { setCampaignsStatus } from '../../../../../../src/agents/ogilvy/meta-launch.service.js';
+import { reconcileForAction } from '../../../../../../src/agents/ogilvy/reconcile.service.js';
 
 /**
  * POST /api/ogilvy/conversations/[id]/pause
@@ -27,12 +28,42 @@ export async function POST(_request, { params }) {
     return Response.json({ error: 'Session not found' }, { status: 404 });
   }
 
-  const plan = session.plan_json || {};
-  const campaignIds = plan.meta_campaign_ids || session.meta_campaign_ids || [];
+  // Pre-action drift sync: pull Meta state once and reconcile DB before
+  // gating on session.status. If the user already paused everything in Meta
+  // Ads Manager, our DB still says 'launched' until something talks to Meta —
+  // without this, /pause would proceed and burn N Meta calls just to confirm
+  // the entities are already PAUSED. After reconcile, three outcomes:
+  //   - DB now says 'paused' → user's request is already satisfied, return OK
+  //   - DB now says 'archived' → entities are gone, action no longer applies
+  //   - DB still 'launched' → proceed with the normal pause flow
+  const { result: reconcileResult, effectiveStatus } = await reconcileForAction(session, { userId: ctx.user.id });
+  if (effectiveStatus === 'paused') {
+    return Response.json({
+      ok: true,
+      message: 'Meta 上已是暂停状态,已同步 DB,无需再操作',
+      reconciled_from_meta: reconcileResult.status_changed || true,
+    });
+  }
+  if (effectiveStatus === 'archived') {
+    return Response.json(
+      {
+        error: 'Meta 上的实体已被全部删除,session 已自动归档',
+        reconciled_from_meta: reconcileResult,
+      },
+      { status: 409 },
+    );
+  }
+
+  // Re-read plan after reconcile in case meta_ad_ids was pruned for missing
+  // entities. campaignIds / adsetIds rarely drift in Phase 1 reconcile (only
+  // ad-level cleanup is implemented) but read fresh anyway for safety.
+  const freshSession = await getSession(id);
+  const plan = freshSession?.plan_json || {};
+  const campaignIds = plan.meta_campaign_ids || freshSession?.meta_campaign_ids || [];
   const adsetIds = plan.meta_adset_ids || [];
   const adIds = plan.meta_ad_ids || [];
   if (campaignIds.length === 0) {
-    return Response.json({ error: '该会话没有已上线的 campaign，无法暂停' }, { status: 400 });
+    return Response.json({ error: '该会话没有已上线的 campaign,无法暂停' }, { status: 400 });
   }
 
   const claim = await transitionSessionStatus(id, {
@@ -42,7 +73,7 @@ export async function POST(_request, { params }) {
   if (claim?.conflict) {
     const cur = claim.conflict.current_status;
     return Response.json(
-      { error: `当前状态 ${cur} 无法暂停（只能暂停 launched 会话）` },
+      { error: `当前状态 ${cur} 无法暂停(只能暂停 launched 会话)` },
       { status: 409 },
     );
   }
