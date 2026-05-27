@@ -321,6 +321,8 @@ export default function SessionWorkspace({ sessionId, session, productLineName, 
     if (!sessionId || !plan) return;
     setLaunchProgress({ phase: 'starting', detail: '连接 Meta…' });
     const skippedAds = [];
+    let launchedPayload = null;
+    let stageError = null;
     try {
       const res = await fetch(`/api/ogilvy/conversations/${sessionId}/launch`, { method: 'POST' });
       if (!res.ok) {
@@ -354,6 +356,12 @@ export default function SessionWorkspace({ sessionId, session, productLineName, 
               if (currentEvent === 'stage_progress' && data?.type === 'error' && data?.ad) {
                 skippedAds.push({ ad: data.ad, error: data.error });
               }
+              if (currentEvent === 'launched') {
+                launchedPayload = data;
+              }
+              if (currentEvent === 'error') {
+                stageError = data;
+              }
               handleLaunchEvent(currentEvent, data);
             } catch {}
             eventType = null;
@@ -368,7 +376,32 @@ export default function SessionWorkspace({ sessionId, session, productLineName, 
         // Best-effort cancel; ignore if the stream already closed.
         try { await reader.cancel(); } catch {}
       }
-      if (skippedAds.length > 0) {
+      // Build the "what to warn about" summary. Three independent sources:
+      //   1. skippedAds  — stage_progress events that yielded `type:'error'`
+      //      (a specific ad was skipped during stage; the rest continued)
+      //   2. stage failure with partial_ids — stage threw partway, the
+      //      partial Meta resources persisted on the session need cleanup
+      //   3. launched.partial — activate succeeded on some entities but
+      //      failed on others; user is spending money on what survived
+      //      and needs to know what didn't activate
+      if (stageError) {
+        const partial = stageError.partial_ids;
+        const partialMsg = partial && (partial.campaign_ids?.length || partial.adset_ids?.length || partial.ad_ids?.length)
+          ? `\n\n已在 Meta 上创建的孤儿资源(${[
+              partial.campaign_ids?.length && `${partial.campaign_ids.length} campaign`,
+              partial.adset_ids?.length && `${partial.adset_ids.length} adset`,
+              partial.creative_ids?.length && `${partial.creative_ids.length} creative`,
+              partial.ad_ids?.length && `${partial.ad_ids.length} ad`,
+            ].filter(Boolean).join(', ')})需要去 Meta 后台手动清理 — IDs 已保存在 plan_json.meta_*_ids。`
+          : '';
+        window.alert(`${stageError.phase} 阶段失败:${stageError.message}${partialMsg}`);
+      } else if (launchedPayload?.partial) {
+        const failed = launchedPayload.activate_results?.filter(r => r.error) || [];
+        const lines = failed.map(r => `· ${r.level} ${r.id?.slice(-6) || '?'}: ${r.error}`).join('\n');
+        window.alert(
+          `⚠ 投放已上线 ${launchedPayload.activate_succeeded} 个实体,但有 ${launchedPayload.activate_failed} 个未激活:\n${lines}\n\n已上线的实体正在 Meta 上消耗预算。可以点「暂停」止血,或去 Meta 后台手动 fix。`
+        );
+      } else if (skippedAds.length > 0) {
         const lines = skippedAds.map(s => `· ${s.ad}: ${s.error}`).join('\n');
         window.alert(`投放已上线，但有 ${skippedAds.length} 条广告未创建：\n${lines}`);
       }

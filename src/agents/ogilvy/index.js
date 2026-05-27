@@ -1042,6 +1042,22 @@ async function persistStageOutput(input, { sessionId }) {
  * (added in PR 4).
  */
 async function draftAdPlan(input, { sessionId, waNumbers }) {
+  // Lifecycle guard (P1-1): refuse to overwrite plan_json on a session that's
+  // already mid-launch, launched, paused, or staged. Without this, the Agent
+  // running in another tab could blow away meta_campaign_ids / meta_ad_ids
+  // by rewriting plan_json while a launch is in flight, or — worse — wipe
+  // the campaign tree linkage on a live session and break /pause / /resume.
+  // Only `active` (first draft) and `failed` (retry after fix) are writable.
+  const sessionRow = await getSession(sessionId);
+  if (sessionRow && !['active', 'failed'].includes(sessionRow.status)) {
+    return {
+      error: 'session_locked',
+      message:
+        `当前会话状态 "${sessionRow.status}" 已锁定 plan,不能再修改方案。` +
+        `如果是 launched/paused 想改方案,请先在 UI 暂停并删除当前 session,新建一个重做。`,
+    };
+  }
+
   // Skill-driven flow guard: refuse plan submission if the agent has not yet
   // produced any ad creative this session. Cheaper than parsing the full
   // skill output for completion markers — if there's no creative, there's no
@@ -1117,7 +1133,27 @@ async function draftAdPlan(input, { sessionId, waNumbers }) {
     drafted_at: new Date().toISOString(),
   };
 
-  await updateSession(sessionId, { plan_json: plan });
+  // Atomic CAS belt-and-suspenders to the read-side status guard above:
+  // if status drifted from active/failed → staging in the microsecond gap
+  // between our getSession read and this update, the WHERE clause filters
+  // us out and updateSession throws STATUS_DRIFT instead of clobbering
+  // plan_json.
+  try {
+    await updateSession(
+      sessionId,
+      { plan_json: plan },
+      { onlyIfStatusIn: ['active', 'failed'] },
+    );
+  } catch (err) {
+    if (err.code === 'STATUS_DRIFT') {
+      return {
+        error: 'session_locked',
+        message:
+          '会话状态在保存前已被另一操作锁定(可能是 launch 同时开始)。请刷新 UI 查看当前状态。',
+      };
+    }
+    throw err;
+  }
 
   return { ok: true, plan_summary: plan.summary, campaigns_count: plan.campaigns.length };
 }

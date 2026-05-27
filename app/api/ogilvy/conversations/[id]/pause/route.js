@@ -78,8 +78,31 @@ export async function POST(_request, { params }) {
 
   const failed = results.filter((r) => r.error);
   if (failed.length > 0) {
-    // Any failure → revert. Partial pause is worse than no pause (user thinks
-    // it's stopped, money still burning).
+    // Best-effort reverse (P0-4): some entities did go to PAUSED on Meta.
+    // Reverting only DB status leaves Meta in a half-paused state — UI says
+    // "launched" but a chunk of the tree is dead, with no visible signal.
+    // Flip the successful ones back to ACTIVE so Meta state matches DB state.
+    // The reverse can itself fail (rate limit, transient blip); we surface
+    // that as `reverse_failures` so the user sees the residual drift.
+    const succeeded = results.filter((r) => !r.error);
+    let reverseResults = [];
+    if (succeeded.length > 0) {
+      try {
+        reverseResults = await setCampaignsStatus(
+          {
+            campaign_ids: succeeded.filter(r => r.level === 'campaign').map(r => r.id),
+            adset_ids: succeeded.filter(r => r.level === 'adset').map(r => r.id),
+            ad_ids: succeeded.filter(r => r.level === 'ad').map(r => r.id),
+          },
+          'ACTIVE',
+          { userId: ctx.user.id },
+        );
+      } catch (revErr) {
+        reverseResults = succeeded.map(s => ({ ...s, error: `reverse threw: ${revErr.message}` }));
+      }
+    }
+    const reverseFailed = reverseResults.filter(r => r.error);
+
     console.log(JSON.stringify({
       ts: new Date().toISOString(),
       level: 'error',
@@ -90,12 +113,22 @@ export async function POST(_request, { params }) {
       user_id: ctx.user.id,
       total: results.length,
       failed_count: failed.length,
+      reverse_attempted: succeeded.length,
+      reverse_failed_count: reverseFailed.length,
       failed_entities: failed.map(r => ({ level: r.level, id: r.id, error: r.error })),
+      reverse_failed_entities: reverseFailed.map(r => ({ level: r.level, id: r.id, error: r.error })),
       reverted: true,
+      drift: reverseFailed.length > 0,
     }));
     await transitionSessionStatus(id, { from: ['paused'], to: 'launched' });
     return Response.json(
-      { error: '部分实体暂停失败，已回滚', failed },
+      {
+        error: reverseFailed.length > 0
+          ? '部分实体暂停失败,反向回滚也未全部成功 — Meta 上仍有部分实体处于 PAUSED 状态,需人工 fix'
+          : '部分实体暂停失败,已成功回滚到 ACTIVE',
+        failed,
+        reverse_failures: reverseFailed,
+      },
       { status: 500 },
     );
   }

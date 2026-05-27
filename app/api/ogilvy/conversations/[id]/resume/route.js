@@ -73,6 +73,28 @@ export async function POST(_request, { params }) {
 
   const failed = results.filter((r) => r.error);
   if (failed.length > 0) {
+    // Best-effort reverse (P0-4): symmetric to pause. Some entities went
+    // ACTIVE on Meta — leaving them ACTIVE while DB rolls back to "paused"
+    // means money burns silently. Flip the successes back to PAUSED.
+    const succeeded = results.filter((r) => !r.error);
+    let reverseResults = [];
+    if (succeeded.length > 0) {
+      try {
+        reverseResults = await setCampaignsStatus(
+          {
+            campaign_ids: succeeded.filter(r => r.level === 'campaign').map(r => r.id),
+            adset_ids: succeeded.filter(r => r.level === 'adset').map(r => r.id),
+            ad_ids: succeeded.filter(r => r.level === 'ad').map(r => r.id),
+          },
+          'PAUSED',
+          { userId: ctx.user.id },
+        );
+      } catch (revErr) {
+        reverseResults = succeeded.map(s => ({ ...s, error: `reverse threw: ${revErr.message}` }));
+      }
+    }
+    const reverseFailed = reverseResults.filter(r => r.error);
+
     console.log(JSON.stringify({
       ts: new Date().toISOString(),
       level: 'error',
@@ -83,12 +105,22 @@ export async function POST(_request, { params }) {
       user_id: ctx.user.id,
       total: results.length,
       failed_count: failed.length,
+      reverse_attempted: succeeded.length,
+      reverse_failed_count: reverseFailed.length,
       failed_entities: failed.map(r => ({ level: r.level, id: r.id, error: r.error })),
+      reverse_failed_entities: reverseFailed.map(r => ({ level: r.level, id: r.id, error: r.error })),
       reverted: true,
+      drift: reverseFailed.length > 0,
     }));
     await transitionSessionStatus(id, { from: ['launched'], to: 'paused' });
     return Response.json(
-      { error: '部分实体恢复失败，已回滚', failed },
+      {
+        error: reverseFailed.length > 0
+          ? '部分实体恢复失败,反向回滚也未全部成功 — Meta 上仍有部分实体处于 ACTIVE 状态在消耗预算,需人工 fix'
+          : '部分实体恢复失败,已成功回滚到 PAUSED',
+        failed,
+        reverse_failures: reverseFailed,
+      },
       { status: 500 },
     );
   }

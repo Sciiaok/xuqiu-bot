@@ -62,16 +62,51 @@ function buildMetaError(dataError, { step, httpStatus, path } = {}) {
   return err;
 }
 
-async function metaPost(path, body, token, { step } = {}) {
-  const res = await fetch(graphUrl(path), {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ ...body, access_token: token }),
-    signal: AbortSignal.timeout(FETCH_TIMEOUT),
-  });
-  const data = await res.json();
-  if (data.error) throw buildMetaError(data.error, { step, httpStatus: res.status, path });
-  return data;
+// Single-retry wrapper for transient Meta failures (network blip, 5xx, 429).
+// Used by callers that mark themselves as idempotent — setting status to
+// PAUSED twice has the same effect as once, so retry is safe; **create**
+// operations (campaigns/adsets/creatives/ads) are NOT marked retryable
+// because there's no idempotency key and we'd risk creating duplicates.
+async function withMetaRetry(fn, { step } = {}) {
+  try {
+    return await fn();
+  } catch (err) {
+    const status = err.metaStatus;
+    // Has explicit Meta envelope: retry only on 5xx and 429 (rate limit).
+    // No envelope (network throw / timeout): always treat as transient.
+    const transient = typeof status === 'number'
+      ? status >= 500 || status === 429
+      : true;
+    if (!transient) throw err;
+    const backoff = 500 + Math.floor(Math.random() * 500);
+    console.log(JSON.stringify({
+      ts: new Date().toISOString(),
+      level: 'warn',
+      event: 'ogilvy.meta.retry',
+      component: 'ogilvy/meta-launch',
+      step: step || null,
+      http_status: status ?? null,
+      backoff_ms: backoff,
+      error: err.message,
+    }));
+    await new Promise(r => setTimeout(r, backoff));
+    return await fn();
+  }
+}
+
+async function metaPost(path, body, token, { step, retryable = false } = {}) {
+  const doCall = async () => {
+    const res = await fetch(graphUrl(path), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ...body, access_token: token }),
+      signal: AbortSignal.timeout(FETCH_TIMEOUT),
+    });
+    const data = await res.json();
+    if (data.error) throw buildMetaError(data.error, { step, httpStatus: res.status, path });
+    return data;
+  };
+  return retryable ? withMetaRetry(doCall, { step }) : doCall();
 }
 
 async function metaUploadImage(imageUrl, { ad_account_id, access_token }) {
@@ -484,9 +519,11 @@ export async function fetchAdStatuses(adIds, { userId }) {
     chunks.push(adIds.slice(i, i + META_IDS_BATCH_LIMIT));
   }
 
-  const fetchChunk = async (chunk) => {
-    // Batch lookup: GET /v21.0/?ids=AD_1,AD_2&fields=… returns
-    // { AD_1: {...}, AD_2: {...} }. One request per chunk of ≤50.
+  // Pure-GET batch lookup is idempotent — wrap in withMetaRetry so a single
+  // transient 5xx / rate-limit doesn't drop the chunk to allSettled below.
+  const fetchChunk = (chunk) => withMetaRetry(async () => {
+    // GET /v21.0/?ids=AD_1,AD_2&fields=… returns { AD_1: {...}, AD_2: {...} }.
+    // One request per chunk of ≤50.
     const url = new URL(graphUrl(''));
     url.searchParams.set('ids', chunk.join(','));
     url.searchParams.set('fields', 'id,name,effective_status,issues_info');
@@ -498,10 +535,35 @@ export async function fetchAdStatuses(adIds, { userId }) {
       throw buildMetaError(data.error, { step: 'ad-status', httpStatus: res.status, path: '?ids=…' });
     }
     return Object.values(data).filter((row) => row && row.id);
-  };
+  }, { step: 'ad-status' });
 
-  const results = await Promise.all(chunks.map(fetchChunk));
-  return results.flat();
+  // `allSettled` instead of `all`: a single bad chunk (e.g. one ad ID Meta
+  // has archived, rate-limit on chunk N of 5) used to wipe out the entire
+  // result, leaving the UI with zero statuses. Now each chunk independently
+  // succeeds or fails; failed chunks log + count toward a partial response
+  // and the others still flow through.
+  const settled = await Promise.allSettled(chunks.map(fetchChunk));
+  const out = [];
+  const chunkErrors = [];
+  for (let i = 0; i < settled.length; i++) {
+    const s = settled[i];
+    if (s.status === 'fulfilled') out.push(...s.value);
+    else chunkErrors.push({ chunk_index: i, chunk_size: chunks[i].length, error: s.reason?.message || String(s.reason) });
+  }
+  if (chunkErrors.length > 0) {
+    console.log(JSON.stringify({
+      ts: new Date().toISOString(),
+      level: 'warn',
+      event: 'ogilvy.fetch_ad_statuses.chunk_failed',
+      component: 'ogilvy/meta-launch',
+      total_chunks: chunks.length,
+      failed_chunks: chunkErrors.length,
+      total_ads: adIds.length,
+      returned_ads: out.length,
+      chunk_errors: chunkErrors,
+    }));
+  }
+  return out;
 }
 
 // ── setCampaignsStatus (pause / resume) ────────────────────────────────
@@ -539,7 +601,7 @@ export async function setCampaignsStatus(
     if (!ids.length) continue;
     const levelResults = await Promise.all(ids.map(async (id) => {
       try {
-        await metaPost(id, { status: target }, access_token, { step: `set ${level} ${id} → ${target}` });
+        await metaPost(id, { status: target }, access_token, { step: `set ${level} ${id} → ${target}`, retryable: true });
         return { level, id, status: target };
       } catch (err) {
         return { level, id, error: err.message };
@@ -577,7 +639,7 @@ export async function* activateCampaigns({ campaign_ids = [], adset_ids = [], ad
 
   async function activateOne(level, id) {
     try {
-      await metaPost(id, { status: 'ACTIVE' }, access_token, { step: `activate ${level} ${id}` });
+      await metaPost(id, { status: 'ACTIVE' }, access_token, { step: `activate ${level} ${id}`, retryable: true });
       return { level, id, status: 'ACTIVE' };
     } catch (err) {
       return { level, id, error: err.message };
