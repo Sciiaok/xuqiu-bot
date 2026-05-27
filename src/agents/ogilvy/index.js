@@ -588,7 +588,7 @@ function buildMessagesWithCache(staticPrompt, dynamicPrompt, history) {
 export async function* runOgilvy(sessionId, userText, attachments = [], userId = null) {
   // 1. Persist the user message first so the next load sees it even if we crash.
   const userIdx = await getNextMessageIndex(sessionId);
-  await addMessage(sessionId, {
+  const userRow = await addMessage(sessionId, {
     message_index: userIdx,
     role: 'user',
     content: userText || '',
@@ -601,7 +601,7 @@ export async function* runOgilvy(sessionId, userText, attachments = [], userId =
     await updateSession(sessionId, { title: userText.slice(0, 60) });
   }
 
-  yield { event: 'user_saved', data: { message_index: userIdx } };
+  yield { event: 'user_saved', data: { message_index: userIdx, id: userRow.id } };
 
   // 2. Session 锁定单产品线 → 自动注入对应的 WA 号码,模型不再让用户选。
   //    历史 (productLine=NULL) 的会话也 fail-safe:返回错误而不是回退到
@@ -791,6 +791,7 @@ export async function* runOgilvy(sessionId, userText, attachments = [], userId =
       }
 
       const nextIdx = await getNextMessageIndex(sessionId);
+      let assistantId = null;
       if (pendingAssistantText) {
         const knownUrls = collectKnownUrls(history);
         const { text: repairedText, repaired, unverified } =
@@ -801,15 +802,16 @@ export async function* runOgilvy(sessionId, userText, attachments = [], userId =
             repaired.map(r => `${r.from} → ${r.to}`).join('; '),
           );
         }
-        await addMessage(sessionId, {
+        const assistantRow = await addMessage(sessionId, {
           message_index: nextIdx,
           role: 'assistant',
           content: repairedText,
         });
+        assistantId = assistantRow.id;
         history.push({ role: 'assistant', content: repairedText });
         pendingAssistantText = '';
       }
-      yield { event: 'done', data: { message_index: nextIdx } };
+      yield { event: 'done', data: { message_index: nextIdx, id: assistantId } };
       return;
     }
 

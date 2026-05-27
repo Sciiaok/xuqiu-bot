@@ -61,8 +61,21 @@ export default function SessionWorkspace({ sessionId, session, productLineName, 
   }, [sessionId]);
 
   // ── SSE streaming hook ──────────────────────────────────────
+  // onUserSaved / onAssistantFinal aren't no-ops anymore. They reconcile the
+  // optimistic tempId user row with the server uuid, and append the final
+  // assistant row in the same React batch that clears streamingText — so the
+  // transition from "streaming preview div" to "persisted MessageRow" happens
+  // in a single render (no blank intermediate frame, no DOM unmount-remount).
   const { send, stop, streamingText, toolStatus, isStreaming } = useMessageStream({
-    onUserSaved: () => {},
+    onUserSaved: ({ id }) => {
+      if (!id) return;
+      setMessages(prev => {
+        const last = prev[prev.length - 1];
+        if (!last || last.role !== 'user') return prev;
+        if (typeof last.id !== 'string' || !last.id.startsWith('u-')) return prev;
+        return [...prev.slice(0, -1), { ...last, id }];
+      });
+    },
     onPlanPartial: (partial) => setStreamingPlan(partial),
     onToolResult: async (data) => {
       if (data.tool === 'draft_ad_plan' && data.result?.ok) {
@@ -76,7 +89,14 @@ export default function SessionWorkspace({ sessionId, session, productLineName, 
         setArchives(Array.isArray(r.session?.stage_outputs) ? r.session.stage_outputs : []);
       }
     },
-    onAssistantFinal: () => {},
+    onAssistantFinal: ({ content, id }) => {
+      if (!content) return;
+      setMessages(prev => [...prev, {
+        id: id || `a-${Date.now()}`,
+        role: 'assistant',
+        content,
+      }]);
+    },
     onError: (err) => {
       setStreamingPlan(null);
       setMessages(prev => [...prev, {
@@ -196,6 +216,10 @@ export default function SessionWorkspace({ sessionId, session, productLineName, 
     if (stillUploading) return;
     if ((!text && !readyAttachments.length) || isStreaming) return;
     if (!sessionId) return;
+
+    // Sending a new turn = user wants to follow the response. Re-engage
+    // auto-follow even if they had scrolled up earlier in the session.
+    stuckToBottomRef.current = true;
 
     const tempId = `u-${Date.now()}`;
     const attachmentsPayload = readyAttachments.map(p => p.uploaded);
@@ -370,7 +394,23 @@ export default function SessionWorkspace({ sessionId, session, productLineName, 
   }
 
   const scrollRef = useRef(null);
+  // Sticky-bottom: auto-scroll only while the user is "near the bottom"
+  // (within 96px ≈ 3 lines). If they scrolled up to re-read history, leave
+  // them alone — incoming SSE deltas no longer yank the viewport down.
+  // handleSend re-engages auto-follow when the user sends the next turn.
+  const stuckToBottomRef = useRef(true);
   useEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const onScroll = () => {
+      const dist = el.scrollHeight - el.scrollTop - el.clientHeight;
+      stuckToBottomRef.current = dist < 96;
+    };
+    el.addEventListener('scroll', onScroll, { passive: true });
+    return () => el.removeEventListener('scroll', onScroll);
+  }, []);
+  useEffect(() => {
+    if (!stuckToBottomRef.current) return;
     const el = scrollRef.current;
     if (!el) return;
     el.scrollTop = el.scrollHeight;
@@ -445,8 +485,8 @@ export default function SessionWorkspace({ sessionId, session, productLineName, 
               <EmptyConversation onPick={setInputVal} />
             ) : (
               <>
-                {messages.map((m, i) => (
-                  <MessageRow key={m.id || i} msg={m} />
+                {messages.map(m => (
+                  <MessageRow key={m.id} msg={m} />
                 ))}
 
                 {toolStatus && (

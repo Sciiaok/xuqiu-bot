@@ -2,7 +2,8 @@
 
 > 适用 dim5 D5:`industry = automotive`
 > 业务模式覆盖:b2b-spot(主力) / b2b-general / brand-hybrid
-> 注:V_1.0 不覆盖 b2c-retail(业务方决策)
+> **★ V_1.0 强拦截 b2c-retail**:阶段 1 命中 b2c 信号(参 SKILL.md §3.2.1 判别清单)→ 走拦截流程,
+> 不要继续 b2c 策划、不要把 b2c 当 b2b 跑下去、不要把 V_1.0 限制做成"问题 X"摆给用户。
 >
 > 内容来源:
 > - [图策] = 用户的《现货汽车出海_Meta_CTW_广告图片策略方案.docx》
@@ -29,8 +30,8 @@
 | 非洲 | **NG ★ / KE / EG** | b2b-spot 价敏 | NG Cost/Conv $0.19 极低 |
 | 拉美 | **MX ★ / PE / BR / CO / CL** | b2b-spot 经销/车队 | MX CTR 6.0% / PE 综合优 |
 | 中亚独联体 | **KZ / UZ** | b2b-spot / b2b-general | UZ 量大 / KZ CPM 偏高 |
-| 东南亚 | **PH / VN / TH / ID** | b2c + b2b-spot | VN CTR 8.3%(样本小)/ PH 综合好 |
-| 欧洲发达 | DE / FR / UK | b2c-retail + brand-hybrid | (V_1.0 不覆盖 b2c)|
+| 东南亚 | **PH / VN / TH / ID** | b2b-spot(b2c 走 §3.2.1 拦截) | VN CTR 8.3%(样本小)/ PH 综合好 |
+| 欧洲发达 | DE / FR / UK / FR / IT / ES | brand-hybrid(b2c-retail 走 §3.2.1 拦截) | brand-hybrid 数据待补 |
 
 ---
 
@@ -60,20 +61,22 @@ Geely Galaxy M9 / Geely Starshine 6 / Geely Xingyao 8 / Foton AUMARK / Foton Aum
 ### 2.3 漏斗结构 6 节点 [投同]
 
 ```
-广告曝光 → 点击 → WhatsApp 对话(询现货)
+广告曝光 → 点击 → {lead_channel}(询现货)
        → 高价值判断(车型 + 数量 + 目的港)
        → 报价单 / OEM 资料
        → 合作(发合同)
        → 成交
 ```
 
+`{lead_channel}` 按阶段 2 锁定路径替换:CTW=WhatsApp 对话 / Lead Form=表单提交 / Web Conv=着陆页转化(详 SKILL.md §5.0)。
+
 | 节点 | 客服 SLA | KPI |
 |---|---|---|
 | 广告曝光 | -- | CPM、覆盖经销商人数 |
 | 点击 | -- | CTR、CPC |
-| WhatsApp 首响 | AI ≤ 1 分钟 / 人工 ≤ 2 小时 | Click → 首响率 |
+| {lead_channel} 首响 | AI ≤ 1 分钟 / 人工 ≤ 2 小时 | Click → 首响率 |
 | 高价值判断 | ≤ 24 小时 | Conversation → Qualified Lead |
-| 报价单 | ≤ 24-48 小时 | CPQL |
+| 报价单 | ≤ 24-48 小时 | **{cost_metric}**(CTW=CPQL / Lead Form=Cost per Lead Submission / Web Conv=CPA) |
 | 合作 | ≤ 48-72 小时 | 签约率 |
 | 成交 | -- | 总转化周期 30-60 天 |
 
@@ -134,9 +137,10 @@ Cars being loaded into shipping container or driven up Ro-Ro vessel ramp at busy
 ```
 - **数据支撑**:B2B 买家怕"库存不清+延误";物流可视化降低点击后摩擦
 
-#### #6 WhatsApp 对话引导图(全 campaign 标配元素)
+#### #6 WhatsApp 对话引导图(**CTW 路径下标配元素**;Lead Form / Web Conv / Google UAC 不强制)
 
-- **适用场景**:所有 CTW 广告,明示"点击 = 进入对话"
+- **适用场景**:**仅当阶段 2 锁定 ad_format = CTW 时**作为 P0/P1 主图标配;明示"点击 = 进入对话"。
+  Lead Form 路径改用"扫码填表"/"点此提交需求"引导图;Web Conv 路径改用"立即查看现车库存"CTA 图。
 - **视觉要求**:手持手机 + WhatsApp 绿色对话气泡 UI;客服头像;"Chat for stock list"提示
 - **Prompt 骨架**:
 ```
@@ -379,7 +383,7 @@ Multi-panel collage (2x2 or 2x3) of {车型} interior dashboard / engine bay / k
 | **b2b-spot** | **95%** | ★ 用户图策文档 + 20 天数据 | **✅ 可上线** |
 | b2b-general | 30% | V4.0 + AI | ⚠️ 待投放专家补全 |
 | brand-hybrid | 40% | V4.0 简化版 | ⚠️ 待补 |
-| b2c-retail | -- | V_1.0 不覆盖 | ❌ 不做(业务方决策) |
+| b2c-retail | -- | V_1.0 强拦截(SKILL.md §3.2.1) | ❌ 命中即走拦截流程,不要"妥协式继续" |
 
 ---
 

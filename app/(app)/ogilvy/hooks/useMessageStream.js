@@ -80,7 +80,7 @@ export function useMessageStream({ onUserSaved, onAssistantFinal, onToolResult, 
             }
             break;
           case 'done':
-            if (accText) onAssistantFinal?.({ content: accText, final: true });
+            if (accText) onAssistantFinal?.({ content: accText, id: data?.id ?? null, final: true });
             setStreamingText('');
             setToolProgress({});
             setIsStreaming(false);

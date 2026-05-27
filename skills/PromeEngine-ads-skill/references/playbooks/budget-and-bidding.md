@@ -22,15 +22,18 @@
 | **auto**(最高价竞价) | 适合测新 | 最高能花到预算的 2 倍,需严格控总预算 |
 | **manual**(手动压价) | 适合成长和维稳/提效 | 测试期不建议 |
 
-### 1.3 出价 × 事件组合(B2B 现货推荐)
+### 1.3 出价 × 事件组合(B2B 现货推荐;**以下表格示例为 CTW 链路**)
 
 | 阶段 | 出价方式 | 优化事件 | 计费事件 |
 |---|---|---|---|
 | 测新期 | auto(最高价) | CONVERSATIONS(对话) | IMPRESSIONS(展示) |
-| 放大期 | auto(若 CPQL 稳定) → manual(压价) | CONVERSATIONS | IMPRESSIONS |
+| 放大期 | auto(若 {cost_metric} 稳定) → manual(压价) | CONVERSATIONS | IMPRESSIONS |
 | 维稳期 | manual(压价) | CONVERSATIONS | IMPRESSIONS |
 
-V_1.0 锁定 CTW,billing_event 固定 IMPRESSIONS,optimization_goal 固定 CONVERSATIONS。
+**字段锁定时机注意**:billing_event = IMPRESSIONS + optimization_goal = CONVERSATIONS
+是**阶段 6 蒸馏到 CTW 后**的字段锁(SKILL.md §8.2),**不是阶段 2-5 的通用约束**。
+阶段 4 策划口径按阶段 2 锁定路径走;非 CTW 路径优化事件相应替换(Lead Form → LEAD_GENERATION /
+Web Conv → OFFSITE_CONVERSIONS)。
 
 ---
 
