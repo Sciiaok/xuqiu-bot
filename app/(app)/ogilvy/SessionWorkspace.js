@@ -331,7 +331,15 @@ export default function SessionWorkspace({ sessionId, session, productLineName, 
       const decoder = new TextDecoder();
       let buf = '';
       let eventType = null;
-      while (true) {
+      // Terminal-event guard: the SSE generator emits `launched` or `error`
+      // as its last frame and then `streamSSE` closes the controller. But the
+      // browser's `reader.read()` doesn't always observe the close promptly
+      // when the connection passes through Cloudflare / load balancers that
+      // keep the underlying TCP alive on heartbeats — leaving the UI stuck
+      // on "启动中…" even though the server is done. Once we've seen the
+      // terminal event, cancel the reader to force the finally block to run.
+      let terminated = false;
+      outer: while (true) {
         const { value, done } = await reader.read();
         if (done) break;
         buf += decoder.decode(value, { stream: true });
@@ -340,16 +348,25 @@ export default function SessionWorkspace({ sessionId, session, productLineName, 
         for (const line of lines) {
           if (line.startsWith('event: ')) eventType = line.slice(7);
           else if (line.startsWith('data: ') && eventType) {
+            const currentEvent = eventType;
             try {
               const data = JSON.parse(line.slice(6));
-              if (eventType === 'stage_progress' && data?.type === 'error' && data?.ad) {
+              if (currentEvent === 'stage_progress' && data?.type === 'error' && data?.ad) {
                 skippedAds.push({ ad: data.ad, error: data.error });
               }
-              handleLaunchEvent(eventType, data);
+              handleLaunchEvent(currentEvent, data);
             } catch {}
             eventType = null;
+            if (currentEvent === 'launched' || currentEvent === 'error') {
+              terminated = true;
+              break outer;
+            }
           }
         }
+      }
+      if (terminated) {
+        // Best-effort cancel; ignore if the stream already closed.
+        try { await reader.cancel(); } catch {}
       }
       if (skippedAds.length > 0) {
         const lines = skippedAds.map(s => `· ${s.ad}: ${s.error}`).join('\n');
