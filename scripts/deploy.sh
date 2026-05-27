@@ -22,6 +22,11 @@ APP_NAME="lead-engine-next"
 TMP_FILE="/tmp/lead_engine_next.tar.gz"
 TOTAL_STEPS=6
 
+# Tarball excludes .git, so capture commit SHA locally and forward it to the
+# server build — otherwise next.config.js resolveCommitSha() falls back to ''
+# and the /login footer can't show "build xxxxxxx".
+COMMIT_SHA="$(git rev-parse HEAD)"
+
 # Colors for output
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
@@ -62,7 +67,7 @@ ssh $SERVER "pm2 stop $APP_NAME 2>/dev/null || true"
 
 # Step 5: Install dependencies and build
 echo -e "\n${GREEN}[5/${TOTAL_STEPS}] Installing dependencies and building...${NC}"
-ssh $SERVER "cd $REMOTE_DIR && mkdir -p logs && npm install --legacy-peer-deps && npm run build"
+ssh $SERVER "cd $REMOTE_DIR && mkdir -p logs && npm install --legacy-peer-deps && COMMIT_SHA=$COMMIT_SHA npm run build"
 
 # Step 6: Start / reload all apps defined in ecosystem.config.cjs.
 # `startOrReload` = "if running, reload; else start". `--update-env` forces PM2
