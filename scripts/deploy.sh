@@ -48,8 +48,12 @@ echo -e "\n${GREEN}[2/${TOTAL_STEPS}] Uploading to $SERVER...${NC}"
 scp $TMP_FILE $SERVER:~/
 
 # Step 3: Extract and setup on server
+# Overwrite into existing $REMOTE_DIR instead of `rm -rf`-ing it, so node_modules
+# and .next/cache survive across deploys — turns the build into an incremental
+# one (~10-30s) instead of a cold compile + full npm install (~2-3 min).
+# Tarball already excludes node_modules and .next, so they stay intact.
 echo -e "\n${GREEN}[3/${TOTAL_STEPS}] Extracting on server...${NC}"
-ssh $SERVER "rm -rf $REMOTE_DIR && mkdir $REMOTE_DIR && tar -xzf ~/lead_engine_next.tar.gz -C $REMOTE_DIR && rm ~/lead_engine_next.tar.gz"
+ssh $SERVER "mkdir -p $REMOTE_DIR && tar -xzf ~/lead_engine_next.tar.gz -C $REMOTE_DIR --overwrite && rm ~/lead_engine_next.tar.gz"
 
 # Step 4: Stop main app before build (free memory for `next build` on small instances).
 # Cron services can keep running — they don't fight for the build's memory budget.
