@@ -467,25 +467,41 @@ export async function* stageCampaigns(plan, { userId }) {
  * Returns: [{ id, name, effective_status, issues_info? }]. Missing IDs are
  * omitted from the response (Meta drops them silently).
  */
+// Meta `?ids=…` batch endpoint hard-caps at 50 IDs per request (returns
+// `(#100) Too many IDs. Maximum: 50.`). Tenants with >50 launched ads were
+// silently getting empty statuses on the dashboard grid; we now chunk and
+// fan out in parallel.
+const META_IDS_BATCH_LIMIT = 50;
+
 export async function fetchAdStatuses(adIds, { userId }) {
   if (!Array.isArray(adIds) || adIds.length === 0) return [];
   const account = await getMetaAccountForUser(userId);
   if (!account) throw new Error('Meta 未连接：请先在「设置 → Meta 连接」完成接入');
   const { access_token } = account;
 
-  // Batch lookup: GET /v21.0/?ids=AD_1,AD_2&fields=… returns
-  // { AD_1: {...}, AD_2: {...} }. One request for any number of ads.
-  const url = new URL(graphUrl(''));
-  url.searchParams.set('ids', adIds.join(','));
-  url.searchParams.set('fields', 'id,name,effective_status,issues_info');
-  url.searchParams.set('access_token', access_token);
-
-  const res = await fetch(url, { signal: AbortSignal.timeout(FETCH_TIMEOUT) });
-  const data = await res.json();
-  if (data.error) {
-    throw buildMetaError(data.error, { step: 'ad-status', httpStatus: res.status, path: '?ids=…' });
+  const chunks = [];
+  for (let i = 0; i < adIds.length; i += META_IDS_BATCH_LIMIT) {
+    chunks.push(adIds.slice(i, i + META_IDS_BATCH_LIMIT));
   }
-  return Object.values(data).filter((row) => row && row.id);
+
+  const fetchChunk = async (chunk) => {
+    // Batch lookup: GET /v21.0/?ids=AD_1,AD_2&fields=… returns
+    // { AD_1: {...}, AD_2: {...} }. One request per chunk of ≤50.
+    const url = new URL(graphUrl(''));
+    url.searchParams.set('ids', chunk.join(','));
+    url.searchParams.set('fields', 'id,name,effective_status,issues_info');
+    url.searchParams.set('access_token', access_token);
+
+    const res = await fetch(url, { signal: AbortSignal.timeout(FETCH_TIMEOUT) });
+    const data = await res.json();
+    if (data.error) {
+      throw buildMetaError(data.error, { step: 'ad-status', httpStatus: res.status, path: '?ids=…' });
+    }
+    return Object.values(data).filter((row) => row && row.id);
+  };
+
+  const results = await Promise.all(chunks.map(fetchChunk));
+  return results.flat();
 }
 
 // ── setCampaignsStatus (pause / resume) ────────────────────────────────
