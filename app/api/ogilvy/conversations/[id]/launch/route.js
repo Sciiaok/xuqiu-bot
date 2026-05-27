@@ -31,16 +31,24 @@ export async function POST(_request, { params }) {
   }
   if (!session.plan_json) return Response.json({ error: 'No plan to launch' }, { status: 400 });
 
-  // Atomic claim: only sessions in `active` may transition to `staging`. This
-  // replaces a read-then-write check that had a real race (two POSTs in flight
-  // before either persisted `staging` would both pass the if-else and double-
-  // stage the campaign tree on Meta). It also closes the `failed` retry path
-  // — a previous launch that crashed has already created PAUSED resources on
-  // Meta; re-running stage would orphan a second set. Re-launch requires
-  // deleting the session and rebuilding the plan.
+  // Atomic claim: only sessions in `active` or `failed` may transition to
+  // `staging`. The `active` source is the normal first-launch path. The
+  // `failed` source is the retry path — historically blocked on the theory
+  // that "previous failure created PAUSED Meta resources, don't double-stage";
+  // in practice we never persisted the partial IDs (stage catch dropped them
+  // before the IDs reached plan_json), so the guard had nothing to compare
+  // against and just blanket-rejected retries. Users had to delete + recreate
+  // for any failure cause, even transient ones. Cleanup of partial Meta
+  // resources is the user's responsibility (Ads Manager filter by campaign
+  // name); doubling up means a few extra PAUSED rows to delete manually,
+  // which is far less painful than rebuilding a plan from scratch.
+  //
+  // The race-condition rationale (two POSTs in flight) is preserved by the
+  // single allowed `staging` target — the second POST sees status=staging
+  // and bounces below.
   const plan = session.plan_json;
   const claim = await transitionSessionStatus(id, {
-    from: ['active'],
+    from: ['active', 'failed'],
     to: 'staging',
     extraUpdates: { plan_json: { ...plan, status: 'staging' } },
   });
@@ -49,11 +57,6 @@ export async function POST(_request, { params }) {
     if (cur === 'launched') return Response.json({ error: 'Already launched' }, { status: 400 });
     if (cur === 'staging' || cur === 'staged') {
       return Response.json({ error: 'Launch already in progress' }, { status: 409 });
-    }
-    if (cur === 'failed') {
-      return Response.json({
-        error: 'Previous launch failed; this session has PAUSED resources on Meta. Delete this session and recreate the plan to launch again.',
-      }, { status: 409 });
     }
     return Response.json({ error: `Session not in launchable state (status=${cur})` }, { status: 409 });
   }
