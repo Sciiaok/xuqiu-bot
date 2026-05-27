@@ -1,0 +1,82 @@
+/* Inline marker in the chat timeline. Shows where the customer clicked a
+ * different ad mid-conversation. Visually echoes DaySeparator but with a
+ * clickable ad chip in the middle. */
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 14px 4px 10px;
+  width: 100%;
+}
+
+.line {
+  flex: 1;
+  height: 1px;
+  background: var(--border, #e5e7eb);
+}
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 10px 4px 4px;
+  background: var(--bg2, #fff);
+  border: 1px solid var(--border, #e5e7eb);
+  border-radius: 999px;
+  cursor: pointer;
+  font: inherit;
+  color: var(--text2, #4b5563);
+  transition: border-color 0.14s, box-shadow 0.14s, color 0.14s;
+  max-width: min(70%, 360px);
+}
+
+.chip:hover {
+  border-color: var(--accent, #2563eb);
+  color: var(--accent, #2563eb);
+  box-shadow: 0 2px 8px rgba(37, 99, 235, 0.08);
+}
+
+.thumb {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  object-fit: cover;
+  flex-shrink: 0;
+  background: var(--bg, #f4f6fa);
+}
+
+.icon {
+  font-size: 13px;
+  width: 22px;
+  height: 22px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.text {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.prefix {
+  font-size: 11.5px;
+  color: var(--text3, #6b7280);
+  flex-shrink: 0;
+}
+
+.label {
+  font-size: 12px;
+  font-weight: 600;
+  color: inherit;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+  max-width: 220px;
+}

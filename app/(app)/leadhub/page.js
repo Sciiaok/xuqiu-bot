@@ -14,6 +14,8 @@ import {
 import Markdown from '../../components/Markdown/Markdown';
 import AdPreviewModal from '../../components/AdPreviewModal/AdPreviewModal';
 import AdSourceBanner from '../../components/AdPreviewModal/AdSourceBanner';
+import AdSourceMarker from '../../components/AdPreviewModal/AdSourceMarker';
+import { extractMetaAdIdFromMessageMetadata } from '../../../lib/referral-context';
 import LeadDetail from '../../components/LeadDetail/LeadDetail';
 import Skeleton, { SkeletonStack } from '../../components/Skeleton/Skeleton';
 import { prefetch, readCache } from '../../../lib/prefetch-store';
@@ -1303,12 +1305,23 @@ export default function LeadHubPage() {
                         stickToBottomRef.current = distanceFromBottom <= SCROLL_BOTTOM_THRESHOLD_PX;
                       }}
                     >
-                      {selected?.metaAdId && (
-                        <AdSourceBanner
-                          adId={selected.metaAdId}
-                          onOpen={setPreviewAdId}
-                        />
-                      )}
+                      {/* Banner shows the conversation's *entry* ad — the first one
+                       * we can attribute from message metadata. Backend may have
+                       * overwritten `conversation.meta_ad_id` to a later referral
+                       * when the same customer re-entered via a different ad, so
+                       * we recompute "first" from messages and fall back to the
+                       * conversation-level id only when messages don't carry one. */}
+                      {(() => {
+                        let firstAdId = null;
+                        for (const m of messages) {
+                          const id = extractMetaAdIdFromMessageMetadata(m.metadata);
+                          if (id) { firstAdId = id; break; }
+                        }
+                        const bannerAdId = firstAdId || selected?.metaAdId || null;
+                        return bannerAdId && (
+                          <AdSourceBanner adId={bannerAdId} onOpen={setPreviewAdId} />
+                        );
+                      })()}
                       {loadingMessages ? (
                         <div className={s.emptyState}>
                           <div className={s.emptySpinner} aria-hidden />
@@ -1322,16 +1335,38 @@ export default function LeadHubPage() {
                         </div>
                       ) : (
                         // Walk messages in order, inserting a day separator
-                        // whenever the Beijing-local day changes. Avoids a
-                        // 3-day conversation reading as a single soup of bubbles.
+                        // whenever the Beijing-local day changes, and an ad-
+                        // source marker whenever the customer enters via a
+                        // *different* ad than the previous active one. The
+                        // first occurrence of the entry ad is suppressed —
+                        // the top banner already covers that case.
                         (() => {
                           const out = [];
                           let prevDay = '';
+                          // Seed activeAdId with the first detectable ad so we
+                          // don't double-up with the banner. Subsequent changes
+                          // (real re-entries) produce inline markers.
+                          let activeAdId = null;
+                          for (const m of messages) {
+                            const id = extractMetaAdIdFromMessageMetadata(m.metadata);
+                            if (id) { activeAdId = id; break; }
+                          }
                           for (const msg of messages) {
                             const day = beijingDayKey(msg.sent_at);
                             if (day && day !== prevDay) {
                               out.push(<DaySeparator key={`sep-${day}-${msg.id}`} label={dayLabel(day)} />);
                               prevDay = day;
+                            }
+                            const msgAdId = extractMetaAdIdFromMessageMetadata(msg.metadata);
+                            if (msgAdId && msgAdId !== activeAdId) {
+                              out.push(
+                                <AdSourceMarker
+                                  key={`adm-${msg.id}`}
+                                  adId={msgAdId}
+                                  onOpen={setPreviewAdId}
+                                />
+                              );
+                              activeAdId = msgAdId;
                             }
                             out.push(
                               <ChatMessage
