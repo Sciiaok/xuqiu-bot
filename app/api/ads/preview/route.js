@@ -19,6 +19,33 @@ const ALLOWED_FORMATS = new Set([
   'MOBILE_FULLWIDTH',
 ]);
 
+// In-memory cache for the Meta preview HTML. The Graph call typically takes
+// 1-3s; without caching the user pays that latency on every modal open and
+// every tab switch. Preview HTML is stable for the lifetime of the ad creative,
+// so a short TTL is enough to absorb the burst of clicks around opening the
+// modal. Cache is keyed per tenant to keep tokens scoped correctly.
+const PREVIEW_CACHE_TTL_MS = 5 * 60 * 1000;
+const PREVIEW_CACHE_MAX = 200;
+const previewCache = new Map(); // key -> { html, expiresAt }
+
+function cacheGet(key) {
+  const hit = previewCache.get(key);
+  if (!hit) return null;
+  if (hit.expiresAt < Date.now()) {
+    previewCache.delete(key);
+    return null;
+  }
+  return hit.html;
+}
+
+function cacheSet(key, html) {
+  if (previewCache.size >= PREVIEW_CACHE_MAX) {
+    const oldestKey = previewCache.keys().next().value;
+    if (oldestKey) previewCache.delete(oldestKey);
+  }
+  previewCache.set(key, { html, expiresAt: Date.now() + PREVIEW_CACHE_TTL_MS });
+}
+
 export async function GET(request) {
   try {
     const ctx = await getTenantContext();
@@ -31,6 +58,12 @@ export async function GET(request) {
 
     if (!/^\d+$/.test(adId)) {
       return NextResponse.json({ error: '无效的 adId' }, { status: 400 });
+    }
+
+    const cacheKey = `${ctx.tenantId}:${adId}:${format}`;
+    const cached = cacheGet(cacheKey);
+    if (cached) {
+      return NextResponse.json({ format, html: cached });
     }
 
     const accessToken = await resolveMetaTokenForTenant(ctx.tenantId);
@@ -63,6 +96,7 @@ export async function GET(request) {
     if (!body) {
       return NextResponse.json({ error: '该广告暂无可用预览' }, { status: 404 });
     }
+    cacheSet(cacheKey, body);
     return NextResponse.json({ format, html: body });
   } catch (error) {
     console.error('ads/preview error:', error);

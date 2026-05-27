@@ -1,0 +1,152 @@
+/* Inline banner at the top of a conversation: surfaces the ad that brought
+ * the inquiry. Sits inside the messages scroll container, just above the first
+ * day separator. */
+
+.banner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 10px 12px;
+  margin: 0 0 12px;
+  background: var(--bg2, #fff);
+  border: 1px solid var(--border, #e5e7eb);
+  border-radius: 10px;
+  cursor: pointer;
+  text-align: left;
+  font: inherit;
+  color: var(--text, #111);
+  transition: border-color 0.14s, box-shadow 0.14s, transform 0.06s;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.03);
+}
+
+.banner:hover {
+  border-color: var(--accent, #2563eb);
+  box-shadow: 0 2px 8px rgba(37, 99, 235, 0.1);
+}
+
+.banner:active {
+  transform: scale(0.998);
+}
+
+.sourceTag {
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  color: var(--accent, #2563eb);
+  text-transform: uppercase;
+  flex-shrink: 0;
+  padding: 2px 6px;
+  background: color-mix(in srgb, var(--accent, #2563eb) 10%, transparent);
+  border-radius: 4px;
+  align-self: flex-start;
+  margin-top: 4px;
+}
+
+.thumb {
+  width: 44px;
+  height: 44px;
+  border-radius: 6px;
+  object-fit: cover;
+  flex-shrink: 0;
+  background: var(--bg, #f4f6fa);
+  border: 1px solid var(--border, #e5e7eb);
+}
+
+.thumbFallback {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--text3, #6b7280);
+  background: var(--bg, #f4f6fa);
+}
+
+.body {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.headline {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text, #111);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  line-height: 1.3;
+}
+
+.primary {
+  font-size: 11.5px;
+  color: var(--text3, #6b7280);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  line-height: 1.35;
+}
+
+.cta {
+  display: inline-block;
+  margin-top: 2px;
+  font-size: 10px;
+  font-weight: 500;
+  color: var(--accent, #2563eb);
+  background: color-mix(in srgb, var(--accent, #2563eb) 8%, transparent);
+  padding: 1px 6px;
+  border-radius: 999px;
+  align-self: flex-start;
+  letter-spacing: 0.01em;
+}
+
+.openHint {
+  font-size: 11px;
+  color: var(--text3, #6b7280);
+  flex-shrink: 0;
+  align-self: center;
+  white-space: nowrap;
+}
+
+.banner:hover .openHint {
+  color: var(--accent, #2563eb);
+}
+
+/* Skeleton — keeps the same height as the loaded card so the chat doesn't
+ * jump when info lands. */
+.skeleton {
+  cursor: default;
+  pointer-events: none;
+}
+
+.thumbSkeleton {
+  width: 44px;
+  height: 44px;
+  border-radius: 6px;
+  background: var(--bg, #f4f6fa);
+  flex-shrink: 0;
+  animation: pulse 1.4s ease-in-out infinite;
+}
+
+.textSkeleton {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.line {
+  height: 10px;
+  border-radius: 4px;
+  background: var(--bg, #f4f6fa);
+  animation: pulse 1.4s ease-in-out infinite;
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 0.6; }
+  50% { opacity: 1; }
+}

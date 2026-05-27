@@ -13,6 +13,7 @@ import {
 } from '../../../lib/inquiries-filters';
 import Markdown from '../../components/Markdown/Markdown';
 import AdPreviewModal from '../../components/AdPreviewModal/AdPreviewModal';
+import AdSourceBanner from '../../components/AdPreviewModal/AdSourceBanner';
 import LeadDetail from '../../components/LeadDetail/LeadDetail';
 import Skeleton, { SkeletonStack } from '../../components/Skeleton/Skeleton';
 import { prefetch, readCache } from '../../../lib/prefetch-store';
@@ -1302,6 +1303,12 @@ export default function LeadHubPage() {
                         stickToBottomRef.current = distanceFromBottom <= SCROLL_BOTTOM_THRESHOLD_PX;
                       }}
                     >
+                      {selected?.metaAdId && (
+                        <AdSourceBanner
+                          adId={selected.metaAdId}
+                          onOpen={setPreviewAdId}
+                        />
+                      )}
                       {loadingMessages ? (
                         <div className={s.emptyState}>
                           <div className={s.emptySpinner} aria-hidden />

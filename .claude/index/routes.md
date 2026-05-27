@@ -1,12 +1,12 @@
 # Routes (auto-generated)
 
-Generated: 2026-05-27T07:56:23.517Z
+Generated: 2026-05-27T08:12:34.081Z
 
 Filesystem-derived list of API endpoints and UI pages. **Do not edit** — run `node scripts/build-index.mjs` to refresh.
 
 ## API Endpoints
 
-Total: **78**
+Total: **79**
 
 | Path | Methods | File |
 | --- | --- | --- |
@@ -19,6 +19,7 @@ Total: **78**
 | `/api/ads/by-campaign` | GET | [app/api/ads/by-campaign/route.js](../../app/api/ads/by-campaign/route.js) |
 | `/api/ads/creative-image` | GET | [app/api/ads/creative-image/route.js](../../app/api/ads/creative-image/route.js) |
 | `/api/ads/dashboard` | GET | [app/api/ads/dashboard/route.js](../../app/api/ads/dashboard/route.js) |
+| `/api/ads/info` | GET | [app/api/ads/info/route.js](../../app/api/ads/info/route.js) |
 | `/api/ads/metrics` | GET | [app/api/ads/metrics/route.js](../../app/api/ads/metrics/route.js) |
 | `/api/ads/preview` | GET | [app/api/ads/preview/route.js](../../app/api/ads/preview/route.js) |
 | `/api/ai/report` | POST | [app/api/ai/report/route.js](../../app/api/ai/report/route.js) |
