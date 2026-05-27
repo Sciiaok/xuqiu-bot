@@ -27,6 +27,41 @@ function graphUrl(path) {
   return `https://graph.facebook.com/${GRAPH_VERSION}/${path}`;
 }
 
+// Meta sometimes returns a generic localized `error_user_msg` ("出错了，请稍后
+// 重试") that hides the real cause. We always log the full `data.error` (code /
+// error_subcode / English message / fbtrace_id) so post-mortems aren't blind.
+// The Error.message keeps the user-facing localized msg up front and appends
+// code/subcode/fbtrace for the engineer reading DB.failed_reason.
+function buildMetaError(dataError, { step, httpStatus, path } = {}) {
+  const userMsg = dataError.error_user_msg || dataError.error_user_title || dataError.message || 'unknown';
+  const code = dataError.code != null ? `code=${dataError.code}` : null;
+  const subcode = dataError.error_subcode != null ? `subcode=${dataError.error_subcode}` : null;
+  const fbtrace = dataError.fbtrace_id ? `fbtrace=${dataError.fbtrace_id}` : null;
+  const suffix = [code, subcode, fbtrace].filter(Boolean).join(' ');
+  const head = step ? `Meta API [${step}]: ${userMsg}` : `Meta API: ${userMsg}`;
+  const err = new Error(suffix ? `${head} (${suffix})` : head);
+  err.metaError = dataError;
+  err.metaStatus = httpStatus;
+  err.step = step;
+  console.log(JSON.stringify({
+    ts: new Date().toISOString(),
+    level: 'error',
+    event: 'ogilvy.meta.request_failed',
+    component: 'ogilvy/meta-launch',
+    step: step || null,
+    http_status: httpStatus,
+    path,
+    meta_code: dataError.code ?? null,
+    meta_error_subcode: dataError.error_subcode ?? null,
+    meta_message: dataError.message || null,
+    meta_error_user_title: dataError.error_user_title || null,
+    meta_error_user_msg: dataError.error_user_msg || null,
+    meta_type: dataError.type || null,
+    fbtrace_id: dataError.fbtrace_id || null,
+  }));
+  return err;
+}
+
 async function metaPost(path, body, token, { step } = {}) {
   const res = await fetch(graphUrl(path), {
     method: 'POST',
@@ -35,16 +70,7 @@ async function metaPost(path, body, token, { step } = {}) {
     signal: AbortSignal.timeout(FETCH_TIMEOUT),
   });
   const data = await res.json();
-  if (data.error) {
-    const msg = data.error.error_user_msg || data.error.error_user_title || data.error.message;
-    // Include the step (campaign / adset / creative / ad / activate) so the
-    // user can tell at which stage Meta rejected the request.
-    const err = new Error(step ? `Meta API [${step}]: ${msg}` : `Meta API: ${msg}`);
-    err.metaError = data.error;
-    err.metaStatus = res.status;
-    err.step = step;
-    throw err;
-  }
+  if (data.error) throw buildMetaError(data.error, { step, httpStatus: res.status, path });
   return data;
 }
 
@@ -66,15 +92,27 @@ async function metaUploadImage(imageUrl, { ad_account_id, access_token }) {
   formData.append('filename', blob, filename);
   formData.append('access_token', access_token);
 
-  const res = await fetch(graphUrl(`${ad_account_id}/adimages`), {
+  const uploadPath = `${ad_account_id}/adimages`;
+  const res = await fetch(graphUrl(uploadPath), {
     method: 'POST',
     body: formData,
     signal: AbortSignal.timeout(FETCH_TIMEOUT),
   });
   const data = await res.json();
-  if (data.error) throw new Error(`Meta API [image]: ${data.error.message}`);
+  if (data.error) throw buildMetaError(data.error, { step: 'image', httpStatus: res.status, path: uploadPath });
   const first = Object.values(data.images || {})[0];
-  if (!first?.hash) throw new Error('No image hash returned from Meta');
+  if (!first?.hash) {
+    console.log(JSON.stringify({
+      ts: new Date().toISOString(),
+      level: 'error',
+      event: 'ogilvy.meta.image_upload_no_hash',
+      component: 'ogilvy/meta-launch',
+      http_status: res.status,
+      image_url: imageUrl,
+      response_keys: Object.keys(data || {}),
+    }));
+    throw new Error('No image hash returned from Meta');
+  }
   return first.hash;
 }
 
@@ -225,6 +263,15 @@ export async function* stageCampaigns(plan, { userId }) {
       { step: `campaign "${campaign.name}"` },
     );
     out.campaign_ids.push(campaignId);
+    console.log(JSON.stringify({
+      ts: new Date().toISOString(),
+      level: 'info',
+      event: 'ogilvy.meta.campaign_created',
+      component: 'ogilvy/meta-launch',
+      campaign_id: campaignId,
+      name: campaign.name,
+      daily_budget_cents: dailyBudget,
+    }));
     yield { type: 'campaign_created', name: campaign.name, id: campaignId };
 
     for (const adSet of campaign.ad_sets || []) {
@@ -271,6 +318,16 @@ export async function* stageCampaigns(plan, { userId }) {
         { step: `adset "${adSet.name}"` },
       );
       out.adset_ids.push(adsetId);
+      console.log(JSON.stringify({
+        ts: new Date().toISOString(),
+        level: 'info',
+        event: 'ogilvy.meta.adset_created',
+        component: 'ogilvy/meta-launch',
+        adset_id: adsetId,
+        campaign_id: campaignId,
+        name: adSet.name,
+        countries,
+      }));
       yield { type: 'adset_created', name: adSet.name, id: adsetId };
 
       for (const ad of adSet.ads || []) {
@@ -296,9 +353,28 @@ export async function* stageCampaigns(plan, { userId }) {
         try {
           imageHash = await metaUploadImage(creative.image_url, account);
         } catch (err) {
+          console.log(JSON.stringify({
+            ts: new Date().toISOString(),
+            level: 'error',
+            event: 'ogilvy.meta.image_upload_failed',
+            component: 'ogilvy/meta-launch',
+            ad_name: ad.name,
+            adset_id: adsetId,
+            image_url: creative.image_url,
+            error: err.message,
+          }));
           yield { type: 'error', ad: ad.name, error: `上传素材图失败: ${err.message}` };
           continue;
         }
+        console.log(JSON.stringify({
+          ts: new Date().toISOString(),
+          level: 'info',
+          event: 'ogilvy.meta.image_uploaded',
+          component: 'ogilvy/meta-launch',
+          ad_name: ad.name,
+          adset_id: adsetId,
+          image_hash: imageHash,
+        }));
         yield { type: 'image_uploaded', ad: ad.name, hash: imageHash };
 
         // 4. Ad creative — single-creative link_data path (not Dynamic Creative).
@@ -336,6 +412,15 @@ export async function* stageCampaigns(plan, { userId }) {
           { step: `creative "${ad.name}"` },
         );
         out.creative_ids.push(creativeId);
+        console.log(JSON.stringify({
+          ts: new Date().toISOString(),
+          level: 'info',
+          event: 'ogilvy.meta.creative_created',
+          component: 'ogilvy/meta-launch',
+          creative_id: creativeId,
+          ad_name: ad.name,
+          adset_id: adsetId,
+        }));
         yield { type: 'creative_created', ad: ad.name, id: creativeId };
 
         // 5. Ad pointing to this creative
@@ -352,6 +437,16 @@ export async function* stageCampaigns(plan, { userId }) {
           { step: `ad "${ad.name}"` },
         );
         out.ad_ids.push(adId);
+        console.log(JSON.stringify({
+          ts: new Date().toISOString(),
+          level: 'info',
+          event: 'ogilvy.meta.ad_created',
+          component: 'ogilvy/meta-launch',
+          ad_id: adId,
+          adset_id: adsetId,
+          creative_id: creativeId,
+          name: ad.name,
+        }));
         yield { type: 'ad_created', ad: ad.name, id: adId };
       }
     }
@@ -388,8 +483,7 @@ export async function fetchAdStatuses(adIds, { userId }) {
   const res = await fetch(url, { signal: AbortSignal.timeout(FETCH_TIMEOUT) });
   const data = await res.json();
   if (data.error) {
-    const msg = data.error.error_user_msg || data.error.message;
-    throw new Error(`Meta API [ad-status]: ${msg}`);
+    throw buildMetaError(data.error, { step: 'ad-status', httpStatus: res.status, path: '?ids=…' });
   }
   return Object.values(data).filter((row) => row && row.id);
 }

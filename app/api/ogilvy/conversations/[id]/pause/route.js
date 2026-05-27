@@ -55,6 +55,23 @@ export async function POST(_request, { params }) {
       { userId: ctx.user.id },
     );
   } catch (err) {
+    console.log(JSON.stringify({
+      ts: new Date().toISOString(),
+      level: 'error',
+      event: 'ogilvy.pause_campaigns.failed',
+      component: 'ogilvy/pause',
+      session_id: id,
+      tenant_id: ctx.tenantId,
+      user_id: ctx.user.id,
+      campaign_count: campaignIds.length,
+      adset_count: adsetIds.length,
+      ad_count: adIds.length,
+      reverted: true,
+      step: err.step || null,
+      meta_code: err.metaError?.code ?? null,
+      fbtrace_id: err.metaError?.fbtrace_id || null,
+      error: err.message,
+    }));
     await transitionSessionStatus(id, { from: ['paused'], to: 'launched' });
     return Response.json({ error: err.message }, { status: 500 });
   }
@@ -63,6 +80,19 @@ export async function POST(_request, { params }) {
   if (failed.length > 0) {
     // Any failure → revert. Partial pause is worse than no pause (user thinks
     // it's stopped, money still burning).
+    console.log(JSON.stringify({
+      ts: new Date().toISOString(),
+      level: 'error',
+      event: 'ogilvy.pause_campaigns.partial_failed',
+      component: 'ogilvy/pause',
+      session_id: id,
+      tenant_id: ctx.tenantId,
+      user_id: ctx.user.id,
+      total: results.length,
+      failed_count: failed.length,
+      failed_entities: failed.map(r => ({ level: r.level, id: r.id, error: r.error })),
+      reverted: true,
+    }));
     await transitionSessionStatus(id, { from: ['paused'], to: 'launched' });
     return Response.json(
       { error: '部分实体暂停失败，已回滚', failed },

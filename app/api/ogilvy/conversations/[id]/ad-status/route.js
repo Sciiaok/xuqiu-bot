@@ -33,6 +33,18 @@ export async function GET(_request, { params }) {
     const ads = await fetchAdStatuses(adIds, { userId: ctx.user.id });
     return Response.json({ ads, fetched_at: new Date().toISOString() });
   } catch (err) {
+    console.log(JSON.stringify({
+      ts: new Date().toISOString(),
+      level: 'error',
+      event: 'ogilvy.fetch_ad_statuses.failed',
+      component: 'ogilvy/ad-status',
+      session_id: id,
+      tenant_id: ctx.tenantId,
+      ad_count: adIds.length,
+      meta_code: err.metaError?.code ?? null,
+      fbtrace_id: err.metaError?.fbtrace_id || null,
+      error: err.message,
+    }));
     return Response.json({ error: err.message }, { status: 502 });
   }
 }

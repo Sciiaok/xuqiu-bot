@@ -27,7 +27,16 @@ export async function GET(request) {
     const result = await listWhatsAppAccountsForUser(ctx.user.id, { force });
     return Response.json(result);
   } catch (err) {
-    console.error('[ogilvy/whatsapp-accounts] fetch failed:', err.message);
+    console.log(JSON.stringify({
+      ts: new Date().toISOString(),
+      level: 'error',
+      event: 'ogilvy.list_whatsapp_accounts.failed',
+      component: 'ogilvy/whatsapp-accounts',
+      tenant_id: ctx.tenantId,
+      user_id: ctx.user.id,
+      force,
+      error: err.message,
+    }));
     return Response.json(
       { status: 'token_error', numbers: [], all_numbers: [], error: err.message },
       { status: 500 },

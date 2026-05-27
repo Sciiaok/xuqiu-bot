@@ -72,6 +72,21 @@ export async function POST(_request, { params }) {
       }
     } catch (err) {
       // Stage failed — mark failed, keep any partial plan_json (debugging aid).
+      console.log(JSON.stringify({
+        ts: new Date().toISOString(),
+        level: 'error',
+        event: 'ogilvy.stage_campaigns.failed',
+        component: 'ogilvy/launch',
+        session_id: id,
+        tenant_id: ctx.tenantId,
+        user_id: ctx.user.id,
+        step: err.step || null,
+        http_status: err.metaStatus || null,
+        meta_code: err.metaError?.code ?? null,
+        meta_error_subcode: err.metaError?.error_subcode ?? null,
+        fbtrace_id: err.metaError?.fbtrace_id || null,
+        error: err.message,
+      }));
       await updateSession(id, {
         status: 'failed',
         plan_json: { ...plan, status: 'failed', failed_reason: err.message, failed_at: new Date().toISOString() },
@@ -82,6 +97,16 @@ export async function POST(_request, { params }) {
 
     const campaignIds = stageResult?.campaign_ids || [];
     if (campaignIds.length === 0) {
+      console.log(JSON.stringify({
+        ts: new Date().toISOString(),
+        level: 'error',
+        event: 'ogilvy.stage_campaigns.empty',
+        component: 'ogilvy/launch',
+        session_id: id,
+        tenant_id: ctx.tenantId,
+        user_id: ctx.user.id,
+        plan_campaign_count: (plan.campaigns || []).length,
+      }));
       await updateSession(id, {
         status: 'failed',
         plan_json: { ...plan, status: 'failed', failed_reason: 'stage_produced_no_campaigns' },
@@ -125,6 +150,25 @@ export async function POST(_request, { params }) {
       // (or a follow-up cleanup) can still find the orphaned PAUSED resources
       // on Meta. Without these, only campaign IDs survive and cleanup has to
       // crawl down from each campaign.
+      console.log(JSON.stringify({
+        ts: new Date().toISOString(),
+        level: 'error',
+        event: 'ogilvy.activate_campaigns.failed',
+        component: 'ogilvy/launch',
+        session_id: id,
+        tenant_id: ctx.tenantId,
+        user_id: ctx.user.id,
+        campaign_count: campaignIds.length,
+        adset_count: stageResult.adset_ids?.length || 0,
+        ad_count: stageResult.ad_ids?.length || 0,
+        partial_activations: activateResults.length,
+        step: err.step || null,
+        http_status: err.metaStatus || null,
+        meta_code: err.metaError?.code ?? null,
+        meta_error_subcode: err.metaError?.error_subcode ?? null,
+        fbtrace_id: err.metaError?.fbtrace_id || null,
+        error: err.message,
+      }));
       await updateSession(id, {
         status: 'failed',
         plan_json: {
@@ -142,6 +186,21 @@ export async function POST(_request, { params }) {
 
     const anyFailed = activateResults.some(r => r.error);
     const finalStatus = anyFailed ? 'failed' : 'launched';
+    console.log(JSON.stringify({
+      ts: new Date().toISOString(),
+      level: anyFailed ? 'error' : 'info',
+      event: anyFailed ? 'ogilvy.launch.partial_failed' : 'ogilvy.launch.completed',
+      component: 'ogilvy/launch',
+      session_id: id,
+      tenant_id: ctx.tenantId,
+      user_id: ctx.user.id,
+      campaign_ids: campaignIds,
+      adset_count: stageResult.adset_ids?.length || 0,
+      ad_count: stageResult.ad_ids?.length || 0,
+      activate_total: activateResults.length,
+      activate_failed: activateResults.filter(r => r.error).length,
+      failed_entities: activateResults.filter(r => r.error).map(r => ({ level: r.level, id: r.id, error: r.error })),
+    }));
     await updateSession(id, {
       status: finalStatus,
       plan_json: {

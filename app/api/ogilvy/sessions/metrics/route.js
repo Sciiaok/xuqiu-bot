@@ -139,7 +139,17 @@ export async function GET() {
       } catch (err) {
         // Don't fail the whole endpoint on a single chunk error — log and skip.
         // The next refresh (cache miss in 5 min) gets another shot.
-        console.warn('[ogilvy/sessions/metrics] insights chunk failed:', err.message);
+        console.log(JSON.stringify({
+          ts: new Date().toISOString(),
+          level: 'warn',
+          event: 'ogilvy.meta_insights_chunk.failed',
+          component: 'ogilvy/sessions-metrics',
+          tenant_id: ctx.tenantId,
+          ad_chunk_size: adChunk.length,
+          meta_code: err.metaError?.code ?? null,
+          fbtrace_id: err.metaError?.fbtrace_id || null,
+          error: err.message,
+        }));
         continue;
       }
       for (const row of rows) {
@@ -166,7 +176,16 @@ export async function GET() {
         to_ts: new Date().toISOString(),
       });
       if (convErr) {
-        console.warn('[ogilvy/sessions/metrics] ad_conversation_stats failed:', convErr.message);
+        console.log(JSON.stringify({
+          ts: new Date().toISOString(),
+          level: 'warn',
+          event: 'ogilvy.ad_conversation_stats.rpc_failed',
+          component: 'ogilvy/sessions-metrics',
+          tenant_id: ctx.tenantId,
+          pg_code: convErr.code || null,
+          pg_details: convErr.details || null,
+          error: convErr.message,
+        }));
       } else {
         for (const row of convStats || []) {
           const sessionId = adIdToSession.get(String(row.meta_ad_id || ''));
@@ -178,7 +197,14 @@ export async function GET() {
         }
       }
     } catch (err) {
-      console.warn('[ogilvy/sessions/metrics] conversation stats error:', err.message);
+      console.log(JSON.stringify({
+        ts: new Date().toISOString(),
+        level: 'warn',
+        event: 'ogilvy.ad_conversation_stats.error',
+        component: 'ogilvy/sessions-metrics',
+        tenant_id: ctx.tenantId,
+        error: err.message,
+      }));
     }
 
     for (const id of Object.keys(metrics)) {
@@ -193,7 +219,14 @@ export async function GET() {
 
     return NextResponse.json(payload);
   } catch (err) {
-    console.error('[ogilvy/sessions/metrics GET]', err.message);
+    console.log(JSON.stringify({
+      ts: new Date().toISOString(),
+      level: 'error',
+      event: 'ogilvy.fetch_metrics.failed',
+      component: 'ogilvy/sessions-metrics',
+      tenant_id: ctx.tenantId,
+      error: err.message,
+    }));
     return NextResponse.json({ error: err.message }, { status: 500 });
   }
 }

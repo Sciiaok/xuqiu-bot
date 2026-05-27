@@ -74,7 +74,17 @@ export async function GET() {
       // 会抛"Meta 未连接",在网格场景下直接返回空 statuses,卡片继续显示 DB 态。
       ads = await fetchAdStatuses(adIds, { userId: ctx.user.id });
     } catch (err) {
-      console.warn('[ogilvy/sessions/ad-status] Meta fetch failed:', err.message);
+      console.log(JSON.stringify({
+        ts: new Date().toISOString(),
+        level: 'warn',
+        event: 'ogilvy.batch_fetch_ad_statuses.failed',
+        component: 'ogilvy/sessions-ad-status',
+        tenant_id: ctx.tenantId,
+        ad_count: adIds.length,
+        meta_code: err.metaError?.code ?? null,
+        fbtrace_id: err.metaError?.fbtrace_id || null,
+        error: err.message,
+      }));
       return NextResponse.json({ statuses: {}, warning: err.message });
     }
 
@@ -100,7 +110,14 @@ export async function GET() {
 
     return NextResponse.json(payload);
   } catch (err) {
-    console.error('[ogilvy/sessions/ad-status GET]', err.message);
+    console.log(JSON.stringify({
+      ts: new Date().toISOString(),
+      level: 'error',
+      event: 'ogilvy.sessions_ad_status.unhandled_error',
+      component: 'ogilvy/sessions-ad-status',
+      tenant_id: ctx.tenantId,
+      error: err.message,
+    }));
     return NextResponse.json({ error: err.message }, { status: 500 });
   }
 }

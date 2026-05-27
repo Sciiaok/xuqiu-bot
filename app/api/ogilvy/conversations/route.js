@@ -33,7 +33,16 @@ export async function GET() {
       })),
     });
   } catch (err) {
-    console.error('[ogilvy/conversations GET]', err.message);
+    console.log(JSON.stringify({
+      ts: new Date().toISOString(),
+      level: 'error',
+      event: 'ogilvy.list_sessions.failed',
+      component: 'ogilvy/conversations',
+      tenant_id: ctx.tenantId,
+      user_id: ctx.user.id,
+      pg_code: err.code || null,
+      error: err.message,
+    }));
     return Response.json({ error: err.message }, { status: 500 });
   }
 }
@@ -84,7 +93,18 @@ export async function POST(request) {
     });
     return Response.json(session, { status: 201 });
   } catch (err) {
-    console.error('[ogilvy/conversations POST]', err.message);
+    console.log(JSON.stringify({
+      ts: new Date().toISOString(),
+      level: 'error',
+      event: 'ogilvy.create_session.failed',
+      component: 'ogilvy/conversations',
+      tenant_id: ctx.tenantId,
+      user_id: ctx.user.id,
+      product_line: productLine,
+      pg_code: err.code || null,
+      pg_details: err.details || null,
+      error: err.message,
+    }));
     return Response.json({ error: err.message }, { status: 500 });
   }
 }

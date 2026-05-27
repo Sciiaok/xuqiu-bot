@@ -44,7 +44,16 @@ export async function GET(_request, { params }) {
       })),
     });
   } catch (err) {
-    console.error('[ogilvy/conversations/[id] GET]', err.message);
+    console.log(JSON.stringify({
+      ts: new Date().toISOString(),
+      level: 'error',
+      event: 'ogilvy.load_session.failed',
+      component: 'ogilvy/conversations',
+      session_id: id,
+      tenant_id: ctx.tenantId,
+      pg_code: err.code || null,
+      error: err.message,
+    }));
     return Response.json({ error: err.message }, { status: 500 });
   }
 }
@@ -73,7 +82,16 @@ export async function DELETE(_request, { params }) {
     await deleteSession(id);
     return Response.json({ ok: true });
   } catch (err) {
-    console.error('[ogilvy/conversations/[id] DELETE]', err.message);
+    console.log(JSON.stringify({
+      ts: new Date().toISOString(),
+      level: 'error',
+      event: 'ogilvy.delete_session.failed',
+      component: 'ogilvy/conversations',
+      session_id: id,
+      tenant_id: ctx.tenantId,
+      pg_code: err.code || null,
+      error: err.message,
+    }));
     return Response.json({ error: err.message }, { status: 500 });
   }
 }

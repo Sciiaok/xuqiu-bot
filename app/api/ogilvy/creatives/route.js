@@ -45,7 +45,16 @@ export async function GET(request) {
     ]);
     return NextResponse.json({ product_line_name: productLineName, ai, kb });
   } catch (err) {
-    console.error('[ogilvy/creatives GET]', err.message);
+    console.log(JSON.stringify({
+      ts: new Date().toISOString(),
+      level: 'error',
+      event: 'ogilvy.load_creatives.failed',
+      component: 'ogilvy/creatives',
+      tenant_id: ctx.tenantId,
+      product_line: productLine,
+      pg_code: err.code || null,
+      error: err.message,
+    }));
     return NextResponse.json({ error: err.message }, { status: 500 });
   }
 }

@@ -128,7 +128,17 @@ export async function webSearch({ query }, { tenantId, sessionId, productLine } 
     } catch (err) {
       // Don't silently regress to the expensive path — log the reason so it
       // shows up when the cheap one breaks (rate-limit, key invalidated, etc).
-      console.warn(`[ogilvy/tools] tavily search failed, falling back to anthropic: ${err.message}`);
+      console.log(JSON.stringify({
+        ts: new Date().toISOString(),
+        level: 'warn',
+        event: 'ogilvy.tavily.search_failed',
+        component: 'ogilvy/tools',
+        session_id: sessionId || null,
+        tenant_id: tenantId || null,
+        product_line: productLine || null,
+        query_preview: String(query).slice(0, 120),
+        error: err.message,
+      }));
       result = await anthropicWebSearch(query, { tenantId, sessionId, productLine });
     }
   } else {
@@ -168,7 +178,17 @@ export async function readWebpage({ url }, { tenantId, sessionId, productLine } 
     try {
       return await tavilyExtract(url);
     } catch (err) {
-      console.warn(`[ogilvy/tools] tavily extract failed for ${url}: ${err.message}`);
+      console.log(JSON.stringify({
+        ts: new Date().toISOString(),
+        level: 'warn',
+        event: 'ogilvy.tavily.extract_failed',
+        component: 'ogilvy/tools',
+        session_id: sessionId || null,
+        tenant_id: tenantId || null,
+        product_line: productLine || null,
+        url,
+        error: err.message,
+      }));
       // fall through to Anthropic — both broken means structured-error return.
     }
   }
@@ -203,6 +223,18 @@ export async function readWebpage({ url }, { tenantId, sessionId, productLine } 
       content: (parsed?.content || text || '').slice(0, 6000),
     };
   } catch (err) {
+    console.log(JSON.stringify({
+      ts: new Date().toISOString(),
+      level: 'warn',
+      event: 'ogilvy.web_fetch.unavailable',
+      component: 'ogilvy/tools',
+      session_id: sessionId || null,
+      tenant_id: tenantId || null,
+      product_line: productLine || null,
+      url,
+      hostname,
+      error: err.message,
+    }));
     // Structured degradation — tell the Agent the path failed AND what to do
     // instead. Without this hint, observed behaviour in the 2026-05-25 case
     // was the Agent retrying read_webpage 10 times across 10 different URLs,
@@ -371,6 +403,18 @@ async function anthropicWebSearch(query, { tenantId, sessionId, productLine }) {
       citations,
     };
   } catch (err) {
+    console.log(JSON.stringify({
+      ts: new Date().toISOString(),
+      level: 'warn',
+      event: 'ogilvy.anthropic_web_search.failed',
+      component: 'ogilvy/tools',
+      session_id: sessionId || null,
+      tenant_id: tenantId || null,
+      product_line: productLine || null,
+      query_preview: String(query).slice(0, 120),
+      error: err.message,
+      error_name: err.name || null,
+    }));
     return { error: `Search error: ${err.message}`, results: [], citations: [] };
   }
 }

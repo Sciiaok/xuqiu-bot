@@ -726,7 +726,19 @@ export async function* runOgilvy(sessionId, userText, attachments = [], userId =
         }
       }
     } catch (err) {
-      console.error('[ogilvy] LLM stream error:', err.message);
+      console.log(JSON.stringify({
+        ts: new Date().toISOString(),
+        level: 'error',
+        event: 'ogilvy.llm.stream_error',
+        component: 'ogilvy/agent',
+        session_id: sessionId,
+        iteration: iter,
+        accumulated_text_chars: assistantText.length,
+        accumulated_tool_calls: Object.keys(accToolCalls).length,
+        finish_reason: finishReason || null,
+        error: err.message,
+        error_name: err.name || null,
+      }));
       yield { event: 'error', data: { message: `模型调用失败：${err.message}` } };
       return;
     }
@@ -750,10 +762,16 @@ export async function* runOgilvy(sessionId, userText, attachments = [], userId =
           ? repairAssistantUrls(pendingAssistantText, knownUrls)
           : { text: pendingAssistantText, repaired: [], unverified: [] };
       if (repaired.length || unverified.length) {
-        console.log(
-          `[ogilvy] url-repair session=${sessionId}: repaired=${repaired.length} unverified=${unverified.length}`,
-          repaired.map(r => `${r.from} → ${r.to}`).join('; '),
-        );
+        console.log(JSON.stringify({
+          ts: new Date().toISOString(),
+          level: 'info',
+          event: 'ogilvy.url_repair.applied',
+          component: 'ogilvy/agent',
+          session_id: sessionId,
+          repaired_count: repaired.length,
+          unverified_count: unverified.length,
+          repairs: repaired.map(r => `${r.from} → ${r.to}`),
+        }));
       }
       const flushedText = repairedText || null;
       pendingAssistantText = '';

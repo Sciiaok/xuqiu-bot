@@ -105,7 +105,18 @@ export async function POST(request) {
         const parsed = await parseBufferToContent(buffer, fileType);
         text = typeof parsed === 'string' ? parsed : '';
       } catch (err) {
-        console.error('[ogilvy/upload] parse error:', err);
+        console.log(JSON.stringify({
+          ts: new Date().toISOString(),
+          level: 'error',
+          event: 'ogilvy.parse_document.failed',
+          component: 'ogilvy/upload',
+          tenant_id: ctx.tenantId,
+          session_id: sessionId || null,
+          filename: file.name,
+          file_type: fileType,
+          size: file.size,
+          error: err.message,
+        }));
         return Response.json({ error: `解析失败:${err.message}` }, { status: 400 });
       }
       const charCount = text.length;
@@ -141,7 +152,20 @@ export async function POST(request) {
     }
 
     if (uploadError) {
-      console.error('[ogilvy/upload] storage error:', uploadError);
+      console.log(JSON.stringify({
+        ts: new Date().toISOString(),
+        level: 'error',
+        event: 'ogilvy.upload_image.failed',
+        component: 'ogilvy/upload',
+        tenant_id: ctx.tenantId,
+        session_id: sessionId || null,
+        bucket: 'chat-uploads',
+        storage_path: storagePath,
+        size: file.size,
+        content_type: file.type,
+        storage_status: uploadError.statusCode || null,
+        error: uploadError.message,
+      }));
       return Response.json({ error: `Upload failed: ${uploadError.message}` }, { status: 500 });
     }
 
@@ -158,7 +182,15 @@ export async function POST(request) {
       size: file.size,
     });
   } catch (err) {
-    console.error('[ogilvy/upload] error:', err);
+    console.log(JSON.stringify({
+      ts: new Date().toISOString(),
+      level: 'error',
+      event: 'ogilvy.upload.unhandled_error',
+      component: 'ogilvy/upload',
+      tenant_id: ctx.tenantId,
+      error: err.message || 'Upload failed',
+      error_name: err.name || null,
+    }));
     return Response.json({ error: err.message || 'Upload failed' }, { status: 500 });
   }
 }

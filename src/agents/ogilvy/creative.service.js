@@ -197,7 +197,22 @@ async function saveAssetToStorage({ imageBuffer, prompt, model, productInfo, use
   const { error: uploadError } = await storageClient.storage
     .from(STORAGE_BUCKET)
     .upload(storagePath, imageBuffer, { contentType: 'image/png' });
-  if (uploadError) throw new Error(`Storage upload failed: ${uploadError.message}`);
+  if (uploadError) {
+    console.log(JSON.stringify({
+      ts: new Date().toISOString(),
+      level: 'error',
+      event: 'ogilvy.storage.upload_failed',
+      component: 'ogilvy/creative',
+      session_id: sessionId || null,
+      tenant_id: tenantId,
+      bucket: STORAGE_BUCKET,
+      storage_path: storagePath,
+      image_size: imageBuffer.length,
+      model,
+      error: uploadError.message,
+    }));
+    throw new Error(`Storage upload failed: ${uploadError.message}`);
+  }
 
   // Public URL uses the service client (RLS not required for read).
   const { data: urlData } = supabase.storage.from(STORAGE_BUCKET).getPublicUrl(storagePath);
@@ -226,7 +241,23 @@ async function saveAssetToStorage({ imageBuffer, prompt, model, productInfo, use
     })
     .select('id')
     .single();
-  if (dbError) throw new Error(`DB insert failed: ${dbError.message}`);
+  if (dbError) {
+    console.log(JSON.stringify({
+      ts: new Date().toISOString(),
+      level: 'error',
+      event: 'ogilvy.aigc_assets.insert_failed',
+      component: 'ogilvy/creative',
+      session_id: sessionId || null,
+      tenant_id: tenantId,
+      user_id: userId || null,
+      model,
+      storage_path: storagePath,
+      pg_code: dbError.code || null,
+      pg_details: dbError.details || null,
+      error: dbError.message,
+    }));
+    throw new Error(`DB insert failed: ${dbError.message}`);
+  }
 
   return { id: row.id, url: urlData.publicUrl, storage_path: storagePath };
 }

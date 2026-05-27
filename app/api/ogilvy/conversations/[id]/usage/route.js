@@ -126,7 +126,16 @@ export async function GET(_request, { params }) {
       turn_count: (data || []).length,
     });
   } catch (err) {
-    console.error('[ogilvy/conversations/[id]/usage GET]', err.message);
+    console.log(JSON.stringify({
+      ts: new Date().toISOString(),
+      level: 'error',
+      event: 'ogilvy.fetch_usage_logs.failed',
+      component: 'ogilvy/usage',
+      session_id: id,
+      tenant_id: ctx.tenantId,
+      pg_code: err.code || null,
+      error: err.message,
+    }));
     return Response.json({ error: err.message }, { status: 500 });
   }
 }
