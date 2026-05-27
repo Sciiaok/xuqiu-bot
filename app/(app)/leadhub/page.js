@@ -1481,17 +1481,11 @@ export default function LeadHubPage() {
                     ) : (
                       <div className={s.profileWrap}>
                         <div className={s.profileSection}>
-                          <div className={s.profileField}>
-                            <span className={s.profileLabel}>名称</span>
-                            <span className={s.profileValue}>{profile.contact?.name || profile.contact?.company_name || '—'}</span>
-                          </div>
-                          <div className={s.profileField}>
-                            <span className={s.profileLabel}>WhatsApp</span>
-                            <span className={s.profileValue}>{profile.contact?.wa_id || '—'}</span>
-                          </div>
+                          {/* BSUID 优先展示 —— Meta 给的稳定唯一 key，换号也不变。
+                           * 其它字段（号码、姓名）都是"现在长这样"，BSUID 才是身份。 */}
                           {profile.contact?.bsuid && (
                             <div className={s.profileField}>
-                              <span className={s.profileLabel} title="Business Solution User ID — Meta 给客户的稳定 ID，跟号码解耦">
+                              <span className={s.profileLabel} title="Business Solution User ID — Meta 给客户的稳定唯一 key,跟号码解耦">
                                 Meta ID
                               </span>
                               <span
@@ -1504,6 +1498,14 @@ export default function LeadHubPage() {
                               </span>
                             </div>
                           )}
+                          <div className={s.profileField}>
+                            <span className={s.profileLabel}>名称</span>
+                            <span className={s.profileValue}>{profile.contact?.name || profile.contact?.company_name || '—'}</span>
+                          </div>
+                          <div className={s.profileField}>
+                            <span className={s.profileLabel}>WhatsApp</span>
+                            <span className={s.profileValue}>{profile.contact?.wa_id || '—'}</span>
+                          </div>
                           {profile.contact?.company_name && (
                             <div className={s.profileField}>
                               <span className={s.profileLabel}>公司</span>
