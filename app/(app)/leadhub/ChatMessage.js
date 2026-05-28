@@ -6,7 +6,9 @@ import s from './page.module.css';
 /**
  * Single message row in the conversation panel. Direction (in/out) drives
  * bubble side; `sent_by === 'operator'` marks human takeover messages with a
- * different avatar + sender label.
+ * different avatar + sender label. `sent_by === 'operator_app'` is the same
+ * thing but for messages the operator sent from the WhatsApp Business app
+ * (coexistence mode echo) — same styling, sender label suffixed with " · App".
  *
  * 译文渲染：若 msg.metadata.translation.zh 存在（且非附件），在气泡内原文
  * 下方加分隔线 + 灰色小字渲染中文。翻译默认全开，由后端自动产出；本组件
@@ -14,9 +16,14 @@ import s from './page.module.css';
  */
 export default function ChatMessage({ msg, contactName }) {
   const isIn = msg.role === 'user';
-  const isOperator = msg.sent_by === 'operator';
+  const isOperatorApp = msg.sent_by === 'operator_app';
+  const isOperator = msg.sent_by === 'operator' || isOperatorApp;
   const dir = isIn ? 'in' : 'out';
-  const senderName = isIn ? (contactName || '客户') : isOperator ? '人工客服' : 'AI Agent';
+  const senderName = isIn
+    ? (contactName || '客户')
+    : isOperatorApp ? '人工客服 · App'
+    : isOperator ? '人工客服'
+    : 'AI Agent';
   const ts = toBeijingTime(msg.sent_at);
 
   const media = msg.metadata;

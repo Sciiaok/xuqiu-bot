@@ -10,7 +10,14 @@ import {
 } from '../../../src/whatsapp-media.service.js';
 import { getOrCreateRoutedConversationContext } from '../../../lib/conversation-context.service.js';
 import { enqueueMessage, hasPendingMessages } from '../../../lib/repositories/queue.repository.js';
-import { isHumanTakeover, clearFaqEnded } from '../../../lib/repositories/conversation.repository.js';
+import {
+  isHumanTakeover,
+  clearFaqEnded,
+  startHumanTakeover,
+  refreshTakeoverIfActive,
+  updateConversationOnMessage,
+} from '../../../lib/repositories/conversation.repository.js';
+import { createMessage, findMessageByWamid } from '../../../lib/repositories/message.repository.js';
 import { processConversationQueue } from '../../../lib/queue-processor.js';
 import { updateContactMetadata } from '../../../lib/repositories/contact.repository.js';
 import { resolveTenantByPhoneNumberId } from '../../../lib/tenant-context.js';
@@ -180,6 +187,113 @@ async function buildQueuedMessage({
 }
 
 /**
+ * Build display content + metadata from a coexistence echo. Text is rendered
+ * verbatim; non-text gets a generic placeholder — we don't download media or
+ * transcribe audio for echoes (no real user value, just extra spend).
+ */
+function buildEchoMessageContent(echo) {
+  if (echo.type === 'text') {
+    return { content: echo.text?.body || '', metadata: {} };
+  }
+  return {
+    content: `[${echo.type || 'unknown'} sent from WhatsApp Business app]`,
+    metadata: { echo_type: echo.type || 'unknown' },
+  };
+}
+
+/**
+ * Persist coexistence echoes as operator messages and mute AI.
+ *
+ * Echo flow (Meta → here):
+ * - field === 'smb_message_echoes', value.message_echoes[] populated
+ * - each echo: { from: business, to: customer_wa_id, id: wamid, type, <type>:{} }
+ *
+ * Per-echo we:
+ * 1. resolve tenant via phone_number_id (same path as inbound)
+ * 2. resolve/create the conversation by `echo.to` (the customer)
+ * 3. dedupe via metadata.wa_message_id — skip if LeadEngine UI already inserted
+ *    this same wamid, or if Meta redelivered the echo
+ * 4. insert as role='assistant', sent_by='operator_app'
+ * 5. start takeover (or refresh TTL if already on) — operator is actively
+ *    replying via app, AI must stop auto-replying
+ */
+async function processMessageEchoes({ echoes, phoneNumberId, logger }) {
+  const tenantId = await resolveTenantByPhoneNumberId(phoneNumberId);
+  if (!tenantId) {
+    logger.warn('webhook.echo.unknown_phone_number', { phone_number_id: phoneNumberId });
+    return;
+  }
+
+  for (const echo of echoes) {
+    const customerWaId = echo.to;
+    const wamid = echo.id;
+    if (!customerWaId || !wamid) {
+      logger.warn('webhook.echo.malformed', { has_to: Boolean(customerWaId), has_id: Boolean(wamid) });
+      continue;
+    }
+
+    try {
+      const context = await getOrCreateRoutedConversationContext({
+        tenantId,
+        waId: customerWaId,
+        profileName: null,
+        phoneNumberId,
+        bsuid: null,
+        username: null,
+      });
+
+      const existing = await findMessageByWamid({ conversationId: context.conversation_id, wamid });
+      if (existing) {
+        logger.info('webhook.echo.duplicate', {
+          conversation_id: context.conversation_id,
+          wamid,
+        });
+        continue;
+      }
+
+      const { content, metadata } = buildEchoMessageContent(echo);
+
+      await createMessage({
+        tenantId,
+        conversationId: context.conversation_id,
+        role: 'assistant',
+        content,
+        sentBy: 'operator_app',
+        metadata: {
+          ...metadata,
+          wa_message_id: wamid,
+          source: 'whatsapp_app',
+        },
+      });
+
+      await updateConversationOnMessage(context.conversation_id);
+
+      // 操作员在 app 里主动回复 → 必须把 AI 静音。已开就刷 TTL，没开就启接管。
+      // 否则下一条客户消息会被 Medici 抢答，跟 app 端形成双人格回复。
+      const wasActive = await isHumanTakeover(context.conversation_id);
+      if (wasActive) {
+        await refreshTakeoverIfActive(context.conversation_id);
+      } else {
+        await startHumanTakeover(context.conversation_id);
+      }
+
+      logger.info('webhook.echo.recorded', {
+        conversation_id: context.conversation_id,
+        wamid,
+        echo_type: echo.type,
+        takeover_started: !wasActive,
+      });
+    } catch (err) {
+      logger.error('webhook.echo.failed', {
+        wamid,
+        customer_wa_id: customerWaId,
+        error: err.message,
+      });
+    }
+  }
+}
+
+/**
  * POST /api/webhook - Receive incoming WhatsApp messages
  * Messages are queued for aggregated processing
  *
@@ -234,13 +348,27 @@ export async function POST(request) {
         logger.warn('webhook.dump.failed', { error: err.message });
       });
 
-      // Check if this is a message notification
-      if (!body.entry || !body.entry[0].changes || !body.entry[0].changes[0].value.messages) {
+      // Check if this is a message notification (inbound from customer OR
+      // coexistence echo of an outbound the business sent via the WA Business app).
+      const change = body.entry?.[0]?.changes?.[0]?.value;
+      if (!change) {
         logger.info('webhook.ignored.non_message_notification');
         return;
       }
 
-      const change = body.entry[0].changes[0].value;
+      const phoneNumberId = change.metadata?.phone_number_id || null;
+
+      // === Coexistence echo path ===
+      // `value.message_echoes` (field=smb_message_echoes) is delivered when the
+      // operator replies from the WhatsApp Business app on a shared number.
+      // We persist these as operator messages so the LeadHub conversation window
+      // stays in sync with what the customer actually sees.
+      const echoMessages = Array.isArray(change.message_echoes) ? change.message_echoes : [];
+      if (echoMessages.length > 0) {
+        await processMessageEchoes({ echoes: echoMessages, phoneNumberId, logger });
+        return;
+      }
+
       const inboundMessages = Array.isArray(change.messages) ? change.messages : [];
       if (inboundMessages.length === 0) {
         logger.info('webhook.ignored.no_messages');
@@ -253,7 +381,6 @@ export async function POST(request) {
       const profileName = webhookContact?.profile?.name?.trim() || null;
       const bsuid = webhookContact?.user_id || null;       // BSUID — always present once rolled out
       const waUsername = webhookContact?.username || null;  // WhatsApp username (optional)
-      const phoneNumberId = change.metadata?.phone_number_id || null;
 
       // 按 phoneNumberId 反查 tenant —— 单一路径：meta_phone_numbers。找不到
       // 说明该号码所属 tenant 还没接 Meta BM，webhook 直接返 200 跳过（Meta

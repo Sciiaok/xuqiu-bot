@@ -173,6 +173,14 @@ export async function POST(request) {
       messageContent = message;
     }
 
+    // Coexistence: stash wamid so the echo-webhook handler can dedupe against
+    // this same outbound message. `messages.metadata.wa_message_id` is the key
+    // looked up in `findMessageByWamid` before the echo is inserted.
+    const outboundWamid = whatsappResponse?.messages?.[0]?.id || null;
+    if (outboundWamid) {
+      extraMetadata = { ...extraMetadata, wa_message_id: outboundWamid };
+    }
+
     const updatedSession = await addOperatorMessage(
       conversationId,
       messageContent,
