@@ -1,11 +1,12 @@
 /**
  * Translate service —— 询盘对话「翻译为中文」功能的服务层。
  *
- * 数据流：
- *   1. 用户在 LeadHub 顶部点「翻译」 → POST /api/conversations/[id]/translate
+ * 数据流（默认全开，无 UI 开关）：
+ *   1. 前端打开会话时 fire-and-forget POST /api/conversations/[id]/translate
  *      → translateConversation(): 批量翻译该会话所有未翻译、非中文的消息。
- *   2. 之后该会话有新消息入库时，createMessage 在落库后判断 conversation
- *      .translation_enabled → fire-and-forget 调 translateMessageAsync()。
+ *      幂等：缓存命中的全跳过，再次打开同会话 0 LLM 成本。
+ *   2. 之后该会话有新消息入库时，createMessage 在落库后无条件 fire-and-
+ *      forget 调 translateMessageAsync()，由 shouldSkipTranslation 判定。
  *
  * 翻译产物永久缓存在 messages.metadata.translation 里：
  *   { zh, translated_at, model }

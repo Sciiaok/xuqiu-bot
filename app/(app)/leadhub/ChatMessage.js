@@ -8,11 +8,11 @@ import s from './page.module.css';
  * bubble side; `sent_by === 'operator'` marks human takeover messages with a
  * different avatar + sender label.
  *
- * `translationEnabled`：会话级翻译开关。打开时若 msg.metadata.translation.zh
- * 存在，则在气泡内原文下方加分隔线 + 灰色小字渲染中文。开关关闭或没有译
- * 文（已是中文 / 附件 / 翻译失败）时不显示，气泡保持原样高度。
+ * 译文渲染：若 msg.metadata.translation.zh 存在（且非附件），在气泡内原文
+ * 下方加分隔线 + 灰色小字渲染中文。翻译默认全开，由后端自动产出；本组件
+ * 只关心「有没有缓存到的译文」。
  */
-export default function ChatMessage({ msg, contactName, translationEnabled = false }) {
+export default function ChatMessage({ msg, contactName }) {
   const isIn = msg.role === 'user';
   const isOperator = msg.sent_by === 'operator';
   const dir = isIn ? 'in' : 'out';
@@ -51,7 +51,7 @@ export default function ChatMessage({ msg, contactName, translationEnabled = fal
     : relativeTime(msg.sent_at);
 
   // 附件本身无可翻文本 —— shouldSkipTranslation 也会跳过，但前端再保险一道。
-  const translation = translationEnabled && !isAttachment ? msg.metadata?.translation?.zh : null;
+  const translation = !isAttachment ? msg.metadata?.translation?.zh : null;
 
   return (
     <div className={`${s.msgRow} ${dir === 'out' ? s.msgOut : s.msgIn} ${isOperator && !isIn ? s.msgOperator : ''}`}>
