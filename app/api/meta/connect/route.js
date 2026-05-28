@@ -155,7 +155,7 @@ export async function POST(request) {
     log('success', 'bm', `BM 解析成功：${bm.name || '(未命名)'}（${bm.id}）`);
 
     // 1.5 BM 跨租户共享自 2026-05-28 起允许 —— 不再在 BM 级别拒绝。
-    //     BM 下面的 WABA / 广告账户 / phone / page_id 仍然各自独占，下面逐项校验。
+    //     BM 下面的 WABA / 广告账户 / phone 仍然各自独占；Facebook Page 允许跨租户共享。
 
     // 1.6 解析用户选定的 Facebook Page ID（来自 preview 勾选，可选）
     //     1 connection : 1 page；用户可暂不选，CTWA 广告投放前补即可。
@@ -169,50 +169,21 @@ export async function POST(request) {
       }, { status: 400 });
     }
 
-    // Page 跨租户独占校验（与 WABA / AdAccount 同样的预检模式）
-    if (pageId) {
-      const { data: pageConflict } = await supabase
-        .from('meta_connections')
-        .select('tenant_id')
-        .eq('status', 'active')
-        .filter('metadata->>page_id', 'eq', pageId)
-        .neq('tenant_id', ctx.tenantId)
-        .maybeSingle();
-      if (pageConflict) {
-        log('error', 'exclusivity', `Page ${pageId} 已被另一租户绑定（tenant=${pageConflict.tenant_id.slice(0, 8)}…）`);
-        return NextResponse.json({
-          error: `Facebook Page ${pageId} 已经被另一个租户绑定，请重新选择。`,
-          logs,
-        }, { status: 409 });
-      }
-    }
+    // Facebook Page 允许跨租户共享 —— 不做独占校验。
     if (pageId) log('info', 'page', `用户选定 Page ${pageId}`);
     else log('info', 'page', '用户未选 page —— CTWA 广告投放前需要补绑');
 
     // 2. 写 meta_connections —— page_id 直接进 metadata，无需后续单独再 POST
     log('info', 'connection', '写 meta_connections（旧 active 会自动置 disconnected）');
-    let conn;
-    try {
-      conn = await createConnection({
-        tenantId: ctx.tenantId,
-        bmId: bm.id,
-        businessName: bm.name || null,
-        token,
-        scopes: [],
-        connectedByUserId: ctx.user.id,
-        metadata: pageId ? { mode, page_id: pageId } : { mode },
-      });
-    } catch (err) {
-      // page_id 唯一索引兜底 race（极少）
-      if (isCrossTenantConflictError(err)) {
-        log('error', 'exclusivity', `写 connection 时 page_id 被抢占：${err.message}`);
-        return NextResponse.json({
-          error: `Facebook Page ${pageId} 刚刚被另一个租户抢占，请刷新预览重试。`,
-          logs,
-        }, { status: 409 });
-      }
-      throw err;
-    }
+    const conn = await createConnection({
+      tenantId: ctx.tenantId,
+      bmId: bm.id,
+      businessName: bm.name || null,
+      token,
+      scopes: [],
+      connectedByUserId: ctx.user.id,
+      metadata: pageId ? { mode, page_id: pageId } : { mode },
+    });
     log('success', 'connection', `meta_connections.id=${conn.id}（token AES-256-GCM 加密落库）`);
 
     // 3. 用户选定的 WABA ids（来自 preview 步骤的勾选）

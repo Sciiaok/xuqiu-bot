@@ -328,9 +328,10 @@ export async function POST(request) {
         ? `可用主页 ${pages.length} 个`
         : 'BM 下未发现任何 Facebook 主页 —— 没有 page 时不影响连接，但 CTWA 广告将无法投放');
 
-    // 7. 跨租户独占预检：WABA / 广告账户 / Page 已被其他租户绑定的，逐项标记给前端
+    // 7. 跨租户独占预检：WABA / 广告账户 已被其他租户绑定的，逐项标记给前端
     //    BM 本身允许跨租户共享（2026-05-28 起），所以这里不再做 BM 级整体拒绝
     //    —— 只标记 BM 下哪些资源已被别人占走，让用户能选剩下的。
+    //    Facebook Page 允许跨租户共享，不做冲突标记。
     {
       const wabaIds = wabasWithPhones.map(w => w.id);
       if (wabaIds.length > 0) {
@@ -363,28 +364,6 @@ export async function POST(request) {
         }
         if (dupAdSet.size > 0) {
           log('warn', 'exclusivity', `广告账户 ${[...dupAdSet].join(', ')} 已被其他租户绑定 —— 不可选`);
-        }
-      }
-
-      // Page 跨租户冲突标记：跟 WABA / AdAccount 一致，查别的租户 active 连接的
-      // metadata->>page_id 命中哪几个
-      const pageIds = pages.map(p => p.page_id);
-      if (pageIds.length > 0) {
-        const { data: pageDups } = await supabase
-          .from('meta_connections')
-          .select('tenant_id, metadata')
-          .eq('status', 'active')
-          .neq('tenant_id', ctx.tenantId);
-        const occupied = new Set();
-        for (const row of pageDups || []) {
-          const pid = row?.metadata?.page_id;
-          if (pid && pageIds.includes(String(pid))) occupied.add(String(pid));
-        }
-        for (const p of pages) {
-          if (occupied.has(p.page_id)) p.conflict = 'bound_by_other_tenant';
-        }
-        if (occupied.size > 0) {
-          log('warn', 'exclusivity', `Page ${[...occupied].join(', ')} 已被其他租户绑定 —— 不可选`);
         }
       }
     }

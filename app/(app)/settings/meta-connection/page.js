@@ -100,9 +100,10 @@ export default function MetaConnectionPage() {
       setSelectedWabaIds(new Set(selectableWabas.map(w => w.id)));
       const ads = (data.ad_accounts || []).filter(a => a.conflict !== 'bound_by_other_tenant');
       setSelectedAdAccountId(ads.length === 1 ? ads[0].ad_account_id : null);
-      // Page 单选：只有 1 个可选时自动选中；多个或 0 个让用户决定
-      const selectablePages = (data.pages || []).filter(p => p.conflict !== 'bound_by_other_tenant');
-      setSelectedPageId(selectablePages.length === 1 ? selectablePages[0].page_id : null);
+      // Page 单选：只有 1 个时自动选中；多个或 0 个让用户决定
+      // Facebook Page 允许跨租户共享，不做冲突过滤
+      const allPages = data.pages || [];
+      setSelectedPageId(allPages.length === 1 ? allPages[0].page_id : null);
       setStep('choose');
     } catch (err) {
       setError(err.message);
@@ -573,18 +574,15 @@ function ChooseStep({ preview, selectedWabaIds, selectedAdAccountId, selectedPag
             </label>
             {pages.map(p => {
               const checked = selectedPageId === p.page_id;
-              const conflict = p.conflict === 'bound_by_other_tenant';
               return (
                 <label
                   key={p.page_id}
-                  className={`${s.choiceRow} ${checked ? s.choiceRowOn : ''} ${conflict ? s.choiceRowDisabled : ''}`}
-                  title={conflict ? '该主页已被其他租户绑定 —— 不能跨租户共用' : ''}
+                  className={`${s.choiceRow} ${checked ? s.choiceRowOn : ''}`}
                 >
                   <input
                     type="radio"
                     name="page"
                     checked={checked}
-                    disabled={conflict}
                     onChange={() => pickPage(p.page_id)}
                   />
                   <div className={s.choiceMain}>
@@ -594,15 +592,9 @@ function ChooseStep({ preview, selectedWabaIds, selectedAdAccountId, selectedPag
                         {p.page_id}
                       </span>
                     </div>
-                    {conflict ? (
-                      <div className={s.muted} style={{ fontSize: 12, color: 'var(--red)' }}>
-                        已被其他租户绑定 —— 不可选
-                      </div>
-                    ) : (
-                      <div className={s.muted} style={{ fontSize: 12 }}>
-                        {p.category || '主页'}
-                      </div>
-                    )}
+                    <div className={s.muted} style={{ fontSize: 12 }}>
+                      {p.category || '主页'}
+                    </div>
                   </div>
                 </label>
               );
