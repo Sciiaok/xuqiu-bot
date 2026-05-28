@@ -260,7 +260,75 @@ export async function POST(request) {
     log(adAccounts.length > 0 ? 'success' : 'warn', 'ads',
       `可用广告账户 ${adAccounts.length} 个（共 ${allAdAccounts.length}，过滤 ${filteredAds.length}）`);
 
-    // 7. 跨租户独占预检：WABA / 广告账户已被其他租户绑定的，逐项标记给前端
+    // 6.5 列 Facebook 主页 —— 与 ad_accounts 同模式：owned + client + system user 兜底
+    //     CTWA 广告必须绑一个 page；之前要用户手输，现在自动列出来跟 WABA 一样勾。
+    const pagesMap = new Map();
+    let pageScopeError = null;
+    for (const edge of ['owned_pages', 'client_pages']) {
+      log('info', 'pages', `GET /${bm.id}/${edge}`);
+      const r = await graphGetSafe(`/${bm.id}/${edge}`, token, { fields: 'id,name,category' });
+      if (!r.ok) {
+        log('warn', 'pages', `${edge} 失败：${fmtErr(r.error)}`, r.error);
+        // 缺 scope 时 Meta 一般回 (#200) Permissions error 或 OAuthException code 10/100。
+        // 把 message 留下来后面统一报错。
+        if (/permission|scope|pages_show_list/i.test(r.error?.message || '')) {
+          pageScopeError = r.error?.message;
+        }
+        continue;
+      }
+      const list = r.data?.data || [];
+      log('success', 'pages', `${edge}: ${list.length} 个`, list.map(p => ({ id: p.id, name: p.name })));
+      for (const p of list) {
+        if (!pagesMap.has(p.id)) {
+          pagesMap.set(p.id, {
+            page_id: p.id,
+            name: p.name || null,
+            category: p.category || null,
+            source: edge,
+          });
+        }
+      }
+    }
+
+    // 兜底：BM 边查不到时试 /me/accounts（system user 直接被分配的 page）
+    if (pagesMap.size === 0) {
+      log('info', 'pages', '兜底：GET /me/accounts（system user 直接被分配的 page）');
+      const r = await graphGetSafe('/me/accounts', token, { fields: 'id,name,category' });
+      if (!r.ok) {
+        log('warn', 'pages', `/me/accounts 失败：${fmtErr(r.error)}`, r.error);
+        if (/permission|scope|pages_show_list/i.test(r.error?.message || '')) {
+          pageScopeError = r.error?.message;
+        }
+      } else {
+        const list = r.data?.data || [];
+        log('success', 'pages', `/me/accounts: ${list.length} 个`, list.map(p => ({ id: p.id, name: p.name })));
+        for (const p of list) {
+          if (!pagesMap.has(p.id)) {
+            pagesMap.set(p.id, {
+              page_id: p.id,
+              name: p.name || null,
+              category: p.category || null,
+              source: '/me/accounts',
+            });
+          }
+        }
+      }
+    }
+    const pages = [...pagesMap.values()];
+    if (pages.length === 0 && pageScopeError) {
+      // Token 完全没 page 列表权限 → 阻塞性报错，让用户去 Meta 补 scope 再来
+      log('error', 'pages', `Token 缺少 page 列表权限：${pageScopeError}`);
+      return NextResponse.json({
+        error: `System User Token 缺少 pages_show_list 权限（Meta: ${pageScopeError}）。请到 Meta Business Settings → 系统用户 → 添加 Assets，给该 system user 加上 "Show a list of the Pages" 权限后重新生成 token 再试。`,
+        logs,
+      }, { status: 400 });
+    }
+    log(pages.length > 0 ? 'success' : 'warn', 'pages',
+      pages.length > 0
+        ? `可用主页 ${pages.length} 个`
+        : 'BM 下未发现任何 Facebook 主页 —— 没有 page 时不影响连接，但 CTWA 广告将无法投放');
+
+    // 7. 跨租户独占预检：WABA / 广告账户 / Page 已被其他租户绑定的，逐项标记给前端
     //    BM 本身允许跨租户共享（2026-05-28 起），所以这里不再做 BM 级整体拒绝
     //    —— 只标记 BM 下哪些资源已被别人占走，让用户能选剩下的。
     {
@@ -297,15 +365,39 @@ export async function POST(request) {
           log('warn', 'exclusivity', `广告账户 ${[...dupAdSet].join(', ')} 已被其他租户绑定 —— 不可选`);
         }
       }
+
+      // Page 跨租户冲突标记：跟 WABA / AdAccount 一致，查别的租户 active 连接的
+      // metadata->>page_id 命中哪几个
+      const pageIds = pages.map(p => p.page_id);
+      if (pageIds.length > 0) {
+        const { data: pageDups } = await supabase
+          .from('meta_connections')
+          .select('tenant_id, metadata')
+          .eq('status', 'active')
+          .neq('tenant_id', ctx.tenantId);
+        const occupied = new Set();
+        for (const row of pageDups || []) {
+          const pid = row?.metadata?.page_id;
+          if (pid && pageIds.includes(String(pid))) occupied.add(String(pid));
+        }
+        for (const p of pages) {
+          if (occupied.has(p.page_id)) p.conflict = 'bound_by_other_tenant';
+        }
+        if (occupied.size > 0) {
+          log('warn', 'exclusivity', `Page ${[...occupied].join(', ')} 已被其他租户绑定 —— 不可选`);
+        }
+      }
     }
 
-    log('success', 'done', `预览完成：${wabasWithPhones.length} 个 WABA, ${adAccounts.length} 个可用广告账户`);
+    log('success', 'done',
+      `预览完成：${wabasWithPhones.length} 个 WABA, ${adAccounts.length} 个可用广告账户, ${pages.length} 个主页`);
 
     return NextResponse.json({
       success: true,
       bm: { id: bm.id, name: bm.name || null },
       wabas: wabasWithPhones,
       ad_accounts: adAccounts,
+      pages,
       logs,
     });
   } catch (err) {

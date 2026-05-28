@@ -26,6 +26,8 @@ export default function MetaConnectionPage() {
   const [preview, setPreview] = useState(null); // { bm, wabas, ad_accounts }
   const [selectedWabaIds, setSelectedWabaIds] = useState(new Set());
   const [selectedAdAccountId, setSelectedAdAccountId] = useState(null);
+  // Page 单选：1 connection : 1 page；可为 null（用户暂不选，CTWA 之前再补）
+  const [selectedPageId, setSelectedPageId] = useState(null);
 
   const [previewing, setPreviewing] = useState(false);
   const [submitting, setSubmitting] = useState(false);
@@ -98,6 +100,9 @@ export default function MetaConnectionPage() {
       setSelectedWabaIds(new Set(selectableWabas.map(w => w.id)));
       const ads = (data.ad_accounts || []).filter(a => a.conflict !== 'bound_by_other_tenant');
       setSelectedAdAccountId(ads.length === 1 ? ads[0].ad_account_id : null);
+      // Page 单选：只有 1 个可选时自动选中；多个或 0 个让用户决定
+      const selectablePages = (data.pages || []).filter(p => p.conflict !== 'bound_by_other_tenant');
+      setSelectedPageId(selectablePages.length === 1 ? selectablePages[0].page_id : null);
       setStep('choose');
     } catch (err) {
       setError(err.message);
@@ -127,6 +132,7 @@ export default function MetaConnectionPage() {
           bm_id: bmId.trim() || undefined,
           waba_ids: [...selectedWabaIds],
           ad_account_ids: selectedAdAccountId ? [selectedAdAccountId] : [],
+          page_id: selectedPageId || null,
         }),
       }));
       setToken('');
@@ -134,6 +140,7 @@ export default function MetaConnectionPage() {
       setPreview(null);
       setSelectedWabaIds(new Set());
       setSelectedAdAccountId(null);
+      setSelectedPageId(null);
       setStep('token');
       invalidate(KEYS.META_CONNECTION);
       await load();
@@ -149,6 +156,7 @@ export default function MetaConnectionPage() {
     setPreview(null);
     setSelectedWabaIds(new Set());
     setSelectedAdAccountId(null);
+    setSelectedPageId(null);
   };
 
   const toggleWaba = (id) => {
@@ -230,8 +238,10 @@ export default function MetaConnectionPage() {
           preview={preview}
           selectedWabaIds={selectedWabaIds}
           selectedAdAccountId={selectedAdAccountId}
+          selectedPageId={selectedPageId}
           toggleWaba={toggleWaba}
           pickAdAccount={pickAdAccount}
+          pickPage={setSelectedPageId}
           submitting={submitting}
           onBack={handleBackToToken}
           onSubmit={handleConnect}
@@ -393,10 +403,11 @@ function QualityBadgeInline({ rating }) {
   return <span style={{ color: m.color, fontSize: 11, fontFamily: 'var(--font-mono)' }}>{m.label}</span>;
 }
 
-function ChooseStep({ preview, selectedWabaIds, selectedAdAccountId, toggleWaba, pickAdAccount, submitting, onBack, onSubmit }) {
+function ChooseStep({ preview, selectedWabaIds, selectedAdAccountId, selectedPageId, toggleWaba, pickAdAccount, pickPage, submitting, onBack, onSubmit }) {
   const bm = preview?.bm;
   const wabas = preview?.wabas || [];
   const adAccounts = preview?.ad_accounts || [];
+  const pages = preview?.pages || [];
 
   return (
     <>
@@ -533,6 +544,73 @@ function ChooseStep({ preview, selectedWabaIds, selectedAdAccountId, toggleWaba,
         )}
       </div>
 
+      <div className={s.section}>
+        <h2 className={s.sectionTitle}>Facebook 主页（{pages.length}，CTWA 广告必需，可暂不选）</h2>
+        {pages.length === 0 ? (
+          <div className={s.muted}>
+            该 BM 下没有可用的 Facebook 主页 —— Click-to-WhatsApp 广告投放需要绑定一个主页。
+            可以先完成连接，之后在 Meta Business Manager 里把主页加入 BM 再重新连接。
+          </div>
+        ) : (
+          <div className={s.choiceList}>
+            {/* 提供「暂不绑定」选项 —— 与「未选 page → page_id=null」语义一致 */}
+            <label
+              className={`${s.choiceRow} ${selectedPageId === null ? s.choiceRowOn : ''}`}
+              title="暂不绑定主页 —— CTWA 广告投放前需要重新连接来补绑"
+            >
+              <input
+                type="radio"
+                name="page"
+                checked={selectedPageId === null}
+                onChange={() => pickPage(null)}
+              />
+              <div className={s.choiceMain}>
+                <div className={s.choiceTitle}>暂不绑定（稍后通过重新连接补绑）</div>
+                <div className={s.muted} style={{ fontSize: 12 }}>
+                  不选 page 也可以完成连接，但 CTWA 广告投放前必须先绑定。
+                </div>
+              </div>
+            </label>
+            {pages.map(p => {
+              const checked = selectedPageId === p.page_id;
+              const conflict = p.conflict === 'bound_by_other_tenant';
+              return (
+                <label
+                  key={p.page_id}
+                  className={`${s.choiceRow} ${checked ? s.choiceRowOn : ''} ${conflict ? s.choiceRowDisabled : ''}`}
+                  title={conflict ? '该主页已被其他租户绑定 —— 不能跨租户共用' : ''}
+                >
+                  <input
+                    type="radio"
+                    name="page"
+                    checked={checked}
+                    disabled={conflict}
+                    onChange={() => pickPage(p.page_id)}
+                  />
+                  <div className={s.choiceMain}>
+                    <div className={s.choiceTitle}>
+                      {p.name || '(未命名)'}
+                      <span className={s.muted} style={{ marginLeft: 8, fontFamily: 'var(--font-mono)', fontSize: 11 }}>
+                        {p.page_id}
+                      </span>
+                    </div>
+                    {conflict ? (
+                      <div className={s.muted} style={{ fontSize: 12, color: 'var(--red)' }}>
+                        已被其他租户绑定 —— 不可选
+                      </div>
+                    ) : (
+                      <div className={s.muted} style={{ fontSize: 12 }}>
+                        {p.category || '主页'}
+                      </div>
+                    )}
+                  </div>
+                </label>
+              );
+            })}
+          </div>
+        )}
+      </div>
+
       <div className={s.actionRow}>
         <button type="button" className={s.secondaryBtn} onClick={onBack} disabled={submitting}>
           ← 上一步
@@ -549,7 +627,7 @@ function ChooseStep({ preview, selectedWabaIds, selectedAdAccountId, toggleWaba,
               ? '请先选择 WABA'
               : !selectedAdAccountId
                 ? '请先选择广告账户'
-                : `确认连接（${selectedWabaIds.size} WABA / 1 广告账户）`}
+                : `确认连接（${selectedWabaIds.size} WABA / 1 广告账户${selectedPageId ? ' / 1 主页' : ' / 暂不绑主页'}）`}
         </button>
       </div>
     </>
@@ -587,7 +665,20 @@ function ConnectedView({ state, onRefresh, onDisconnect, refreshing, disconnecti
         </div>
       </div>
 
-      <PageIdSection initialValue={conn.page_id || ''} />
+      <div className={s.section}>
+        <h2 className={s.sectionTitle}>Facebook 主页</h2>
+        {conn.page_id ? (
+          <div className={s.muted} style={{ fontSize: 13 }}>
+            已绑定 <span className={s.mono}>{conn.page_id}</span> —— CTWA 广告就用这个主页作为广告主体。
+            要换主页，点上方「断开连接」后重新连接，在勾选页选新的主页即可。
+          </div>
+        ) : (
+          <div className={s.error}>
+            ⚠️ 未绑定主页 —— Click-to-WhatsApp 广告投放会失败。
+            点上方「断开连接」后重新连接，在勾选页选一个主页即可。
+          </div>
+        )}
+      </div>
 
 
       <div className={s.section}>
@@ -640,78 +731,6 @@ function ConnectedView({ state, onRefresh, onDisconnect, refreshing, disconnecti
         )}
       </div>
     </>
-  );
-}
-
-function PageIdSection({ initialValue }) {
-  const [value, setValue] = useState(initialValue);
-  const [saving, setSaving] = useState(false);
-  const [msg, setMsg] = useState(null); // { type: 'ok'|'err', text }
-  const [savedValue, setSavedValue] = useState(initialValue);
-
-  const dirty = value.trim() !== savedValue;
-  const empty = !savedValue;
-
-  const save = async () => {
-    setSaving(true);
-    setMsg(null);
-    try {
-      const res = await fetch('/api/meta/page-id', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ page_id: value.trim() || null }),
-      });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data?.error || '保存失败');
-      setSavedValue(data.page_id || '');
-      setValue(data.page_id || '');
-      invalidate(KEYS.META_CONNECTION);
-      setMsg({ type: 'ok', text: data.page_id ? '已保存' : '已清空' });
-    } catch (err) {
-      setMsg({ type: 'err', text: err.message });
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  return (
-    <div className={s.section}>
-      <h2 className={s.sectionTitle}>Facebook 主页 ID</h2>
-      {empty ? (
-        <div className={s.error} style={{ marginBottom: 10 }}>
-          ⚠️ 未配置主页 ID —— Ogilvy 启动 Click-to-WhatsApp 投放会失败（Meta 要求广告必须绑定一个 Facebook 主页）。
-        </div>
-      ) : null}
-      <div className={s.muted} style={{ fontSize: 12, marginBottom: 10 }}>
-        进入 <a href="https://business.facebook.com/settings/pages" target="_blank" rel="noreferrer">business.facebook.com/settings/pages</a> →
-        选中要绑定的主页 → 右侧详情面板里的「主页 ID」复制粘贴到这里（一串数字）。
-        该主页必须属于上面这个 BM、且系统用户有权限。
-      </div>
-      <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-        <input
-          type="text"
-          value={value}
-          onChange={(e) => setValue(e.target.value)}
-          placeholder="例如 123456789012345"
-          style={{ flex: '1 1 280px', minWidth: 280, padding: '8px 10px', fontFamily: 'var(--font-mono)' }}
-        />
-        <button
-          type="button"
-          className={s.primaryBtn}
-          onClick={save}
-          disabled={saving || !dirty}
-        >
-          {saving ? '保存中…' : '保存'}
-        </button>
-      </div>
-      {msg && (
-        <div
-          style={{ marginTop: 8, fontSize: 12, color: msg.type === 'ok' ? '#3a8a3f' : '#c44230' }}
-        >
-          {msg.text}
-        </div>
-      )}
-    </div>
   );
 }
 
