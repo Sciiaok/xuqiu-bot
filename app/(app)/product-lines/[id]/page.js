@@ -158,7 +158,15 @@ export default function ProductLineEditPage() {
           <div className={s.headerMeta}>
             <span className={`${s.metaChip} ${phoneBound ? '' : s.metaChipMuted}`}>
               <span className={s.metaChipDot} />
-              {phoneBound ? `WA · ${line.wa_phone_number_id}` : '未绑定 WhatsApp 号码'}
+              {phoneBound ? `WA · ${line.wa_phone_number_id}` : (
+                <Link
+                  href="/settings/meta-connection"
+                  style={{ color: 'inherit', textDecoration: 'underline' }}
+                  title="WhatsApp 号码未绑定或已解绑（Meta 连接断开后会自动解绑）。点击前往设置页重新绑定。"
+                >
+                  未绑定 WhatsApp 号码 — 去绑定 ↗
+                </Link>
+              )}
             </span>
             <span className={s.metaChip}>
               <span className={s.metaChipDot} style={{ background: 'var(--text3)' }} />

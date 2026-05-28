@@ -79,6 +79,7 @@ export async function POST() {
     }
 
     // 4. 解绑 product_lines.wa_phone_number_id
+    let unboundProductLineIds = [];
     if (phoneIds.length > 0) {
       const { data: unbound, error: unbindErr } = await supabase
         .from('product_lines')
@@ -89,7 +90,10 @@ export async function POST() {
       if (unbindErr) {
         log('error', 'product_lines', `解绑失败：${unbindErr.message}`);
       } else {
-        log('success', 'product_lines', `解绑 ${unbound?.length || 0} 条产品线的 wa_phone_number_id（产品线本身保留）`);
+        unboundProductLineIds = (unbound || []).map(r => r.id);
+        log('success', 'product_lines',
+          `解绑 ${unboundProductLineIds.length} 条产品线的 wa_phone_number_id（产品线本身保留）`,
+          { product_line_ids: unboundProductLineIds });
       }
     }
 
@@ -119,6 +123,7 @@ export async function POST() {
         bm_id: conn.bm_id,
         phone_ids: phoneIds,
         waba_ids: wabaIds,
+        unbound_product_line_ids: unboundProductLineIds,
       },
     });
     log('success', 'audit', '写入 audit_log: meta.connection.disconnected');

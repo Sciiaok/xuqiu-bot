@@ -33,6 +33,20 @@ function isPhoneUsable(p) {
   return true;
 }
 
+/**
+ * 检测「资源跨租户独占冲突」错误：
+ *   - Postgres unique_violation 23505（来自 PK / 唯一索引 / trigger RAISE）
+ *   - 触发器 check_waba_tenant_exclusivity 抛的中文错误消息
+ *
+ * 预检（SELECT 后 NEQ tenant）和实际写入（upsert）之间存在 race 窗口：另一个
+ * 租户可能正好在这之间认领走资源。出现该错误时，把它翻译成 409 让用户重试。
+ */
+function isCrossTenantConflictError(err) {
+  if (!err) return false;
+  if (err.code === '23505') return true;
+  return /已经被另一个租户|cross[-_ ]tenant/i.test(err.message || '');
+}
+
 async function graphPost(path, token, body = {}) {
   const url = `https://graph.facebook.com/${META_API_VERSION}${path}`;
   const res = await fetch(url, {
@@ -140,23 +154,8 @@ export async function POST(request) {
     }
     log('success', 'bm', `BM 解析成功：${bm.name || '(未命名)'}（${bm.id}）`);
 
-    // 1.5 跨租户独占校验：BM 不能跟其他 active 租户重复
-    {
-      const { data: bmConflict } = await supabase
-        .from('meta_connections')
-        .select('id, tenant_id')
-        .eq('bm_id', bm.id)
-        .eq('status', 'active')
-        .neq('tenant_id', ctx.tenantId)
-        .maybeSingle();
-      if (bmConflict) {
-        log('error', 'exclusivity', `BM ${bm.id} 已被另一租户绑定（tenant=${bmConflict.tenant_id.slice(0, 8)}…）`);
-        return NextResponse.json({
-          error: `BM ${bm.id} 已经被另一个租户绑定，每个 Meta BM 只能归属一个租户。请先在原租户解绑后重试。`,
-          logs,
-        }, { status: 409 });
-      }
-    }
+    // 1.5 BM 跨租户共享自 2026-05-28 起允许 —— 不再在 BM 级别拒绝。
+    //     BM 下面的 WABA / 广告账户 / phone / page_id 仍然各自独占，下面逐项校验。
 
     // 2. 写 meta_connections
     log('info', 'connection', '写 meta_connections（旧 active 会自动置 disconnected）');
@@ -246,6 +245,14 @@ export async function POST(request) {
           });
         }
       } catch (err) {
+        // 跨租户独占冲突（预检与写入之间被他人抢占）→ 直接 409 让用户重试
+        if (isCrossTenantConflictError(err)) {
+          log('error', 'exclusivity', `WABA ${waba.id} 号码已被其他租户抢占：${err.message}`);
+          return NextResponse.json({
+            error: `WABA ${waba.id} 名下号码已经被另一个租户绑定。请刷新预览后重新选择可用资源。`,
+            logs,
+          }, { status: 409 });
+        }
         log('error', 'phones', `WABA ${waba.id} 号码同步失败：${err.message}`);
       }
     }
@@ -301,6 +308,14 @@ export async function POST(request) {
         adAccountsCount++;
         log('success', 'ads', `ad_account ${info.id} (${info.name || '-'} / ${info.currency || '-'})`);
       } catch (err) {
+        // 跨租户独占冲突 → 409 让用户重试
+        if (isCrossTenantConflictError(err)) {
+          log('error', 'exclusivity', `广告账户 ${id} 已被其他租户抢占：${err.message}`);
+          return NextResponse.json({
+            error: `广告账户 ${id} 已经被另一个租户绑定。请刷新预览后重新选择。`,
+            logs,
+          }, { status: 409 });
+        }
         log('error', 'ads', `广告账户 ${id} 同步失败：${err.message}`);
       }
     }

@@ -260,23 +260,10 @@ export async function POST(request) {
     log(adAccounts.length > 0 ? 'success' : 'warn', 'ads',
       `可用广告账户 ${adAccounts.length} 个（共 ${allAdAccounts.length}，过滤 ${filteredAds.length}）`);
 
-    // 7. 跨租户独占预检：BM / WABA / 广告账户已被其他租户绑定的，标记给前端
+    // 7. 跨租户独占预检：WABA / 广告账户已被其他租户绑定的，逐项标记给前端
+    //    BM 本身允许跨租户共享（2026-05-28 起），所以这里不再做 BM 级整体拒绝
+    //    —— 只标记 BM 下哪些资源已被别人占走，让用户能选剩下的。
     {
-      const { data: bmDup } = await supabase
-        .from('meta_connections')
-        .select('tenant_id')
-        .eq('bm_id', bm.id)
-        .eq('status', 'active')
-        .neq('tenant_id', ctx.tenantId)
-        .maybeSingle();
-      if (bmDup) {
-        log('error', 'exclusivity', `BM ${bm.id} 已被另一租户绑定 —— 无法继续`);
-        return NextResponse.json({
-          error: `BM ${bm.id} 已经被另一个租户绑定，每个 Meta BM 只能归属一个租户。`,
-          logs,
-        }, { status: 409 });
-      }
-
       const wabaIds = wabasWithPhones.map(w => w.id);
       if (wabaIds.length > 0) {
         const { data: wabaDups } = await supabase
