@@ -54,10 +54,10 @@ const MAX_IMAGES_PER_DOC = 2000;
  *
  * Reparse-safe: before extracting, deletes any prior kb_assets rows (and
  * their storage objects) that this same source_doc_id wrote under
- * `<agent_id>/extracted/`. Manually-uploaded assets at other paths are
+ * `<product_line_id>/extracted/`. Manually-uploaded assets at other paths are
  * untouched.
  *
- * @param {Object} ctx                   { tenantId, agentId, productLineId }
+ * @param {Object} ctx                   { tenantId, productLineId }
  * @param {Buffer} buffer                Raw file bytes (already validated upstream)
  * @param {string} docId                 kb_documents.id this file became
  * @param {string} mimeType              File MIME type
@@ -69,15 +69,15 @@ const MAX_IMAGES_PER_DOC = 2000;
  * @returns {Promise<{extracted: number, skipped: number, total: number, errors: string[]}>}
  */
 export async function extractAndStoreImages(ctx, buffer, docId, mimeType, options = {}) {
-  const { tenantId, agentId, productLineId } = ctx || {};
-  if (!tenantId || !agentId || !productLineId) {
-    throw new Error('extractAndStoreImages: tenantId+agentId+productLineId required');
+  const { tenantId, productLineId } = ctx || {};
+  if (!tenantId || !productLineId) {
+    throw new Error('extractAndStoreImages: tenantId+productLineId required');
   }
   const onProgress = typeof options.onProgress === 'function' ? options.onProgress : null;
 
   // Clear prior auto-extracted rows for this doc so reparse / re-upload don't
   // pile up duplicates. We scope deletion to storage paths under
-  // `<agent>/extracted/`, leaving any future hand-uploaded assets alone.
+  // `<product_line>/extracted/`, leaving any future hand-uploaded assets alone.
   await clearPriorAutoAssets({ tenantId, docId });
 
   let rawImages = [];
@@ -129,7 +129,7 @@ export async function extractAndStoreImages(ctx, buffer, docId, mimeType, option
   // `seenHashes` is shared across workers — same-bytes image (logo repeated
   // across sheets) is dropped without a wasted DB SELECT or storage write.
   const ctxShared = {
-    tenantId, agentId, productLineId, docId,
+    tenantId, productLineId, docId,
     seenHashes: new Set(),
     hashColumnExists,
   };
@@ -223,7 +223,7 @@ async function clearPriorAutoAssets({ tenantId, docId }) {
 // ── Per-image pipeline ──────────────────────────────────────────────
 
 async function processOneImage(ctx, img, idx) {
-  const { tenantId, agentId, productLineId, docId, seenHashes, hashColumnExists } = ctx;
+  const { tenantId, productLineId, docId, seenHashes, hashColumnExists } = ctx;
 
   // 1. Encode raw pixel buffer → JPEG (consistent format for storage + vision)
   const jpegBuffer = await encodeToJpeg(img);
@@ -243,7 +243,7 @@ async function processOneImage(ctx, img, idx) {
   //    other's result. Saves ~200-500ms per image.
   const admin = getSupabaseAdmin();
   const filename = `${docId}_img${String(idx + 1).padStart(2, '0')}.jpg`;
-  const storagePath = `${agentId}/extracted/${filename}`;
+  const storagePath = `${productLineId}/extracted/${filename}`;
 
   const [uploadResult, visionResult] = await Promise.all([
     admin.storage.from(STORAGE_BUCKET).upload(storagePath, jpegBuffer, {
@@ -283,7 +283,6 @@ async function processOneImage(ctx, img, idx) {
   //    the dedup probe earlier signaled the migration isn't applied yet.
   const insertRow = {
     tenant_id: tenantId,
-    agent_id: agentId,
     product_line_id: productLineId,
     asset_type: visionResult.asset_type || 'product_image',
     filename,

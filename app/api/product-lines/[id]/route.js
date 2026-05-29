@@ -2,7 +2,6 @@ import { NextResponse } from 'next/server';
 import { getTenantContext } from '../../../../lib/tenant-context.js';
 import {
   findProductLineById,
-  findAgentIdByProductLine,
   updateProductLine,
 } from '../../../../lib/repositories/product-line.repository.js';
 import { invalidateMediciCache } from '../../../../src/agents/medici/config.js';
@@ -26,8 +25,7 @@ export async function GET(_request, { params }) {
     const { id } = await params;
     const line = await findProductLineById({ tenantId: ctx.tenantId, id });
     if (!line) return NextResponse.json({ error: 'Not found' }, { status: 404 });
-    const agent_id = await findAgentIdByProductLine({ tenantId: ctx.tenantId, slug: line.id });
-    return NextResponse.json({ line: { ...line, agent_id } });
+    return NextResponse.json({ line });
   } catch (err) {
     console.error('GET /api/product-lines/[id] failed:', err);
     return NextResponse.json({ error: err.message }, { status: 500 });

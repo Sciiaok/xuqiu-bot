@@ -8,7 +8,7 @@
  *   4. 结构化结果按层批量写 kb_products / kb_shipping_routes
  *   5. 任一 chunk 报告 input/output 截断 → 文档落 status='partial' + partial_reason
  *
- * 写表时同时填 agent_id（旧 NOT NULL）和 product_line_id（新查询路径）。
+ * 写表只填 product_line_id；agent_id 列已松绑 NOT NULL，留给历史数据兼容。
  */
 import { jsonrepair } from 'jsonrepair';
 import { openrouter, MODELS } from './llm-client.js';
@@ -92,7 +92,7 @@ function capInputForLlm(content, { docId, callSite }) {
 /**
  * Process an uploaded file. See module header for the pipeline.
  *
- * @param {Object} ctx          { tenantId, agentId, productLineId }
+ * @param {Object} ctx          { tenantId, productLineId }
  * @param {string} docId        kb_documents.id（已由 API route 创建）
  * @param {string|Array} fileContent
  *   - string: 整篇文本，单 chunk 模式（PDF / Word / MD / TXT / 小 Excel）
@@ -107,9 +107,9 @@ function capInputForLlm(content, { docId, callSite }) {
  * @returns {Promise<{knowledge_points:number, conflicts:Object[], status:'ready'|'partial', partial_reason?:string}>}
  */
 export async function processDocument(ctx, docId, fileContent, layer, options = {}) {
-  const { tenantId, agentId, productLineId } = ctx || {};
-  if (!tenantId || !agentId || !productLineId) {
-    throw new Error('processDocument: tenantId, agentId, productLineId required');
+  const { tenantId, productLineId } = ctx || {};
+  if (!tenantId || !productLineId) {
+    throw new Error('processDocument: tenantId, productLineId required');
   }
   const { filename = '', fileType = 'txt', onProgress = () => {}, isReparse = false } = options;
 
@@ -204,7 +204,7 @@ export async function processDocument(ctx, docId, fileContent, layer, options = 
     await finalizeDocStatus(docId, finalStatus, storedCount, partialReason);
 
     logger.info('kb.upload.complete', {
-      docId, agentId, layer, filename,
+      docId, productLineId, layer, filename,
       points: storedCount, structured: allStructuredRows.length,
       conflicts: conflicts.length,
       passes: chunks.length, status: finalStatus,
@@ -473,7 +473,7 @@ function sliceFirstJsonBlock(s) {
 // ── Process Single Knowledge Point ───────────────────────────────────
 
 async function processKnowledgePoint(ctx, docId, layer, point) {
-  const { tenantId, agentId, productLineId } = ctx;
+  const { tenantId, productLineId } = ctx;
   const originalContent = point.content;
   const sourceLang = detectLanguage(originalContent);
 
@@ -490,11 +490,9 @@ async function processKnowledgePoint(ctx, docId, layer, point) {
     sourceLang !== 'en' ? generateEmbedding(englishContent, embedMeta) : generateEmbedding(originalContent, embedMeta),
   ]);
 
-  // Store —— 同时写 agent_id (旧 NOT NULL 列) 和 product_line_id (新查询路径)
   const { data, error } = await supabase.from('kb_knowledge_points').insert({
     tenant_id: tenantId,
     doc_id: docId,
-    agent_id: agentId,
     product_line_id: productLineId,
     layer,
     content_original: originalContent,
@@ -668,7 +666,7 @@ no comments, no Python-style dicts. Wrap as { "routes": [...] }`;
 
 async function insertStructuredRows(table, ctx, docId, rows) {
   if (!rows.length) return 0;
-  const { tenantId, agentId, productLineId } = ctx;
+  const { tenantId, productLineId } = ctx;
   const stamped = rows.map(r => ({
     ...r,
     tenant_id: tenantId,
@@ -677,7 +675,6 @@ async function insertStructuredRows(table, ctx, docId, rows) {
     // 作为 citation 的 doc 字段。写入端只填 doc_id 会让 source_doc_id 为 null，
     // 导致 quote_price 等返回的 source.doc_id 是 null。这里同步两个字段。
     source_doc_id: docId,
-    agent_id: agentId,
     product_line_id: productLineId,
   }));
   const { error } = await supabase.from(table).insert(stamped);
@@ -774,7 +771,7 @@ export async function resolveConflict(resolution, newPointId, oldPointId) {
     // Also update structured product data if applicable
     const { data: oldPoint } = await supabase
       .from('kb_knowledge_points')
-      .select('metadata_json, agent_id')
+      .select('metadata_json')
       .eq('id', oldPointId)
       .single();
 

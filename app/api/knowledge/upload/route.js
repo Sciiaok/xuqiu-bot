@@ -2,7 +2,7 @@ import crypto from 'node:crypto';
 import { NextResponse } from 'next/server';
 import supabase from '../../../../lib/supabase.js';
 import { getSupabaseAdmin } from '../../../../lib/supabase-admin.js';
-import { getTenantContext, findAgentInTenant } from '../../../../lib/tenant-context.js';
+import { getTenantContext, findProductLineInTenant } from '../../../../lib/tenant-context.js';
 import { processDocument } from '../../../../src/kb-upload.service.js';
 import { markFirstKbUpload } from '../../../../lib/repositories/onboarding.repository.js';
 import { emit as emitProgress } from '../../../../lib/kb-upload-bus.js';
@@ -33,13 +33,13 @@ export async function POST(request) {
 
     const formData = await request.formData();
     const file = formData.get('file');
-    const agentId = formData.get('agent_id');
+    const productLineId = formData.get('product_line_id');
     const layer = formData.get('layer');
     const description = formData.get('description') || null;
 
-    if (!file || !agentId || !layer) {
+    if (!file || !productLineId || !layer) {
       return NextResponse.json(
-        { error: 'file, agent_id, and layer are required' },
+        { error: 'file, product_line_id, and layer are required' },
         { status: 400 }
       );
     }
@@ -63,25 +63,22 @@ export async function POST(request) {
       );
     }
 
-    if (!(await findAgentInTenant({ tenantId: ctx.tenantId, agentId }))) {
-      return NextResponse.json({ error: 'Agent not found' }, { status: 404 });
-    }
-    const { data: agent, error: agentError } = await supabase
-      .from('agents').select('id, product_line').eq('id', agentId).single();
-    if (agentError || !agent) {
-      return NextResponse.json({ error: 'Agent not found' }, { status: 404 });
+    const line = await findProductLineInTenant({ tenantId: ctx.tenantId, productLineId });
+    if (!line) {
+      return NextResponse.json({ error: 'Product line not found' }, { status: 404 });
     }
 
     const buffer = Buffer.from(await file.arrayBuffer());
     const contentSha256 = crypto.createHash('sha256').update(buffer).digest('hex');
 
-    // Idempotency: same agent + same content + still in flight or already
+    // Idempotency: same product line + same content + still in flight or already
     // succeeded → return the existing row instead of starting a duplicate.
     // status='error' is intentionally NOT deduped — re-upload is a retry.
     const { data: existing } = await supabase
       .from('kb_documents')
       .select('id, status, layer, filename, knowledge_points_count')
-      .eq('agent_id', agentId)
+      .eq('tenant_id', ctx.tenantId)
+      .eq('product_line_id', productLineId)
       .eq('content_sha256', contentSha256)
       .in('status', ['processing', 'ready'])
       .maybeSingle();
@@ -98,7 +95,7 @@ export async function POST(request) {
 
     // Storage upload (best-effort, private bucket via service role)
     const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, '_');
-    const storagePath = `${agentId}/${layer}/${Date.now()}_${safeName}`;
+    const storagePath = `${productLineId}/${layer}/${Date.now()}_${safeName}`;
     let storageOk = false;
     try {
       const { error: uploadError } = await getSupabaseAdmin().storage
@@ -113,8 +110,7 @@ export async function POST(request) {
       .from('kb_documents')
       .insert({
         tenant_id: ctx.tenantId,
-        agent_id: agentId,
-        product_line_id: agent.product_line,
+        product_line_id: productLineId,
         filename: file.name,
         storage_path: storageOk ? storagePath : null,
         file_size: file.size,
@@ -134,7 +130,8 @@ export async function POST(request) {
         const { data: winner } = await supabase
           .from('kb_documents')
           .select('id, status, layer, filename, knowledge_points_count')
-          .eq('agent_id', agentId)
+          .eq('tenant_id', ctx.tenantId)
+          .eq('product_line_id', productLineId)
           .eq('content_sha256', contentSha256)
           .maybeSingle();
         if (winner) {
@@ -161,7 +158,7 @@ export async function POST(request) {
     runBackground({
       tenantCtx: ctx,
       doc,
-      agent,
+      productLineId,
       filename: file.name,
       mimeType: file.type,
       fileType,
@@ -184,7 +181,7 @@ export async function POST(request) {
   }
 }
 
-async function runBackground({ tenantCtx, doc, agent, filename, mimeType, fileType, buffer, layer }) {
+async function runBackground({ tenantCtx, doc, productLineId, filename, mimeType, fileType, buffer, layer }) {
   const docId = doc.id;
   emitProgress(docId, 'progress', { stage: 'parsing' });
 
@@ -195,8 +192,7 @@ async function runBackground({ tenantCtx, doc, agent, filename, mimeType, fileTy
 
     const docCtx = {
       tenantId: tenantCtx.tenantId,
-      agentId: agent.id,
-      productLineId: agent.product_line,
+      productLineId,
     };
     const onProgress = (data) => emitProgress(docId, 'progress', data);
 
@@ -225,7 +221,7 @@ async function runBackground({ tenantCtx, doc, agent, filename, mimeType, fileTy
       const { linkAssetsToProducts } = await import('../../../../src/kb-asset-linker.service.js');
       linkResult = await linkAssetsToProducts({
         tenantId: tenantCtx.tenantId,
-        productLineId: agent.product_line,
+        productLineId,
         docId,
       }).catch((e) => ({ linked: 0, errors: [`linker failed: ${e.message}`] }));
     }

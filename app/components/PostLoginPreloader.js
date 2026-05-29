@@ -37,11 +37,9 @@ export default function PostLoginPreloader() {
         if (!line?.id) continue;
         prefetch(lineKeys.detail(line.id), buildLineDetailFetcher(line.id))
           .catch(() => {});
-        if (line.agent_id) {
-          const kb = buildKbFetchers(line.agent_id);
-          for (const [k, f] of Object.entries(kb)) {
-            prefetch(k, f).catch(() => {});
-          }
+        const kb = buildKbFetchers(line.id);
+        for (const [k, f] of Object.entries(kb)) {
+          prefetch(k, f).catch(() => {});
         }
       }
     });

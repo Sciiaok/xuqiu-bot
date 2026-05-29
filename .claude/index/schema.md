@@ -1,6 +1,6 @@
 # Schema Snapshot (auto-generated)
 
-Generated: 2026-05-28T11:34:47.482Z
+Generated: 2026-05-29T07:04:53.765Z
 
 Live snapshot of `public` schema from Supabase. **Do not edit by hand** — run `node scripts/build-index.mjs` to refresh.
 
@@ -431,7 +431,7 @@ Tables: **51**. Listed alphabetically.
 | Column | Type | Nullable | Default |
 | --- | --- | --- | --- |
 | `id` | uuid | N | `gen_random_uuid()` |
-| `agent_id` | uuid | N |  |
+| `agent_id` | uuid | Y |  |
 | `asset_type` | text | N |  |
 | `filename` | text | N |  |
 | `storage_path` | text | N |  |
@@ -506,7 +506,7 @@ Tables: **51**. Listed alphabetically.
 | Column | Type | Nullable | Default |
 | --- | --- | --- | --- |
 | `id` | uuid | N | `gen_random_uuid()` |
-| `agent_id` | uuid | N |  |
+| `agent_id` | uuid | Y |  |
 | `filename` | text | N |  |
 | `storage_path` | text | Y |  |
 | `layer` | text | N |  |
@@ -539,14 +539,14 @@ Tables: **51**. Listed alphabetically.
 - `idx_kb_documents_status` USING btree (status)
 - `idx_kb_documents_tenant` USING btree (tenant_id)
 - `idx_kb_documents_tenant_pl` USING btree (tenant_id, product_line_id)
-- `uniq_kb_documents_agent_content` USING btree (agent_id, content_sha256) WHERE (content_sha256 IS NOT NULL)
+- `uniq_kb_documents_pl_content` USING btree (tenant_id, product_line_id, content_sha256) WHERE (content_sha256 IS NOT NULL)
 
 ### `kb_glossary`
 
 | Column | Type | Nullable | Default |
 | --- | --- | --- | --- |
 | `id` | uuid | N | `gen_random_uuid()` |
-| `agent_id` | uuid | N |  |
+| `agent_id` | uuid | Y |  |
 | `term_zh` | text | N |  |
 | `term_en` | text | N |  |
 | `context` | text | Y |  |
@@ -602,7 +602,7 @@ Tables: **51**. Listed alphabetically.
 | --- | --- | --- | --- |
 | `id` | uuid | N | `gen_random_uuid()` |
 | `doc_id` | uuid | Y |  |
-| `agent_id` | uuid | N |  |
+| `agent_id` | uuid | Y |  |
 | `layer` | text | N |  |
 | `content_original` | text | N |  |
 | `content_en` | text | Y |  |
@@ -670,7 +670,7 @@ Tables: **51**. Listed alphabetically.
 | Column | Type | Nullable | Default |
 | --- | --- | --- | --- |
 | `id` | uuid | N | `gen_random_uuid()` |
-| `agent_id` | uuid | N |  |
+| `agent_id` | uuid | Y |  |
 | `doc_id` | uuid | Y |  |
 | `rule_name` | text | N |  |
 | `rule_type` | text | N |  |
@@ -720,7 +720,7 @@ Tables: **51**. Listed alphabetically.
 | --- | --- | --- | --- |
 | `id` | uuid | N | `gen_random_uuid()` |
 | `doc_id` | uuid | Y |  |
-| `agent_id` | uuid | N |  |
+| `agent_id` | uuid | Y |  |
 | `sku` | text | Y |  |
 | `product_name` | text | Y |  |
 | `product_name_en` | text | Y |  |
@@ -786,7 +786,7 @@ Tables: **51**. Listed alphabetically.
 | --- | --- | --- | --- |
 | `id` | uuid | N | `gen_random_uuid()` |
 | `doc_id` | uuid | Y |  |
-| `agent_id` | uuid | N |  |
+| `agent_id` | uuid | Y |  |
 | `origin_port` | text | Y |  |
 | `destination_port` | text | Y |  |
 | `destination_country` | text | Y |  |
@@ -842,7 +842,7 @@ Tables: **51**. Listed alphabetically.
 | Column | Type | Nullable | Default |
 | --- | --- | --- | --- |
 | `id` | uuid | N | `gen_random_uuid()` |
-| `agent_id` | uuid | N |  |
+| `agent_id` | uuid | Y |  |
 | `title` | text | Y |  |
 | `message_count` | integer | Y | `0` |
 | `created_at` | timestamp with time zone | Y | `now()` |
@@ -1087,7 +1087,7 @@ Tables: **51**. Listed alphabetically.
 **Indexes:**
 - `idx_meta_conn_active_per_tenant` USING btree (tenant_id) WHERE (status = 'active'::text)
 - `idx_meta_conn_tenant` USING btree (tenant_id, status)
-- `idx_meta_connections_bm_active_global` USING btree (bm_id) WHERE (status = 'active'::text)
+- `idx_meta_connections_active_page_global` USING btree (((metadata ->> 'page_id'::text))) WHERE ((status = 'active'::text) AND ((metadata ->> 'page_id'::text) IS NOT NULL))
 
 ### `meta_phone_numbers`
 

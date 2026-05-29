@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import supabase from '../../../../../lib/supabase.js';
-import { getTenantContext, findAgentInTenant } from '../../../../../lib/tenant-context.js';
+import { getTenantContext, findProductLineInTenant } from '../../../../../lib/tenant-context.js';
 import { resolveConflict } from '../../../../../src/kb-upload.service.js';
 
 /**
@@ -35,17 +35,17 @@ export async function POST(request) {
       );
     }
 
-    // 验两条 point 的 agent 都归当前 tenant
+    // 验两条 point 的产品线都归当前 tenant
     const { data: points, error: fetchErr } = await supabase
       .from('kb_knowledge_points')
-      .select('id, agent_id')
+      .select('id, product_line_id')
       .in('id', [new_point_id, old_point_id]);
     if (fetchErr) throw fetchErr;
     if (!points || points.length !== 2) {
       return NextResponse.json({ error: 'Knowledge point not found' }, { status: 404 });
     }
     for (const p of points) {
-      if (!(await findAgentInTenant({ tenantId: ctx.tenantId, agentId: p.agent_id }))) {
+      if (!(await findProductLineInTenant({ tenantId: ctx.tenantId, productLineId: p.product_line_id }))) {
         return NextResponse.json({ error: 'Knowledge point not found' }, { status: 404 });
       }
     }

@@ -1,14 +1,14 @@
 /**
  * /api/knowledge/corrections
  *
- * GET   ?agent_id=...&status=pending      → list
- * POST  { agent_id, conversation_id, message_id?, customer_question?,
+ * GET   ?product_line_id=...&status=pending      → list
+ * POST  { product_line_id, conversation_id, message_id?, customer_question?,
  *         medici_original_answer, human_corrected_answer, diff_summary? }
  *       → record a new correction
- * PUT   { agent_id, correction_id, action: 'adopt'|'reject', overrides? }
+ * PUT   { product_line_id, correction_id, action: 'adopt'|'reject', overrides? }
  */
 import { NextResponse } from 'next/server';
-import { getTenantContext, findAgentInTenant } from '../../../../lib/tenant-context.js';
+import { getTenantContext, findProductLineInTenant } from '../../../../lib/tenant-context.js';
 import {
   recordCorrection,
   listCorrections,
@@ -21,14 +21,14 @@ export async function GET(request) {
     const ctx = await getTenantContext();
     if (!ctx) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     const { searchParams } = new URL(request.url);
-    const agentId = searchParams.get('agent_id');
+    const productLineId = searchParams.get('product_line_id');
     const status = searchParams.get('status') || 'pending';
-    if (!agentId) return NextResponse.json({ error: 'agent_id required' }, { status: 400 });
-    const agent = await findAgentInTenant({ tenantId: ctx.tenantId, agentId });
-    if (!agent) return NextResponse.json({ error: 'Agent not found' }, { status: 404 });
+    if (!productLineId) return NextResponse.json({ error: 'product_line_id required' }, { status: 400 });
+    const line = await findProductLineInTenant({ tenantId: ctx.tenantId, productLineId });
+    if (!line) return NextResponse.json({ error: 'Product line not found' }, { status: 404 });
     const items = await listCorrections({
       tenantId: ctx.tenantId,
-      productLineId: agent.product_line,
+      productLineId,
       status,
     });
     return NextResponse.json({ items });
@@ -44,19 +44,19 @@ export async function POST(request) {
     if (!ctx) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     const body = await request.json();
     const {
-      agent_id, conversation_id, message_id, customer_question,
+      product_line_id, conversation_id, message_id, customer_question,
       medici_original_answer, human_corrected_answer, diff_summary,
     } = body;
-    if (!agent_id || !conversation_id || !medici_original_answer || !human_corrected_answer) {
+    if (!product_line_id || !conversation_id || !medici_original_answer || !human_corrected_answer) {
       return NextResponse.json({
-        error: 'agent_id, conversation_id, medici_original_answer, human_corrected_answer required',
+        error: 'product_line_id, conversation_id, medici_original_answer, human_corrected_answer required',
       }, { status: 400 });
     }
-    const agent = await findAgentInTenant({ tenantId: ctx.tenantId, agentId: agent_id });
-    if (!agent) return NextResponse.json({ error: 'Agent not found' }, { status: 404 });
+    const line = await findProductLineInTenant({ tenantId: ctx.tenantId, productLineId: product_line_id });
+    if (!line) return NextResponse.json({ error: 'Product line not found' }, { status: 404 });
 
     const id = await recordCorrection(
-      { tenantId: ctx.tenantId, productLineId: agent.product_line },
+      { tenantId: ctx.tenantId, productLineId: product_line_id },
       {
         conversationId: conversation_id,
         messageId: message_id,
@@ -80,14 +80,14 @@ export async function PUT(request) {
     const ctx = await getTenantContext();
     if (!ctx) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     const body = await request.json();
-    const { correction_id, action, agent_id, overrides } = body;
-    if (!correction_id || !action || !agent_id) {
-      return NextResponse.json({ error: 'correction_id, action, agent_id required' }, { status: 400 });
+    const { correction_id, action, product_line_id, overrides } = body;
+    if (!correction_id || !action || !product_line_id) {
+      return NextResponse.json({ error: 'correction_id, action, product_line_id required' }, { status: 400 });
     }
-    const agent = await findAgentInTenant({ tenantId: ctx.tenantId, agentId: agent_id });
-    if (!agent) return NextResponse.json({ error: 'Agent not found' }, { status: 404 });
+    const line = await findProductLineInTenant({ tenantId: ctx.tenantId, productLineId: product_line_id });
+    if (!line) return NextResponse.json({ error: 'Product line not found' }, { status: 404 });
 
-    const cctx = { tenantId: ctx.tenantId, productLineId: agent.product_line };
+    const cctx = { tenantId: ctx.tenantId, productLineId: product_line_id };
     if (action === 'adopt') {
       const qaId = await adoptCorrection(correction_id, cctx, {
         resolvedBy: ctx.user?.id,

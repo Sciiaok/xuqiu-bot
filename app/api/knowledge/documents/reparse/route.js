@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import supabase from '../../../../../lib/supabase.js';
 import { getSupabaseAdmin } from '../../../../../lib/supabase-admin.js';
-import { getTenantContext, findAgentInTenant } from '../../../../../lib/tenant-context.js';
+import { getTenantContext, findProductLineInTenant } from '../../../../../lib/tenant-context.js';
 import { getDocumentById } from '../../../../../lib/repositories/knowledge-base.repository.js';
 import { processDocument } from '../../../../../src/kb-upload.service.js';
 import { parseBufferToContent, inferFileTypeFromName } from '../../../../../src/kb-file-parsers.js';
@@ -11,7 +11,7 @@ import { emit as emitProgress } from '../../../../../lib/kb-upload-bus.js';
  * POST /api/knowledge/documents/reparse?doc_id=xxx
  *
  * 用原始上传文件（kb-assets bucket 的 storage_path）重跑解析管道：
- *   1. 校验权限（doc 所属 agent 必须属于当前 tenant）
+ *   1. 校验权限（doc 所属产品线必须属于当前 tenant）
  *   2. 从 storage 重下原文件，按 filename 扩展名推 fileType
  *   3. fire-and-forget runBackground → processDocument(..., { isReparse: true })
  *
@@ -40,8 +40,8 @@ export async function POST(request) {
     const doc = await getDocumentById(docId);
     if (!doc) return NextResponse.json({ error: 'Document not found' }, { status: 404 });
 
-    const agent = await findAgentInTenant({ tenantId: ctx.tenantId, agentId: doc.agent_id });
-    if (!agent) return NextResponse.json({ error: 'Document not found' }, { status: 404 });
+    const line = await findProductLineInTenant({ tenantId: ctx.tenantId, productLineId: doc.product_line_id });
+    if (!line) return NextResponse.json({ error: 'Document not found' }, { status: 404 });
 
     if (!doc.storage_path) {
       return NextResponse.json(
@@ -94,8 +94,7 @@ export async function POST(request) {
 
     const docCtx = {
       tenantId: ctx.tenantId,
-      agentId: agent.id,
-      productLineId: agent.product_line,
+      productLineId: line.id,
     };
 
     // ── Fire-and-forget。和 /api/knowledge/upload 的 runBackground 同款 SSE 事件 ──

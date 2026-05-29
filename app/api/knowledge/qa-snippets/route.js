@@ -1,51 +1,51 @@
 /**
  * /api/knowledge/qa-snippets
  *
- * GET    ?agent_id=...&include_inactive=true   → list snippets
- * PUT    { snippet_id, ...patch }
- * DELETE ?snippet_id=...
+ * GET    ?product_line_id=...&include_inactive=true   → list snippets
+ * PUT    { snippet_id, product_line_id, ...patch }
+ * DELETE ?snippet_id=...&product_line_id=...
  *
  * Note: there's no POST. New snippets are produced ONLY by the corrections
  * pipeline (src/kb-corrections.service.js) — manual creation was removed.
  */
 import { NextResponse } from 'next/server';
-import { getTenantContext, findAgentInTenant } from '../../../../lib/tenant-context.js';
+import { getTenantContext, findProductLineInTenant } from '../../../../lib/tenant-context.js';
 import {
   listQaSnippets,
   updateQaSnippet,
   deleteQaSnippet,
 } from '../../../../src/kb-qa-snippets.service.js';
 
-async function authAgent(request) {
+async function authLine(request) {
   const ctx = await getTenantContext();
   if (!ctx) return { error: NextResponse.json({ error: 'Unauthorized' }, { status: 401 }) };
   const { searchParams } = new URL(request.url);
-  const agentId = searchParams.get('agent_id');
-  if (!agentId) return { error: NextResponse.json({ error: 'agent_id required' }, { status: 400 }) };
-  const agent = await findAgentInTenant({ tenantId: ctx.tenantId, agentId });
-  if (!agent) return { error: NextResponse.json({ error: 'Agent not found' }, { status: 404 }) };
-  return { ctx, agent };
+  const productLineId = searchParams.get('product_line_id');
+  if (!productLineId) return { error: NextResponse.json({ error: 'product_line_id required' }, { status: 400 }) };
+  const line = await findProductLineInTenant({ tenantId: ctx.tenantId, productLineId });
+  if (!line) return { error: NextResponse.json({ error: 'Product line not found' }, { status: 404 }) };
+  return { ctx, line };
 }
 
-async function authAgentFromBody(body, agentIdField = 'agent_id') {
+async function authLineFromBody(body) {
   const ctx = await getTenantContext();
   if (!ctx) return { error: NextResponse.json({ error: 'Unauthorized' }, { status: 401 }) };
-  const agentId = body?.[agentIdField];
-  if (!agentId) return { error: NextResponse.json({ error: `${agentIdField} required` }, { status: 400 }) };
-  const agent = await findAgentInTenant({ tenantId: ctx.tenantId, agentId });
-  if (!agent) return { error: NextResponse.json({ error: 'Agent not found' }, { status: 404 }) };
-  return { ctx, agent };
+  const productLineId = body?.product_line_id;
+  if (!productLineId) return { error: NextResponse.json({ error: 'product_line_id required' }, { status: 400 }) };
+  const line = await findProductLineInTenant({ tenantId: ctx.tenantId, productLineId });
+  if (!line) return { error: NextResponse.json({ error: 'Product line not found' }, { status: 404 }) };
+  return { ctx, line };
 }
 
 export async function GET(request) {
   try {
-    const auth = await authAgent(request);
+    const auth = await authLine(request);
     if (auth.error) return auth.error;
     const { searchParams } = new URL(request.url);
     const includeInactive = searchParams.get('include_inactive') === 'true';
     const snippets = await listQaSnippets({
       tenantId: auth.ctx.tenantId,
-      productLineId: auth.agent.product_line,
+      productLineId: auth.line.id,
       includeInactive,
     });
     return NextResponse.json({ snippets });
@@ -58,11 +58,9 @@ export async function GET(request) {
 export async function PUT(request) {
   try {
     const body = await request.json();
-    const ctx = await getTenantContext();
-    if (!ctx) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    const { snippet_id, agent_id, ...rest } = body;
+    const { snippet_id, product_line_id, ...rest } = body;
     if (!snippet_id) return NextResponse.json({ error: 'snippet_id required' }, { status: 400 });
-    const auth = await authAgentFromBody({ agent_id });
+    const auth = await authLineFromBody({ product_line_id });
     if (auth.error) return auth.error;
     await updateQaSnippet(snippet_id, {
       questions: rest.questions,
@@ -70,7 +68,7 @@ export async function PUT(request) {
       applicableWhen: rest.applicable_when,
       priority: rest.priority,
       isActive: rest.is_active,
-    }, { tenantId: ctx.tenantId, productLineId: auth.agent.product_line });
+    }, { tenantId: auth.ctx.tenantId, productLineId: auth.line.id });
     return NextResponse.json({ ok: true });
   } catch (e) {
     console.error('[knowledge/qa-snippets] PUT', e);
@@ -84,11 +82,13 @@ export async function DELETE(request) {
     if (!ctx) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     const { searchParams } = new URL(request.url);
     const snippetId = searchParams.get('snippet_id');
-    const agentId = searchParams.get('agent_id');
-    if (!snippetId || !agentId) return NextResponse.json({ error: 'snippet_id and agent_id required' }, { status: 400 });
-    const agent = await findAgentInTenant({ tenantId: ctx.tenantId, agentId });
-    if (!agent) return NextResponse.json({ error: 'Agent not found' }, { status: 404 });
-    await deleteQaSnippet(snippetId, { tenantId: ctx.tenantId, productLineId: agent.product_line });
+    const productLineId = searchParams.get('product_line_id');
+    if (!snippetId || !productLineId) {
+      return NextResponse.json({ error: 'snippet_id and product_line_id required' }, { status: 400 });
+    }
+    const line = await findProductLineInTenant({ tenantId: ctx.tenantId, productLineId });
+    if (!line) return NextResponse.json({ error: 'Product line not found' }, { status: 404 });
+    await deleteQaSnippet(snippetId, { tenantId: ctx.tenantId, productLineId });
     return NextResponse.json({ ok: true });
   } catch (e) {
     console.error('[knowledge/qa-snippets] DELETE', e);

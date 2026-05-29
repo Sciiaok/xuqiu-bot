@@ -1,11 +1,11 @@
 /**
  * /api/knowledge/pending-review
  *
- * GET   ?agent_id=...&status=pending      → list
- * POST  { review_id, action: 'approve'|'reject', note?, agent_id }
+ * GET   ?product_line_id=...&status=pending      → list
+ * POST  { review_id, action: 'approve'|'reject', note?, product_line_id }
  */
 import { NextResponse } from 'next/server';
-import { getTenantContext, findAgentInTenant } from '../../../../lib/tenant-context.js';
+import { getTenantContext, findProductLineInTenant } from '../../../../lib/tenant-context.js';
 import {
   listPending,
   approveReview,
@@ -17,14 +17,14 @@ export async function GET(request) {
     const ctx = await getTenantContext();
     if (!ctx) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     const { searchParams } = new URL(request.url);
-    const agentId = searchParams.get('agent_id');
+    const productLineId = searchParams.get('product_line_id');
     const status = searchParams.get('status') || 'pending';
-    if (!agentId) return NextResponse.json({ error: 'agent_id required' }, { status: 400 });
-    const agent = await findAgentInTenant({ tenantId: ctx.tenantId, agentId });
-    if (!agent) return NextResponse.json({ error: 'Agent not found' }, { status: 404 });
+    if (!productLineId) return NextResponse.json({ error: 'product_line_id required' }, { status: 400 });
+    const line = await findProductLineInTenant({ tenantId: ctx.tenantId, productLineId });
+    if (!line) return NextResponse.json({ error: 'Product line not found' }, { status: 404 });
     const rows = await listPending({
       tenantId: ctx.tenantId,
-      productLineId: agent.product_line,
+      productLineId,
       status,
     });
     return NextResponse.json({ items: rows });
@@ -39,14 +39,14 @@ export async function POST(request) {
     const ctx = await getTenantContext();
     if (!ctx) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     const body = await request.json();
-    const { review_id, action, note, agent_id } = body;
-    if (!review_id || !action || !agent_id) {
-      return NextResponse.json({ error: 'review_id, action, agent_id required' }, { status: 400 });
+    const { review_id, action, note, product_line_id } = body;
+    if (!review_id || !action || !product_line_id) {
+      return NextResponse.json({ error: 'review_id, action, product_line_id required' }, { status: 400 });
     }
-    const agent = await findAgentInTenant({ tenantId: ctx.tenantId, agentId: agent_id });
-    if (!agent) return NextResponse.json({ error: 'Agent not found' }, { status: 404 });
+    const line = await findProductLineInTenant({ tenantId: ctx.tenantId, productLineId: product_line_id });
+    if (!line) return NextResponse.json({ error: 'Product line not found' }, { status: 404 });
 
-    const reviewCtx = { tenantId: ctx.tenantId, productLineId: agent.product_line };
+    const reviewCtx = { tenantId: ctx.tenantId, productLineId: product_line_id };
 
     if (action === 'approve') {
       const id = await approveReview(review_id, reviewCtx, { resolvedBy: ctx.user?.id });

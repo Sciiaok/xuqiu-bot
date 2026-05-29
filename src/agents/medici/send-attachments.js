@@ -33,7 +33,7 @@ function asMediaType(mimeType) {
 async function fetchAsset(assetId) {
   const { data: row, error } = await supabase
     .from('kb_assets')
-    .select('id, agent_id, filename, storage_path, mime_type, is_sendable, linked_skus, description')
+    .select('id, filename, storage_path, mime_type, is_sendable, linked_skus, description')
     .eq('id', assetId)
     .maybeSingle();
   if (error) throw error;

@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { generateEmbedding, translateToEnglish, detectLanguage } from '../../../../../src/kb-search.service.js';
 import supabase from '../../../../../lib/supabase.js';
-import { getTenantContext, findAgentInTenant } from '../../../../../lib/tenant-context.js';
+import { getTenantContext, findProductLineInTenant } from '../../../../../lib/tenant-context.js';
 
 const VALID_LAYERS = new Set(['company', 'product', 'logistics', 'sales']);
 
@@ -12,7 +12,7 @@ const VALID_LAYERS = new Set(['company', 'product', 'logistics', 'sales']);
  * extraction from /api/knowledge/teach). Generates embeddings and inserts
  * into kb_knowledge_points.
  *
- * Body:  { agent_id, items: [{ content, content_en?, layer, metadata? }] }
+ * Body:  { product_line_id, items: [{ content, content_en?, layer, metadata? }] }
  * Reply: { inserted_count }
  */
 export async function POST(request) {
@@ -21,17 +21,17 @@ export async function POST(request) {
     if (!ctx) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 
     const body = await request.json();
-    const { agent_id, items } = body;
+    const { product_line_id, items } = body;
 
-    if (!agent_id || !Array.isArray(items)) {
-      return NextResponse.json({ error: 'agent_id and items[] are required' }, { status: 400 });
+    if (!product_line_id || !Array.isArray(items)) {
+      return NextResponse.json({ error: 'product_line_id and items[] are required' }, { status: 400 });
     }
     if (items.length === 0) {
       return NextResponse.json({ inserted_count: 0 });
     }
 
-    const agent = await findAgentInTenant({ tenantId: ctx.tenantId, agentId: agent_id });
-    if (!agent) return NextResponse.json({ error: 'Agent not found' }, { status: 404 });
+    const line = await findProductLineInTenant({ tenantId: ctx.tenantId, productLineId: product_line_id });
+    if (!line) return NextResponse.json({ error: 'Product line not found' }, { status: 404 });
 
     let insertedCount = 0;
     const errors = [];
@@ -47,7 +47,7 @@ export async function POST(request) {
       const embedMeta = {
         tenantId: ctx.tenantId,
         callSite: 'kb.embedding.teach',
-        productLine: agent.product_line,
+        productLine: product_line_id,
       };
       const embeddingEn = await generateEmbedding(contentEn, embedMeta);
       const embeddingOrig = sourceLang !== 'en' ? await generateEmbedding(content, embedMeta) : embeddingEn;
@@ -56,8 +56,7 @@ export async function POST(request) {
         .from('kb_knowledge_points')
         .insert({
           tenant_id: ctx.tenantId,
-          agent_id,
-          product_line_id: agent.product_line,
+          product_line_id,
           layer,
           content_original: content,
           content_en: contentEn,

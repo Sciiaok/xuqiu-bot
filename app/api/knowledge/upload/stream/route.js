@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import supabase from '../../../../../lib/supabase.js';
-import { getTenantContext, findAgentInTenant } from '../../../../../lib/tenant-context.js';
+import { getTenantContext, findProductLineInTenant } from '../../../../../lib/tenant-context.js';
 import { streamSSE } from '../../../../../lib/sse.js';
 import { subscribe, hasBus } from '../../../../../lib/kb-upload-bus.js';
 
@@ -27,13 +27,13 @@ export async function GET(request) {
 
   const { data: doc, error } = await supabase
     .from('kb_documents')
-    .select('id, agent_id, status, error_message, knowledge_points_count')
+    .select('id, product_line_id, status, error_message, knowledge_points_count')
     .eq('id', docId)
     .maybeSingle();
   if (error || !doc) {
     return NextResponse.json({ error: 'Document not found' }, { status: 404 });
   }
-  if (!(await findAgentInTenant({ tenantId: ctx.tenantId, agentId: doc.agent_id }))) {
+  if (!(await findProductLineInTenant({ tenantId: ctx.tenantId, productLineId: doc.product_line_id }))) {
     return NextResponse.json({ error: 'Document not found' }, { status: 404 });
   }
 

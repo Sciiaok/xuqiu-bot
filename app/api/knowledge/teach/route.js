@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { openrouter, MODELS } from '../../../../src/llm-client.js';
-import { getTenantContext, findAgentInTenant } from '../../../../lib/tenant-context.js';
+import { getTenantContext, findProductLineInTenant } from '../../../../lib/tenant-context.js';
 
 /**
  * POST /api/knowledge/teach
@@ -10,7 +10,7 @@ import { getTenantContext, findAgentInTenant } from '../../../../lib/tenant-cont
  * persisting. The frontend then shows the points to the user; the user
  * confirms and POSTs them to /api/knowledge/teach/commit for insertion.
  *
- * Body:  { agent_id, message }
+ * Body:  { product_line_id, message }
  * Reply: { reply, extracted_knowledge }
  */
 export async function POST(request) {
@@ -19,14 +19,14 @@ export async function POST(request) {
     if (!ctx) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 
     const body = await request.json();
-    const { agent_id, message } = body;
+    const { product_line_id, message } = body;
 
-    if (!agent_id || !message) {
-      return NextResponse.json({ error: 'agent_id and message are required' }, { status: 400 });
+    if (!product_line_id || !message) {
+      return NextResponse.json({ error: 'product_line_id and message are required' }, { status: 400 });
     }
-    const agent = await findAgentInTenant({ tenantId: ctx.tenantId, agentId: agent_id });
-    if (!agent) {
-      return NextResponse.json({ error: 'Agent not found' }, { status: 404 });
+    const line = await findProductLineInTenant({ tenantId: ctx.tenantId, productLineId: product_line_id });
+    if (!line) {
+      return NextResponse.json({ error: 'Product line not found' }, { status: 404 });
     }
 
     const response = await openrouter.messages.create({
@@ -58,7 +58,7 @@ Output as JSON:
         },
         { role: 'user', content: message },
       ],
-    }, { tenantId: ctx.tenantId, callSite: 'knowledge.teach.extract', productLine: agent.product_line });
+    }, { tenantId: ctx.tenantId, callSite: 'knowledge.teach.extract', productLine: product_line_id });
 
     const text = response.choices[0].message.content || '{}';
     let parsed;

@@ -116,7 +116,7 @@ export default function ProductLineEditPage() {
         lead_fields: normalizeLeadFields(leadFields),
       };
       const updated = await updateProductLine(id, body);
-      setLine((prev) => ({ ...updated, agent_id: prev?.agent_id ?? null }));
+      setLine(updated);
       invalidate(lineKeys.detail(id));
       setSavedAt(Date.now());
       setTimeout(() => setSavedAt(0), 2500);
@@ -135,7 +135,6 @@ export default function ProductLineEditPage() {
   if (loadError) return <div className={s.root}><div className={s.errorBanner}>加载失败：{loadError}</div></div>;
   if (!line || !form) return null;
 
-  const agentId = line.agent_id;
   const isKbTab = activeTab === 'knowledge';
 
   const phoneBound = !!line.wa_phone_number_id;
@@ -235,16 +234,9 @@ export default function ProductLineEditPage() {
 
       {isKbTab && (
         <div className={s.kbWrap}>
-          {!agentId ? (
-            <div className={s.kbMissingAgent}>
-              此产品线尚未绑定 agent，无法加载知识库。请先在旧 agent 表中创建一条 product_line 为
-              <code> {line.id} </code>的记录。
-            </div>
-          ) : (
-            <div className={kb.tabContent}>
-              {activeTab === 'knowledge' && <KnowledgeBaseTab agentId={agentId} />}
-            </div>
-          )}
+          <div className={kb.tabContent}>
+            <KnowledgeBaseTab productLineId={line.id} />
+          </div>
         </div>
       )}
 

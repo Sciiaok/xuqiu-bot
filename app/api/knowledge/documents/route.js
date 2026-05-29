@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import supabase from '../../../../lib/supabase.js';
 import { getSupabaseAdmin } from '../../../../lib/supabase-admin.js';
-import { getTenantContext, findAgentInTenant } from '../../../../lib/tenant-context.js';
+import { getTenantContext, findProductLineInTenant } from '../../../../lib/tenant-context.js';
 import {
   getDocumentsByProductLine,
   getDocumentById,
@@ -11,8 +11,8 @@ import {
 const ASSET_BUCKET = 'kb-assets';
 
 /**
- * GET /api/knowledge/documents?agent_id=xxx
- * List all knowledge documents for an agent's product line.
+ * GET /api/knowledge/documents?product_line_id=xxx
+ * List all knowledge documents for a product line.
  */
 export async function GET(request) {
   try {
@@ -20,19 +20,19 @@ export async function GET(request) {
     if (!ctx) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 
     const { searchParams } = new URL(request.url);
-    const agentId = searchParams.get('agent_id');
+    const productLineId = searchParams.get('product_line_id');
 
-    if (!agentId) {
-      return NextResponse.json({ error: 'agent_id is required' }, { status: 400 });
+    if (!productLineId) {
+      return NextResponse.json({ error: 'product_line_id is required' }, { status: 400 });
     }
-    const agent = await findAgentInTenant({ tenantId: ctx.tenantId, agentId });
-    if (!agent) {
-      return NextResponse.json({ error: 'Agent not found' }, { status: 404 });
+    const line = await findProductLineInTenant({ tenantId: ctx.tenantId, productLineId });
+    if (!line) {
+      return NextResponse.json({ error: 'Product line not found' }, { status: 404 });
     }
 
     const documents = await getDocumentsByProductLine({
       tenantId: ctx.tenantId,
-      productLineId: agent.product_line,
+      productLineId,
     });
     return NextResponse.json({ documents });
   } catch (error) {
@@ -62,12 +62,12 @@ export async function DELETE(request) {
       return NextResponse.json({ error: 'doc_id is required' }, { status: 400 });
     }
 
-    // 验 doc 所属 agent 归属当前 tenant —— 否则 doc_id 一旦泄露就能跨 tenant 删数据。
+    // 验 doc 所属产品线归属当前 tenant —— 否则 doc_id 一旦泄露就能跨 tenant 删数据。
     const doc = await getDocumentById(docId);
     if (!doc) {
       return NextResponse.json({ error: 'Document not found' }, { status: 404 });
     }
-    if (!(await findAgentInTenant({ tenantId: ctx.tenantId, agentId: doc.agent_id }))) {
+    if (!(await findProductLineInTenant({ tenantId: ctx.tenantId, productLineId: doc.product_line_id }))) {
       return NextResponse.json({ error: 'Document not found' }, { status: 404 });
     }
 

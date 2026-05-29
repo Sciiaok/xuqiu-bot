@@ -117,7 +117,7 @@ function LimitsNotice() {
   );
 }
 
-export default function KnowledgeBaseTab({ agentId }) {
+export default function KnowledgeBaseTab({ productLineId }) {
   const [section, setSection] = useState('overview');
 
   // Common data
@@ -132,14 +132,14 @@ export default function KnowledgeBaseTab({ agentId }) {
   // other view (this tab on a different tab, the product-line detail page)
   // sees the latest data on next mount.
   async function refreshAll() {
-    if (!agentId) return;
+    if (!productLineId) return;
     setLoadError('');
-    const fetchers = buildKbFetchers(agentId);
+    const fetchers = buildKbFetchers(productLineId);
     const keys = [
-      lineKeys.kbHealth(agentId),
-      lineKeys.kbDocs(agentId),
-      lineKeys.kbQa(agentId),
-      lineKeys.kbAssets(agentId),
+      lineKeys.kbHealth(productLineId),
+      lineKeys.kbDocs(productLineId),
+      lineKeys.kbQa(productLineId),
+      lineKeys.kbAssets(productLineId),
     ];
     try {
       // Drop existing entries so we get fresh data, then refetch through
@@ -153,13 +153,13 @@ export default function KnowledgeBaseTab({ agentId }) {
   }
 
   useEffect(() => {
-    if (!agentId) return;
+    if (!productLineId) return;
     // Hydrate from cache synchronously if available — KB is tenant-wide
     // prefetched by PostLoginPreloader so most opens are zero-flash.
-    const cachedH = readCache(lineKeys.kbHealth(agentId))?.data;
-    const cachedD = readCache(lineKeys.kbDocs(agentId))?.data;
-    const cachedQ = readCache(lineKeys.kbQa(agentId))?.data;
-    const cachedA = readCache(lineKeys.kbAssets(agentId))?.data;
+    const cachedH = readCache(lineKeys.kbHealth(productLineId))?.data;
+    const cachedD = readCache(lineKeys.kbDocs(productLineId))?.data;
+    const cachedQ = readCache(lineKeys.kbQa(productLineId))?.data;
+    const cachedA = readCache(lineKeys.kbAssets(productLineId))?.data;
     if (cachedH && cachedD && cachedQ && cachedA) {
       setHealth(cachedH); setDocuments(cachedD);
       setQaSnippets(cachedQ); setAssets(cachedA); setLoading(false);
@@ -168,7 +168,7 @@ export default function KnowledgeBaseTab({ agentId }) {
     setLoading(true);
     refreshAll().finally(() => setLoading(false));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [agentId]);
+  }, [productLineId]);
 
   const contentCount = documents.length + qaSnippets.length + assets.length;
   const sectionCounts = {
@@ -206,7 +206,7 @@ export default function KnowledgeBaseTab({ agentId }) {
       )}
 
       {section === 'input' && (
-        <InputSection agentId={agentId} onChanged={refreshAll} />
+        <InputSection productLineId={productLineId} onChanged={refreshAll} />
       )}
 
       {section === 'content' && (
@@ -214,7 +214,7 @@ export default function KnowledgeBaseTab({ agentId }) {
           documents={documents}
           qaSnippets={qaSnippets}
           assets={assets}
-          agentId={agentId}
+          productLineId={productLineId}
           onChanged={refreshAll}
         />
       )}
@@ -308,17 +308,17 @@ function OverviewSection({ health }) {
 
 // ── 录入 section ────────────────────────────────────────────────────
 
-function InputSection({ agentId, onChanged }) {
+function InputSection({ productLineId, onChanged }) {
   return (
     <>
-      <FileUploadCard agentId={agentId} onChanged={onChanged} />
-      <TeachCard agentId={agentId} onChanged={onChanged} />
-      <SingleImageCard agentId={agentId} onChanged={onChanged} />
+      <FileUploadCard productLineId={productLineId} onChanged={onChanged} />
+      <TeachCard productLineId={productLineId} onChanged={onChanged} />
+      <SingleImageCard productLineId={productLineId} onChanged={onChanged} />
     </>
   );
 }
 
-function FileUploadCard({ agentId, onChanged }) {
+function FileUploadCard({ productLineId, onChanged }) {
   const [layer, setLayer] = useState('product');
   // items: { key, name, state, stage?, total?, done?, kpCount?, imgCount?,
   //   imgErrors?: string[], linkedAssets?: number, error?, dedup?, warning? }
@@ -385,7 +385,7 @@ function FileUploadCard({ agentId, onChanged }) {
         return;
       }
       try {
-        const data = await uploadDocument(agentId, it.file, layer);
+        const data = await uploadDocument(productLineId, it.file, layer);
         if (data.dedup && data.status === 'ready') {
           patchItem(it.key, {
             state: 'ready',
@@ -527,7 +527,7 @@ function UploadItemRow({ item }) {
 }
 
 // 对话式录入：两步制 — 先抽取展示，用户确认后才入库。
-function TeachCard({ agentId, onChanged }) {
+function TeachCard({ productLineId, onChanged }) {
   const [text, setText] = useState('');
   const [stage, setStage] = useState('input'); // 'input' | 'preview' | 'done'
   const [busy, setBusy] = useState(false);
@@ -543,7 +543,7 @@ function TeachCard({ agentId, onChanged }) {
   async function onExtract() {
     setBusy(true); setError('');
     try {
-      const data = await teachExtract(agentId, text);
+      const data = await teachExtract(productLineId, text);
       const list = (data.extracted_knowledge || []).map((it, i) => ({
         _id: `${Date.now()}-${i}`,
         keep: true,
@@ -564,7 +564,7 @@ function TeachCard({ agentId, onChanged }) {
     if (kept.length === 0) { setError('至少保留一条知识点'); return; }
     setBusy(true); setError('');
     try {
-      const data = await teachCommit(agentId, kept.map(it => ({
+      const data = await teachCommit(productLineId, kept.map(it => ({
         content: it.content.trim(),
         layer: it.layer,
         metadata: it.metadata,
@@ -667,7 +667,7 @@ function TeachCard({ agentId, onChanged }) {
 const SINGLE_IMAGE_MAX_BYTES = 5 * 1024 * 1024; // mirror /api/knowledge/assets cap
 const SINGLE_IMAGE_ACCEPT = 'image/jpeg,image/png,image/webp,image/gif';
 
-function SingleImageCard({ agentId, onChanged }) {
+function SingleImageCard({ productLineId, onChanged }) {
   const [file, setFile] = useState(null);
   const [description, setDescription] = useState('');
   const [busy, setBusy] = useState(false);
@@ -700,7 +700,7 @@ function SingleImageCard({ agentId, onChanged }) {
     if (!file) return;
     setBusy(true); setError('');
     try {
-      await uploadAsset(agentId, file, description.trim());
+      await uploadAsset(productLineId, file, description.trim());
       reset();
       onChanged?.();
     } catch (e) {
@@ -772,7 +772,7 @@ const CONTENT_TABS = [
   { key: 'images', label: '图片资产' },
 ];
 
-function ContentSection({ documents, qaSnippets, assets, agentId, onChanged }) {
+function ContentSection({ documents, qaSnippets, assets, productLineId, onChanged }) {
   const [tab, setTab] = useState('docs');
   return (
     <>
@@ -789,7 +789,7 @@ function ContentSection({ documents, qaSnippets, assets, agentId, onChanged }) {
       </div>
 
       {tab === 'docs' && <DocList documents={documents} onChanged={onChanged} />}
-      {tab === 'qa' && <QaList items={qaSnippets} agentId={agentId} onChanged={onChanged} />}
+      {tab === 'qa' && <QaList items={qaSnippets} productLineId={productLineId} onChanged={onChanged} />}
       {tab === 'images' && <AssetList assets={assets} onChanged={onChanged} />}
     </>
   );
@@ -900,7 +900,7 @@ function DocListItem({ doc, fmtSize, fmtTime, onChanged }) {
   );
 }
 
-function QaList({ items, agentId, onChanged }) {
+function QaList({ items, productLineId, onChanged }) {
   const [editingId, setEditingId] = useState(null);
   const [editAnswer, setEditAnswer] = useState('');
 
@@ -916,12 +916,12 @@ function QaList({ items, agentId, onChanged }) {
             </div>
             <div style={{ display: 'flex', gap: 6 }}>
               <button className={s.docDeleteBtn} onClick={async () => {
-                await updateQaSnippet(agentId, qa.id, { is_active: !qa.is_active }); onChanged?.();
+                await updateQaSnippet(productLineId, qa.id, { is_active: !qa.is_active }); onChanged?.();
               }}>{qa.is_active ? '禁用' : '启用'}</button>
               <button className={s.docDeleteBtn} onClick={() => { setEditingId(qa.id); setEditAnswer(qa.answer); }}>编辑</button>
               <button className={s.docDeleteBtn} onClick={async () => {
                 if (!window.confirm('删除这条 Q&A？')) return;
-                await deleteQaSnippet(agentId, qa.id); onChanged?.();
+                await deleteQaSnippet(productLineId, qa.id); onChanged?.();
               }}>删除</button>
             </div>
           </div>
@@ -931,7 +931,7 @@ function QaList({ items, agentId, onChanged }) {
                 value={editAnswer} onChange={e => setEditAnswer(e.target.value)} />
               <div style={{ display: 'flex', gap: 6 }}>
                 <Button size="xs" variant="primary" onClick={async () => {
-                  await updateQaSnippet(agentId, qa.id, { answer: editAnswer.trim() });
+                  await updateQaSnippet(productLineId, qa.id, { answer: editAnswer.trim() });
                   setEditingId(null); setEditAnswer(''); onChanged?.();
                 }}>保存</Button>
                 <Button size="xs" variant="ghost" onClick={() => { setEditingId(null); setEditAnswer(''); }}>取消</Button>

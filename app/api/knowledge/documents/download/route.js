@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { getSupabaseAdmin } from '../../../../../lib/supabase-admin.js';
-import { getTenantContext, findAgentInTenant } from '../../../../../lib/tenant-context.js';
+import { getTenantContext, findProductLineInTenant } from '../../../../../lib/tenant-context.js';
 import { getDocumentById } from '../../../../../lib/repositories/knowledge-base.repository.js';
 
 /**
@@ -22,8 +22,8 @@ export async function GET(request) {
     if (!doc) {
       return NextResponse.json({ error: 'Document not found' }, { status: 404 });
     }
-    // 验 doc 所属 agent 归属当前 tenant —— 否则 doc_id 一旦泄露就能跨 tenant 下载文件。
-    if (!(await findAgentInTenant({ tenantId: ctx.tenantId, agentId: doc.agent_id }))) {
+    // 验 doc 所属产品线归属当前 tenant —— 否则 doc_id 一旦泄露就能跨 tenant 下载文件。
+    if (!(await findProductLineInTenant({ tenantId: ctx.tenantId, productLineId: doc.product_line_id }))) {
       return NextResponse.json({ error: 'Document not found' }, { status: 404 });
     }
     if (!doc.storage_path) {

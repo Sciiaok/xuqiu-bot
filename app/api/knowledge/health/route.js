@@ -1,9 +1,9 @@
 import { NextResponse } from 'next/server';
-import { getTenantContext, findAgentInTenant } from '../../../../lib/tenant-context.js';
+import { getTenantContext, findProductLineInTenant } from '../../../../lib/tenant-context.js';
 import { getHealthSummary } from '../../../../lib/repositories/knowledge-base.repository.js';
 
 /**
- * GET /api/knowledge/health?agent_id=xxx
+ * GET /api/knowledge/health?product_line_id=xxx
  *
  * Returns the per-layer coverage + recommendations shown on the OverviewTab.
  */
@@ -13,19 +13,19 @@ export async function GET(request) {
     if (!ctx) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 
     const { searchParams } = new URL(request.url);
-    const agentId = searchParams.get('agent_id');
+    const productLineId = searchParams.get('product_line_id');
 
-    if (!agentId) {
-      return NextResponse.json({ error: 'agent_id is required' }, { status: 400 });
+    if (!productLineId) {
+      return NextResponse.json({ error: 'product_line_id is required' }, { status: 400 });
     }
-    const agent = await findAgentInTenant({ tenantId: ctx.tenantId, agentId });
-    if (!agent) {
-      return NextResponse.json({ error: 'Agent not found' }, { status: 404 });
+    const line = await findProductLineInTenant({ tenantId: ctx.tenantId, productLineId });
+    if (!line) {
+      return NextResponse.json({ error: 'Product line not found' }, { status: 404 });
     }
 
     const summary = await getHealthSummary({
       tenantId: ctx.tenantId,
-      productLineId: agent.product_line,
+      productLineId,
     });
     const recommendations = generateRecommendations(summary.layers, summary.outdated_docs);
 
