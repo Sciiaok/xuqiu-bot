@@ -21,7 +21,6 @@ import {
   findProductLineByPhoneNumberId,
   setConversationProductLine,
 } from '../../../lib/repositories/product-line.repository.js';
-import { subscribeToConfigInvalidations } from '../../../lib/medici-config-bus.js';
 import { buildEnvelopeSchema } from './output-schema.js';
 
 // ─── Assembly helpers ────────────────────────────────────────────────
@@ -221,12 +220,3 @@ export async function loadMediciConfig(conversation) {
   const config = await getMediciConfig({ tenantId, id: productLineId });
   return config || null;
 }
-
-// ─── Cross-process invalidation ──────────────────────────────────────
-//
-// 模块加载时订阅 Redis pub/sub 广播。任何进程（Web / queue-processor /
-// cron）只要 import 了这个模块就自动接收 PUT 发出的失效信号。
-// subscribeToConfigInvalidations 内部幂等 —— 多次 import 不会重复订阅。
-subscribeToConfigInvalidations(({ tenantId, id }) => {
-  invalidateMediciCache({ tenantId, id });
-});

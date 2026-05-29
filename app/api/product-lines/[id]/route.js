@@ -5,7 +5,6 @@ import {
   updateProductLine,
 } from '../../../../lib/repositories/product-line.repository.js';
 import { invalidateMediciCache } from '../../../../src/agents/medici/config.js';
-import { publishConfigInvalidation } from '../../../../lib/medici-config-bus.js';
 import { recordAudit } from '../../../../lib/repositories/audit-log.repository.js';
 
 /**
@@ -104,9 +103,9 @@ export async function PUT(request, { params }) {
 
     const line = await updateProductLine({ tenantId: ctx.tenantId, id, updates });
 
-    // 跨进程广播 + 本地清除（本进程订阅在 medici/config.js，但本地直接清
-    // 一手避免 round-trip 的微小窗口）。
-    await publishConfigInvalidation({ tenantId: ctx.tenantId, id });
+    // 当前部署：lead-engine-next 单进程承载 PUT + Medici。同进程直接清
+    // cache 即可。其它 PM2 服务（queue-cron 等）是 HTTP 触发器，不 import
+    // Medici 链路，没有 cache 副本。
     invalidateMediciCache({ tenantId: ctx.tenantId, id });
 
     if (updates.lead_fields !== undefined) {
