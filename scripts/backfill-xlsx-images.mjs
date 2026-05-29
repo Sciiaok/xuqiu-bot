@@ -38,7 +38,7 @@ const supabase = createClient(
 async function main() {
   let query = supabase
     .from('kb_documents')
-    .select('id, tenant_id, agent_id, product_line_id, filename, storage_path')
+    .select('id, tenant_id, product_line_id, filename, storage_path')
     .ilike('filename', '%.xlsx')
     .eq('status', 'ready')
     .not('storage_path', 'is', null);
@@ -68,7 +68,7 @@ async function main() {
       const buffer = Buffer.from(await file.arrayBuffer());
       console.log(`   downloaded ${buffer.length} bytes in ${Date.now() - t0}ms, extracting...`);
       const result = await extractAndStoreImages(
-        { tenantId: doc.tenant_id, agentId: doc.agent_id, productLineId: doc.product_line_id },
+        { tenantId: doc.tenant_id, productLineId: doc.product_line_id },
         buffer,
         doc.id,
         XLSX_MIME,

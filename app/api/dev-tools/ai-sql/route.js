@@ -8,7 +8,7 @@ const SCHEMA_HINT = `
 Tables (Supabase Postgres):
 
 contacts(id uuid, wa_id, bsuid, username, name, company_name, metadata jsonb, created_at, updated_at)
-conversations(id uuid, contact_id → contacts.id, agent_id → agents.id,
+conversations(id uuid, contact_id → contacts.id, product_line → product_lines.id,
   status, started_at, last_message_at, message_count,
   is_human_takeover bool, human_takeover_at,
   wa_phone_number_id, meta_ad_id, closed_reason, created_at, updated_at)
@@ -22,7 +22,8 @@ leads(id uuid, tenant_id, conversation_id → conversations.id, contact_id → c
   --   loading_port, qty_bucket, color_quantity, buyer_type, timeline,
   --   international_commercial_term, company_name, product_name, sku_description)
   --   live inside leads.details JSONB — query with details->>'brand' etc.
-agents(id uuid, name, product_line, ...)
+product_lines(id text PK, tenant_id, name, wa_phone_number_id, lead_fields jsonb,
+  business_value_guidance, is_active, created_at, updated_at)
 message_queue(id, conversation_id, contact_id, wa_id, content, message_type,
   metadata jsonb, wa_message_id, status, process_after, locked_by, locked_at)
 contact_notes(id, contact_id → contacts.id, content, type, created_by, created_at)

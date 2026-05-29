@@ -18,8 +18,7 @@ const MAX_LIMIT = 50;
 const FULL_SCAN_BATCH_SIZE = 200;
 const CONTACT_ID_BATCH = 1000;
 
-// 产品线归属的事实真源是 leads.product_line。conversations.agent_id 自 2026-04-24
-// 起停止写入，agent:agents join 因此读不出任何东西，已剥除。
+// 产品线归属的事实真源是 leads.product_line。agents 表已下线。
 const LEADS_SELECT = `
   id, conversation_id, inquiry_quality, business_value,
   conversation_intent, conversation_intent_summary,
@@ -94,8 +93,8 @@ function parseFilters(sp) {
     // conversation-level filters
     dateFrom: Number.isNaN(Date.parse(dateFrom)) ? '' : dateFrom,
     dateTo: Number.isNaN(Date.parse(dateTo)) ? '' : dateTo,
-    // 产品线归属走 leads.product_line（非 conversations.agent_id），所以这是
-    // lead-scoped filter；values 是 product_line slug（e.g. 'vehicle'）。
+    // 产品线归属走 leads.product_line —— lead-scoped filter；
+    // values 是 product_line slug（e.g. 'vehicle'）。
     productLines: sp.getAll('productLines').filter(Boolean),
     humanTakeover: parseHumanTakeover(sp),
     // Accept either ?metaAdId=X or repeated ?metaAdId=X&metaAdId=Y

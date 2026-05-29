@@ -50,7 +50,7 @@ export async function GET(request, { params }) {
       error: conversationsError,
     } = await supabase
       .from('conversations')
-      .select('id, agent_id, status, created_at, is_human_takeover, agents(name, product_line)')
+      .select('id, product_line, status, created_at, is_human_takeover, product_lines(name)')
       .eq('tenant_id', ctx.tenantId)
       .eq('contact_id', id)
       .order('created_at', { ascending: false });
@@ -104,7 +104,7 @@ export async function GET(request, { params }) {
     if (withAiSummary) {
       // 联系人通常只跟单一产品线对话 —— 取最近一条对话的 product_line 归属;
       // 多产品线场景下会偏向最近的那条,可接受。
-      const mostRecentProductLine = conversations?.[0]?.agents?.product_line || null;
+      const mostRecentProductLine = conversations?.[0]?.product_line || null;
       try {
         responseBody.aiSummary = await generateSummaryWithFallback({
           system: AI_SYSTEM_PROMPT,

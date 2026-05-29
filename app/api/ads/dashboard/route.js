@@ -479,7 +479,7 @@ async function fetchConversationRows({ supabase, tenantId, adIds, fromISO, toISO
     while (true) {
       let query = supabase
         .from('conversations')
-        .select('id, meta_ad_id, created_at, agent_id, leads(inquiry_quality)')
+        .select('id, meta_ad_id, created_at, product_line, leads(inquiry_quality)')
         .eq('tenant_id', tenantId)
         .in('meta_ad_id', chunk)
         .order('created_at', { ascending: false })
@@ -510,20 +510,6 @@ async function fetchConversationSummaryByAd({ supabase, tenantId, fromISO, toISO
 
   if (error) throw error;
   return data || [];
-}
-
-async function fetchAgentsMap({ supabase, tenantId }) {
-  const { data, error } = await supabase
-    .from('agents')
-    .select('id, product_line')
-    .eq('tenant_id', tenantId);
-  if (error) throw error;
-
-  const map = new Map();
-  for (const agent of data || []) {
-    if (agent?.id) map.set(agent.id, agent.product_line || 'unclassified');
-  }
-  return map;
 }
 
 function normalizeQuality(value) {
@@ -573,7 +559,7 @@ function ensureDailyBucket(stats, date) {
   return stats.dailyMap.get(date);
 }
 
-function aggregateConversationMetrics({ conversations, agentMap }) {
+function aggregateConversationMetrics({ conversations }) {
   const statsByAd = new Map();
   const lineCountsByAd = new Map();
 
@@ -601,7 +587,7 @@ function aggregateConversationMetrics({ conversations, agentMap }) {
       stats.lastConversationAt = row.created_at;
     }
 
-    const line = agentMap.get(row.agent_id) || 'unknown';
+    const line = row.product_line || 'unknown';
     if (!lineCountsByAd.has(adId)) lineCountsByAd.set(adId, new Map());
     const lineMap = lineCountsByAd.get(adId);
     lineMap.set(line, (lineMap.get(line) || 0) + 1);
@@ -822,7 +808,6 @@ export async function GET(request) {
     }
 
     let metaRateLimited = false;
-    const agentsMap = await fetchAgentsMap({ supabase, tenantId: ctx.tenantId });
     let metaAds = [];
     try {
       metaAds = await fetchMetaAds({ adAccountId, accessToken });
@@ -996,14 +981,8 @@ export async function GET(request) {
       console.warn('Skipping creative preview enrichment for ad dashboard:', error?.message || error);
     }
 
-    const lifetimeConvAgg = aggregateConversationMetrics({
-      conversations: lifetimeConversations,
-      agentMap: agentsMap,
-    });
-    const periodConvAgg = aggregateConversationMetrics({
-      conversations: periodConversations,
-      agentMap: agentsMap,
-    });
+    const lifetimeConvAgg = aggregateConversationMetrics({ conversations: lifetimeConversations });
+    const periodConvAgg = aggregateConversationMetrics({ conversations: periodConversations });
 
     const relevantAdIds = new Set(candidateAdIds);
     for (const adId of lifetimeConvAgg.statsByAd.keys()) relevantAdIds.add(adId);

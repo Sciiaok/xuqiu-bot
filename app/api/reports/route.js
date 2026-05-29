@@ -5,7 +5,7 @@ import { generateReport } from '@/src/report-generator.service';
 
 /**
  * GET /api/reports — List reports with optional filters
- * Query params: type, agentId, from, to, limit, offset
+ * Query params: type, from, to, limit, offset
  */
 export async function GET(request) {
   try {
@@ -21,7 +21,7 @@ export async function GET(request) {
 
     let query = supabase
       .from('ai_reports')
-      .select('id, type, status, agent_ids, period_start, period_end, summary_line, kpi_snapshot, retry_count, error_message, generated_at, created_at', { count: 'exact' })
+      .select('id, type, status, product_lines, period_start, period_end, summary_line, kpi_snapshot, retry_count, error_message, generated_at, created_at', { count: 'exact' })
       .eq('tenant_id', ctx.tenantId)
       .order('created_at', { ascending: false })
       .range(offset, offset + limit - 1);
@@ -42,7 +42,7 @@ export async function GET(request) {
 
 /**
  * POST /api/reports — Create a manual report
- * Body: { periodStart, periodEnd, agentIds? }
+ * Body: { periodStart, periodEnd, productLines? }
  */
 export async function POST(request) {
   try {
@@ -50,7 +50,7 @@ export async function POST(request) {
     if (!ctx) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 
     const body = await request.json();
-    const { periodStart, periodEnd, agentIds } = body;
+    const { periodStart, periodEnd, productLines } = body;
 
     if (!periodStart || !periodEnd) {
       return NextResponse.json({ error: 'periodStart and periodEnd are required' }, { status: 400 });
@@ -61,7 +61,7 @@ export async function POST(request) {
       type: 'manual',
       periodStart,
       periodEnd,
-      agentIds: agentIds || [],
+      productLines: productLines || [],
     });
 
     return NextResponse.json({ report });

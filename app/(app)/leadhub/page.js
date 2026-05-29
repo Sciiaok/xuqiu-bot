@@ -57,8 +57,7 @@ const DETAIL_TABS = [
   { key: 'notes', label: '备注' },
 ];
 
-// Sentinel for "no product-line filter". Backend filters by leads.product_line;
-// conversations.agent_id has been deprecated since 2026-04.
+// Sentinel for "no product-line filter". Backend filters by leads.product_line.
 const SUPPLY_CHAIN_ALL = '全部产品线';
 const QUALITY_ALL = '全部质量';
 const BUSINESS_VALUE_ALL = '全部价值';

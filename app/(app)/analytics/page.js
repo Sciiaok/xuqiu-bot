@@ -35,12 +35,6 @@ const INTENT_LABELS = {
   unknown: 'UNKNOWN',
 };
 
-const AGENT_NAME_LABELS = {
-  'Vehicle Export Agent': '整车出口业务',
-  'Agricultural Machinery Export Agent': '农机出口业务',
-  'Japanese Auto Parts Export Agent': '汽配出口业务',
-};
-
 // Chart palette — distinct, modern, dashboard-friendly
 const COLORS = {
   blue: '#4C7FF0',
@@ -299,7 +293,7 @@ export default function AnalyticsPage() {
   // ── Derived data ──
   const kpi = data?.kpi ?? {};
   const dailyTrend = (data?.dailyTrend ?? []).map(d => ({ ...d, date: fmtDate(d.date) }));
-  const agentDistribution = data?.agentDistribution ?? [];
+  const productLineDistribution = data?.productLineDistribution ?? [];
   const countryDistribution = data?.countryDistribution ?? [];
   const qualityDistribution = data?.qualityDistribution ?? [];
   const intentDistribution = (data?.intentDistribution ?? []).map(d => ({
@@ -452,39 +446,36 @@ export default function AnalyticsPage() {
             )}
           </Card>
 
-          {/* Agent Distribution + Country Distribution */}
+          {/* Product Line Distribution + Country Distribution */}
           <div className={s.twoCol}>
-            {/* Agent Distribution */}
+            {/* Product Line Distribution */}
             <Card title="业务线分布">
-              {agentDistribution.length > 0 ? (
+              {productLineDistribution.length > 0 ? (
                 <div className={s.agentList}>
-                  {agentDistribution.map(agent => {
-                    const total = Object.values(agent.quality).reduce((a, b) => a + b, 0);
-                    // Prefer stable agentId. Fall back to productLine for the
-                    // "no agent assigned" bucket so keys stay unique even when
-                    // multiple rows share the "Unknown" display name.
-                    const rowKey = agent.agentId || `noagent:${agent.productLine || 'unknown'}`;
+                  {productLineDistribution.map(line => {
+                    const total = Object.values(line.quality).reduce((a, b) => a + b, 0);
+                    const rowKey = line.productLine || 'noline:unknown';
                     return (
                       <div key={rowKey} className={s.agentRow}>
                         <div className={s.agentHeader}>
-                          <span className={s.agentName}>{AGENT_NAME_LABELS[agent.agentName] || agent.agentName}</span>
-                          <Tag variant={PL_TAG_VARIANT[agent.productLine] || 'low'}>
-                            {agent.displayLabel || agent.productLine}
+                          <span className={s.agentName}>{line.name}</span>
+                          <Tag variant={PL_TAG_VARIANT[line.productLine] || 'low'}>
+                            {line.productLine || '未绑定'}
                           </Tag>
                           <span className={s.agentStats}>
-                            {agent.inquiryCount} 询盘 · {agent.proofCount} 高质量 · {agent.proofRate}%
+                            {line.inquiryCount} 询盘 · {line.proofCount} 高质量 · {line.proofRate}%
                           </span>
                         </div>
                         <div className={s.qualityBar}>
                           {Object.entries(QUALITY_COLORS).map(([key, color]) => {
-                            const pct = total > 0 ? (agent.quality[key] / total) * 100 : 0;
+                            const pct = total > 0 ? (line.quality[key] / total) * 100 : 0;
                             if (pct === 0) return null;
                             return (
                               <div
                                 key={key}
                                 className={s.qualitySegment}
                                 style={{ width: `${pct}%`, background: color }}
-                                title={`${key}: ${agent.quality[key]}`}
+                                title={`${key}: ${line.quality[key]}`}
                               />
                             );
                           })}
@@ -551,7 +542,7 @@ export default function AnalyticsPage() {
                   i + 1,
                   p.productName,
                   <Tag key={p.productLine} variant={PL_TAG_VARIANT[p.productLine] || 'low'}>
-                    {p.displayLabel || p.productLine}
+                    {p.productLineName || p.productLine}
                   </Tag>,
                   p.inquiryCount,
                   `${p.proofRate}%`,

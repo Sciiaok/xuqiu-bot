@@ -8,7 +8,7 @@
  *   4. 结构化结果按层批量写 kb_products / kb_shipping_routes
  *   5. 任一 chunk 报告 input/output 截断 → 文档落 status='partial' + partial_reason
  *
- * 写表只填 product_line_id；agent_id 列已松绑 NOT NULL，留给历史数据兼容。
+ * 写表按 product_line_id；agents 表已下线。
  */
 import { jsonrepair } from 'jsonrepair';
 import { openrouter, MODELS } from './llm-client.js';

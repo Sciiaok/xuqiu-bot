@@ -61,13 +61,13 @@ export default function AttributionTab({ adsData, loading, daysFilter, metricsMa
         const [currentRes, prevRes] = await Promise.all([
           supabase
             .from('conversations')
-            .select('meta_ad_id, agent_id, created_at, agents(product_line), leads(inquiry_quality, details)')
+            .select('meta_ad_id, product_line, created_at, leads(inquiry_quality, details)')
             .not('meta_ad_id', 'is', null)
             .gte('created_at', fromDate.toISOString())
             .lte('created_at', toDate.toISOString()),
           supabase
             .from('conversations')
-            .select('meta_ad_id, agent_id, created_at, agents(product_line), leads(inquiry_quality, details)')
+            .select('meta_ad_id, product_line, created_at, leads(inquiry_quality, details)')
             .not('meta_ad_id', 'is', null)
             .gte('created_at', prevFrom.toISOString())
             .lte('created_at', prevTo.toISOString()),
@@ -78,10 +78,10 @@ export default function AttributionTab({ adsData, loading, daysFilter, metricsMa
 
         const currentConvs = selectedLine === 'all'
           ? (currentRes.data || [])
-          : (currentRes.data || []).filter((conv) => conv.agents?.product_line === selectedLine);
+          : (currentRes.data || []).filter((conv) => conv.product_line === selectedLine);
         const prevConvs = selectedLine === 'all'
           ? (prevRes.data || [])
-          : (prevRes.data || []).filter((conv) => conv.agents?.product_line === selectedLine);
+          : (prevRes.data || []).filter((conv) => conv.product_line === selectedLine);
 
         function aggregateConversations(convs) {
           const countryMap = new Map();
@@ -89,12 +89,12 @@ export default function AttributionTab({ adsData, loading, daysFilter, metricsMa
 
           for (const conv of convs || []) {
             const leadsArr = Array.isArray(conv.leads) ? conv.leads : (conv.leads ? [conv.leads] : []);
-            const agentLine = conv.agents?.product_line || '其他';
+            const productLine = conv.product_line || '其他';
 
-            if (!lineMap.has(agentLine)) {
-              lineMap.set(agentLine, { line: agentLine, conversations: 0, qualifyCount: 0, proofCount: 0, adIds: new Set() });
+            if (!lineMap.has(productLine)) {
+              lineMap.set(productLine, { line: productLine, conversations: 0, qualifyCount: 0, proofCount: 0, adIds: new Set() });
             }
-            const lineBucket = lineMap.get(agentLine);
+            const lineBucket = lineMap.get(productLine);
             lineBucket.conversations += 1;
             if (conv.meta_ad_id) lineBucket.adIds.add(String(conv.meta_ad_id));
 
