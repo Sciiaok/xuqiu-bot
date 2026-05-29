@@ -1,18 +1,21 @@
 # Routes (auto-generated)
 
-Generated: 2026-05-28T10:57:01.264Z
+Generated: 2026-05-29T10:36:22.642Z
 
 Filesystem-derived list of API endpoints and UI pages. **Do not edit** — run `node scripts/build-index.mjs` to refresh.
 
 ## API Endpoints
 
-Total: **79**
+Total: **82**
 
 | Path | Methods | File |
 | --- | --- | --- |
 | `/api/admin/invitations` | GET, POST | [app/api/admin/invitations/route.js](../../app/api/admin/invitations/route.js) |
 | `/api/admin/invitations/[id]` | DELETE | [app/api/admin/invitations/[id]/route.js](../../app/api/admin/invitations/[id]/route.js) |
 | `/api/admin/llm-usage` | GET | [app/api/admin/llm-usage/route.js](../../app/api/admin/llm-usage/route.js) |
+| `/api/admin/skills` | GET | [app/api/admin/skills/route.js](../../app/api/admin/skills/route.js) |
+| `/api/admin/skills/[name]/activate` | POST | [app/api/admin/skills/[name]/activate/route.js](../../app/api/admin/skills/[name]/activate/route.js) |
+| `/api/admin/skills/[name]/commits` | GET | [app/api/admin/skills/[name]/commits/route.js](../../app/api/admin/skills/[name]/commits/route.js) |
 | `/api/admin/tenants` | GET | [app/api/admin/tenants/route.js](../../app/api/admin/tenants/route.js) |
 | `/api/admin/tenants/[id]` | PATCH | [app/api/admin/tenants/[id]/route.js](../../app/api/admin/tenants/[id]/route.js) |
 | `/api/ads` | GET | [app/api/ads/route.js](../../app/api/ads/route.js) |
@@ -92,12 +95,13 @@ Total: **79**
 
 ## UI Pages
 
-Total: **16**
+Total: **17**
 
 | URL | File |
 | --- | --- |
 | `/admin/invitations` | [app/(app)/admin/invitations/page.js](../../app/(app)/admin/invitations/page.js) |
 | `/admin/llm-usage` | [app/(app)/admin/llm-usage/page.js](../../app/(app)/admin/llm-usage/page.js) |
+| `/admin/skills` | [app/(app)/admin/skills/page.js](../../app/(app)/admin/skills/page.js) |
 | `/admin/tenants` | [app/(app)/admin/tenants/page.js](../../app/(app)/admin/tenants/page.js) |
 | `/analytics` | [app/(app)/analytics/page.js](../../app/(app)/analytics/page.js) |
 | `/campaign-studio` | [app/(app)/campaign-studio/page.js](../../app/(app)/campaign-studio/page.js) |

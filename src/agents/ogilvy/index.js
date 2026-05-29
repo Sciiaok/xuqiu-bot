@@ -42,25 +42,15 @@ import { collectKnownUrls, repairAssistantUrls } from './url-repair.js';
 // yields an `error` event and the user can resume by sending a new message.
 const MAX_ITERATIONS = 10;
 
-// ── Skill bundle + host patch (loaded once, cached at module scope) ─────
+// ── Host patch (loaded once at module scope, never changes) ─────────────
 //
-// Top-level await loads the skill bundle synchronously at first import. The
-// loader memoizes by directory path, so subsequent imports are free.
-// Restart the Next.js server to pick up edits to the skill bundle.
-const SKILL = await loadSkill('PromeEngine-ads-skill');
-// Resolve sibling skill-host-patch.md via import.meta.url so the path holds
-// regardless of process cwd (dev / standalone build / serverless).
+// Skill bundle itself is loaded per-invocation inside runOgilvy so admin UI
+// version switches take effect on the next session turn without a process
+// restart.
 const HOST_PATCH = fs.readFileSync(
   path.join(path.dirname(fileURLToPath(import.meta.url)), 'skill-host-patch.md'),
   'utf8',
 );
-
-// References are loaded on-demand via the `read_skill_reference` tool. v2 bundle
-// reorganized references into platforms/ industries/ playbooks/ + top-level
-// docs — 15 files / ~40K tokens total. Inlining everything would balloon the
-// cached prefix; lazy fetch keeps the prefix small and only pulls the few
-// references the model actually consults this session.
-const REFERENCE_KEYS = Array.from(SKILL.references.keys()).sort();
 
 // ── Tool schemas ────────────────────────────────────────────────────────
 
@@ -413,17 +403,23 @@ const TOOLS = [
 // Static segment (1 + 2 + reference index) is stable across turns and gets
 // cache_control.
 
-const REFERENCE_INDEX_NOTE =
-  `## skill 可用 reference (用 read_skill_reference 工具按 name 读)\n\n` +
-  REFERENCE_KEYS.map(k => `- ${k}`).join('\n');
-
-const SYSTEM_STATIC = [
-  SKILL.systemPrompt,
-  '---',
-  HOST_PATCH,
-  '---',
-  REFERENCE_INDEX_NOTE,
-].join('\n\n');
+// Build the static system prompt for a given skill bundle. Called once per
+// runOgilvy invocation. References list is inlined as a directory index
+// so the model can discover reference keys without a probe — the reference
+// bodies are still pulled on demand via read_skill_reference.
+function buildSystemStatic(skill) {
+  const referenceKeys = Array.from(skill.references.keys()).sort();
+  const referenceIndexNote =
+    `## skill 可用 reference (用 read_skill_reference 工具按 name 读)\n\n` +
+    referenceKeys.map(k => `- ${k}`).join('\n');
+  return [
+    skill.systemPrompt,
+    '---',
+    HOST_PATCH,
+    '---',
+    referenceIndexNote,
+  ].join('\n\n');
+}
 
 /**
  * Collect every image URL the user has uploaded in this session (in order).
@@ -603,6 +599,12 @@ export async function* runOgilvy(sessionId, userText, attachments = [], userId =
 
   yield { event: 'user_saved', data: { message_index: userIdx, id: userRow.id } };
 
+  // Skill bundle — loaded per-invocation. Admin UI version switch (via
+  // /admin/skills) flips the active commit_sha in skill_active; the next
+  // session turn here picks up the new content. ~5-20ms DB hit.
+  const skill = await loadSkill('PromeEngine-ads-skill');
+  const systemStatic = buildSystemStatic(skill);
+
   // 2. Session 锁定单产品线 → 自动注入对应的 WA 号码,模型不再让用户选。
   //    历史 (productLine=NULL) 的会话也 fail-safe:返回错误而不是回退到
   //    "随便挑一个号码"——避免错号发广告。
@@ -666,7 +668,7 @@ export async function* runOgilvy(sessionId, userText, attachments = [], userId =
         // mega-output), the length-continuation path below stitches the
         // next stream onto pendingAssistantText.
         max_tokens: 16384,
-        messages: buildMessagesWithCache(SYSTEM_STATIC, dynamicPrompt, history),
+        messages: buildMessagesWithCache(systemStatic, dynamicPrompt, history),
         tools: openaiTools,
         tool_choice: 'auto',
         // Pin to Anthropic direct — keeps cache_control semantics consistent
@@ -849,6 +851,7 @@ export async function* runOgilvy(sessionId, userText, attachments = [], userId =
       productLine,
       waNumbers: [boundWaNumber],
       uploadedImageUrls,
+      skill,
     };
 
     // Kick off every tool in parallel. Results are collected by id so we can
@@ -906,12 +909,13 @@ async function executeTool(name, input, ctx) {
       return persistStageOutput(input, ctx);
     case 'read_skill_reference': {
       const refName = typeof input?.name === 'string' ? input.name.trim() : '';
+      const referenceKeys = Array.from(ctx.skill.references.keys()).sort();
       if (!refName) {
-        return { error: 'name_required', message: 'name 必填', available: REFERENCE_KEYS };
+        return { error: 'name_required', message: 'name 必填', available: referenceKeys };
       }
-      const content = SKILL.references.get(refName);
+      const content = ctx.skill.references.get(refName);
       if (!content) {
-        return { error: 'not_found', message: `reference "${refName}" 不存在`, available: REFERENCE_KEYS };
+        return { error: 'not_found', message: `reference "${refName}" 不存在`, available: referenceKeys };
       }
       return { name: refName, content };
     }

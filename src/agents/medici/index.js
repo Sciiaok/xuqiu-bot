@@ -53,21 +53,15 @@ const TOP_LEVEL_RETAIN = new Set([
   'conversation_intent_summary', 'route', 'handoff_summary',
 ]);
 
-// ─── Skill bundle + host patch (loaded once, cached at module scope) ─
+// ─── Host patch (loaded once at module scope, never changes) ─────────
 //
-// Top-level await loads the skill bundle synchronously at first import. The
-// loader memoizes by directory path, so subsequent imports are free.
-// Restart the Next.js server to pick up edits to the skill bundle.
-const SKILL = await loadSkill('ai-reception-deal');
+// Skill bundle itself is loaded per-invocation inside runMedici so admin UI
+// version switches take effect on the next conversation without a process
+// restart.
 const HOST_PATCH = fs.readFileSync(
   path.join(path.dirname(fileURLToPath(import.meta.url)), 'skill-host-patch.md'),
   'utf8',
 );
-
-// Static segment is stable across all conversations and gets cache_control.
-// Skill body + host patch combined ~10K tokens; references/*.md are NOT
-// included here — the agent pulls them on demand via read_skill_reference.
-const SYSTEM_STATIC = SKILL.systemPrompt + '\n\n---\n\n' + HOST_PATCH;
 
 // ─── Prompt assembly ─────────────────────────────────────────────────
 
@@ -664,6 +658,12 @@ export async function runMedici({
     );
   }
 
+  // Skill bundle — loaded per-invocation. Admin UI version switch (via
+  // /admin/skills) flips the active commit_sha in skill_active; the next call
+  // here picks up the new content. ~5-20ms DB hit.
+  const skill = await loadSkill('ai-reception-deal');
+  const systemStatic = skill.systemPrompt + '\n\n---\n\n' + HOST_PATCH;
+
   // 1. messages[] (history + latest, cache_control on trailing history turn).
   const { messages, historyCount, latestContent } = await buildMessages(history, input, logger, metaToken);
 
@@ -699,15 +699,15 @@ export async function runMedici({
     sent_assets: sentAssetIds,
     available_assets: availableAssets,
   });
-  const systemBlocks = buildSystemBlocks(SYSTEM_STATIC, perLineContext, perTurnContext);
+  const systemBlocks = buildSystemBlocks(systemStatic, perLineContext, perTurnContext);
 
   logger.info('medici.request.started', {
     message_count: messages.length,
     history_count: historyCount,
     latest_input_type: Array.isArray(latestContent) ? 'multimodal' : 'text',
     model: MODELS.SONNET,
-    skill: SKILL.metadata.name,
-    skill_sha: SKILL.source.sha256,
+    skill: skill.metadata.name,
+    skill_sha: skill.source.sha256,
     context_info: buildTraceContextInfo(context),
     available_assets_count: availableAssets.length,
     sent_assets_count: sentAssetIds.length,
@@ -757,6 +757,7 @@ export async function runMedici({
         tenantId,
         productLineId,
         qualifyMissingFields: context.qualify_missing_fields || [],
+        skill,
       });
       onToolEvent?.({ type: 'tool_result', tool: toolName, result, iteration: iterations });
       return { tc, result };
@@ -872,12 +873,12 @@ export async function runMedici({
 async function dispatchTool(name, input, ctx) {
   if (name === 'read_skill_reference') {
     const refName = String(input?.name || '').replace(/\.md$/, '').replace(/^references\//, '');
-    const content = SKILL.references.get(refName);
+    const content = ctx.skill.references.get(refName);
     if (!content) {
       return {
         error: 'reference_not_found',
         message: `未找到 reference "${refName}"。`,
-        available: [...SKILL.references.keys()],
+        available: [...ctx.skill.references.keys()],
       };
     }
     return { name: refName, content };

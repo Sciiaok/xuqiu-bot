@@ -39,6 +39,7 @@ const FOUNDER_NAV = [
     items: [
       { href: '/admin/tenants', label: '租户管理', icon: 'tenants' },
       { href: '/admin/invitations', label: '邀请管理', icon: 'invitations' },
+      { href: '/admin/skills', label: 'Skill 版本', icon: 'skills' },
       { href: '/admin/llm-usage', label: '大模型成本', icon: 'tokens' },
     ],
   },
@@ -109,6 +110,14 @@ const ICONS = {
       <circle cx="5" cy="5" r="3"/>
       <circle cx="10" cy="10" r="3"/>
       <path d="M5 5v0M10 10v0"/>
+    </svg>
+  ),
+  skills: (
+    <svg fill="none" stroke="currentColor" strokeWidth="1.4" viewBox="0 0 15 15">
+      <path d="M2.5 2.5h6a2 2 0 0 1 2 2V13H4.5a2 2 0 0 1-2-2V2.5z"/>
+      <path d="M10.5 4.5h2v8.5h-6"/>
+      <line x1="5" y1="5.5" x2="8" y2="5.5"/>
+      <line x1="5" y1="8" x2="8" y2="8"/>
     </svg>
   ),
   settings: (

@@ -1,75 +1,98 @@
 /**
- * Skills runtime — load a skill bundle directory from disk and return its
- * content in a shape Ogilvy (or any other agent) can consume.
+ * Skills runtime — load a skill bundle and return its content in a shape
+ * Ogilvy / Medici can consume.
  *
- * What "loading" means:
- *   1. Locate the bundle at `skills/<name>/`.
- *   2. Parse `SKILL.md`'s YAML frontmatter (name + description) and split out
- *      its body — the body is what becomes the agent's system prompt.
- *   3. Index `references/*.md` into a Map<basenameWithoutExt, content> so the
- *      agent can pull a reference on demand via a `read_skill_reference` tool
- *      instead of pre-loading every reference into the prompt.
+ * Two sources, in priority order:
+ *   1. Supabase `current_skill` view — populated by the admin UI when a
+ *      version is activated. Hot-swappable: switch the active commit_sha
+ *      via /admin/skills, all callers pick up the new content on the
+ *      next loadSkill() call.
+ *   2. Submodule fallback on disk at `skills/<name>/SKILL.md` — used as
+ *      baseline when no row exists in skill_active yet (fresh install,
+ *      or admin has never picked a version).
  *
- * Caching: results are memoized in a module-level Map keyed by absolute path.
- * Restart the process to pick up edits to a skill bundle.
+ * No process-level cache: each call goes to the DB so all PM2 processes
+ * (Next app + cron workers) see updates immediately. Latency ~5-20ms,
+ * negligible vs. the LLM call that follows.
  */
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
+import { getSupabaseAdmin } from '../../../lib/supabase-admin.js';
 
-// Resolve `skills/` relative to this file (not process.cwd()) so the path
-// holds whether the server runs from the repo root, a subdirectory, or a
-// bundled standalone build (Vercel etc.). This file is at
-// src/agents/skills-runtime/loader.js — three dirs up is the project root.
 const SKILLS_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../../skills');
-const cache = new Map();
 
 /**
- * Load a skill bundle by name.
- *
- * @param {string} name — skill name (matches the bundle's frontmatter.name and
- *   the directory under `skills/`)
+ * @param {string} name
  * @returns {Promise<{
  *   metadata: { name: string, description: string },
- *   systemPrompt: string,           // SKILL.md body, frontmatter stripped
- *   references: Map<string, string>,// references/<key>.md → content
+ *   systemPrompt: string,
+ *   references: Map<string, string>,
  *   source: { path: string, sha256: string },
  * }>}
  */
 export async function loadSkill(name) {
-  const dirPath = path.join(SKILLS_DIR, name);
+  const admin = getSupabaseAdmin();
+  const { data, error } = await admin
+    .from('current_skill')
+    .select('commit_sha, skill_md, refs')
+    .eq('skill_name', name)
+    .maybeSingle();
 
-  if (!fs.existsSync(dirPath) || !fs.statSync(dirPath).isDirectory()) {
-    throw new Error(`[skills-runtime] skill "${name}" not found at ${dirPath}.`);
+  // PGRST205 = PostgREST sees no such table (migration not yet applied).
+  // Fall back to disk baseline so dev / preview environments work without
+  // manual schema setup. All other errors are genuine (auth, network) and
+  // bubble up.
+  if (error && error.code !== 'PGRST205') {
+    throw new Error(`[skills-runtime] DB read failed for "${name}": ${error.message}`);
   }
 
-  const cached = cache.get(dirPath);
-  if (cached) return cached;
-
-  const skill = loadFromDir(dirPath, name);
-  cache.set(dirPath, skill);
-  return skill;
+  if (data) return loadFromRow(name, data);
+  return loadFromDisk(name);
 }
 
-function loadFromDir(dirPath, expectedName) {
+function loadFromRow(name, row) {
+  const { metadata, body } = parseSkillFrontmatter(row.skill_md, `db:${name}@${row.commit_sha.slice(0, 7)}`);
+  assertNameMatch(metadata, name, `db:${name}`);
+
+  const refs = row.refs || {};
+  const keys = Object.keys(refs).sort();
+  const references = new Map();
+  const hash = crypto.createHash('sha256').update(row.skill_md);
+  for (const key of keys) {
+    const content = refs[key];
+    references.set(key, content);
+    hash.update('\0').update(key).update('\0').update(content);
+  }
+  return {
+    metadata,
+    systemPrompt: body,
+    references,
+    source: {
+      path: `db://current_skill/${name}@${row.commit_sha.slice(0, 7)}`,
+      sha256: hash.digest('hex').slice(0, 16),
+    },
+  };
+}
+
+function loadFromDisk(name) {
+  const dirPath = path.join(SKILLS_DIR, name);
+  if (!fs.existsSync(dirPath) || !fs.statSync(dirPath).isDirectory()) {
+    throw new Error(`[skills-runtime] skill "${name}" not found in DB or at ${dirPath}.`);
+  }
   const skillPath = path.join(dirPath, 'SKILL.md');
   if (!fs.existsSync(skillPath)) {
     throw new Error(`[skills-runtime] ${dirPath}: missing SKILL.md`);
   }
   const skillRaw = fs.readFileSync(skillPath, 'utf8');
   const { metadata, body } = parseSkillFrontmatter(skillRaw, dirPath);
-  assertNameMatch(metadata, expectedName, dirPath);
+  assertNameMatch(metadata, name, dirPath);
 
   const references = new Map();
   const refDir = path.join(dirPath, 'references');
   const hash = crypto.createHash('sha256').update(skillRaw);
   if (fs.existsSync(refDir) && fs.statSync(refDir).isDirectory()) {
-    // Recursive walk: bundle v2 reorganized references into `platforms/`,
-    // `industries/`, `playbooks/` subdirs + a few top-level docs. Keys are
-    // relative paths without the `.md` suffix using forward slashes
-    // (e.g. `platforms/meta`, `industries/automotive`, `data-sources`).
-    // Sorted for deterministic sha256.
     const files = [];
     const walk = (dir) => {
       for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
@@ -82,28 +105,26 @@ function loadFromDir(dirPath, expectedName) {
     files.sort();
     for (const full of files) {
       const rel = path.relative(refDir, full).split(path.sep).join('/');
-      const key = rel.slice(0, -3); // strip ".md"
+      const key = rel.slice(0, -3);
       const content = fs.readFileSync(full, 'utf8');
       references.set(key, content);
       hash.update('\0').update(rel).update('\0').update(content);
     }
   }
-  const sha256 = hash.digest('hex').slice(0, 16);
-
   return {
     metadata,
     systemPrompt: body,
     references,
-    source: { path: dirPath, sha256 },
+    source: { path: dirPath, sha256: hash.digest('hex').slice(0, 16) },
   };
 }
 
 // ── frontmatter parser ──────────────────────────────────────────────────
 //
 // Skill bundles use a tiny YAML frontmatter (name + description). We don't
-// need full YAML — just the leading `---\n...\n---\n` block. Description can
-// span multiple lines via the `>` block-scalar form, which we collapse to a
-// single space-joined string.
+// need full YAML — just the leading `---\n...\n---\n` block. Description
+// can span multiple lines via the `>` block-scalar form, which we collapse
+// to a single space-joined string.
 
 function parseSkillFrontmatter(raw, sourcePath) {
   const match = raw.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n([\s\S]*)$/);
@@ -124,9 +145,6 @@ function parseSkillFrontmatter(raw, sourcePath) {
     let value = m[2];
 
     if (value === '>' || value === '|') {
-      // Block scalar: take subsequent indented lines until we hit a non-indented
-      // line or end. Join with a single space (`>` is folded; we don't preserve
-      // line breaks since description is a single sentence).
       const collected = [];
       i++;
       while (i < lines.length && /^\s/.test(lines[i])) {
