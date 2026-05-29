@@ -111,7 +111,8 @@ export async function POST(request) {
     const { productLine, ad, history = [], message, image, priorLead } = body || {};
 
     if (!productLine) return NextResponse.json({ error: 'productLine is required' }, { status: 400 });
-    if (!ad?.id)       return NextResponse.json({ error: 'ad.id is required' }, { status: 400 });
+    // ad 可选：调试台允许"不选广告"模拟无 referral 的自然进入。给了 ad 就必须带 id。
+    if (ad && !ad.id)  return NextResponse.json({ error: 'ad.id is required when ad is provided' }, { status: 400 });
     // image-only turns are valid; require at least one of message/image.
     if (!message && !image?.data_url) {
       return NextResponse.json({ error: 'message or image is required' }, { status: 400 });
@@ -144,7 +145,11 @@ export async function POST(request) {
     //    The frontend enriches `ad` from /api/ads/dashboard's creative fields
     //    (extractCreativeText), so headline / body / source_url carry the
     //    real Meta ad copy, not placeholders.
-    const referral = {
+    //
+    //    When the operator chose "不选广告"（ad omitted），referral 留空，
+    //    模拟生产侧"contact 没有 last_referral"的自然进入路径——prompt 里不
+    //    附 ad_referral 块。
+    const referral = ad ? {
       source_type: 'ad',
       source_id: ad.id,
       ad_id: ad.id,
@@ -153,9 +158,13 @@ export async function POST(request) {
       source_url: ad.source_url || '',
       media_type: ad.media_type || '',
       thumbnail_url: ad.thumbnail_url || '',
-    };
+    } : null;
     const adReferral = formatReferralContextForPrompt(referral);
-    log('info', 'Built synthetic ad referral', { ad_id: ad.id, headline: referral.headline });
+    if (referral) {
+      log('info', 'Built synthetic ad referral', { ad_id: ad.id, headline: referral.headline });
+    } else {
+      log('info', 'No ad selected — running without referral (natural-entry simulation)');
+    }
 
     // 4. Build contextInfo. The simulator has no persistence, so the caller
     //    echoes back the previous turn's `response.leads[0]` as `priorLead`.
@@ -265,7 +274,7 @@ export async function POST(request) {
     // Build the input message. When the user attached an image, surface it via
     // metadata.inline_image — Medici's buildClaudeContent forwards it to
     // Claude as an image_url block alongside any text.
-    const inputMetadata = { referral };
+    const inputMetadata = referral ? { referral } : {};
     if (image?.data_url) {
       inputMetadata.media_type = 'image';
       inputMetadata.inline_image = {
@@ -287,7 +296,7 @@ export async function POST(request) {
         role: 'user',
         content: message || '',
         metadata: {
-          referral,
+          ...(referral ? { referral } : {}),
           ...(image?.data_url
             ? { inline_image: { mime_type: image.mime_type, bytes: image.size_bytes || 'n/a' } }
             : {}),

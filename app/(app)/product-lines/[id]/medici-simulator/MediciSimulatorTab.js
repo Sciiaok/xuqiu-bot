@@ -154,8 +154,9 @@ export default function MediciSimulatorTab({ productLineSlug }) {
   const locked = takeoverActive || faqEnded;
   const handoffSummary = lastTurn?.summary?.handoff_summary || '';
 
-  const canSend = selectedAd
-    && (draft.trim().length > 0 || pendingImage)
+  // 广告可不选：模拟"无 referral / 自然进入"场景。后端构造 referral 时
+  // 会把 ad 缺失视为 null，prompt 里不附 ad_referral 块。
+  const canSend = (draft.trim().length > 0 || pendingImage)
     && !sending
     && !locked;
 
@@ -237,7 +238,7 @@ export default function MediciSimulatorTab({ productLineSlug }) {
     batchTimerRef.current = null;
     const batch = batchRef.current.messages;
     const historySnapshot = batchRef.current.historySnapshot;
-    if (batch.length === 0 || !selectedAd) {
+    if (batch.length === 0) {
       setBatchDeadlineAt(0);
       setPendingBatch([]);
       return;
@@ -273,15 +274,17 @@ export default function MediciSimulatorTab({ productLineSlug }) {
           // own businessLine — so the simulator always exercises THIS line's
           // config even if the ad's classification drifts.
           productLine: productLineSlug,
-          ad: {
-            id:            selectedAd.id,
-            name:          selectedAd.name,
-            headline:      selectedAd.headline,
-            body:          selectedAd.body,
-            source_url:    selectedAd.source_url,
-            media_type:    selectedAd.media_type,
-            thumbnail_url: selectedAd.thumbnail_url,
-          },
+          ...(selectedAd ? {
+            ad: {
+              id:            selectedAd.id,
+              name:          selectedAd.name,
+              headline:      selectedAd.headline,
+              body:          selectedAd.body,
+              source_url:    selectedAd.source_url,
+              media_type:    selectedAd.media_type,
+              thumbnail_url: selectedAd.thumbnail_url,
+            },
+          } : {}),
           history: historySnapshot.map(({ role, content, attachments }) => ({
             role,
             content,
@@ -368,7 +371,7 @@ export default function MediciSimulatorTab({ productLineSlug }) {
             <option value="">
               {adsLoading
                 ? '加载广告中…'
-                : (ads.length === 0 ? '本产品线下暂无广告可选' : '— 选择广告 —')}
+                : '不选广告（模拟无 referral 自然进入）'}
             </option>
             {ads.map((a) => (
               <option key={a.id} value={a.id}>
@@ -480,9 +483,7 @@ export default function MediciSimulatorTab({ productLineSlug }) {
               <div className={s.chatEmpty}>
                 {selectedAd
                   ? '输入你的第一条消息开始对话…'
-                  : (ads.length === 0
-                      ? '本产品线下暂无广告 — 请在 Ogilvy 投放广告后再来调试'
-                      : '请先在上方选择一个广告')}
+                  : '未选广告 — 将以"无 referral"模拟自然进入。输入第一条消息开始对话…'}
               </div>
             ) : (
               history.map((m, i) => {
@@ -604,7 +605,7 @@ export default function MediciSimulatorTab({ productLineSlug }) {
               type="button"
               className={s.attachBtn}
               onClick={() => fileInputRef.current?.click()}
-              disabled={!selectedAd || sending || locked}
+              disabled={sending || locked}
               title="附加图片（JPEG / PNG / WebP / GIF，≤5MB）"
             >
               📎
@@ -615,7 +616,7 @@ export default function MediciSimulatorTab({ productLineSlug }) {
                 takeoverActive ? 'AI 已挂起 — 点上方"模拟人工放手"继续'
                 : faqEnded     ? '对话已结束 — 点上方"忽略"继续或清空重来'
                 : selectedAd   ? '模拟客户消息…'
-                :                '先选广告'
+                :                '模拟客户消息…（未选广告 = 无 referral）'
               }
               value={draft}
               onChange={(e) => setDraft(e.target.value)}
@@ -625,7 +626,7 @@ export default function MediciSimulatorTab({ productLineSlug }) {
                   handleSend();
                 }
               }}
-              disabled={!selectedAd || sending || locked}
+              disabled={sending || locked}
               rows={1}
             />
             <button type="button" className={s.sendBtn} onClick={handleSend} disabled={!canSend}>

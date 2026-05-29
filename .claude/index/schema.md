@@ -1,10 +1,10 @@
 # Schema Snapshot (auto-generated)
 
-Generated: 2026-05-29T08:29:22.349Z
+Generated: 2026-05-29T12:31:02.558Z
 
 Live snapshot of `public` schema from Supabase. **Do not edit by hand** — run `node scripts/build-index.mjs` to refresh.
 
-Tables: **45**. Listed alphabetically.
+Tables: **48**. Listed alphabetically.
 
 ## Tables
 
@@ -19,6 +19,7 @@ Tables: **45**. Listed alphabetically.
 - [`contacts`](#contacts)
 - [`conversations`](#conversations)
 - [`conversations_with_resolved_route`](#conversations-with-resolved-route)
+- [`current_skill`](#current-skill)
 - [`fix_knowledge`](#fix-knowledge)
 - [`inquiry_dashboard_summaries`](#inquiry-dashboard-summaries)
 - [`invitations`](#invitations)
@@ -50,6 +51,8 @@ Tables: **45**. Listed alphabetically.
 - [`orchestrator_sessions`](#orchestrator-sessions)
 - [`product_lines`](#product-lines)
 - [`sessions`](#sessions)
+- [`skill_active`](#skill-active)
+- [`skill_versions`](#skill-versions)
 - [`tenants`](#tenants)
 - [`users`](#users)
 - [`webhook_dumps`](#webhook-dumps)
@@ -328,6 +331,18 @@ Tables: **45**. Listed alphabetically.
 | `feishu_notified_at` | timestamp with time zone | Y |  |
 | `faq_ended_at` | timestamp with time zone | Y |  |
 | `resolved_route` | text | Y |  |
+
+### `current_skill`
+
+| Column | Type | Nullable | Default |
+| --- | --- | --- | --- |
+| `skill_name` | text | Y |  |
+| `commit_sha` | text | Y |  |
+| `commit_summary` | text | Y |  |
+| `commit_at` | timestamp with time zone | Y |  |
+| `skill_md` | text | Y |  |
+| `refs` | jsonb | Y |  |
+| `activated_at` | timestamp with time zone | Y |  |
 
 ### `fix_knowledge`
 
@@ -1181,6 +1196,34 @@ Tables: **45**. Listed alphabetically.
 - `idx_sessions_stage` USING btree (stage)
 - `idx_sessions_wa_id` USING btree (wa_id)
 - `sessions_wa_id_key` USING btree (wa_id)
+
+### `skill_active`
+
+| Column | Type | Nullable | Default |
+| --- | --- | --- | --- |
+| `skill_name` | text | N |  |
+| `commit_sha` | text | N |  |
+| `activated_at` | timestamp with time zone | N | `now()` |
+| `activated_by` | uuid | Y |  |
+
+**Foreign keys:**
+- `commit_sha` → `skill_versions.commit_sha`
+- `commit_sha` → `skill_versions.skill_name`
+- `skill_name` → `skill_versions.commit_sha`
+- `skill_name` → `skill_versions.skill_name`
+
+### `skill_versions`
+
+| Column | Type | Nullable | Default |
+| --- | --- | --- | --- |
+| `skill_name` | text | N |  |
+| `commit_sha` | text | N |  |
+| `commit_summary` | text | N |  |
+| `commit_at` | timestamp with time zone | N |  |
+| `skill_md` | text | N |  |
+| `refs` | jsonb | N | `'{}'::jsonb` |
+| `imported_at` | timestamp with time zone | N | `now()` |
+| `imported_by` | uuid | Y |  |
 
 ### `tenants`
 
