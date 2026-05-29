@@ -41,11 +41,16 @@ function fmtErr(err) {
  *   - 没认证业务名 → 不能发消息（Meta 拒）
  *   - "Test Number" → Meta 测试号码，不能投生产用
  *   - 质量评级 RED → Meta 已限流/封禁，发不出去
+ *   - code_verification_status ≠ VERIFIED → 号码未完成 Meta 验证流程，
+ *     在 Meta BM UI 上显示为 "Unverified"，不能用 Cloud API 收发消息
  */
 function checkPhoneUsable(p) {
   if (!p.verified_name) return { ok: false, reason: '未认证业务名' };
   if (p.verified_name === 'Test Number') return { ok: false, reason: 'Meta 测试号码' };
   if (p.quality_rating === 'RED') return { ok: false, reason: '质量评级 RED（Meta 已限流）' };
+  if (p.code_verification_status && p.code_verification_status !== 'VERIFIED') {
+    return { ok: false, reason: `未完成号码验证（${p.code_verification_status}）` };
+  }
   return { ok: true };
 }
 
@@ -167,6 +172,7 @@ export async function POST(request) {
           display_number: p.display_phone_number,
           verified_name: p.verified_name || null,
           quality_rating: p.quality_rating || null,
+          code_verification_status: p.code_verification_status || null,
         }));
         for (const p of all) {
           const check = checkPhoneUsable(p);

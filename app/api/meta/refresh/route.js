@@ -27,6 +27,7 @@ function isPhoneUsable(p) {
   if (!p.verified_name) return false;
   if (p.verified_name === 'Test Number') return false;
   if (p.quality_rating === 'RED') return false;
+  if (p.code_verification_status && p.code_verification_status !== 'VERIFIED') return false;
   return true;
 }
 
@@ -80,7 +81,7 @@ export async function POST() {
           // 与 connect/preview 一致：过滤不可用号码
           if (!isPhoneUsable(p)) {
             phonesSkipped++;
-            log('info', 'phones', `跳过不可用号码 ${p.display_phone_number}（${p.verified_name || '未认证'} / ${p.quality_rating || '-'}）`);
+            log('info', 'phones', `跳过不可用号码 ${p.display_phone_number}（${p.verified_name || '未认证业务名'} / ${p.quality_rating || '-'} / ${p.code_verification_status || '-'}）`);
             continue;
           }
           await upsertPhone({
@@ -104,7 +105,7 @@ export async function POST() {
       }
     }
     if (phonesSkipped > 0) {
-      log('warn', 'phones', `跳过 ${phonesSkipped} 个不可用号码（之前可能可用，现在被 Meta 标记为 RED/Test/未认证）`);
+      log('warn', 'phones', `跳过 ${phonesSkipped} 个不可用号码（RED/Test/未认证业务名/未完成号码验证）`);
     }
 
     // 之前有但这次没看到 → 标 removed

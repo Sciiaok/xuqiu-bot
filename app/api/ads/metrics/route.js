@@ -189,10 +189,10 @@ function buildMetrics(rows, adIds) {
   return { metrics, totals };
 }
 
-function buildCacheKey(days, adIds, startDate, endDate) {
+function buildCacheKey(tenantId, days, adIds, startDate, endDate) {
   const idsPart = adIds.length > 0 ? adIds.sort().join(',') : 'all';
   const datePart = startDate && endDate ? `${startDate}_${endDate}` : `${days}d`;
-  return `ads:metrics:${datePart}:${idsPart}`;
+  return `ads:metrics:${tenantId}:${datePart}:${idsPart}`;
 }
 
 async function getFromCache(key) {
@@ -228,7 +228,7 @@ export async function GET(request) {
     const accessToken = metaCtx.accessToken;
 
     // Redis cache — skip the 20s+ Meta API call when identical params hit recently
-    const cacheKey = buildCacheKey(days, adIds, startDate, endDate);
+    const cacheKey = buildCacheKey(ctx.tenantId, days, adIds, startDate, endDate);
     const cached = await getFromCache(cacheKey);
     if (cached) {
       if (totalsOnly) return NextResponse.json({ totals: cached.totals });

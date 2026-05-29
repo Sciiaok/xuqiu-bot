@@ -25,11 +25,14 @@ async function graphGet(path, token, params = {}) {
   return data;
 }
 
-/** 与 preview 一致的可用号码判定 —— 测试号 / RED / 未认证全过滤掉。 */
+/** 与 preview 一致的可用号码判定 —— 测试号 / RED / 未认证业务名 / 未完成号码验证 全过滤掉。 */
 function isPhoneUsable(p) {
   if (!p.verified_name) return false;
   if (p.verified_name === 'Test Number') return false;
   if (p.quality_rating === 'RED') return false;
+  // code_verification_status: VERIFIED / NOT_VERIFIED / EXPIRED
+  // 只有 VERIFIED 的号码 Meta UI 才显示 "Connected"，才能用 Cloud API 收发消息。
+  if (p.code_verification_status && p.code_verification_status !== 'VERIFIED') return false;
   return true;
 }
 
@@ -240,7 +243,7 @@ export async function POST(request) {
           // 与 preview 一致：过滤掉测试号 / RED / 未认证号码，DB 只存可用的
           if (!isPhoneUsable(p)) {
             phonesSkipped++;
-            log('info', 'phones', `跳过不可用号码 ${p.display_phone_number}（${p.verified_name || '未认证'} / ${p.quality_rating || '-'}）`);
+            log('info', 'phones', `跳过不可用号码 ${p.display_phone_number}（${p.verified_name || '未认证业务名'} / ${p.quality_rating || '-'} / ${p.code_verification_status || '-'}）`);
             continue;
           }
           await upsertPhone({
