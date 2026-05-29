@@ -45,23 +45,6 @@ const INTENT_LABEL = {
   other: '其他',
 };
 
-// 每条 lead 在 DB 里会有的 canonical 列 + 展示标签。lead_fields 里的自定义
-// 字段（通过 lead.details JSONB 回传）单独在下面那段 detailsBlock 渲染。
-const CANONICAL_FIELDS = [
-  ['brand',                          '品牌'],
-  ['product_name',                   '产品'],
-  ['car_model',                      '型号'],
-  ['sku_description',                '规格'],
-  ['qty_bucket',                     '数量'],
-  ['color_quantity',                 '颜色/数量'],
-  ['destination_country',            '目的国'],
-  ['destination_port',               '目的港'],
-  ['loading_port',                   '装运港'],
-  ['international_commercial_term',  '贸易条款'],
-  ['timeline',                       '时间线'],
-  ['buyer_type',                     '买家类型'],
-];
-
 function formatFieldValue(v) {
   if (v === null || v === undefined || v === '') return '';
   if (Array.isArray(v)) {
@@ -85,7 +68,7 @@ function buildFeishuLeadMessage(lead, handoffSummary, context = {}) {
   const intentText = intents.map((i) => INTENT_LABEL[i] || i).join(' · ') || '-';
 
   // 归属头部：租户 / 产品线 / 广告 —— 一眼定位是哪个工作区 + 哪条产品线 + 哪条广告进来的
-  const { tenantName, productLineName, adHeadline } = context;
+  const { tenantName, productLineName, productLineLeadFields, adHeadline } = context;
   const tenantLabel = tenantName || (lead.tenant_id ? `\`${lead.tenant_id}\`` : '-');
   const productLineLabel = lead.product_line
     ? (productLineName ? `${productLineName}（\`${lead.product_line}\`）` : `\`${lead.product_line}\``)
@@ -107,11 +90,16 @@ function buildFeishuLeadMessage(lead, handoffSummary, context = {}) {
     `**意图** ${intentText}`,
   ];
 
-  // Canonical 字段按非空过滤；lead.details 里超出 CANONICAL 的 key 单独展开
-  const canonicalRows = CANONICAL_FIELDS
-    .map(([key, label]) => ({ label, value: formatFieldValue(lead.details?.[key]) }))
+  // Canonical 字段由该产品线的 lead_fields 配置驱动 —— 顺序按 display_order，
+  // label 用 f.label || f.key。lead_fields 为空（产品线未完成 onboarding）时
+  // canonical 段为空，所有 details 落到"其他字段"。
+  const sortedLeadFields = Array.isArray(productLineLeadFields)
+    ? productLineLeadFields.slice().sort((a, b) => (a.display_order ?? 0) - (b.display_order ?? 0))
+    : [];
+  const canonicalRows = sortedLeadFields
+    .map((f) => ({ label: f.label || f.key, value: formatFieldValue(lead.details?.[f.key]) }))
     .filter((r) => r.value !== '');
-  const canonicalKeys = new Set(CANONICAL_FIELDS.map(([k]) => k));
+  const canonicalKeys = new Set(sortedLeadFields.map((f) => f.key));
 
   const detailsEntries = lead.details && typeof lead.details === 'object'
     ? Object.entries(lead.details).filter(([k, v]) => {
@@ -196,7 +184,7 @@ export async function sendFAQResources(waId, phoneNumberId, traceContext = {}) {
 }
 
 /**
- * 解析 Feishu 通知 header 需要的归属信息：租户名 / 产品线名 / 广告标题。
+ * 解析 Feishu 通知 header 需要的归属信息：租户名 / 产品线名+lead_fields / 广告标题。
  * 任何一项查询失败都不阻塞通知；失败的字段在 header 里降级显示。
  */
 async function resolveFeishuHeaderContext(lead, logger) {
@@ -217,12 +205,15 @@ async function resolveFeishuHeaderContext(lead, logger) {
 
     lead.product_line
       ? findProductLineById({ tenantId: lead.tenant_id, id: lead.product_line })
-          .then((row) => row?.name || null)
+          .then((row) => ({
+            name: row?.name || null,
+            leadFields: Array.isArray(row?.lead_fields) ? row.lead_fields : [],
+          }))
           .catch((err) => {
             logger.warn('routing.feishu.product_line_lookup_failed', { error: err.message });
-            return null;
+            return { name: null, leadFields: [] };
           })
-      : Promise.resolve(null),
+      : Promise.resolve({ name: null, leadFields: [] }),
 
     lead.meta_ad_id && lead.contact_id
       ? supabase
@@ -248,8 +239,13 @@ async function resolveFeishuHeaderContext(lead, logger) {
       : Promise.resolve(null),
   ];
 
-  const [tenantName, productLineName, adHeadline] = await Promise.all(tasks);
-  return { tenantName, productLineName, adHeadline };
+  const [tenantName, productLine, adHeadline] = await Promise.all(tasks);
+  return {
+    tenantName,
+    productLineName: productLine.name,
+    productLineLeadFields: productLine.leadFields,
+    adHeadline,
+  };
 }
 
 /**
