@@ -1,14 +1,13 @@
 # Schema Snapshot (auto-generated)
 
-Generated: 2026-05-29T07:04:53.765Z
+Generated: 2026-05-29T08:29:22.349Z
 
 Live snapshot of `public` schema from Supabase. **Do not edit by hand** — run `node scripts/build-index.mjs` to refresh.
 
-Tables: **51**. Listed alphabetically.
+Tables: **45**. Listed alphabetically.
 
 ## Tables
 
-- [`agents`](#agents)
 - [`ai_reports`](#ai-reports)
 - [`aigc_assets`](#aigc-assets)
 - [`audit_log`](#audit-log)
@@ -49,41 +48,11 @@ Tables: **51**. Listed alphabetically.
 - [`onboarding_progress`](#onboarding-progress)
 - [`orchestrator_messages`](#orchestrator-messages)
 - [`orchestrator_sessions`](#orchestrator-sessions)
-- [`product_assets`](#product-assets)
-- [`product_doc_operations`](#product-doc-operations)
-- [`product_documents`](#product-documents)
-- [`product_embeddings`](#product-embeddings)
 - [`product_lines`](#product-lines)
-- [`product_specs`](#product-specs)
 - [`sessions`](#sessions)
 - [`tenants`](#tenants)
 - [`users`](#users)
 - [`webhook_dumps`](#webhook-dumps)
-
-### `agents`
-
-| Column | Type | Nullable | Default |
-| --- | --- | --- | --- |
-| `id` | uuid | N | `gen_random_uuid()` |
-| `name` | text | N |  |
-| `product_line` | text | N |  |
-| `system_prompt` | text | N |  |
-| `output_schema` | jsonb | N |  |
-| `wa_phone_number_id` | text | Y |  |
-| `is_active` | boolean | N | `true` |
-| `created_at` | timestamp with time zone | Y | `now()` |
-| `updated_at` | timestamp with time zone | Y | `now()` |
-| `ad_context_map` | jsonb | N | `'{}'::jsonb` |
-| `qualification_config` | jsonb | N | `'{}'::jsonb` |
-| `display_label` | text | Y |  |
-| `tenant_id` | uuid | N | `'00000000-0000-0000-0000-000000000001':…` |
-
-**Foreign keys:**
-- `tenant_id` → `tenants.id`
-
-**Indexes:**
-- `agents_product_line_key` USING btree (product_line)
-- `idx_agents_tenant` USING btree (tenant_id)
 
 ### `ai_reports`
 
@@ -92,7 +61,6 @@ Tables: **51**. Listed alphabetically.
 | `id` | uuid | N | `gen_random_uuid()` |
 | `type` | text | N |  |
 | `status` | text | N | `'generating'::text` |
-| `agent_ids` | ARRAY | N | `'{}'::text[]` |
 | `period_start` | date | N |  |
 | `period_end` | date | N |  |
 | `content` | jsonb | Y |  |
@@ -103,6 +71,7 @@ Tables: **51**. Listed alphabetically.
 | `generated_at` | timestamp with time zone | Y |  |
 | `created_at` | timestamp with time zone | N | `now()` |
 | `tenant_id` | uuid | N | `'00000000-0000-0000-0000-000000000001':…` |
+| `product_lines` | ARRAY | N | `'{}'::text[]` |
 
 **Foreign keys:**
 - `tenant_id` → `tenants.id`
@@ -111,7 +80,7 @@ Tables: **51**. Listed alphabetically.
 - `idx_ai_reports_status` USING btree (status) WHERE (status = 'failed'::text)
 - `idx_ai_reports_tenant` USING btree (tenant_id)
 - `idx_ai_reports_type_created` USING btree (type, created_at DESC)
-- `idx_ai_reports_unique_auto` USING btree (type, period_start, period_end) WHERE ((type = ANY (ARRAY['daily'::text, 'weekly'::text, 'monthly'::text])) AND (agent_ids = '{}'::text[]))
+- `idx_ai_reports_unique_auto` USING btree (type, period_start, period_end) WHERE ((type = ANY (ARRAY['daily'::text, 'weekly'::text, 'monthly'::text])) AND (product_lines = '{}'::text[]))
 
 ### `aigc_assets`
 
@@ -314,7 +283,6 @@ Tables: **51**. Listed alphabetically.
 | `created_at` | timestamp with time zone | Y | `now()` |
 | `is_human_takeover` | boolean | N | `false` |
 | `human_takeover_at` | timestamp with time zone | Y |  |
-| `agent_id` | uuid | Y |  |
 | `wa_phone_number_id` | text | Y |  |
 | `meta_ad_id` | text | Y |  |
 | `product_line` | text | Y |  |
@@ -323,13 +291,11 @@ Tables: **51**. Listed alphabetically.
 | `faq_ended_at` | timestamp with time zone | Y |  |
 
 **Foreign keys:**
-- `agent_id` → `agents.id`
 - `contact_id` → `contacts.id`
 - `product_line` → `product_lines.id`
 - `tenant_id` → `tenants.id`
 
 **Indexes:**
-- `idx_conversations_agent` USING btree (agent_id)
 - `idx_conversations_contact_id` USING btree (contact_id)
 - `idx_conversations_human_takeover` USING btree (human_takeover_at) WHERE (is_human_takeover = true)
 - `idx_conversations_last_message` USING btree (last_message_at)
@@ -338,7 +304,7 @@ Tables: **51**. Listed alphabetically.
 - `idx_conversations_status` USING btree (status) WHERE (status = 'active'::text)
 - `idx_conversations_tenant` USING btree (tenant_id)
 - `idx_conversations_wa_phone_number_id` USING btree (wa_phone_number_id) WHERE (wa_phone_number_id IS NOT NULL)
-- `idx_unique_active_conversation` USING btree (contact_id, COALESCE(agent_id, '00000000-0000-0000-0000-000000000000'::uuid)) WHERE (status = 'active'::text)
+- `idx_unique_active_conversation` USING btree (contact_id) WHERE (status = 'active'::text)
 
 ### `conversations_with_resolved_route`
 
@@ -355,12 +321,12 @@ Tables: **51**. Listed alphabetically.
 | `created_at` | timestamp with time zone | Y |  |
 | `is_human_takeover` | boolean | Y |  |
 | `human_takeover_at` | timestamp with time zone | Y |  |
-| `agent_id` | uuid | Y |  |
 | `wa_phone_number_id` | text | Y |  |
 | `meta_ad_id` | text | Y |  |
 | `product_line` | text | Y |  |
 | `tenant_id` | uuid | Y |  |
 | `feishu_notified_at` | timestamp with time zone | Y |  |
+| `faq_ended_at` | timestamp with time zone | Y |  |
 | `resolved_route` | text | Y |  |
 
 ### `fix_knowledge`
@@ -431,7 +397,6 @@ Tables: **51**. Listed alphabetically.
 | Column | Type | Nullable | Default |
 | --- | --- | --- | --- |
 | `id` | uuid | N | `gen_random_uuid()` |
-| `agent_id` | uuid | Y |  |
 | `asset_type` | text | N |  |
 | `filename` | text | N |  |
 | `storage_path` | text | N |  |
@@ -456,12 +421,10 @@ Tables: **51**. Listed alphabetically.
 | `content_sha256` | text | Y |  |
 
 **Foreign keys:**
-- `agent_id` → `agents.id`
 - `source_doc_id` → `kb_documents.id`
 - `tenant_id` → `tenants.id`
 
 **Indexes:**
-- `idx_kb_assets_agent` USING btree (agent_id)
 - `idx_kb_assets_content_sha` USING btree (content_sha256) WHERE (content_sha256 IS NOT NULL)
 - `idx_kb_assets_scenario` USING btree (tenant_id, product_line_id, scenario)
 - `idx_kb_assets_skus` USING gin (linked_skus)
@@ -506,7 +469,6 @@ Tables: **51**. Listed alphabetically.
 | Column | Type | Nullable | Default |
 | --- | --- | --- | --- |
 | `id` | uuid | N | `gen_random_uuid()` |
-| `agent_id` | uuid | Y |  |
 | `filename` | text | N |  |
 | `storage_path` | text | Y |  |
 | `layer` | text | N |  |
@@ -530,11 +492,9 @@ Tables: **51**. Listed alphabetically.
 | `partial_reason` | text | Y |  |
 
 **Foreign keys:**
-- `agent_id` → `agents.id`
 - `tenant_id` → `tenants.id`
 
 **Indexes:**
-- `idx_kb_documents_agent` USING btree (agent_id)
 - `idx_kb_documents_layer` USING btree (layer)
 - `idx_kb_documents_status` USING btree (status)
 - `idx_kb_documents_tenant` USING btree (tenant_id)
@@ -546,7 +506,6 @@ Tables: **51**. Listed alphabetically.
 | Column | Type | Nullable | Default |
 | --- | --- | --- | --- |
 | `id` | uuid | N | `gen_random_uuid()` |
-| `agent_id` | uuid | Y |  |
 | `term_zh` | text | N |  |
 | `term_en` | text | N |  |
 | `context` | text | Y |  |
@@ -555,11 +514,9 @@ Tables: **51**. Listed alphabetically.
 | `product_line_id` | text | Y |  |
 
 **Foreign keys:**
-- `agent_id` → `agents.id`
 - `tenant_id` → `tenants.id`
 
 **Indexes:**
-- `idx_kb_glossary_agent` USING btree (agent_id)
 - `idx_kb_glossary_tenant` USING btree (tenant_id)
 - `idx_kb_glossary_tenant_pl` USING btree (tenant_id, product_line_id)
 
@@ -568,7 +525,6 @@ Tables: **51**. Listed alphabetically.
 | Column | Type | Nullable | Default |
 | --- | --- | --- | --- |
 | `id` | uuid | N | `gen_random_uuid()` |
-| `agent_id` | uuid | Y |  |
 | `query` | text | N |  |
 | `layer` | text | Y |  |
 | `gap_type` | text | Y | `'no_result'::text` |
@@ -587,11 +543,9 @@ Tables: **51**. Listed alphabetically.
 | `tool_name` | text | Y |  |
 
 **Foreign keys:**
-- `agent_id` → `agents.id`
 - `tenant_id` → `tenants.id`
 
 **Indexes:**
-- `idx_kb_knowledge_gaps_agent` USING btree (agent_id, status, last_occurred_at DESC)
 - `idx_kb_knowledge_gaps_signature` USING btree (tenant_id, product_line_id, question_signature) WHERE (question_signature IS NOT NULL)
 - `idx_kb_knowledge_gaps_tenant` USING btree (tenant_id)
 - `idx_kb_knowledge_gaps_tenant_pl` USING btree (tenant_id, product_line_id)
@@ -602,7 +556,6 @@ Tables: **51**. Listed alphabetically.
 | --- | --- | --- | --- |
 | `id` | uuid | N | `gen_random_uuid()` |
 | `doc_id` | uuid | Y |  |
-| `agent_id` | uuid | Y |  |
 | `layer` | text | N |  |
 | `content_original` | text | N |  |
 | `content_en` | text | Y |  |
@@ -622,7 +575,6 @@ Tables: **51**. Listed alphabetically.
 | `confidence` | text | N | `'extracted_high'::text` |
 
 **Foreign keys:**
-- `agent_id` → `agents.id`
 - `doc_id` → `kb_documents.id`
 - `superseded_by` → `kb_knowledge_points.id`
 - `tenant_id` → `tenants.id`
@@ -630,7 +582,6 @@ Tables: **51**. Listed alphabetically.
 **Indexes:**
 - `idx_kb_knowledge_points_tenant` USING btree (tenant_id)
 - `idx_kb_knowledge_points_tenant_pl` USING btree (tenant_id, product_line_id)
-- `idx_kb_kp_agent` USING btree (agent_id)
 - `idx_kb_kp_doc` USING btree (doc_id)
 - `idx_kb_kp_embedding_en` USING ivfflat (embedding_en vector_cosine_ops) WITH (lists='50')
 - `idx_kb_kp_embedding_original` USING ivfflat (embedding_original vector_cosine_ops) WITH (lists='50')
@@ -670,7 +621,6 @@ Tables: **51**. Listed alphabetically.
 | Column | Type | Nullable | Default |
 | --- | --- | --- | --- |
 | `id` | uuid | N | `gen_random_uuid()` |
-| `agent_id` | uuid | Y |  |
 | `doc_id` | uuid | Y |  |
 | `rule_name` | text | N |  |
 | `rule_type` | text | N |  |
@@ -686,12 +636,10 @@ Tables: **51**. Listed alphabetically.
 | `product_line_id` | text | Y |  |
 
 **Foreign keys:**
-- `agent_id` → `agents.id`
 - `doc_id` → `kb_documents.id`
 - `tenant_id` → `tenants.id`
 
 **Indexes:**
-- `idx_kb_pricing_agent` USING btree (agent_id)
 - `idx_kb_pricing_rules_tenant` USING btree (tenant_id)
 - `idx_kb_pricing_rules_tenant_pl` USING btree (tenant_id, product_line_id)
 - `idx_kb_pricing_type` USING btree (rule_type)
@@ -720,7 +668,6 @@ Tables: **51**. Listed alphabetically.
 | --- | --- | --- | --- |
 | `id` | uuid | N | `gen_random_uuid()` |
 | `doc_id` | uuid | Y |  |
-| `agent_id` | uuid | Y |  |
 | `sku` | text | Y |  |
 | `product_name` | text | Y |  |
 | `product_name_en` | text | Y |  |
@@ -742,13 +689,11 @@ Tables: **51**. Listed alphabetically.
 | `source_doc_id` | uuid | Y |  |
 
 **Foreign keys:**
-- `agent_id` → `agents.id`
 - `doc_id` → `kb_documents.id`
 - `source_doc_id` → `kb_documents.id`
 - `tenant_id` → `tenants.id`
 
 **Indexes:**
-- `idx_kb_products_agent` USING btree (agent_id)
 - `idx_kb_products_category` USING btree (category)
 - `idx_kb_products_expiry` USING btree (tenant_id, product_line_id, expiry_date)
 - `idx_kb_products_sku` USING btree (sku)
@@ -786,7 +731,6 @@ Tables: **51**. Listed alphabetically.
 | --- | --- | --- | --- |
 | `id` | uuid | N | `gen_random_uuid()` |
 | `doc_id` | uuid | Y |  |
-| `agent_id` | uuid | Y |  |
 | `origin_port` | text | Y |  |
 | `destination_port` | text | Y |  |
 | `destination_country` | text | Y |  |
@@ -804,13 +748,11 @@ Tables: **51**. Listed alphabetically.
 | `source_doc_id` | uuid | Y |  |
 
 **Foreign keys:**
-- `agent_id` → `agents.id`
 - `doc_id` → `kb_documents.id`
 - `source_doc_id` → `kb_documents.id`
 - `tenant_id` → `tenants.id`
 
 **Indexes:**
-- `idx_kb_shipping_agent` USING btree (agent_id)
 - `idx_kb_shipping_country` USING btree (destination_country)
 - `idx_kb_shipping_routes_expiry` USING btree (tenant_id, product_line_id, expiry_date)
 - `idx_kb_shipping_routes_tenant` USING btree (tenant_id)
@@ -842,7 +784,6 @@ Tables: **51**. Listed alphabetically.
 | Column | Type | Nullable | Default |
 | --- | --- | --- | --- |
 | `id` | uuid | N | `gen_random_uuid()` |
-| `agent_id` | uuid | Y |  |
 | `title` | text | Y |  |
 | `message_count` | integer | Y | `0` |
 | `created_at` | timestamp with time zone | Y | `now()` |
@@ -851,11 +792,9 @@ Tables: **51**. Listed alphabetically.
 | `product_line_id` | text | Y |  |
 
 **Foreign keys:**
-- `agent_id` → `agents.id`
 - `tenant_id` → `tenants.id`
 
 **Indexes:**
-- `idx_kb_test_sessions_agent` USING btree (agent_id, updated_at DESC)
 - `idx_kb_test_sessions_tenant` USING btree (tenant_id)
 - `idx_kb_test_sessions_tenant_pl` USING btree (tenant_id, product_line_id)
 
@@ -919,7 +858,6 @@ Tables: **51**. Listed alphabetically.
 | `business_value` | text | Y | `'LOW'::text` |
 | `conversation_intent_summary` | text | Y |  |
 | `company_name` | text | Y |  |
-| `agent_id` | uuid | Y |  |
 | `product_name` | text | Y |  |
 | `sku_description` | text | Y |  |
 | `details` | jsonb | Y | `'{}'::jsonb` |
@@ -928,14 +866,12 @@ Tables: **51**. Listed alphabetically.
 | `tenant_id` | uuid | N | `'00000000-0000-0000-0000-000000000001':…` |
 
 **Foreign keys:**
-- `agent_id` → `agents.id`
 - `contact_id` → `contacts.id`
 - `conversation_id` → `conversations.id`
 - `product_line` → `product_lines.id`
 - `tenant_id` → `tenants.id`
 
 **Indexes:**
-- `idx_leads_agent` USING btree (agent_id)
 - `idx_leads_approved` USING btree (approved) WHERE (approved = true)
 - `idx_leads_approved_at` USING btree (approved_at)
 - `idx_leads_business_value` USING btree (business_value)
@@ -1198,101 +1134,6 @@ Tables: **51**. Listed alphabetically.
 - `idx_orchestrator_sessions_status` USING btree (status) WHERE (status = ANY (ARRAY['running'::text, 'awaiting_approval'::text]))
 - `idx_orchestrator_sessions_tenant` USING btree (tenant_id)
 
-### `product_assets`
-
-| Column | Type | Nullable | Default |
-| --- | --- | --- | --- |
-| `id` | uuid | N | `gen_random_uuid()` |
-| `agent_id` | uuid | N |  |
-| `model` | text | N |  |
-| `filename` | text | N |  |
-| `storage_path` | text | N |  |
-| `content_type` | text | N |  |
-| `created_at` | timestamp with time zone | Y | `now()` |
-| `tenant_id` | uuid | N | `'00000000-0000-0000-0000-000000000001':…` |
-
-**Foreign keys:**
-- `agent_id` → `agents.id`
-- `tenant_id` → `tenants.id`
-
-**Indexes:**
-- `idx_product_assets_agent` USING btree (agent_id)
-- `idx_product_assets_agent_model` USING btree (agent_id, model)
-- `idx_product_assets_model` USING btree (model)
-- `idx_product_assets_tenant` USING btree (tenant_id)
-
-### `product_doc_operations`
-
-| Column | Type | Nullable | Default |
-| --- | --- | --- | --- |
-| `id` | uuid | N | `gen_random_uuid()` |
-| `document_id` | uuid | Y |  |
-| `agent_id` | uuid | N |  |
-| `operation` | text | N |  |
-| `operator` | text | Y |  |
-| `details` | jsonb | Y | `'{}'::jsonb` |
-| `created_at` | timestamp with time zone | Y | `now()` |
-| `tenant_id` | uuid | N | `'00000000-0000-0000-0000-000000000001':…` |
-
-**Foreign keys:**
-- `agent_id` → `agents.id`
-- `document_id` → `product_documents.id`
-- `tenant_id` → `tenants.id`
-
-**Indexes:**
-- `idx_product_doc_operations_tenant` USING btree (tenant_id)
-- `idx_product_doc_ops_agent` USING btree (agent_id)
-- `idx_product_doc_ops_created` USING btree (created_at DESC)
-
-### `product_documents`
-
-| Column | Type | Nullable | Default |
-| --- | --- | --- | --- |
-| `id` | uuid | N | `gen_random_uuid()` |
-| `agent_id` | uuid | N |  |
-| `filename` | text | N |  |
-| `storage_path` | text | N |  |
-| `doc_type` | text | N | `'general'::text` |
-| `status` | text | N | `'pending'::text` |
-| `error_message` | text | Y |  |
-| `page_count` | integer | Y |  |
-| `created_at` | timestamp with time zone | Y | `now()` |
-| `updated_at` | timestamp with time zone | Y | `now()` |
-| `tenant_id` | uuid | N | `'00000000-0000-0000-0000-000000000001':…` |
-
-**Foreign keys:**
-- `agent_id` → `agents.id`
-- `tenant_id` → `tenants.id`
-
-**Indexes:**
-- `idx_product_documents_agent` USING btree (agent_id)
-- `idx_product_documents_status` USING btree (status)
-- `idx_product_documents_tenant` USING btree (tenant_id)
-
-### `product_embeddings`
-
-| Column | Type | Nullable | Default |
-| --- | --- | --- | --- |
-| `id` | uuid | N | `gen_random_uuid()` |
-| `document_id` | uuid | N |  |
-| `agent_id` | uuid | N |  |
-| `chunk_text` | text | N |  |
-| `chunk_index` | integer | N |  |
-| `embedding` | vector | N |  |
-| `metadata` | jsonb | Y | `'{}'::jsonb` |
-| `created_at` | timestamp with time zone | Y | `now()` |
-| `tenant_id` | uuid | N | `'00000000-0000-0000-0000-000000000001':…` |
-
-**Foreign keys:**
-- `agent_id` → `agents.id`
-- `document_id` → `product_documents.id`
-- `tenant_id` → `tenants.id`
-
-**Indexes:**
-- `idx_product_embeddings_agent` USING btree (agent_id)
-- `idx_product_embeddings_embedding` USING ivfflat (embedding vector_cosine_ops) WITH (lists='100')
-- `idx_product_embeddings_tenant` USING btree (tenant_id)
-
 ### `product_lines`
 
 | Column | Type | Nullable | Default |
@@ -1318,32 +1159,6 @@ Tables: **51**. Listed alphabetically.
 - `idx_product_lines_tenant` USING btree (tenant_id)
 - `idx_product_lines_wa_phone` USING btree (wa_phone_number_id) WHERE (wa_phone_number_id IS NOT NULL)
 - `product_lines_wa_phone_number_id_key` USING btree (wa_phone_number_id)
-
-### `product_specs`
-
-| Column | Type | Nullable | Default |
-| --- | --- | --- | --- |
-| `id` | uuid | N | `gen_random_uuid()` |
-| `document_id` | uuid | N |  |
-| `agent_id` | uuid | N |  |
-| `model` | text | N |  |
-| `brand` | text | Y |  |
-| `product_line` | text | N |  |
-| `specs` | jsonb | N | `'{}'::jsonb` |
-| `created_at` | timestamp with time zone | Y | `now()` |
-| `tenant_id` | uuid | N | `'00000000-0000-0000-0000-000000000001':…` |
-
-**Foreign keys:**
-- `agent_id` → `agents.id`
-- `document_id` → `product_documents.id`
-- `tenant_id` → `tenants.id`
-
-**Indexes:**
-- `idx_product_specs_agent` USING btree (agent_id)
-- `idx_product_specs_model` USING btree (model)
-- `idx_product_specs_product_line` USING btree (product_line)
-- `idx_product_specs_specs` USING gin (specs)
-- `idx_product_specs_tenant` USING btree (tenant_id)
 
 ### `sessions`
 

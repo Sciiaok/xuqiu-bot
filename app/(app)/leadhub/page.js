@@ -89,6 +89,12 @@ const DATE_PRESETS = [
   { key: 'custom', label: '自定义' },
 ];
 
+// WhatsApp Cloud API 硬上限。超过就 400，前端拦截避免无谓往返。
+//   text body: 4096
+//   media caption: 1024
+const WA_TEXT_MAX = 4096;
+const WA_CAPTION_MAX = 1024;
+
 /* ── Main Page ─────────────────────────────────────────── */
 // Pure helpers + small atoms (Avatar / RouteTag / KpiStrip / DaySeparator) moved
 // to ./page-helpers; the InquiryCard and ChatMessage sub-components moved to
@@ -1345,24 +1351,46 @@ export default function LeadHubPage() {
                         >
                           附件
                         </button>
-                        <input
-                          className={s.chatInput}
-                          placeholder={isHumanTakeover ? '输入消息，回车发送' : '点击右上「接管对话」开始输入'}
-                          disabled={!isHumanTakeover || sending}
-                          value={msgText}
-                          onChange={e => setMsgText(e.target.value)}
-                          onKeyDown={e => {
-                            if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSendMessage(); }
-                          }}
-                        />
-                        <Button
-                          variant="primary"
-                          size="sm"
-                          onClick={handleSendMessage}
-                          disabled={!isHumanTakeover || (!msgText.trim() && !selectedFile) || sending}
-                        >
-                          {sending ? '发送中…' : '发送'}
-                        </Button>
+                        {(() => {
+                          // 有附件 → caption 1024；纯文本 → text 4096
+                          const limit = selectedFile ? WA_CAPTION_MAX : WA_TEXT_MAX;
+                          const len = msgText.length;
+                          const overLimit = len > limit;
+                          const showCounter = len > limit * 0.8; // 80% 起显示，避免日常打扰
+                          return (
+                            <>
+                              <input
+                                className={s.chatInput}
+                                placeholder={isHumanTakeover ? '输入消息，回车发送' : '点击右上「接管对话」开始输入'}
+                                disabled={!isHumanTakeover || sending}
+                                value={msgText}
+                                onChange={e => setMsgText(e.target.value)}
+                                onKeyDown={e => {
+                                  if (e.key === 'Enter' && !e.shiftKey) {
+                                    e.preventDefault();
+                                    if (!overLimit) handleSendMessage();
+                                  }
+                                }}
+                              />
+                              {showCounter && (
+                                <span
+                                  className={overLimit ? s.charCounterOver : s.charCounter}
+                                  title={overLimit ? `WhatsApp 单条上限 ${limit} 字符，请精简或拆分` : ''}
+                                >
+                                  {len}/{limit}
+                                </span>
+                              )}
+                              <Button
+                                variant="primary"
+                                size="sm"
+                                onClick={handleSendMessage}
+                                disabled={!isHumanTakeover || (!msgText.trim() && !selectedFile) || sending || overLimit}
+                              >
+                                {sending ? '发送中…' : '发送'}
+                              </Button>
+                            </>
+                          );
+                        })()}
                       </div>
                     </div>
                   </div>

@@ -17,7 +17,12 @@ import {
   refreshTakeoverIfActive,
   updateConversationOnMessage,
 } from '../../../lib/repositories/conversation.repository.js';
-import { createMessage, findMessageByWamid } from '../../../lib/repositories/message.repository.js';
+import {
+  createMessage,
+  findMessageByWamid,
+  findMessageByWamidGlobal,
+  updateMessageDelivery,
+} from '../../../lib/repositories/message.repository.js';
 import { processConversationQueue } from '../../../lib/queue-processor.js';
 import { updateContactMetadata } from '../../../lib/repositories/contact.repository.js';
 import { resolveTenantByPhoneNumberId } from '../../../lib/tenant-context.js';
@@ -202,6 +207,72 @@ function buildEchoMessageContent(echo) {
 }
 
 /**
+ * Status webhook：Meta 把 outbound 的链路状态推回来（sent/delivered/read/failed）。
+ * 按 wamid 找到对应 messages 行，往 metadata.delivery 合并新状态。
+ *
+ * 状态升级规则（防止乱序覆盖）：
+ *   queued(0) → sent(1) → delivered(2) → read(3)
+ *   failed(99)：终态，一旦写入不再被任何后续事件覆盖
+ *   同级或更低级事件直接丢弃（Meta 偶发乱序 / 重投）
+ */
+const DELIVERY_RANK = { queued: 0, sent: 1, delivered: 2, read: 3, failed: 99 };
+
+function shouldUpgradeDelivery(prevStatus, nextStatus) {
+  if (prevStatus === 'failed') return false;
+  if (nextStatus === 'failed') return true;
+  const prev = DELIVERY_RANK[prevStatus] ?? 0;
+  const next = DELIVERY_RANK[nextStatus] ?? 0;
+  return next > prev;
+}
+
+async function processMessageStatuses({ statuses, phoneNumberId, logger }) {
+  const tenantId = await resolveTenantByPhoneNumberId(phoneNumberId);
+  if (!tenantId) {
+    logger.warn('webhook.status.unknown_phone_number', { phone_number_id: phoneNumberId });
+    return;
+  }
+  for (const ev of statuses) {
+    const wamid = ev.id;
+    const status = ev.status;
+    if (!wamid || !status) {
+      logger.warn('webhook.status.malformed', { has_id: Boolean(wamid), has_status: Boolean(status) });
+      continue;
+    }
+    try {
+      const row = await findMessageByWamidGlobal(wamid);
+      if (!row) {
+        // 常见原因：echo-only 场景下我们记下的 wamid 与 Meta 推回的不一致；或
+        // 消息是在改造前发出的（没存 wamid）。info 级别，不告警。
+        logger.info('webhook.status.message_not_found', { wamid, status });
+        continue;
+      }
+      const prevStatus = row.metadata?.delivery?.status || null;
+      if (!shouldUpgradeDelivery(prevStatus, status)) {
+        logger.info('webhook.status.skipped', { wamid, prev: prevStatus, next: status });
+        continue;
+      }
+      const ts = ev.timestamp
+        ? new Date(Number(ev.timestamp) * 1000).toISOString()
+        : new Date().toISOString();
+      const patch = { status, [`${status}_at`]: ts };
+      if (status === 'failed' && Array.isArray(ev.errors) && ev.errors.length > 0) {
+        const e = ev.errors[0];
+        patch.error = {
+          meta_code: e.code ?? null,
+          meta_subcode: e.error_subcode ?? null,
+          meta_message: e.title || e.message || null,
+          error_data: e.error_data || null,
+        };
+      }
+      await updateMessageDelivery(row.id, patch);
+      logger.info('webhook.status.updated', { wamid, prev: prevStatus, next: status });
+    } catch (err) {
+      logger.error('webhook.status.failed', { wamid, status, error: err.message });
+    }
+  }
+}
+
+/**
  * Persist coexistence echoes as operator messages and mute AI.
  *
  * Echo flow (Meta → here):
@@ -357,6 +428,16 @@ export async function POST(request) {
       }
 
       const phoneNumberId = change.metadata?.phone_number_id || null;
+
+      // === Delivery status path ===
+      // `value.statuses` (field=messages) 是 outbound 链路状态：
+      // sent / delivered / read / failed。按 wamid 回写到对应 messages
+      // 的 metadata.delivery，让操作员能看到 ✓ / ✓✓ / 红✗ 等角标。
+      const statusEvents = Array.isArray(change.statuses) ? change.statuses : [];
+      if (statusEvents.length > 0) {
+        await processMessageStatuses({ statuses: statusEvents, phoneNumberId, logger });
+        return;
+      }
 
       // === Coexistence echo path ===
       // `value.message_echoes` (field=smb_message_echoes) is delivered when the

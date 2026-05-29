@@ -25,6 +25,13 @@ import { getSupabaseAdmin } from '../lib/supabase-admin.js';
 
 const TRANSLATION_MODEL = MODELS.HAIKU;
 const BATCH_SIZE = 20;
+const MAX_ATTEMPTS = 3;
+// 输出 token 预算 = sum(input chars) × OUTPUT_TOKEN_RATIO，clamp 到
+// [MIN, MAX]。中→中翻译 1 字符 ≈ 1.5-2 token，×2 留余量；Haiku 4.5 单次
+// 最多 32K 输出，上限取 16K 留缓冲。MIN 800 维持原行为兜底。
+const OUTPUT_TOKEN_RATIO = 2;
+const MIN_OUTPUT_TOKENS = 800;
+const MAX_OUTPUT_TOKENS = 16000;
 
 const SYSTEM_PROMPT = `你是专业的客服对话翻译助手。把每条消息翻译成简体中文。
 要求：
@@ -64,6 +71,8 @@ export function isChineseText(text) {
 export function shouldSkipTranslation(messageRow) {
   if (!messageRow) return true;
   if (messageRow.metadata?.translation?.zh) return true; // 缓存命中
+  // 连续失败 N 次后永久放弃，避免每次开会话都白烧 LLM
+  if ((messageRow.metadata?.translation?.attempts || 0) >= MAX_ATTEMPTS) return true;
   const content = (messageRow.content || '').trim();
   if (!content) return true;
   // 附件 placeholder（send-message 路径写成 "[image: foo.jpg]" / "[image: foo.jpg] caption"）
@@ -90,10 +99,16 @@ async function callTranslateLLM({ messages, tenantId, productLine, sessionId }) 
 输入：
 ${JSON.stringify(items, null, 2)}`;
 
+  const totalChars = messages.reduce((sum, m) => sum + (m.content?.length || 0), 0);
+  const maxTokens = Math.min(
+    MAX_OUTPUT_TOKENS,
+    Math.max(MIN_OUTPUT_TOKENS, totalChars * OUTPUT_TOKEN_RATIO),
+  );
+
   const response = await openrouter.messages.create(
     {
       models: [TRANSLATION_MODEL],
-      max_tokens: Math.max(800, items.length * 220),
+      max_tokens: maxTokens,
       messages: [
         { role: 'system', content: SYSTEM_PROMPT },
         { role: 'user', content: userPrompt },
@@ -153,7 +168,6 @@ async function persistTranslations({ results }) {
   const admin = getSupabaseAdmin();
   const now = new Date().toISOString();
   for (const r of results) {
-    if (!r.zh) continue;
     const { data: row, error: readErr } = await admin
       .from('messages')
       .select('metadata')
@@ -163,13 +177,25 @@ async function persistTranslations({ results }) {
       console.warn('[translate] read failed', { id: r.id, err: readErr?.message });
       continue;
     }
-    const nextMeta = {
-      ...(row.metadata || {}),
-      translation: {
+    const prevTranslation = row.metadata?.translation || {};
+    let nextTranslation;
+    if (r.zh) {
+      nextTranslation = {
         zh: r.zh,
         translated_at: now,
         model: TRANSLATION_MODEL,
-      },
+      };
+    } else {
+      // 失败也落 metadata：累计 attempts，shouldSkipTranslation 据此最终拦截
+      nextTranslation = {
+        ...prevTranslation,
+        failed_at: now,
+        attempts: (prevTranslation.attempts || 0) + 1,
+      };
+    }
+    const nextMeta = {
+      ...(row.metadata || {}),
+      translation: nextTranslation,
     };
     const { error: updErr } = await admin
       .from('messages')

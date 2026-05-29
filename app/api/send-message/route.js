@@ -5,6 +5,11 @@ import { getTenantContext } from '../../../lib/tenant-context.js';
 import { addOperatorMessage, getSessionByConversationId } from '../../../lib/session.js';
 import { isHumanTakeover } from '../../../lib/repositories/conversation.repository.js';
 
+// WhatsApp Cloud API 硬上限——超出 Meta 直接 400。前端已经拦了，这里
+// 是兜底，避免 API 被直连调用时仍能命中限制并给出可读错误。
+const WA_TEXT_MAX = 4096;
+const WA_CAPTION_MAX = 1024;
+
 export async function POST(request) {
   try {
     const ctx = await getTenantContext();
@@ -47,6 +52,12 @@ export async function POST(request) {
         );
       }
       mediaType = validation.waType;
+      if (caption && caption.length > WA_CAPTION_MAX) {
+        return NextResponse.json(
+          { error: 'Bad Request', message: `caption 长度 ${caption.length} 超出 WhatsApp 上限 ${WA_CAPTION_MAX} 字符` },
+          { status: 400 }
+        );
+      }
     } else {
       // Text message (existing behavior)
       const body = await request.json();
@@ -67,12 +78,20 @@ export async function POST(request) {
           { status: 400 }
         );
       }
+
+      if (message.length > WA_TEXT_MAX) {
+        return NextResponse.json(
+          { error: 'Bad Request', message: `消息长度 ${message.length} 超出 WhatsApp 上限 ${WA_TEXT_MAX} 字符` },
+          { status: 400 }
+        );
+      }
     }
 
     let whatsappResponse;
     let messageContent;
     let extraMetadata = {};
     let conversationPhoneNumberId = null;
+    let sendError = null;
 
     // 必须有 conversationId —— 上面的 body 解析已经强制要求，这里再次验证保
     // 险，并把 session 挪到这里作为唯一加载点（前后逻辑都依赖 session）。
@@ -136,29 +155,19 @@ export async function POST(request) {
       kind: mediaType ? 'media' : 'text',
     });
 
+    // media 内容字符串与 storage 上传不依赖 Meta 调用结果，先算好——失败
+    // 路径也要把附件落库，否则用户看不到自己刚才尝试发了什么。
     if (mediaType) {
-      whatsappResponse = await sendMedia(
-        waId,
-        mediaType,
-        fileBuffer,
-        mimeType,
-        filename,
-        caption,
-        conversationPhoneNumberId
-      );
       messageContent = caption
         ? `[${mediaType}: ${filename}] ${caption}`
         : `[${mediaType}: ${filename}]`;
-
-      // Upload to Supabase Storage for display in chat
       try {
         const ext = filename.slice(filename.lastIndexOf('.')) || '';
         const safeName = `${Date.now()}_${Math.random().toString(36).slice(2, 8)}${ext}`;
         const storagePath = `${waId}/${safeName}`;
-        const { data: uploadData, error: uploadError } = await supabase.storage
+        const { error: uploadError } = await supabase.storage
           .from('chat-media')
           .upload(storagePath, fileBuffer, { contentType: mimeType, upsert: false });
-
         if (!uploadError) {
           const { data: { publicUrl } } = supabase.storage
             .from('chat-media')
@@ -169,16 +178,56 @@ export async function POST(request) {
         console.warn('Storage upload failed, media will show as placeholder:', storageErr.message);
       }
     } else {
-      whatsappResponse = await sendMessage(waId, message, conversationPhoneNumberId);
       messageContent = message;
     }
 
-    // Coexistence: stash wamid so the echo-webhook handler can dedupe against
-    // this same outbound message. `messages.metadata.wa_message_id` is the key
-    // looked up in `findMessageByWamid` before the echo is inserted.
-    const outboundWamid = whatsappResponse?.messages?.[0]?.id || null;
-    if (outboundWamid) {
-      extraMetadata = { ...extraMetadata, wa_message_id: outboundWamid };
+    // Meta 调用——成功落 delivery.status='sent' + wamid；失败落
+    // delivery.status='failed' + 结构化 error。两条路径都会走 addOperatorMessage
+    // 落库，确保操作员能在会话里看到「发出去过 / 失败原因」。
+    try {
+      if (mediaType) {
+        whatsappResponse = await sendMedia(
+          waId,
+          mediaType,
+          fileBuffer,
+          mimeType,
+          filename,
+          caption,
+          conversationPhoneNumberId
+        );
+      } else {
+        whatsappResponse = await sendMessage(waId, message, conversationPhoneNumberId);
+      }
+    } catch (err) {
+      sendError = err;
+      console.error('[send-message] meta call failed', {
+        conversation_id: conversationId,
+        kind: mediaType ? 'media' : 'text',
+        meta_status: err.metaStatus || null,
+        meta_code: err.metaCode || null,
+        meta_message: err.metaMessage || err.message,
+      });
+    }
+
+    const nowIso = new Date().toISOString();
+    if (sendError) {
+      extraMetadata.delivery = {
+        status: 'failed',
+        failed_at: nowIso,
+        error: {
+          http_status: sendError.metaStatus || null,
+          meta_code: sendError.metaCode || null,
+          meta_subcode: sendError.metaSubcode || null,
+          meta_message: sendError.metaMessage || sendError.message,
+          trace_id: sendError.metaTraceId || null,
+        },
+      };
+    } else {
+      // Coexistence: stash wamid so the echo-webhook handler can dedupe and so
+      // the statuses-webhook handler can find this row to upgrade delivery.
+      const outboundWamid = whatsappResponse?.messages?.[0]?.id || null;
+      if (outboundWamid) extraMetadata.wa_message_id = outboundWamid;
+      extraMetadata.delivery = { status: 'sent', sent_at: nowIso };
     }
 
     const updatedSession = await addOperatorMessage(
@@ -187,6 +236,21 @@ export async function POST(request) {
       ctx.user.email || 'operator',
       extraMetadata
     );
+
+    if (sendError) {
+      return NextResponse.json(
+        {
+          error: 'WhatsApp Error',
+          message: sendError.metaMessage || sendError.message,
+          data: {
+            waId,
+            conversationId: updatedSession.conversation_id,
+            delivery: extraMetadata.delivery,
+          },
+        },
+        { status: 502 }
+      );
+    }
 
     console.log(
       `Operator ${mediaType || 'text'} message sent to ${waId} (conversation=${updatedSession.conversation_id}) by ${ctx.user.email}`
@@ -203,15 +267,9 @@ export async function POST(request) {
       },
     });
   } catch (error) {
+    // Meta 调用失败已经在内联 try/catch 里处理（落库 + 502）。这里只兜底
+    // 上下游异常：tenant context、DB 写入失败、storage 异常等。
     console.error('Error sending message:', error);
-
-    if (error.message?.includes('WhatsApp')) {
-      return NextResponse.json(
-        { error: 'WhatsApp Error', message: error.message },
-        { status: 502 }
-      );
-    }
-
     return NextResponse.json(
       { error: 'Internal Server Error', message: 'Failed to send message' },
       { status: 500 }

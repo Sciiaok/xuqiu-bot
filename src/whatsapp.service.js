@@ -34,6 +34,20 @@ export function invalidateTokenCache(phoneNumberId) {
   else tokenCache.clear();
 }
 
+// Meta Graph 错误形如 { error: { code, message, error_subcode, fbtrace_id, ... } }
+// 上游 send-message 路由用这些字段把失败原因落 messages.metadata.delivery.error，
+// 不再用正则去硬撕 message 字符串。
+function makeMetaError(label, httpStatus, errorData) {
+  const inner = errorData?.error || {};
+  const err = new Error(`${label} - ${JSON.stringify(errorData)}`);
+  err.metaStatus = httpStatus;
+  err.metaCode = inner.code ?? null;
+  err.metaSubcode = inner.error_subcode ?? null;
+  err.metaMessage = inner.message ?? null;
+  err.metaTraceId = inner.fbtrace_id ?? null;
+  return err;
+}
+
 /**
  * Send a message to a WhatsApp user
  * @param {string} waId - WhatsApp user ID
@@ -67,7 +81,7 @@ export async function sendMessage(waId, messageText, phoneNumberId) {
     if (!response.ok) {
       const errorData = await response.json();
       console.error('WhatsApp API error:', errorData);
-      throw new Error(`WhatsApp API error: ${response.status} - ${JSON.stringify(errorData)}`);
+      throw makeMetaError(`WhatsApp API error: ${response.status}`, response.status, errorData);
     }
 
     const data = await response.json();
@@ -176,7 +190,7 @@ export async function sendMedia(waId, type, fileBuffer, mimeType, filename, capt
   if (!uploadResponse.ok) {
     const errorData = await uploadResponse.json();
     console.error('WhatsApp media upload error:', errorData);
-    throw new Error(`WhatsApp media upload error: ${uploadResponse.status} - ${JSON.stringify(errorData)}`);
+    throw makeMetaError(`WhatsApp media upload error: ${uploadResponse.status}`, uploadResponse.status, errorData);
   }
 
   const { id: mediaId } = await uploadResponse.json();
@@ -205,7 +219,7 @@ export async function sendMedia(waId, type, fileBuffer, mimeType, filename, capt
   if (!sendResponse.ok) {
     const errorData = await sendResponse.json();
     console.error('WhatsApp media send error:', errorData);
-    throw new Error(`WhatsApp media send error: ${sendResponse.status} - ${JSON.stringify(errorData)}`);
+    throw makeMetaError(`WhatsApp media send error: ${sendResponse.status}`, sendResponse.status, errorData);
   }
 
   const data = await sendResponse.json();

@@ -60,6 +60,11 @@ export default function ChatMessage({ msg, contactName }) {
   // 附件本身无可翻文本 —— shouldSkipTranslation 也会跳过，但前端再保险一道。
   const translation = !isAttachment ? msg.metadata?.translation?.zh : null;
 
+  // outbound 链路状态。inbound 永远没有（客户消息不发回执给我们）。
+  // operator_app 路径走 WA app，wamid 是别人发的，我们也不追，跳过。
+  const delivery = dir === 'out' && !isOperatorApp ? msg.metadata?.delivery : null;
+  const deliveryBadge = delivery ? renderDeliveryBadge(delivery) : null;
+
   return (
     <div className={`${s.msgRow} ${dir === 'out' ? s.msgOut : s.msgIn} ${isOperator && !isIn ? s.msgOperator : ''}`}>
       {dir === 'in' && <div className={s.msgAvatar}>{avatarLabel}</div>}
@@ -77,9 +82,43 @@ export default function ChatMessage({ msg, contactName }) {
           <span className={`${s.msgSenderInline} ${senderClass}`}>{senderName}</span>
           <span className={s.msgFootDot}>·</span>
           <span className={s.msgTs} title={ts}>{shortTs}</span>
+          {deliveryBadge && (
+            <>
+              <span className={s.msgFootDot}>·</span>
+              {deliveryBadge}
+            </>
+          )}
         </div>
       </div>
       {dir === 'out' && <div className={`${s.msgAvatar} ${avatarClass}`}>{avatarLabel}</div>}
     </div>
   );
+}
+
+// 链路状态映射到 WA 风格小角标：
+//   sent      → ✓     灰色（"已提交至 Meta"）
+//   delivered → ✓✓    灰色（"已送达客户设备"）
+//   read      → ✓✓    蓝色（"客户已读"，前提是客户打开了已读回执）
+//   failed    → ✗     红色（hover 看错误详情）
+function renderDeliveryBadge(delivery) {
+  const status = delivery.status;
+  if (status === 'failed') {
+    const err = delivery.error || {};
+    const title = [
+      err.meta_message || '发送失败',
+      err.meta_code ? `Meta code: ${err.meta_code}` : null,
+      delivery.failed_at ? `时间: ${new Date(delivery.failed_at).toLocaleString('zh-CN', { hour12: false })}` : null,
+    ].filter(Boolean).join('\n');
+    return <span className={`${s.msgDelivery} ${s.msgDeliveryFailed}`} title={title}>✗ 发送失败</span>;
+  }
+  if (status === 'read') {
+    return <span className={`${s.msgDelivery} ${s.msgDeliveryRead}`} title="客户已读">✓✓</span>;
+  }
+  if (status === 'delivered') {
+    return <span className={s.msgDelivery} title="已送达">✓✓</span>;
+  }
+  if (status === 'sent') {
+    return <span className={s.msgDelivery} title="已发送">✓</span>;
+  }
+  return null;
 }
