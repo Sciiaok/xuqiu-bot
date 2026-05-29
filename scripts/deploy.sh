@@ -44,6 +44,9 @@ tar -czvf $TMP_FILE \
     --exclude='.next' \
     --exclude='.git' \
     --exclude='node_modules' \
+    --exclude='.claude' \
+    --exclude='.playwright-mcp' \
+    --exclude='./*.png' \
     --exclude='scripts/deploy.sh' \
     --exclude='scripts/migrate-sessions-to-v2.js' \
     .
