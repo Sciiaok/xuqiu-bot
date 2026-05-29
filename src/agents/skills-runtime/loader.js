@@ -63,7 +63,10 @@ function loadFromRow(name, row) {
   for (const key of keys) {
     const content = refs[key];
     references.set(key, content);
-    hash.update('\0').update(key).update('\0').update(content);
+    // Keep hash input consistent with the disk path's `rel` (which includes
+    // the `.md` extension) so the same content produces the same sha
+    // regardless of whether the loader read DB or fell back to disk.
+    hash.update('\0').update(key + '.md').update('\0').update(content);
   }
   return {
     metadata,
