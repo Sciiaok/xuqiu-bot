@@ -34,9 +34,10 @@ export async function GET(request) {
  *
  * Resolution:
  *   1. Validate phone_number_id is in this user's accessible WA list.
- *   2. If a (tenant, phone_number_id) row already exists:
- *        active   → return as-is (idempotent).
- *        inactive → reactivate and return.
+ *   2. Look the row up by its deterministic slug `wa_${phone_number_id}` (NOT
+ *      by wa_phone_number_id — a prior Meta disconnect nulls that column out
+ *      while keeping the row + its KB/config). If found:
+ *        → reactivate and (re)bind wa_phone_number_id, then return.
  *   3. Otherwise insert a new row with slug = `wa_${phone_number_id}` and
  *      name = verified_name (fallback display_number / phone_number_id).
  */
@@ -59,27 +60,32 @@ export async function POST(request) {
       );
     }
 
-    // Existing-row lookup is tenant-scoped: one (tenant, phone_number_id) is
-    // unique by DB constraint, but we want to read both active and inactive.
+    // Look up by the deterministic slug, not by wa_phone_number_id: disconnect
+    // nulls wa_phone_number_id but keeps the row (id stays `wa_<phone>`), so on
+    // reconnect the row only matches by slug. Matching by the (now-null) phone
+    // column would miss it and re-insert the same slug → PK 23505.
+    const slug = `wa_${phone_number_id}`;
     const { data: existing, error: lookupErr } = await supabase
       .from('product_lines')
       .select('*')
       .eq('tenant_id', ctx.tenantId)
-      .eq('wa_phone_number_id', phone_number_id)
+      .eq('id', slug)
       .maybeSingle();
     if (lookupErr) throw lookupErr;
 
     let line;
     if (existing) {
-      line = existing.is_active
-        ? existing
-        : await updateProductLine({
+      // Reactivate + (re)bind the phone if it drifted (disconnect nulls it).
+      const needsRebind =
+        !existing.is_active || existing.wa_phone_number_id !== phone_number_id;
+      line = needsRebind
+        ? await updateProductLine({
             tenantId: ctx.tenantId,
-            id: existing.id,
-            updates: { is_active: true },
-          });
+            id: slug,
+            updates: { is_active: true, wa_phone_number_id: phone_number_id },
+          })
+        : existing;
     } else {
-      const slug = `wa_${phone_number_id}`;
       const name = number.verified_name || number.display_number || phone_number_id;
       line = await createProductLine({ tenantId: ctx.tenantId, id: slug, name });
       // Bind the number on the same row so subsequent webhooks route correctly.
