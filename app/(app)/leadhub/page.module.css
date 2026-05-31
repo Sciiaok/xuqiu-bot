@@ -1013,6 +1013,27 @@
   font-weight: 600;
 }
 
+/* 失败原因原文块：摊在气泡下方，让操作员直接读到 Meta 的拒收说明而不必 hover。
+   红字 + 浅红底，跟 ✗ 角标同色系；max-width 收在气泡内，长句自动换行。 */
+.msgDeliveryError {
+  margin-top: 2px;
+  padding: 5px 9px;
+  max-width: 100%;
+  font-size: 11px;
+  line-height: 1.45;
+  color: #c23b3b;
+  background: rgba(217, 74, 74, 0.08);
+  border: 1px solid rgba(217, 74, 74, 0.22);
+  border-radius: 8px;
+  word-break: break-word;
+}
+.msgDeliveryErrorCode {
+  margin-left: 6px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  opacity: 0.7;
+}
+
 /* 字符计数：80% 起出现，超限变红。font-mono + tabular-nums 保证宽度稳定，
    避免边打字边抖动。 */
 .charCounter,

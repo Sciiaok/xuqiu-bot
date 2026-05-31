@@ -64,6 +64,7 @@ export default function ChatMessage({ msg, contactName }) {
   // operator_app 路径走 WA app，wamid 是别人发的，我们也不追，跳过。
   const delivery = dir === 'out' && !isOperatorApp ? msg.metadata?.delivery : null;
   const deliveryBadge = delivery ? renderDeliveryBadge(delivery) : null;
+  const deliveryFailure = delivery?.status === 'failed' ? extractDeliveryFailure(delivery) : null;
 
   return (
     <div className={`${s.msgRow} ${dir === 'out' ? s.msgOut : s.msgIn} ${isOperator && !isIn ? s.msgOperator : ''}`}>
@@ -89,6 +90,14 @@ export default function ChatMessage({ msg, contactName }) {
             </>
           )}
         </div>
+        {deliveryFailure && (
+          <div className={s.msgDeliveryError}>
+            {deliveryFailure.detail}
+            {deliveryFailure.code && (
+              <span className={s.msgDeliveryErrorCode}>{deliveryFailure.code}</span>
+            )}
+          </div>
+        )}
       </div>
       {dir === 'out' && <div className={`${s.msgAvatar} ${avatarClass}`}>{avatarLabel}</div>}
     </div>
@@ -103,12 +112,9 @@ export default function ChatMessage({ msg, contactName }) {
 function renderDeliveryBadge(delivery) {
   const status = delivery.status;
   if (status === 'failed') {
-    const err = delivery.error || {};
-    const title = [
-      err.meta_message || '发送失败',
-      err.meta_code ? `Meta code: ${err.meta_code}` : null,
-      delivery.failed_at ? `时间: ${new Date(delivery.failed_at).toLocaleString('zh-CN', { hour12: false })}` : null,
-    ].filter(Boolean).join('\n');
+    const title = delivery.failed_at
+      ? `时间: ${new Date(delivery.failed_at).toLocaleString('zh-CN', { hour12: false })}`
+      : undefined;
     return <span className={`${s.msgDelivery} ${s.msgDeliveryFailed}`} title={title}>✗ 发送失败</span>;
   }
   if (status === 'read') {
@@ -121,4 +127,27 @@ function renderDeliveryBadge(delivery) {
     return <span className={s.msgDelivery} title="已发送">✓</span>;
   }
   return null;
+}
+
+// 失败原因：把 Meta 回的原文摊到前端，不预设具体错误码。两条来源 error 结构
+// 略有差异（send-message 路由 vs statuses webhook），按"最完整 → 最简略"取第一个
+// 非空字段：
+//   error_data.details  — Meta 给的整句人类可读说明（最优）
+//   meta_message        — 短标题（如 "Re-engagement message"）
+//   message             — 路由兜底的原始 message
+// 都没有时退回笼统文案，避免渲染空块。code 拼 #code/subcode 供排查。
+function extractDeliveryFailure(delivery) {
+  const err = delivery?.error;
+  if (!err) return { detail: '发送失败（无错误详情）', code: null };
+  const detail =
+    err.error_data?.details ||
+    err.meta_message ||
+    err.message ||
+    (err.error_data ? JSON.stringify(err.error_data) : null) ||
+    '发送失败（无错误详情）';
+  let code = null;
+  if (err.meta_code != null) {
+    code = `#${err.meta_code}${err.meta_subcode != null ? `/${err.meta_subcode}` : ''}`;
+  }
+  return { detail, code };
 }
