@@ -109,6 +109,19 @@ async function metaPost(path, body, token, { step, retryable = false } = {}) {
   return retryable ? withMetaRetry(doCall, { step }) : doCall();
 }
 
+// DELETE /{id}. Used to roll back the just-created campaign when the launch
+// pre-flight rejects it, so a failed launch doesn't leave an orphan campaign
+// on Meta. access_token goes in the query string (Graph DELETE doesn't read a
+// JSON body reliably).
+async function metaDelete(id, token) {
+  const url = new URL(graphUrl(id));
+  url.searchParams.set('access_token', token);
+  const res = await fetch(url, { method: 'DELETE', signal: AbortSignal.timeout(FETCH_TIMEOUT) });
+  const data = await res.json();
+  if (data.error) throw buildMetaError(data.error, { step: `delete ${id}`, httpStatus: res.status, path: id });
+  return data;
+}
+
 async function metaUploadImage(imageUrl, { ad_account_id, access_token }) {
   // Graph can't ingest third-party URLs directly without special perms, so we
   // re-download + upload multipart. Works for any public image (incl. ours on
@@ -208,6 +221,39 @@ function buildPageWelcomeMessageJson(text) {
   });
 }
 
+/**
+ * Translate the pre-flight Meta rejection into an actionable message. The one
+ * we care about is subcode 1487246 ("This WhatsApp phone number is not linked
+ * to your account") — Meta-side asset linkage, not a number health problem.
+ * Other subcodes are surfaced as-is (already carry code/subcode/fbtrace from
+ * buildMetaError). `campaignDeleted` decides whether we still need to point
+ * the user at an orphan campaign for manual cleanup.
+ */
+function buildPreflightError(err, { displayNumber, campaignId, campaignDeleted }) {
+  const orphanTail = campaignDeleted
+    ? ''
+    : `（注意：预检失败但回滚 campaign ${campaignId} 也失败了，请去 Meta 后台手动删除它）`;
+  if (err?.metaError?.error_subcode === 1487246) {
+    const num = displayNumber || '所选号码';
+    const e = new Error(
+      `WhatsApp 号码「${num}」未关联到投放用的广告账户，Meta 拒绝创建 Click-to-WhatsApp 广告。` +
+      `请到 Meta 商务管理后台，把该号码 / WABA 连接到该广告账户和广告所用的 Facebook 主页` +
+      `（可参照同 BM 下已能正常投放的号码的关联配置），完成后重新启动。` +
+      `(Meta code=100 subcode=1487246)` + orphanTail,
+    );
+    e.metaError = err.metaError;
+    e.step = err.step;
+    return e;
+  }
+  if (!campaignDeleted && orphanTail) {
+    const e = new Error(`${err.message}${orphanTail}`);
+    e.metaError = err.metaError;
+    e.step = err.step;
+    return e;
+  }
+  return err;
+}
+
 // ── stageCampaigns ─────────────────────────────────────────────────────
 
 /**
@@ -297,6 +343,74 @@ export async function* stageCampaigns(plan, { userId }) {
       access_token,
       { step: `campaign "${campaign.name}"` },
     );
+
+    // Pre-flight the WhatsApp↔ad-account linkage before creating any adset.
+    // The 1487246 ("number not linked to your account") rejection is a Meta-
+    // side asset-linkage gap that we cannot see from our DB (the number can be
+    // CONNECTED + GREEN yet still not granted to this ad account). Catching it
+    // at the real adset-create step left an orphan campaign behind every time.
+    //
+    // execution_options:['validate_only'] runs Meta's full adset validation —
+    // including promoted_object — but creates nothing. It needs a real
+    // campaign_id (bogus IDs short-circuit before the linkage check), so we
+    // validate against the campaign we just made, then roll that campaign back
+    // if validation fails. The promoted_object (page + number) is identical
+    // across every adset in the campaign, so one probe covers the whole launch.
+    const firstAdSet = (campaign.ad_sets || [])[0];
+    const preflightCountries = Array.isArray(firstAdSet?.targeting?.countries)
+      ? firstAdSet.targeting.countries.filter(c => typeof c === 'string' && c.trim())
+      : [];
+    if (firstAdSet && preflightCountries.length > 0) {
+      try {
+        await metaPost(
+          `${ad_account_id}/adsets`,
+          {
+            name: `__preflight__ ${firstAdSet.name}`,
+            campaign_id: campaignId,
+            optimization_goal: 'CONVERSATIONS',
+            billing_event: 'IMPRESSIONS',
+            destination_type: 'WHATSAPP',
+            promoted_object: { page_id, whatsapp_phone_number: whatsapp.phone_normalized },
+            targeting: {
+              age_min: 18,
+              age_max: 65,
+              geo_locations: { countries: preflightCountries },
+              targeting_automation: { advantage_audience: 0 },
+            },
+            status: 'PAUSED',
+            execution_options: ['validate_only'],
+          },
+          access_token,
+          { step: `preflight "${campaign.name}"` },
+        );
+      } catch (err) {
+        let campaignDeleted = false;
+        try {
+          await metaDelete(campaignId, access_token);
+          campaignDeleted = true;
+        } catch { /* roll-back failed — surfaced to the user via buildPreflightError */ }
+        console.log(JSON.stringify({
+          ts: new Date().toISOString(),
+          level: 'error',
+          event: 'ogilvy.meta.preflight_failed',
+          component: 'ogilvy/meta-launch',
+          campaign_id: campaignId,
+          campaign_rolled_back: campaignDeleted,
+          name: campaign.name,
+          phone_normalized: whatsapp.phone_normalized,
+          meta_code: err.metaError?.code ?? null,
+          meta_error_subcode: err.metaError?.error_subcode ?? null,
+          fbtrace_id: err.metaError?.fbtrace_id || null,
+          error: err.message,
+        }));
+        throw buildPreflightError(err, {
+          displayNumber: whatsapp.display_number,
+          campaignId,
+          campaignDeleted,
+        });
+      }
+    }
+
     out.campaign_ids.push(campaignId);
     console.log(JSON.stringify({
       ts: new Date().toISOString(),
