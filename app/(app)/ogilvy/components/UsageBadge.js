@@ -149,11 +149,11 @@ function UsagePopover({ usage }) {
       {Object.keys(byModel).length > 0 && (
         <>
           <div className={s.usageSep}>按模型</div>
-          {Object.entries(byModel)
+          {Object.entries(mergeByModel(byModel))
             .sort(([, a], [, b]) => b.count - a.count)
             .map(([m, v]) => (
               <div key={m} className={s.usageRow}>
-                <span className={s.usageMuted}>{shortModelName(m)}</span>
+                <span className={s.usageMuted}>{m}</span>
                 <span>×{v.count} · {fmtCost(v.cost_usd)}</span>
               </div>
             ))}
@@ -190,6 +190,24 @@ function fmtCost(n) {
   return '$' + v.toFixed(2);
 }
 
+// 归一化模型名:剥 provider 前缀 + 尾部版本日期 (-2026MMDD)。同一个模型在
+// 成功/失败两条日志路径里被记成 `gpt-5.4-image-2-20260421`(OpenRouter 解析名)
+// 和 `openai/gpt-5.4-image-2`(本地请求串),归一化后两者收敛成同一个 key。
 function shortModelName(m) {
-  return String(m).replace(/^anthropic\//, '').replace(/^openai\//, '');
+  return String(m)
+    .replace(/^(anthropic|openai|google)\//, '')
+    .replace(/-20\d{6}$/, '');
+}
+
+// 按归一化模型名重新聚合 by_model —— by_model 以原始字符串为 key,同一模型的
+// 不同写法会拆成多行;这里只合并展示需要的 count / cost_usd,落表数据不动。
+function mergeByModel(byModel) {
+  const merged = {};
+  for (const [m, v] of Object.entries(byModel)) {
+    const key = shortModelName(m);
+    if (!merged[key]) merged[key] = { count: 0, cost_usd: 0 };
+    merged[key].count += v.count;
+    merged[key].cost_usd += Number(v.cost_usd) || 0;
+  }
+  return merged;
 }

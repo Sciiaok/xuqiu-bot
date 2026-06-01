@@ -417,10 +417,24 @@ function CallSiteTable({ bySite, grandTotal }) {
 
 // ── Model table ──────────────────────────────────────────────────────
 function ModelTable({ byModel, grandTotal }) {
-  const rows = useMemo(
-    () => Object.entries(byModel).map(([m, v]) => ({ m, ...v })).sort((a, b) => b.cost_usd - a.cost_usd),
-    [byModel],
-  );
+  // 按归一化模型名合并:同一模型的不同写法(带/不带版本日期、provider 前缀)
+  // 收敛成一行,各列累加。
+  const rows = useMemo(() => {
+    const merged = {};
+    for (const [m, v] of Object.entries(byModel)) {
+      const key = shortModelName(m);
+      if (!merged[key]) {
+        merged[key] = { m: key, count: 0, prompt: 0, completion: 0, cache_read: 0, cache_create: 0, cost_usd: 0 };
+      }
+      merged[key].count += v.count || 0;
+      merged[key].prompt += v.prompt || 0;
+      merged[key].completion += v.completion || 0;
+      merged[key].cache_read += v.cache_read || 0;
+      merged[key].cache_create += v.cache_create || 0;
+      merged[key].cost_usd += Number(v.cost_usd) || 0;
+    }
+    return Object.values(merged).sort((a, b) => b.cost_usd - a.cost_usd);
+  }, [byModel]);
   if (rows.length === 0) return null;
   return (
     <div className={s.section}>
@@ -441,7 +455,7 @@ function ModelTable({ byModel, grandTotal }) {
             const pct = grandTotal > 0 ? (row.cost_usd / grandTotal) * 100 : 0;
             return (
               <tr key={row.m}>
-                <td className={s.callSite}>{shortModelName(row.m)}</td>
+                <td className={s.callSite}>{row.m}</td>
                 <td className={s.cellRight}>{row.count}</td>
                 <td className={s.cellRight}>{fmtTokens(row.prompt + row.cache_read + row.cache_create)}</td>
                 <td className={s.cellRight}>{fmtTokens(row.completion)}</td>
@@ -552,8 +566,13 @@ function fmtTokens(n) {
   return String(v);
 }
 
+// 归一化模型名:剥 provider 前缀 + 尾部版本日期 (-2026MMDD)。同一模型在成功/
+// 失败两条日志路径里会被记成带日期的 OpenRouter 解析名和不带日期的本地请求串,
+// 归一化后收敛成同一个 key(ModelTable 据此合并多行)。
 function shortModelName(m) {
-  return String(m).replace(/^anthropic\//, '').replace(/^openai\//, '').replace(/^google\//, '');
+  return String(m)
+    .replace(/^(anthropic|openai|google)\//, '')
+    .replace(/-20\d{6}$/, '');
 }
 
 function computeDelta(curr, prev) {
