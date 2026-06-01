@@ -14,8 +14,10 @@ import {
   listAdAccountsByTenant,
   listPhonesByTenant,
   findActiveConnectionByTenant,
+  updateConnectionMetadata,
 } from '../../../lib/repositories/meta-connection.repository.js';
 import { decryptToken } from '../../../lib/meta-token-crypto.js';
+import { config } from '../../config.js';
 
 async function tenantIdForUser(userId) {
   if (!userId) return null;
@@ -37,11 +39,37 @@ export async function getMetaAccountForUser(userId) {
   ]);
   if (!conn || ads.length === 0) return null;
 
+  const token = decryptToken(conn.system_user_token_encrypted);
   return {
-    access_token: decryptToken(conn.system_user_token_encrypted),
+    access_token: token,
     ad_account_id: ads[0].ad_account_id,
     page_id: conn.metadata?.page_id || null,
+    page_name: await resolvePageName(conn, token),
   };
+}
+
+/**
+ * Facebook Page 的真实名称(广告在信息流里 "Sponsored" 上方显示的就是它,
+ * 跟 WhatsApp 业务名 / 号码无关)。connect 时只落了 page_id,所以第一次按需
+ * 向 Graph 拉一次 name 并回写 metadata.page_name 做缓存;之后直接命中。
+ * page_id 变更时 /api/meta/page-id 会把 page_name 清空触发重拉。
+ */
+async function resolvePageName(conn, token) {
+  const pageId = conn?.metadata?.page_id;
+  if (!pageId) return null;
+  if (conn.metadata?.page_name) return conn.metadata.page_name;
+  try {
+    const res = await fetch(
+      `https://graph.facebook.com/${config.meta.apiVersion}/${pageId}` +
+        `?fields=name&access_token=${encodeURIComponent(token)}`,
+    );
+    const data = await res.json();
+    const name = data?.name || null;
+    if (name) await updateConnectionMetadata(conn.id, { page_name: name });
+    return name;
+  } catch {
+    return null;
+  }
 }
 
 /**

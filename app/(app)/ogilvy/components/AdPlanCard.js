@@ -276,7 +276,7 @@ export default function AdPlanCard({
                 aria-label="查看大图"
                 title={activeAd.creative?.image_url ? '点击查看大图' : undefined}
               >
-                <AdCreativePreview ad={activeAd} whatsapp={plan.whatsapp} />
+                <AdCreativePreview ad={activeAd} whatsapp={plan.whatsapp} page={plan.page} />
               </button>
 
               {activeAd.welcome_message && (

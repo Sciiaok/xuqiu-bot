@@ -850,6 +850,8 @@ export async function* runOgilvy(sessionId, userText, attachments = [], userId =
       tenantId: session?.tenant_id || null,
       productLine,
       waNumbers: [boundWaNumber],
+      pageId: metaAccount?.page_id || null,
+      pageName: metaAccount?.page_name || null,
       uploadedImageUrls,
       skill,
     };
@@ -1045,7 +1047,7 @@ async function persistStageOutput(input, { sessionId }) {
  * This does NOT touch Meta. Staging/activation happens in separate tools
  * (added in PR 4).
  */
-async function draftAdPlan(input, { sessionId, waNumbers }) {
+async function draftAdPlan(input, { sessionId, waNumbers, pageId, pageName }) {
   // Lifecycle guard (P1-1): refuse to overwrite plan_json on a session that's
   // already mid-launch, launched, paused, or staged. Without this, the Agent
   // running in another tab could blow away meta_campaign_ids / meta_ad_ids
@@ -1127,6 +1129,9 @@ async function draftAdPlan(input, { sessionId, waNumbers }) {
       verified_name: chosen.verified_name,
       waba_id: chosen.waba_id,
     },
+    // 广告主页 —— 信息流里 "Sponsored" 上方显示的就是这个 Facebook Page 名称,
+    // 跟 WhatsApp 业务名/号码是两回事。预览用它,别再拿号码数字拼假名字。
+    page: { id: pageId || null, name: pageName || null },
     objective: 'WHATSAPP_CONVERSATIONS',
     // campaigns 直接透传 — v2 在 ads[] 项内带 creative_typology_id /
     // first_contact_binding 审计字段,launch 链路不读,只随 plan_json 落库。

@@ -33,7 +33,8 @@ export async function POST(req) {
       return NextResponse.json({ error: '当前 tenant 没有 active Meta 连接，请先完成 Meta 连接' }, { status: 404 });
     }
 
-    await updateConnectionMetadata(conn.id, { page_id: pageId || null });
+    // 清空缓存的 page_name —— 换了 page_id 后,下次 getMetaAccountForUser 会重拉真实名称。
+    await updateConnectionMetadata(conn.id, { page_id: pageId || null, page_name: null });
     return NextResponse.json({ success: true, page_id: pageId || null });
   } catch (err) {
     console.error('[meta/page-id POST] failed:', err);

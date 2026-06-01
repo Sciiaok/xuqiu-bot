@@ -9,8 +9,10 @@ import s from '../ogilvy.module.css';
  * creative will read in a feed", not pixel-parity with Meta.
  *
  * Data sources (all pre-launch):
- *   - Business name / phone number → plan.whatsapp.{verified_name, display_number}
- *   - Avatar                       → first char of verified_name (color via hash)
+ *   - Page name (header)           → plan.page.name (the real Facebook Page that
+ *                                    runs the ad; falls back to the WhatsApp
+ *                                    verified_name for legacy plans missing it)
+ *   - Avatar                       → first char of page name (color via hash)
  *   - Ad copy                      → ad.creative.{primary_text, headline}
  *   - Image                        → ad.creative.image_url
  *   - CTA                          → always "WhatsApp" for C2WA format
@@ -25,24 +27,15 @@ function avatarColorFor(name) {
   return AVATAR_COLORS[hash % AVATAR_COLORS.length];
 }
 
-function formatPageName(verifiedName, displayNumber) {
-  if (!verifiedName && !displayNumber) return 'Your business';
-  if (verifiedName && displayNumber) {
-    // Mimic Meta feed truncation: "Name (+123…"
-    const digits = String(displayNumber).replace(/\D/g, '');
-    const tail = digits.slice(0, 5);
-    return `${verifiedName} (${tail}…)`;
-  }
-  return verifiedName || displayNumber;
-}
-
-export default function AdCreativePreview({ ad, whatsapp }) {
+export default function AdCreativePreview({ ad, whatsapp, page }) {
   if (!ad) return null;
 
   const creative = ad.creative || {};
-  const pageName = formatPageName(whatsapp?.verified_name, whatsapp?.display_number);
-  const avatarChar = (whatsapp?.verified_name || 'A').trim().charAt(0).toUpperCase();
-  const avatarBg = avatarColorFor(whatsapp?.verified_name || 'A');
+  // 信息流里显示的是投放广告的 Facebook Page 名称。老方案没存 page.name 时,
+  // 回退到 WhatsApp 业务名(近似),都没有才用占位符。
+  const pageName = page?.name || whatsapp?.verified_name || 'Your business';
+  const avatarChar = pageName.trim().charAt(0).toUpperCase() || 'A';
+  const avatarBg = avatarColorFor(pageName);
 
   return (
     <div className={s.preview} role="figure" aria-label="广告预览">
