@@ -1,3 +1,7 @@
+-- ⚠️ SUPERSEDED / 从未应用：本迁移不完整(漏了第二个全局唯一索引 idx_contacts_wa_id)
+--    且从未在生产应用。完整且已应用的版本见
+--    2026-06-01-contacts-tenant-scoped-unique-keys-complete.sql。此文件仅留作历史。
+--
 -- 2026-05-27: contacts 唯一键改为 tenant-scoped。
 --
 -- 原 contacts_wa_id_key / contacts_bsuid_key 是 GLOBAL unique（只在单列上），

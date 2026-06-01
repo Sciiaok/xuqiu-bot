@@ -1,6 +1,6 @@
 # Schema Snapshot (auto-generated)
 
-Generated: 2026-06-01T06:46:07.741Z
+Generated: 2026-06-01T10:28:11.676Z
 
 Live snapshot of `public` schema from Supabase. **Do not edit by hand** — run `node scripts/build-index.mjs` to refresh.
 
@@ -265,8 +265,8 @@ Tables: **48**. Listed alphabetically.
 - `tenant_id` → `tenants.id`
 
 **Indexes:**
-- `contacts_bsuid_key` USING btree (bsuid)
-- `contacts_wa_id_key` USING btree (wa_id)
+- `contacts_tenant_bsuid_key` USING btree (tenant_id, bsuid) WHERE (bsuid IS NOT NULL)
+- `contacts_tenant_wa_id_key` USING btree (tenant_id, wa_id) WHERE (wa_id IS NOT NULL)
 - `idx_contacts_bsuid` USING btree (bsuid) WHERE (bsuid IS NOT NULL)
 - `idx_contacts_tenant` USING btree (tenant_id)
 - `idx_contacts_wa_id` USING btree (wa_id)
