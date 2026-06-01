@@ -20,6 +20,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { getSupabaseAdmin } from '../../../lib/supabase-admin.js';
+import { currentEnv } from '../../../lib/skills-github.js';
 
 const SKILLS_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../../skills');
 
@@ -34,10 +35,12 @@ const SKILLS_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '.
  */
 export async function loadSkill(name) {
   const admin = getSupabaseAdmin();
+  const env = currentEnv();
   const { data, error } = await admin
     .from('current_skill')
     .select('commit_sha, skill_md, refs')
     .eq('skill_name', name)
+    .eq('environment', env)
     .maybeSingle();
 
   // PGRST205 = PostgREST sees no such table (migration not yet applied).

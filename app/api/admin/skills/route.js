@@ -1,13 +1,14 @@
 import { NextResponse } from 'next/server';
 import { getSupabaseAdmin } from '@/lib/supabase-admin';
 import { getTenantContext, FOUNDER_TENANT_ID } from '@/lib/tenant-context';
-import { SKILL_NAMES, SKILL_DISPLAY } from '@/lib/skills-github';
+import { SKILL_NAMES, SKILL_DISPLAY, ENVIRONMENTS } from '@/lib/skills-github';
 
 /**
  * GET /api/admin/skills
  *
- * Returns the current active version (if any) per known skill. Used by the
- * admin UI to render the per-skill cards.
+ * Per skill, returns the currently active commit for each environment.
+ * Shape:
+ *   { skills: [{ name, display, active: { test: {…} | null, production: {…} | null } }] }
  */
 export async function GET() {
   try {
@@ -20,16 +21,23 @@ export async function GET() {
     const admin = getSupabaseAdmin();
     const { data, error } = await admin
       .from('current_skill')
-      .select('skill_name, commit_sha, commit_summary, commit_at, activated_at');
+      .select('skill_name, environment, commit_sha, commit_summary, commit_at, activated_at');
     if (error && error.code !== 'PGRST205') throw error;
 
-    const activeByName = new Map((data || []).map((r) => [r.skill_name, r]));
-    const skills = SKILL_NAMES.map((name) => ({
-      name,
-      display: SKILL_DISPLAY[name] || name,
-      active: activeByName.get(name) || null,
-    }));
-    return NextResponse.json({ skills });
+    // Build {skill_name: {env: row}}
+    const byName = new Map();
+    for (const row of data || []) {
+      if (!byName.has(row.skill_name)) byName.set(row.skill_name, {});
+      byName.get(row.skill_name)[row.environment] = row;
+    }
+
+    const skills = SKILL_NAMES.map((name) => {
+      const envMap = byName.get(name) || {};
+      const active = {};
+      for (const env of ENVIRONMENTS) active[env] = envMap[env] || null;
+      return { name, display: SKILL_DISPLAY[name] || name, active };
+    });
+    return NextResponse.json({ skills, environments: ENVIRONMENTS });
   } catch (err) {
     console.error('[admin/skills GET] failed:', err);
     return NextResponse.json({ error: err.message }, { status: 500 });

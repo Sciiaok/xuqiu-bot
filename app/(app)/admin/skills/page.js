@@ -11,6 +11,7 @@ function formatDate(iso) {
 
 export default function AdminSkillsPage() {
   const [skills, setSkills] = useState([]);
+  const [environments, setEnvironments] = useState(['test', 'production']);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
 
@@ -22,6 +23,7 @@ export default function AdminSkillsPage() {
       const data = await res.json();
       if (!res.ok) throw new Error(data?.error || '加载失败');
       setSkills(data.skills || []);
+      if (data.environments) setEnvironments(data.environments);
     } catch (err) {
       setError(err.message);
     } finally {
@@ -40,7 +42,10 @@ export default function AdminSkillsPage() {
           <a href="https://github.com/LeadEngine/skills" target="_blank" rel="noreferrer" className={s.link}>
             LeadEngine/skills
           </a>{' '}
-          的 commit 历史,切换后下一次 agent 调用即生效(所有 PM2 进程)。
+          的 commit 历史。
+          <br />
+          每个 skill 在 <strong>test</strong> 和 <strong>production</strong> 两个环境各自维护一个 active 指针;
+          aws-test / Mac mini 跑 test,aws-online 跑 production。切换后下一次 agent 调用即生效(所有 PM2 进程)。
         </p>
       </header>
 
@@ -48,24 +53,27 @@ export default function AdminSkillsPage() {
       {loading && <div className={s.muted}>加载中…</div>}
 
       {!loading && skills.map((skill) => (
-        <SkillCard key={skill.name} skill={skill} onActivated={load} />
+        <SkillCard key={skill.name} skill={skill} environments={environments} onActivated={load} />
       ))}
     </div>
   );
 }
 
-function SkillCard({ skill, onActivated }) {
+function SkillCard({ skill, environments, onActivated }) {
   const [expanded, setExpanded] = useState(false);
   const [commits, setCommits] = useState(null);
+  const [branches, setBranches] = useState(null);
+  const [selectedBranch, setSelectedBranch] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
-  const [activatingSha, setActivatingSha] = useState(null);
+  const [busyKey, setBusyKey] = useState(null);
 
-  const fetchCommits = async () => {
+  const fetchCommits = async (branch) => {
     setLoading(true);
     setError('');
     try {
-      const res = await fetch(`/api/admin/skills/${encodeURIComponent(skill.name)}/commits`);
+      const qs = branch ? `?branch=${encodeURIComponent(branch)}` : '';
+      const res = await fetch(`/api/admin/skills/${encodeURIComponent(skill.name)}/commits${qs}`);
       const data = await res.json();
       if (!res.ok) throw new Error(data?.error || '加载 commit 列表失败');
       setCommits(data.commits || []);
@@ -76,34 +84,59 @@ function SkillCard({ skill, onActivated }) {
     }
   };
 
-  const toggle = () => {
-    const next = !expanded;
-    setExpanded(next);
-    if (next && commits === null) fetchCommits();
+  const fetchBranches = async () => {
+    try {
+      const res = await fetch(`/api/admin/skills/${encodeURIComponent(skill.name)}/branches`);
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.error || '加载分支列表失败');
+      setBranches(data.branches || []);
+      setSelectedBranch(data.default || (data.branches?.[0] ?? null));
+      return data.default || data.branches?.[0] || null;
+    } catch (err) {
+      setError(err.message);
+      return null;
+    }
   };
 
-  const handleActivate = async (sha, summary) => {
-    if (!confirm(`切到 ${sha.slice(0, 7)} 「${summary}」?下一次 agent 调用就生效。`)) return;
-    setActivatingSha(sha);
+  const toggle = async () => {
+    const next = !expanded;
+    setExpanded(next);
+    if (next && commits === null) {
+      const initialBranch = await fetchBranches();
+      await fetchCommits(initialBranch);
+    }
+  };
+
+  const changeBranch = async (b) => {
+    setSelectedBranch(b);
+    await fetchCommits(b);
+  };
+
+  const handleActivate = async (sha, summary, environment) => {
+    const confirmMsg = environment === 'production'
+      ? `⚠️ 切【生产】到 ${sha.slice(0, 7)} 「${summary}」?aws-online 下一次 agent 调用就生效。`
+      : `切【test】到 ${sha.slice(0, 7)} 「${summary}」?`;
+    if (!confirm(confirmMsg)) return;
+
+    const key = `${sha}:${environment}`;
+    setBusyKey(key);
     setError('');
     try {
       const res = await fetch(`/api/admin/skills/${encodeURIComponent(skill.name)}/activate`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ commit_sha: sha }),
+        body: JSON.stringify({ commit_sha: sha, environment }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data?.error || '切换失败');
       await onActivated();
-      await fetchCommits();
+      await fetchCommits(selectedBranch);
     } catch (err) {
       setError(err.message);
     } finally {
-      setActivatingSha(null);
+      setBusyKey(null);
     }
   };
-
-  const active = skill.active;
 
   return (
     <section className={s.card}>
@@ -119,53 +152,92 @@ function SkillCard({ skill, onActivated }) {
         </button>
       </div>
 
-      <div className={s.activeRow}>
-        {active ? (
-          <>
-            <span className={s.activeLabel}>当前 active</span>
-            <code className={s.sha}>{active.commit_sha.slice(0, 7)}</code>
-            <span className={s.summary}>{active.commit_summary}</span>
-            <span className={s.date}>{formatDate(active.commit_at)}</span>
-          </>
-        ) : (
-          <span className={s.fallbackNote}>
-            尚未指定版本 — 当前回退到 submodule baseline(`skills/{skill.name}/`)
-          </span>
-        )}
+      <div className={s.envStack}>
+        {environments.map((env) => (
+          <ActiveRow key={env} env={env} row={skill.active[env]} skillName={skill.name} />
+        ))}
       </div>
 
       {expanded && (
         <div className={s.commitList}>
+          {branches && (
+            <div className={s.branchBar}>
+              <label className={s.branchLabel}>分支</label>
+              <select
+                className={s.branchSelect}
+                value={selectedBranch || ''}
+                onChange={(e) => changeBranch(e.target.value)}
+                disabled={loading}
+              >
+                {branches.map((b) => (
+                  <option key={b} value={b}>{b}</option>
+                ))}
+              </select>
+            </div>
+          )}
           {loading && <div className={s.muted}>从 GitHub 拉 commit 列表…</div>}
           {error && <div className={s.error}>{error}</div>}
           {commits && commits.length === 0 && (
-            <div className={s.muted}>没有 commit 触达这个 skill。</div>
+            <div className={s.muted}>这个分支上没有 commit 触达 {skill.name}/。</div>
           )}
           {commits && commits.map((c) => {
-            const isActive = active?.commit_sha === c.sha;
-            const isBusy = activatingSha === c.sha;
+            const activeIn = environments.filter((env) => skill.active[env]?.commit_sha === c.sha);
             return (
-              <div key={c.sha} className={`${s.commit} ${isActive ? s.commitActive : ''}`}>
+              <div key={c.sha} className={`${s.commit} ${activeIn.length > 0 ? s.commitActive : ''}`}>
                 <code className={s.sha}>{c.short}</code>
                 <span className={s.summary}>{c.summary || '(no message)'}</span>
                 <span className={s.date}>{formatDate(c.date)}</span>
                 <span className={s.flags}>
                   {c.imported && <span className={s.badge}>已缓存</span>}
-                  {isActive && <span className={`${s.badge} ${s.badgeActive}`}>active</span>}
+                  {activeIn.map((env) => (
+                    <span key={env} className={`${s.badge} ${s.badgeActive} ${env === 'production' ? s.badgeProd : ''}`}>
+                      active in {env}
+                    </span>
+                  ))}
                 </span>
-                <button
-                  className={s.activateBtn}
-                  type="button"
-                  disabled={isActive || isBusy}
-                  onClick={() => handleActivate(c.sha, c.summary)}
-                >
-                  {isBusy ? '切换中…' : isActive ? '当前' : '切到这版'}
-                </button>
+                <span className={s.actions}>
+                  {environments.map((env) => {
+                    const isThisActive = skill.active[env]?.commit_sha === c.sha;
+                    const isBusy = busyKey === `${c.sha}:${env}`;
+                    const isProd = env === 'production';
+                    return (
+                      <button
+                        key={env}
+                        type="button"
+                        disabled={isThisActive || isBusy}
+                        onClick={() => handleActivate(c.sha, c.summary, env)}
+                        className={`${s.activateBtn} ${isProd ? s.activateBtnProd : ''}`}
+                      >
+                        {isBusy ? '…' : isThisActive ? `已是 ${env}` : `→ ${env}`}
+                      </button>
+                    );
+                  })}
+                </span>
               </div>
             );
           })}
         </div>
       )}
     </section>
+  );
+}
+
+function ActiveRow({ env, row, skillName }) {
+  const isProd = env === 'production';
+  return (
+    <div className={s.activeRow}>
+      <span className={`${s.envChip} ${isProd ? s.envChipProd : ''}`}>{env}</span>
+      {row ? (
+        <>
+          <code className={s.sha}>{row.commit_sha.slice(0, 7)}</code>
+          <span className={s.summary}>{row.commit_summary}</span>
+          <span className={s.date}>{formatDate(row.commit_at)}</span>
+        </>
+      ) : (
+        <span className={s.fallbackNote}>
+          没指定版本 — 回退到 submodule baseline(<code>skills/{skillName}/</code>)
+        </span>
+      )}
+    </div>
   );
 }

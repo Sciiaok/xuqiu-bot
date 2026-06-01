@@ -1,12 +1,12 @@
 # Routes (auto-generated)
 
-Generated: 2026-05-29T10:36:22.642Z
+Generated: 2026-06-01T06:46:05.489Z
 
 Filesystem-derived list of API endpoints and UI pages. **Do not edit** — run `node scripts/build-index.mjs` to refresh.
 
 ## API Endpoints
 
-Total: **82**
+Total: **83**
 
 | Path | Methods | File |
 | --- | --- | --- |
@@ -15,6 +15,7 @@ Total: **82**
 | `/api/admin/llm-usage` | GET | [app/api/admin/llm-usage/route.js](../../app/api/admin/llm-usage/route.js) |
 | `/api/admin/skills` | GET | [app/api/admin/skills/route.js](../../app/api/admin/skills/route.js) |
 | `/api/admin/skills/[name]/activate` | POST | [app/api/admin/skills/[name]/activate/route.js](../../app/api/admin/skills/[name]/activate/route.js) |
+| `/api/admin/skills/[name]/branches` | GET | [app/api/admin/skills/[name]/branches/route.js](../../app/api/admin/skills/[name]/branches/route.js) |
 | `/api/admin/skills/[name]/commits` | GET | [app/api/admin/skills/[name]/commits/route.js](../../app/api/admin/skills/[name]/commits/route.js) |
 | `/api/admin/tenants` | GET | [app/api/admin/tenants/route.js](../../app/api/admin/tenants/route.js) |
 | `/api/admin/tenants/[id]` | PATCH | [app/api/admin/tenants/[id]/route.js](../../app/api/admin/tenants/[id]/route.js) |

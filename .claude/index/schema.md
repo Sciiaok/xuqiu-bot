@@ -1,6 +1,6 @@
 # Schema Snapshot (auto-generated)
 
-Generated: 2026-05-29T12:31:02.558Z
+Generated: 2026-06-01T06:46:07.741Z
 
 Live snapshot of `public` schema from Supabase. **Do not edit by hand** — run `node scripts/build-index.mjs` to refresh.
 
@@ -337,6 +337,7 @@ Tables: **48**. Listed alphabetically.
 | Column | Type | Nullable | Default |
 | --- | --- | --- | --- |
 | `skill_name` | text | Y |  |
+| `environment` | text | Y |  |
 | `commit_sha` | text | Y |  |
 | `commit_summary` | text | Y |  |
 | `commit_at` | timestamp with time zone | Y |  |
@@ -1205,6 +1206,7 @@ Tables: **48**. Listed alphabetically.
 | `commit_sha` | text | N |  |
 | `activated_at` | timestamp with time zone | N | `now()` |
 | `activated_by` | uuid | Y |  |
+| `environment` | text | N | `'production'::text` |
 
 **Foreign keys:**
 - `commit_sha` → `skill_versions.commit_sha`
