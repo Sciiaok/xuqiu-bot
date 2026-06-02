@@ -100,8 +100,14 @@ async function getLeadsRows(fromISO, toISO) {
   return (data || []).map((lead) => ({
     Contact: resolveLeadContact(lead),
     Country: lead.details?.destination_country || '',
-    Product: lead.details?.car_model || lead.details?.product_name || '',
-    Quantity: lead.details?.qty_bucket || '',
+    // 业务字段名按产品线 lead_fields 可配置（vehicle 用 car_model/qty_bucket，
+    // 农机线用 model/machinery_type/quantity，光伏线用 product_type…）。导出列
+    // 不能只认 vehicle 那套名字，否则非 vehicle 线导出 Product/Quantity 全空。
+    // 兜底链覆盖当前所有活跃产品线的同义键。
+    Product: lead.details?.car_model || lead.details?.product_name
+      || lead.details?.model || lead.details?.machinery_type
+      || lead.details?.product_type || '',
+    Quantity: lead.details?.qty_bucket || lead.details?.quantity || '',
     Quality: lead.inquiry_quality || '',
     'Business Value': lead.business_value || '',
     Route: lead.route || '',

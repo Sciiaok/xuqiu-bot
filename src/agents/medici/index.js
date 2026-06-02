@@ -572,24 +572,21 @@ export function stripEmptyStringFields(obj) {
 /**
  * Normalize agent responses to canonical leads[].
  *
- * 业务字段（brand / car_model / destination_country 等）和产品线自定义
- * lead_fields 全部进 details JSONB；顶层只保留 TOP_LEVEL_RETAIN 里列出的系统
- * 字段 + 评分元数据。
- *
- * Legacy LLM 输出别名（car_brand→brand / part_name→product_name / quantity→qty_bucket）
- * 在进 details 前先 canonicalize。
+ * 产品线配置的 lead_fields 全部进 details JSONB（按配置的 key 名原样存）；
+ * 顶层只保留 TOP_LEVEL_RETAIN 里列出的系统字段 + 评分元数据。
  */
 export function normalizeAgentResponse(parsed) {
   if (!parsed.leads) return;
   parsed.leads = parsed.leads.map((lead) => {
     const canonical = { ...lead };
-    if (canonical.car_brand && !canonical.brand) { canonical.brand = canonical.car_brand; delete canonical.car_brand; }
-    if (canonical.part_name && !canonical.product_name) { canonical.product_name = canonical.part_name; delete canonical.part_name; }
-    if (canonical.quantity && !canonical.qty_bucket) { canonical.qty_bucket = canonical.quantity; delete canonical.quantity; }
-    if (canonical.incoterm && !canonical.international_commercial_term) {
-      canonical.international_commercial_term = canonical.incoterm;
-      delete canonical.incoterm;
-    }
+    // NOTE: legacy field aliases (car_brand→brand / part_name→product_name /
+    // quantity→qty_bucket / incoterm→international_commercial_term) were removed.
+    // normalizeAgentResponse only runs for custom-schema lines, whose
+    // output_schema is additionalProperties:false — the model can ONLY emit the
+    // product_line's configured lead_fields keys. Aliasing a configured key
+    // (e.g. 农机线的 `quantity`) to a different name silently dropped it from
+    // details, so the UI (which reads details[key] by the configured key) never
+    // showed it. Store keys verbatim.
 
     const detailsObj = { ...(canonical.details || {}) };
     const topLevel = {};
