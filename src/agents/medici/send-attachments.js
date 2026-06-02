@@ -114,7 +114,7 @@ export async function sendMediciAttachments({
         throw new Error(`unsupported mime_type for outbound: ${row.mime_type}`);
       }
 
-      await sendMedia(
+      const sendResult = await sendMedia(
         waId,
         mediaType,
         buffer,
@@ -128,6 +128,10 @@ export async function sendMediciAttachments({
         ? `[${mediaType}: ${row.filename}] ${caption}`
         : `[${mediaType}: ${row.filename}]`;
 
+      // 投递初始态:与文本回复 / 人工发送对齐。createMessage 紧跟在 sendMedia
+      // 之后,wamid 当场可得,直接落进 metadata —— 让附件气泡也有 ✓ 角标,并能被
+      // statuses webhook 按 wamid 升级。失败的附件走 catch,不会落这条消息。
+      const outboundWamid = sendResult?.messages?.[0]?.id || null;
       await createMessage({
         tenantId,
         conversationId,
@@ -138,6 +142,8 @@ export async function sendMediciAttachments({
           media_type: mediaType,
           filename: row.filename,
           kb_asset_id: row.id,
+          ...(outboundWamid ? { wa_message_id: outboundWamid } : {}),
+          delivery: { status: 'sent', sent_at: new Date().toISOString() },
         },
       });
 
