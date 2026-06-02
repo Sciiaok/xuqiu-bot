@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { getTenantContext } from '../../../../lib/tenant-context.js';
 import { runMedici } from '../../../../src/agents/medici/index.js';
-import { getMissingFields } from '../../../../src/inquiry-quality.js';
+import { getMissingFields, resolveProductIdentity } from '../../../../src/inquiry-quality.js';
 import { getMediciConfig } from '../../../../src/agents/medici/config.js';
 import { formatReferralContextForPrompt } from '../../../../lib/referral-context.js';
 import { filterAttachmentsBySkuContext } from '../../../../src/agents/medici/attachment-guard.js';
@@ -350,7 +350,8 @@ export async function POST(request) {
     const productContext = freshLead ? {
       carModel: freshLead.details?.car_model || null,
       brand: freshLead.details?.brand || null,
-      productName: freshLead.details?.product_name || null,
+      // 别名感知，覆盖非 vehicle 线的 model/machinery_type（与 queue-processor 一致）。
+      productName: resolveProductIdentity(freshLead.details) || null,
     } : {};
     const attachments = await resolveAttachmentUrls(response.attachments, {
       tenantId: ctx.tenantId,

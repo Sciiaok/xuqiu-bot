@@ -45,7 +45,9 @@ export default function LeadDetail({ leads = [], leadFields = [] }) {
             value: formatLeadFieldValue(resolveLeadFieldValue(lead, f.key)),
           }))
           .filter((r) => r.value !== '');
-        const title = lead.details?.product_name || lead.details?.car_model || lead.details?.brand || '—';
+        // 标题取按 display_order 排序后第一个有值的配置字段，而不是硬编码
+        // car_model/product_name —— 后者对非 vehicle 产品线永远落到 '—'。
+        const title = rows[0]?.value || '—';
 
         return (
           <div key={lead.id || i} className={s.card}>

@@ -81,7 +81,6 @@ function parseFilters(sp) {
     businessValues: parseMultiSelectParams(sp, 'businessValue', BUSINESS_VALUE_OPTIONS),
     routes: parseMultiSelectParams(sp, 'route', ROUTE_OPTIONS),
     country: sp.get('country') || 'all',
-    model: sp.get('model') || 'all',
 
     // conversation-level resolved-route filter (HUMAN_NOW / CONTINUE / FAQ_END)
     resolvedRoute: RESOLVED_ROUTE_VALUES.has(rawResolvedRoute) ? rawResolvedRoute : null,
@@ -125,8 +124,7 @@ function hasLeadScopedFilter(f) {
     f.businessValues.length > 0 ||
     f.routes.length > 0 ||
     f.productLines.length > 0 ||
-    (f.country && f.country !== 'all') ||
-    (f.model && f.model !== 'all')
+    (f.country && f.country !== 'all')
   );
 }
 
@@ -221,7 +219,6 @@ function applyLeadFilters(query, filters, prefix = 'leads.') {
   if (filters.routes.length > 0) query = query.in(col('route'), filters.routes);
   if (filters.productLines.length > 0) query = query.in(col('product_line'), filters.productLines);
   if (filters.country !== 'all') query = query.eq(col('details->>destination_country'), filters.country);
-  if (filters.model !== 'all') query = query.eq(col('details->>car_model'), filters.model);
   return query;
 }
 

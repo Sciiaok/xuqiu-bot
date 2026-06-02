@@ -5,7 +5,7 @@
 
 const GLOBAL_MAX_TURNS = 30;
 
-const FIELD_ALIASES = {
+export const FIELD_ALIASES = {
   brand: ['brand', 'car_brand'],
   car_brand: ['car_brand', 'brand'],
   car_model: ['car_model', 'model'],
@@ -21,6 +21,7 @@ const FIELD_ALIASES = {
   oem_code: ['oem_code'],
   part_name: ['part_name', 'product_name'],
   product_name: ['product_name', 'part_name', 'machinery_type'],
+  product_type: ['product_type', 'product_name'],
   quantity: ['quantity', 'qty_bucket'],
   qty_bucket: ['qty_bucket', 'quantity'],
   sku_description: ['sku_description', 'specifications'],
@@ -83,6 +84,38 @@ function getFieldValue(fieldState, fieldName) {
     }
   }
   return undefined;
+}
+
+// ─── Shared field resolution (used beyond quality grading) ───────────
+// 产品线 lead_fields 字段名可配置（vehicle 用 car_model/qty_bucket，农机线用
+// machinery_type/model/quantity，光伏线用 product_type…）。任何「从 lead.details
+// 取某语义字段」的逻辑都应走这里的别名感知解析，不要再硬编码 vehicle 那套键名。
+// 这是处理字段词汇差异的唯一真源——见 FIELD_ALIASES。
+
+// 「这条线索是关于什么产品」的候选键，按优先级排列。
+const PRODUCT_IDENTITY_KEYS = ['car_model', 'product_name', 'model', 'machinery_type', 'product_type'];
+
+/** 别名感知地从 lead.details（含 customer_profile 等嵌套）解析单个语义字段。 */
+export function resolveLeadValue(details, semanticKey) {
+  const fieldState = {};
+  collectFlatFields(fieldState, details || {});
+  return getFieldValue(fieldState, semanticKey);
+}
+
+/** 跨产品线词汇解析「产品标识」（型号 / 品名 / 机型 / 产品类型）。 */
+export function resolveProductIdentity(details) {
+  const fieldState = {};
+  collectFlatFields(fieldState, details || {});
+  for (const key of PRODUCT_IDENTITY_KEYS) {
+    const value = getFieldValue(fieldState, key);
+    if (hasValue(value)) return value;
+  }
+  return undefined;
+}
+
+/** 跨产品线词汇解析数量（qty_bucket / quantity）。 */
+export function resolveQuantity(details) {
+  return resolveLeadValue(details, 'qty_bucket');
 }
 
 /**
