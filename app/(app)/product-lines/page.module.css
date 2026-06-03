@@ -34,6 +34,47 @@
   font-family: var(--font-sans);
 }
 
+/* 语义图例 —— 一次性解释上班/下班的实际效果,和开关同色系 */
+.legend {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+  margin-top: 10px;
+}
+
+.legendItem {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  font-weight: 500;
+  padding: 4px 10px;
+  border-radius: 8px;
+  font-family: var(--font-sans);
+}
+
+.legendItem b { font-weight: 700; }
+
+.legendOn {
+  color: #2c6e30;
+  background: color-mix(in srgb, var(--green) 11%, transparent);
+}
+
+.legendOff {
+  color: var(--text2);
+  background: color-mix(in srgb, var(--text3) 12%, transparent);
+}
+
+.legendDot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+}
+
+.legendOn .legendDot { background: var(--green); }
+.legendOff .legendDot { background: var(--text3); }
+
 .cardList {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
@@ -41,26 +82,43 @@
 }
 
 .card {
+  position: relative;
   display: flex;
   flex-direction: column;
-  gap: 16px;
-  padding: 20px;
+  gap: 14px;
+  padding: 18px 18px 16px;
   background: var(--bg2);
   border: 1px solid var(--border);
-  border-radius: var(--rl);
+  border-radius: 14px;
+  box-shadow: 0 1px 2px rgba(20, 30, 60, 0.05);
   transition: border-color 0.15s, transform 0.15s, box-shadow 0.15s;
   text-align: left;
   text-decoration: none;
   color: inherit;
   font-family: inherit;
   cursor: pointer;
+  overflow: hidden;
 }
 
 .card:hover:not(:disabled) {
   border-color: var(--accent);
   transform: translateY(-1px);
-  box-shadow: 0 4px 16px -8px color-mix(in srgb, var(--accent) 40%, transparent);
+  box-shadow: 0 8px 24px -12px color-mix(in srgb, var(--accent) 50%, transparent);
 }
+
+/* 左侧状态色边条 —— 一眼区分上班(绿)/下班(灰) */
+.railOn::before,
+.railOff::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 3px;
+}
+.railOn::before { background: var(--green, #2e7d32); }
+.railOff::before { background: color-mix(in srgb, var(--text3) 60%, transparent); }
+.railOff { background: #f7f8fa; }
 
 .cardPending {
   border-style: dashed;
@@ -101,7 +159,6 @@
   font-family: var(--font-mono, monospace);
 }
 
-.statusOk,
 .statusWarn,
 .statusOff {
   flex-shrink: 0;
@@ -111,11 +168,6 @@
   font-family: var(--font-sans);
   font-weight: 500;
   white-space: nowrap;
-}
-
-.statusOk {
-  background: color-mix(in srgb, var(--green, #3fb950) 18%, transparent);
-  color: var(--green, #3fb950);
 }
 
 .statusWarn {
@@ -128,120 +180,123 @@
   color: var(--text3);
 }
 
-/* 上班/下班开关 — 配置卡右上角一键控件(整卡是个进入配置的 button,故此控件
-   自带 stopPropagation,视觉上要明显可点) */
-.dutyToggle {
+/* 上班/下班开关 — 配置卡右上角,"人工坐席"小标签 + 状态词 + 滑块。整卡是个
+   进入配置的 button,故内层 dutyBtn 自带 stopPropagation,视觉上是明确的开关。 */
+.duty {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 4px;
   flex-shrink: 0;
+}
+
+.dutyCap {
+  font-size: 9.5px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text3);
+  font-weight: 600;
+}
+
+.dutyBtn {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
-  font-size: 11px;
-  font-weight: 600;
-  padding: 3px 10px 3px 8px;
-  border-radius: 10px;
-  font-family: var(--font-sans);
-  cursor: pointer;
-  user-select: none;
+  gap: 7px;
   border: 1px solid transparent;
-  transition: background 0.15s ease, border-color 0.15s ease, opacity 0.15s ease;
+  background: transparent;
+  cursor: pointer;
+  padding: 3px 4px 3px 8px;
+  border-radius: 999px;
+  transition: background 0.15s ease, border-color 0.15s ease;
 }
 
-.dutyToggle:hover {
-  border-color: color-mix(in srgb, currentColor 35%, transparent);
+.dutyBtn:hover {
+  background: var(--bg);
+  border-color: var(--border);
 }
 
-.dutyToggle:focus-visible {
-  outline: 2px solid color-mix(in srgb, currentColor 55%, transparent);
+.dutyBtn:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--accent) 55%, transparent);
   outline-offset: 1px;
 }
 
-.dutyDot {
-  width: 7px;
-  height: 7px;
+.dutyState {
+  font-size: 12.5px;
+  font-weight: 700;
+}
+
+.dutyTrack {
+  position: relative;
+  width: 38px;
+  height: 21px;
+  border-radius: 999px;
+  transition: background 0.2s ease;
+}
+
+.dutyKnob {
+  position: absolute;
+  top: 2px;
+  width: 17px;
+  height: 17px;
   border-radius: 50%;
-  background: currentColor;
-  box-shadow: 0 0 0 3px color-mix(in srgb, currentColor 18%, transparent);
+  background: #fff;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.28);
+  transition: left 0.2s ease;
 }
 
-.dutyOn {
-  background: color-mix(in srgb, var(--green, #3fb950) 18%, transparent);
-  color: var(--green, #3fb950);
-}
+.dutyOn .dutyState { color: var(--green, #2e7d32); }
+.dutyOn .dutyTrack { background: var(--green, #2e7d32); }
+.dutyOn .dutyKnob { left: 19px; }
 
-.dutyOff {
-  background: color-mix(in srgb, var(--text3, #8b949e) 14%, transparent);
-  color: var(--text3, #8b949e);
-}
+.dutyOff .dutyState { color: var(--text3); }
+.dutyOff .dutyTrack { background: #c8ccd1; }
+.dutyOff .dutyKnob { left: 2px; }
 
-.dutyBusy {
-  opacity: 0.55;
-  pointer-events: none;
-}
+.dutyBusy { opacity: 0.55; pointer-events: none; }
 
-/* META — Phone Number ID + quality chip on one row */
-.cardMeta {
+/* FOOTER — de-emphasized: phone number id (routing key) + WA quality */
+.foot {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 12px;
-  padding-top: 12px;
-  border-top: 1px solid var(--border);
-}
-
-.metaItem {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  min-width: 0;
-}
-
-.metaLabel {
-  font-size: 10px;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
+  gap: 10px;
+  font-size: 11px;
   color: var(--text3);
-  font-family: var(--font-sans);
 }
 
-.metaValue {
-  font-size: 12px;
-  color: var(--text2);
+.footId {
   font-family: var(--font-mono, monospace);
   overflow: hidden;
   text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-.qualityChip {
+.qual {
   flex-shrink: 0;
   display: inline-flex;
   align-items: center;
   gap: 5px;
-  font-size: 11px;
-  padding: 3px 8px;
-  border-radius: 10px;
-  background: var(--bg);
-  border: 1px solid var(--border);
-  color: var(--text2);
   font-family: var(--font-mono, monospace);
   letter-spacing: 0.02em;
 }
 
-.qualityDot {
+.qualDot {
   width: 6px;
   height: 6px;
   border-radius: 50%;
   background: var(--text3);
 }
 
-.qualityChip_green .qualityDot { background: var(--green, #3fb950); }
-.qualityChip_yellow .qualityDot { background: var(--amber, #d29922); }
-.qualityChip_red .qualityDot { background: var(--red, #f85149); }
+.qual_green .qualDot { background: var(--green, #2e7d32); }
+.qual_yellow .qualDot { background: var(--amber, #b26a00); }
+.qual_red .qualDot { background: var(--red, #d93025); }
 
-/* STATS — KPI strip at the bottom */
+/* STATS — KPI strip */
 .cardStats {
   display: flex;
   align-items: stretch;
   background: var(--bg);
+  border: 1px solid var(--border);
   border-radius: 10px;
   padding: 12px 4px;
 }

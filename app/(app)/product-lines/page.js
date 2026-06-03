@@ -132,7 +132,11 @@ export default function ProductLinesPage() {
       <div className={s.header}>
         <div className={s.headerLeft}>
           <h1 className={s.title}>Medici</h1>
-          <span className={s.subtitle}>一个 WhatsApp 号码 = 一个 Medici 客服 · 点号码进入配置 · 右上角一键上班/下班</span>
+          <span className={s.subtitle}>一个 WhatsApp 号码 = 一个 Medici 客服 · 点卡片进入配置</span>
+          <div className={s.legend}>
+            <span className={`${s.legendItem} ${s.legendOn}`}><span className={s.legendDot} /><b>上班</b> · 超 3 轮询盘自动转人工</span>
+            <span className={`${s.legendItem} ${s.legendOff}`}><span className={s.legendDot} /><b>下班</b> · AI 独立接待，不自动转人工</span>
+          </div>
         </div>
       </div>
 
@@ -190,7 +194,7 @@ export default function ProductLinesPage() {
                 key={number.phone_number_id}
                 type="button"
                 onClick={() => openCard({ number, line })}
-                className={`${s.card} ${configured ? '' : s.cardPending} ${opening ? s.cardLoading : ''}`}
+                className={`${s.card} ${configured ? (line.reception_on !== false ? s.railOn : s.railOff) : s.cardPending} ${opening ? s.cardLoading : ''}`}
                 disabled={opening}
               >
                 {/* HEAD ─ status chip floats top-right, name + phone left */}
@@ -205,42 +209,30 @@ export default function ProductLinesPage() {
                     ? <span className={s.statusOff}>打开中…</span>
                     : configured
                       ? (
-                        <span
-                          role="switch"
-                          aria-checked={line.reception_on !== false}
-                          tabIndex={0}
-                          className={`${s.dutyToggle} ${line.reception_on !== false ? s.dutyOn : s.dutyOff} ${togglingId === line.id ? s.dutyBusy : ''}`}
-                          title={line.reception_on !== false
-                            ? '上班中 · 点击下班(停用「超3轮自动转人工」)'
-                            : '已下班 · 点击上班(启用「超3轮自动转人工」)'}
-                          onClick={(e) => { e.stopPropagation(); e.preventDefault(); toggleReception(line); }}
-                          onKeyDown={(e) => {
-                            if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); e.stopPropagation(); toggleReception(line); }
-                          }}
-                        >
-                          <span className={s.dutyDot} />
-                          {togglingId === line.id ? '…' : (line.reception_on !== false ? '上班' : '下班')}
+                        <span className={`${s.duty} ${line.reception_on !== false ? s.dutyOn : s.dutyOff} ${togglingId === line.id ? s.dutyBusy : ''}`}>
+                          <span className={s.dutyCap}>人工坐席</span>
+                          <span
+                            role="switch"
+                            aria-checked={line.reception_on !== false}
+                            tabIndex={0}
+                            className={s.dutyBtn}
+                            title={line.reception_on !== false
+                              ? '人工坐席上班中 · 点击下班(停用「超3轮自动转人工」)'
+                              : '人工坐席已下班 · 点击上班(启用「超3轮自动转人工」)'}
+                            onClick={(e) => { e.stopPropagation(); e.preventDefault(); toggleReception(line); }}
+                            onKeyDown={(e) => {
+                              if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); e.stopPropagation(); toggleReception(line); }
+                            }}
+                          >
+                            <span className={s.dutyState}>{togglingId === line.id ? '…' : (line.reception_on !== false ? '上班' : '下班')}</span>
+                            <span className={s.dutyTrack}><span className={s.dutyKnob} /></span>
+                          </span>
                         </span>
                       )
                       : <span className={s.statusWarn}>待配置</span>}
                 </div>
 
-                {/* META ─ Phone Number ID prominently (it's the routing key), quality chip */}
-                <div className={s.cardMeta}>
-                  <div className={s.metaItem}>
-                    <span className={s.metaLabel}>Phone Number ID</span>
-                    <span className={s.metaValue}>{number.phone_number_id}</span>
-                  </div>
-                  {number.quality_rating && (
-                    <span className={`${s.qualityChip} ${s[`qualityChip_${number.quality_rating.toLowerCase()}`] || ''}`}>
-                      <span className={s.qualityDot} />
-                      {number.quality_rating}
-                    </span>
-                  )}
-                </div>
-
-                {/* STATS ─ KPI strip. Configured cards show real numbers; pending
-                    cards show a CTA hint since stats aren't meaningful yet. */}
+                {/* STATS ─ KPI strip(已配置)或创建 CTA(待配置) */}
                 {configured ? (
                   <div className={s.cardStats}>
                     <div className={s.statTile}>
@@ -260,6 +252,17 @@ export default function ProductLinesPage() {
                 ) : (
                   <div className={s.cardPendingHint}>点击此卡片创建配置 →</div>
                 )}
+
+                {/* FOOTER ─ phone number id（路由键，弱化）+ WhatsApp 号码质量 */}
+                <div className={s.foot}>
+                  <span className={s.footId}>ID {number.phone_number_id}</span>
+                  {number.quality_rating && (
+                    <span className={`${s.qual} ${s[`qual_${number.quality_rating.toLowerCase()}`] || ''}`}>
+                      <span className={s.qualDot} />
+                      {number.quality_rating}
+                    </span>
+                  )}
+                </div>
               </button>
             );
           })}
