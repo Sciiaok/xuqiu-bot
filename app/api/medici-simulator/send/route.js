@@ -1,7 +1,8 @@
 import { NextResponse } from 'next/server';
 import { getTenantContext } from '../../../../lib/tenant-context.js';
 import { runMedici } from '../../../../src/agents/medici/index.js';
-import { getMissingFields, resolveProductIdentity } from '../../../../src/inquiry-quality.js';
+import { getMissingFields, resolveProductIdentity, resolveQuantity, resolveHostRoute } from '../../../../src/inquiry-quality.js';
+import { hasValidLeads } from '../../../../lib/session.js';
 import { getMediciConfig } from '../../../../src/agents/medici/config.js';
 import { formatReferralContextForPrompt } from '../../../../lib/referral-context.js';
 import { filterAttachmentsBySkuContext } from '../../../../src/agents/medici/attachment-guard.js';
@@ -190,12 +191,15 @@ export async function POST(request) {
     // 同样这么读)。前端 echo 回来的 `priorLead` 就是上一轮 response.leads[0],
     // 已经是 details 嵌套形态。
     const priorDetails = priorLeadData?.details || {};
+    // 别名感知解析,与 queue-processor 的 prior_state 完全一致 —— 非 vehicle 线
+    // (农机 machinery_type/model/quantity、光伏 product_type 等)也能命中,
+    // 否则调试台 prior_state 取空、AI 重复追问已知信息(与线上不一致)。
     const priorState = priorLeadData ? {
       conversation_intent: priorLeadData.conversation_intent,
       inquiry_quality: priorLeadData.inquiry_quality,
       business_value: priorLeadData.business_value,
-      car_model: priorDetails.car_model || priorDetails.product_name || null,
-      qty_bucket: priorDetails.qty_bucket || null,
+      car_model: resolveProductIdentity(priorDetails) || null,
+      qty_bucket: resolveQuantity(priorDetails) || null,
       destination_country: priorDetails.destination_country || null,
       company_name: priorDetails.company_name || null,
     } : null;
@@ -337,6 +341,33 @@ export async function POST(request) {
     log('info', reply
       ? `Reply: "${reply.slice(0, 160)}${reply.length > 160 ? '…' : ''}"`
       : 'Reply: (empty — spam/FAQ_END case)');
+
+    // 宿主级 route 改写 —— 与生产 queue-processor 共用 resolveHostRoute(单一真源),
+    // 让调试台最终 route 与线上一致:上班+超3轮+有线索→HUMAN_NOW;满30轮→FAQ_END。
+    // 只做展示(response.route 反映宿主最终值,response.model_route 保留模型原始值),
+    // 绝不触发副作用(不发飞书 / 不起接管 / 不发 FAQ 资源)。
+    const modelRoute = response.route;
+    const hostRoute = resolveHostRoute({
+      modelRoute,
+      priorRounds: Math.floor(conversationHistory.length / 2),
+      postMessageCount: conversationHistory.length + (reply ? 2 : 1),
+      hasLead: hasValidLeads(response.leads),
+      onDuty: agentConfig.reception_on !== false,
+    });
+    response.model_route = modelRoute;
+    response.route = hostRoute.route;
+    response.host_route_reason = hostRoute.reason;
+    if (hostRoute.forcedHandoff && !(response.handoff_summary || '').trim()) {
+      response.handoff_summary = '系统规则：接待处于上班状态，对话已超过三轮，自动转人工跟进。';
+    }
+    if (hostRoute.route !== modelRoute) {
+      log('info', `宿主 route 改写：模型=${modelRoute} → 最终=${hostRoute.route}（${hostRoute.reason}）`, {
+        model_route: modelRoute,
+        host_route: hostRoute.route,
+        reason: hostRoute.reason,
+        reception_on: agentConfig.reception_on !== false,
+      });
+    }
 
     // 飞书验收用例 12 需要直接核对 handoff_summary。HUMAN_NOW 时单独打成
     // 一行 trace，让 reviewer 不用扒 envelope 也能一眼看到。

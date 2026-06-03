@@ -220,6 +220,33 @@ export function shouldForceOnDutyHandoff({ route, priorRounds, hasLead, onDuty }
   );
 }
 
+/**
+ * 宿主在 Medici 路由判断之上叠加的两条硬规则的【单一真源】—— 生产入站链路
+ * (lib/queue-processor.js) 与 medici 调试台 (app/api/medici-simulator) 共用,
+ * 保证两环境最终 route 完全一致、不漂移。优先级:
+ *   1. "上班"长对话强制转人工(最高):shouldForceOnDutyHandoff 命中 → HUMAN_NOW
+ *   2. 满全局最大轮数 → FAQ_END
+ * 规则 1 要求 modelRoute === 'CONTINUE',所以被规则 1 强转的不会再被规则 2 降级。
+ * 注意:`modelRoute` 必须传 Medici 的【原始】route(不要传已被改写过的)。
+ * 本函数只决策 route,不产生任何副作用(发飞书 / 起接管 / 发 FAQ 资源由调用方按需做)。
+ * @param {Object} args
+ * @param {string} args.modelRoute        Medici 原始 route
+ * @param {number} args.priorRounds       落库前历史轮数 floor(history/2)
+ * @param {number} args.postMessageCount  落库后消息总条数(喂给 hasReachedGlobalMaxTurns)
+ * @param {boolean} args.hasLead
+ * @param {boolean} args.onDuty
+ * @returns {{ route: string, forcedHandoff: boolean, reason: 'onduty_handoff'|'global_max_turns'|null }}
+ */
+export function resolveHostRoute({ modelRoute, priorRounds, postMessageCount, hasLead, onDuty }) {
+  if (shouldForceOnDutyHandoff({ route: modelRoute, priorRounds, hasLead, onDuty })) {
+    return { route: 'HUMAN_NOW', forcedHandoff: true, reason: 'onduty_handoff' };
+  }
+  if (hasReachedGlobalMaxTurns(postMessageCount || 0)) {
+    return { route: 'FAQ_END', forcedHandoff: false, reason: 'global_max_turns' };
+  }
+  return { route: modelRoute, forcedHandoff: false, reason: null };
+}
+
 export default {
   GLOBAL_MAX_TURNS,
   getMissingFields,
@@ -227,4 +254,5 @@ export default {
   getGlobalMaxTurns,
   ONDUTY_HANDOFF_MIN_ROUNDS,
   shouldForceOnDutyHandoff,
+  resolveHostRoute,
 };
