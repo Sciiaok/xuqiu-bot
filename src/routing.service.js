@@ -331,6 +331,39 @@ export async function executeConversationRouting(route, conversationId, waId, ha
     return { success: true, action: 'continue_conversation' };
   }
 
+  // FAQ_END 是【会话级】收尾动作：发 FAQ 资源 + 进入静默期，与本轮是否抽到 lead
+  // 无关。满全局最大轮数(30)强制收尾时，模型本轮 route 通常仍是 CONTINUE，leads
+  // 以原始 route 落库（甚至本轮纯闲聊根本没 lead）—— 绝不能像 HUMAN_NOW 那样按
+  // leads.route 过滤后「无 lead 即跳过」，否则 30 轮安全闸形同虚设。这里把该会话所有
+  // leads（无论当前 route，故 route=null）统一标成 FAQ_END 以与会话级 route 一致，
+  // 再无条件发 FAQ + markFaqEnded。
+  if (route === 'FAQ_END') {
+    const leads = await getLeadsByConversation(conversationId, null);
+    const results = [];
+    for (const lead of leads) {
+      const result = await executeLeadRouting('FAQ_END', lead, handoffSummary, traceContext);
+      results.push({ leadId: lead.id, ...result });
+    }
+
+    await sendFAQResources(waId, phoneNumberId, traceContext);
+    // 进入 FAQ_END 静默期：客户继续发消息时 queue-processor 只入库不调 Medici，
+    // 避免 spam 循环烧钱 + 重发 FAQ 资源。webhook 检测到新 CTWA referral（客户重新
+    // 点广告）会清空 → 重新放开 AI 接待。
+    try {
+      await markFaqEnded(conversationId);
+    } catch (markErr) {
+      logger.warn('routing.faq.mark_ended_failed', { error: markErr.message });
+    }
+
+    logger.info('routing.faq.ended', { leads_marked: results.length });
+    return {
+      success: results.every((r) => r.success),
+      action: 'faq_ended',
+      results,
+      leadsRouted: results.length,
+    };
+  }
+
   // 每个接管周期只发一次飞书通知：进入 HUMAN_NOW 时若已通知过，整批跳过。
   // 接管被取消时（endHumanTakeover）会清掉这个时间戳，重新允许下一次。
   if (route === 'HUMAN_NOW') {
@@ -362,18 +395,6 @@ export async function executeConversationRouting(route, conversationId, waId, ha
   for (const lead of leads) {
     const result = await executeLeadRouting(route, lead, handoffSummary, traceContext);
     results.push({ leadId: lead.id, ...result });
-  }
-
-  if (route === 'FAQ_END') {
-    await sendFAQResources(waId, phoneNumberId, traceContext);
-    // 进入 FAQ_END 静默期：客户继续发消息时 queue-processor 只入库不调
-    // Medici，避免 spam 循环烧钱 + 重发 FAQ 资源。webhook 检测到新 CTWA
-    // referral（客户重新点广告）会清空 → 重新放开 AI 接待。
-    try {
-      await markFaqEnded(conversationId);
-    } catch (markErr) {
-      logger.warn('routing.faq.mark_ended_failed', { error: markErr.message });
-    }
   }
 
   if (route === 'HUMAN_NOW' && results.some(r => r.success)) {
