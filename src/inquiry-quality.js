@@ -181,9 +181,60 @@ export function getGlobalMaxTurns() {
   return GLOBAL_MAX_TURNS;
 }
 
+// ─── Business-hours forced handoff policy ────────────────────────────
+// 在 Medici 的路由判断之上叠加的硬规则：北京时间营业时段内、对话超过三轮且
+// 已抽到有效线索的会话，强制转人工（消费点见 lib/queue-processor.js）。
+// 北京无夏令时，epoch + 8h 后取 UTC 小时即为北京小时（与
+// report-generator.service.js 的 chinaDate 同习惯，避免依赖服务器本地时区）。
+const BEIJING_UTC_OFFSET_MS = 8 * 60 * 60 * 1000;
+const BUSINESS_HOURS_START_HOUR = 10; // 含 10:00
+const BUSINESS_HOURS_END_HOUR = 20;   // 不含 20:00
+
+// 本轮落库前历史已满的轮数达到此值即强转。floor(history/2) >= 3 表示本轮是第 4
+// 个客户消息起，落库后对话「超过三轮」。
+export const BUSINESS_HOURS_HANDOFF_MIN_ROUNDS = 3;
+
+/**
+ * Whether `date` falls within Beijing business hours, window [10:00, 20:00).
+ * @param {Date} [date=new Date()]
+ * @returns {boolean}
+ */
+export function isWithinBeijingBusinessHours(date = new Date()) {
+  const beijingHour = new Date(date.getTime() + BEIJING_UTC_OFFSET_MS).getUTCHours();
+  return beijingHour >= BUSINESS_HOURS_START_HOUR && beijingHour < BUSINESS_HOURS_END_HOUR;
+}
+
+/**
+ * 营业时段长对话强制转人工的判定（叠加在 Medici 路由之上）。四条件全真才转：
+ *   - route === 'CONTINUE'：仅覆盖 CONTINUE，尊重模型自判的 FAQ_END / HUMAN_NOW
+ *   - priorRounds >= BUSINESS_HOURS_HANDOFF_MIN_ROUNDS：落库前历史已满 3 轮，
+ *     本轮落库后对话「超过三轮」
+ *   - now 落在北京营业时段 [10:00, 20:00)
+ *   - hasLead：本轮抽到有效线索（纯闲聊 / FAQ 不打扰销售）
+ * 纯函数。hasLead 由调用方用 lib/session.js::hasValidLeads 算好传入，避免
+ * inquiry-quality ↔ session 循环依赖。
+ * @param {Object} args
+ * @param {string} args.route
+ * @param {number} args.priorRounds
+ * @param {boolean} args.hasLead
+ * @param {Date} [args.now=new Date()]
+ * @returns {boolean}
+ */
+export function shouldForceBusinessHoursHandoff({ route, priorRounds, hasLead, now = new Date() }) {
+  return (
+    route === 'CONTINUE' &&
+    priorRounds >= BUSINESS_HOURS_HANDOFF_MIN_ROUNDS &&
+    isWithinBeijingBusinessHours(now) &&
+    hasLead === true
+  );
+}
+
 export default {
   GLOBAL_MAX_TURNS,
   getMissingFields,
   hasReachedGlobalMaxTurns,
   getGlobalMaxTurns,
+  BUSINESS_HOURS_HANDOFF_MIN_ROUNDS,
+  isWithinBeijingBusinessHours,
+  shouldForceBusinessHoursHandoff,
 };
