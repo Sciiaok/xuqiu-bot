@@ -19,6 +19,7 @@ import {
   lookupPolicy,
   findAsset,
   checkConstraint,
+  computeApproxRange,
 } from '../../kb-tools.service.js';
 import supabase from '../../../lib/supabase.js';
 
@@ -42,7 +43,7 @@ const TOOL_DEFS = {
   lookup_product: {
     name: 'lookup_product',
     description:
-      'Find products by SKU, model name, or attribute filters (e.g. horsepower, fuel type). Returns {found:true, products:[...]} with structured product data, or {found:false, suggestions?:[...], missing_fields?:[...]}. The tool tokenizes input automatically (whitespace, CJK/Latin transitions), so pass the keyword verbatim — do NOT insert or strip spaces yourself. **This is an internal signal — `found:false` does NOT mean you should tell the customer "we don\'t have X".** During `lead_collection`: record the customer\'s brand/SKU into `leads`, then keep collecting the configured qualify_fields. `suggestions` are NEVER proactively offered as cross-sell — only surface them when the customer explicitly asks for alternatives ("还有什么别的"/"recommend something else"). When `qualify_fields` are complete and the SKU is still not_found, route to HUMAN_NOW per handover-rules §1.4 (do not surface KB miss to the customer in next_message). **Price lock** — two flavors, both strip `fob_price_usd` from the response: (a) `_price_locked.reason="leads_incomplete"` → leads not QUALIFY-complete; (b) `_price_locked.reason="config_not_picked"` → the search returned >1 SKU and the customer hasn\'t narrowed to one config yet. In either case, do NOT quote any price (number, range, ballpark, "from $X to $Y"); list the configurations and ask which one. See skill-host-patch §10.',
+      'Find products by SKU, model name, or attribute filters (e.g. horsepower, fuel type). Returns {found:true, products:[...]} with structured product data, or {found:false, suggestions?:[...], missing_fields?:[...]}. The tool tokenizes input automatically (whitespace, CJK/Latin transitions), so pass the keyword verbatim — do NOT insert or strip spaces yourself. **This is an internal signal — `found:false` does NOT mean you should tell the customer "we don\'t have X".** During `lead_collection`: record the customer\'s brand/SKU into `leads`, then keep collecting the configured qualify_fields. `suggestions` are NEVER proactively offered as cross-sell — only surface them when the customer explicitly asks for alternatives ("还有什么别的"/"recommend something else"). When `qualify_fields` are complete and the SKU is still not_found, route to HUMAN_NOW per handover-rules §1.4 (do not surface KB miss to the customer in next_message). **This tool never returns prices — it is identification only.** For ANY price question, call `quote_price` (it returns a server-computed indicative range). When the search returns >1 SKU, list the configurations and ask the customer which one BEFORE quoting — `quote_price` needs the query to resolve to a single SKU. See skill-host-patch §10.',
     input_schema: {
       type: 'object',
       properties: {
@@ -60,15 +61,11 @@ const TOOL_DEFS = {
   quote_price: {
     name: 'quote_price',
     description:
-      'Quote a price for a specific product. Returns {ok:true, unit_price, total_price, breakdown, validity, source} OR {ok:false, missing_fields|needs_human|not_found}. NEVER guess prices — always call this. CIF/DDP requires destination_port. **Price lock**: when leads are not QUALIFY-complete the host short-circuits this tool to {ok:false, missing_fields:[...], reason:"leads_incomplete", _price_locked:{...}} — do NOT quote any price (number, range, ballpark); ask for the missing leads instead. See skill-host-patch §10.',
+      'Get an INDICATIVE PRICE RANGE for ONE specific product. Call this for any specific-product price question — no need to collect leads first. Returns {ok:true, approximate:true, price_low, price_high, currency:"USD", trade_term:"FOB", basis:"per_unit"} when the sku/model resolves to a single priced product. The range is computed server-side — relay price_low–price_high verbatim as an approximate FOB unit range; NEVER reveal or imply an exact/base price, NEVER invent numbers, NEVER explain how the range is derived. Other shapes: {ok:false, not_found:true} (no such product — do NOT tell the customer "we don\'t have it"; per §5 keep probing or hand off); {ok:false, missing_fields:["sku"]} (matched >1 configuration — list them, ask which one, then call again); {ok:false, needs_human:true} (product exists but no price on file — hand off, never fabricate). The range is FOB unit price; CIF/DDP freight is extra and confirmed offline.',
     input_schema: {
       type: 'object',
       properties: {
-        sku: { type: 'string' },
-        quantity: { type: 'number', description: 'default 1' },
-        trade_term: { type: 'string', enum: ['FOB', 'CIF', 'DDP'], description: 'default FOB' },
-        destination_port: { type: 'string', description: 'required for CIF/DDP' },
-        payment_term: { type: 'string', description: 'e.g. "TT 30/70" or "LC at sight" — non-standard terms trigger needs_human' },
+        sku: { type: 'string', description: 'SKU or model identifier of ONE specific product. Tokenized automatically.' },
       },
       required: ['sku'],
     },
@@ -197,46 +194,17 @@ function stripProductPrices(products) {
   });
 }
 
-function applyPriceLock(toolName, result, missingLeads) {
+// freight 运费仍按 leads 完整度做闸：未齐时从 route 里抽掉 unit_cost。
+// （产品报价已改为对外只给 quote_price 的区间，不再依赖这里；本函数仅服务
+// lookup_freight。）
+function applyFreightPriceLock(result, missingLeads) {
   if (!Array.isArray(missingLeads) || missingLeads.length === 0) return result;
   if (!result || typeof result !== 'object') return result;
-  const lock = { reason: 'leads_incomplete', missing: missingLeads };
-
-  if (toolName === 'lookup_product') {
-    if (!result.found || !Array.isArray(result.products)) return result;
-    return {
-      ...result,
-      products: stripProductPrices(result.products),
-      _price_locked: lock,
-    };
-  }
-  if (toolName === 'lookup_freight') {
-    if (!result.found || !result.route) return result;
-    return { ...result, route: stripPriceKeys(result.route), _price_locked: lock };
-  }
-  return result;
-}
-
-/**
- * 多 SKU 时再加一道闸：leads 已 QUALIFY-complete 但客户没把"配置"收敛到单
- * 一型号（lookup_product 返回 >1 行），仍然不让 LLM 看价格——否则它会把所有
- * fob_price_usd 合并成一个 "$8,800–$12,600" 区间报给客户。飞书验收标准把
- * "配置" 列为最低必填字段，所以这里把"未锁定单一 SKU" 当成一种"未齐"。
- *
- * 字段补齐（客户确认了具体型号、下一次 lookup 只命中 1 条）后，价格自动恢复。
- */
-function applyMultiSkuPriceLock(result) {
-  if (!result || typeof result !== 'object') return result;
-  if (!result.found || !Array.isArray(result.products)) return result;
-  if (result.products.length <= 1) return result;
-  if (result._price_locked) return result;  // leads_incomplete 已经盖过章了
+  if (!result.found || !result.route) return result;
   return {
     ...result,
-    products: stripProductPrices(result.products),
-    _price_locked: {
-      reason: 'config_not_picked',
-      products: result.products.length,
-    },
+    route: stripPriceKeys(result.route),
+    _price_locked: { reason: 'leads_incomplete', missing: missingLeads },
   };
 }
 
@@ -249,33 +217,41 @@ export async function executeKbTool(toolName, input, ctx = {}) {
     let result;
     const base = { tenantId: ctx.tenantId, productLineId: ctx.productLineId };
     const missingLeads = Array.isArray(ctx.qualifyMissingFields) ? ctx.qualifyMissingFields : [];
-    const leadsLocked = missingLeads.length > 0;
 
     switch (toolName) {
       case 'lookup_product':
         result = await lookupProduct({ ...base, sku: input.sku, model: input.model, attrs: input.attrs });
-        result = applyPriceLock('lookup_product', result, missingLeads);
-        result = applyMultiSkuPriceLock(result);
-        break;
-      case 'quote_price':
-        if (leadsLocked) {
-          result = {
-            ok: false,
-            missing_fields: missingLeads,
-            reason: 'leads_incomplete',
-            _price_locked: { reason: 'leads_incomplete', missing: missingLeads },
-          };
-          break;
+        // 原价数字一律不进模型视野 —— 价格只走 quote_price 的区间通道（见
+        // skill-host-patch §10）。lookup_product 永远只做识别，不返回任何价格字段。
+        if (result.found && Array.isArray(result.products)) {
+          result = { ...result, products: stripProductPrices(result.products) };
         }
-        result = await quotePrice({
-          ...base,
-          sku: input.sku,
-          quantity: input.quantity,
-          tradeTerm: input.trade_term,
-          destinationPort: input.destination_port,
-          paymentTerm: input.payment_term,
-        });
         break;
+      case 'quote_price': {
+        // 对外只给 ballpark 区间：永不报精确数，也不要求 leads 收齐。复用
+        // quotePrice 的产品解析（强制 FOB），拿到 fob 原价后服务端算成区间。
+        //   单一产品 + 有价 → {ok:true, approximate, price_low, price_high}
+        //   多匹配         → quotePrice 返回 missing_fields:['sku']（让客户收敛配置）
+        //   未命中         → not_found
+        //   无 fob 价      → needs_human
+        const exact = await quotePrice({ ...base, sku: input.sku, tradeTerm: 'FOB' });
+        if (!exact.ok) { result = exact; break; }
+        const range = computeApproxRange(exact.breakdown?.unit_fob_price);
+        if (!range) { result = { ok: false, needs_human: true, reason: 'no_fob_price_recorded' }; break; }
+        result = {
+          ok: true,
+          approximate: true,
+          price_low: range.price_low,
+          price_high: range.price_high,
+          currency: 'USD',
+          trade_term: 'FOB',
+          basis: 'per_unit',
+          note: 'Indicative FOB range only; final price confirmed by sales. CIF/DDP adds freight on top.',
+          validity: exact.validity,
+          source: exact.source,
+        };
+        break;
+      }
       case 'lookup_freight':
         result = await lookupShipping({
           ...base,
@@ -283,7 +259,7 @@ export async function executeKbTool(toolName, input, ctx = {}) {
           shippingMethod: input.shipping_method,
           originPort: input.origin_port,
         });
-        result = applyPriceLock('lookup_freight', result, missingLeads);
+        result = applyFreightPriceLock(result, missingLeads);
         if (result && result.found === false) {
           result.hint =
             'No freight rate data on file for this destination — does NOT mean we cannot ship there. Default reply: yes we can ship to this destination, ops will confirm rate and transit time. Do NOT invent specific route characteristics (cost, transit days, frequency, "stable route", "regular service").';

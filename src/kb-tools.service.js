@@ -34,6 +34,36 @@ function round2(n) {
   return Math.round(n * 100) / 100;
 }
 
+// ── Approx-range quote (customer-facing ballpark) ────────────────────
+// 对外只给 fob 原价的 ±区间，绝不给精确数字（见 skill-host-patch §10）。区间在
+// 服务端算死，模型只转述 price_low–price_high，拿不到原价、也不知道 ±规则。
+const QUOTE_RANGE_LOW_PCT = 0.97;  // 原价 −3%
+const QUOTE_RANGE_HIGH_PCT = 1.05; // 原价 +5%
+
+// 按量级取整步长，让区间端点读起来像"大概"而非精确乘积。
+function ballparkStep(v) {
+  if (v < 1000) return 10;
+  if (v < 10000) return 50;
+  if (v < 100000) return 100;
+  return 500;
+}
+
+/**
+ * 把 fob 原价转成对外 ballpark 区间：[原价×0.97 向下取整, 原价×1.05 向上取整]。
+ * 基准非正数 / 非数 → null（调用方据此走 needs_human）。
+ * @param {number|string} basePrice
+ * @returns {{price_low:number, price_high:number}|null}
+ */
+export function computeApproxRange(basePrice) {
+  const base = parseFloat(basePrice);
+  if (!Number.isFinite(base) || base <= 0) return null;
+  const lowRaw = base * QUOTE_RANGE_LOW_PCT;
+  const highRaw = base * QUOTE_RANGE_HIGH_PCT;
+  const price_low = Math.floor(lowRaw / ballparkStep(lowRaw)) * ballparkStep(lowRaw);
+  const price_high = Math.ceil(highRaw / ballparkStep(highRaw)) * ballparkStep(highRaw);
+  return { price_low, price_high };
+}
+
 // ── 1. lookupProduct ─────────────────────────────────────────────────
 
 // Tokenize a search value so that:
