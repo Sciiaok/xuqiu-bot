@@ -1,6 +1,6 @@
 # Schema Snapshot (auto-generated)
 
-Generated: 2026-06-01T10:28:11.676Z
+Generated: 2026-06-03T08:47:13.626Z
 
 Live snapshot of `public` schema from Supabase. **Do not edit by hand** — run `node scripts/build-index.mjs` to refresh.
 
@@ -1167,6 +1167,7 @@ Tables: **48**. Listed alphabetically.
 | `message_style_examples` | text | Y |  |
 | `faq_message` | text | Y |  |
 | `tenant_id` | uuid | N | `'00000000-0000-0000-0000-000000000001':…` |
+| `reception_on` | boolean | N | `true` |
 
 **Foreign keys:**
 - `tenant_id` → `tenants.id`
