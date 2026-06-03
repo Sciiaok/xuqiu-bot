@@ -18,8 +18,9 @@ envelope 的字段、类型、枚举值真源在 `output-schema.js`（`buildEnve
 - `business_value` 按动态段 `BUSINESS VALUE GUIDANCE` 拍板
 - `leads` 字段集由动态段 `LEAD_FIELDS_HINTS` 决定（每个 product_line 不同）；输出策略见 §6
 - `route` 是宿主路由信号——特殊路由见 §5
-- `next_message` ≤ 180 字符
-- `handoff_summary`：转人工时给销售的一段话；不转人工填空字符串
+- `next_message` ≤ 180 字符；用客户的语言写（面向客户）
+- `handoff_summary`：转人工时给销售的一段话；不转人工填空字符串。**必须用简体中文写**（面向中文销售团队，不是客户）
+- `conversation_intent_summary`：意图与客户处境的简要分析。**必须用简体中文写**（内部字段，只给中文销售团队看，与客户语言无关）
 - `attachments`：默认 `[]`；规则见 §7
 - `conversation_intent`：一会话可同时多种；分类规则见 §4
 

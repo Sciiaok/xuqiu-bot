@@ -62,7 +62,10 @@ export function buildEnvelopeSchema(leadsItemsSchema) {
       },
       conversation_intent_summary: {
         type: 'string',
-        description: 'Brief analysis of detected intents and customer situation.',
+        description:
+          'Brief analysis of detected intents and customer situation. ' +
+          'Always write this in Simplified Chinese (简体中文), regardless of the ' +
+          "customer's language — it is read only by the Chinese-speaking sales team.",
       },
       inquiry_quality: {
         type: 'string',
@@ -90,7 +93,10 @@ export function buildEnvelopeSchema(leadsItemsSchema) {
       },
       handoff_summary: {
         type: 'string',
-        description: 'Summary for sales team when routing to HUMAN_NOW.',
+        description:
+          'Summary for sales team when routing to HUMAN_NOW. ' +
+          'Always write this in Simplified Chinese (简体中文), regardless of the ' +
+          "customer's language — it is read only by the Chinese-speaking sales team.",
       },
       attachments: {
         type: 'array',
