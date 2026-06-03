@@ -16,7 +16,7 @@ import { recordAudit } from '../../../../lib/repositories/audit-log.repository.j
  *   - 内容字段：从 dynamic_injection 撤了，UI 不暴露
  *   - 绑定与停用：phone 即入口，停用动作没了
  */
-const ALLOWED_UPDATE_KEYS = new Set(['name', 'business_value_guidance', 'lead_fields']);
+const ALLOWED_UPDATE_KEYS = new Set(['name', 'business_value_guidance', 'lead_fields', 'reception_on']);
 
 const ALLOWED_FIELD_TYPES = new Set(['text', 'number', 'boolean', 'enum', 'array']);
 const ALLOWED_REQUIRED_FOR = new Set(['GOOD', 'QUALIFY', 'PROOF']);
@@ -119,6 +119,17 @@ export async function PUT(request, { params }) {
           before: before.lead_fields || null,
           after: updates.lead_fields,
         },
+      });
+    }
+
+    // 上班/下班是销售可用性的关键动作 —— 留痕便于事后核对谁在何时关了接待。
+    if (updates.reception_on !== undefined && Boolean(before.reception_on) !== Boolean(updates.reception_on)) {
+      await recordAudit({
+        tenantId: ctx.tenantId,
+        actorUserId: ctx.user?.id || null,
+        actorEmail: ctx.user?.email || null,
+        action: 'product_line.reception_toggled',
+        details: { product_line_id: id, on: Boolean(updates.reception_on) },
       });
     }
 

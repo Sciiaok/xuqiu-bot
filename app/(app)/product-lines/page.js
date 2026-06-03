@@ -37,6 +37,9 @@ export default function ProductLinesPage() {
   const [loadError, setLoadError] = useState('');
   const [openingId, setOpeningId] = useState('');
   const [openError, setOpenError] = useState('');
+  // 上班/下班开关:per-line 的就地切换状态
+  const [togglingId, setTogglingId] = useState('');
+  const [toggleError, setToggleError] = useState('');
 
   async function loadAll({ silent = false } = {}) {
     if (!silent) { setLoading(true); setLoadError(''); }
@@ -78,6 +81,34 @@ export default function ProductLinesPage() {
     });
   }, [lines, accounts.all_numbers]);
 
+  // 一键上班/下班:乐观切换该产品线的 reception_on,失败回滚。开关在卡片
+  // (整卡是个进入配置的 button)内,故点击需 stopPropagation 防止误触发跳转。
+  async function toggleReception(line) {
+    if (!line || togglingId) return;
+    const next = !(line.reception_on !== false);
+    setTogglingId(line.id);
+    setToggleError('');
+    setLines((prev) => prev.map((l) => (l.id === line.id ? { ...l, reception_on: next } : l)));
+    try {
+      const res = await fetch(`/api/product-lines/${encodeURIComponent(line.id)}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ reception_on: next }),
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.error || `HTTP ${res.status}`);
+      }
+      invalidate(KEYS.PRODUCT_LINES_ALL);
+    } catch (err) {
+      // 回滚乐观更新
+      setLines((prev) => prev.map((l) => (l.id === line.id ? { ...l, reception_on: !next } : l)));
+      setToggleError(`${line.name}:切换失败 — ${err.message}`);
+    } finally {
+      setTogglingId('');
+    }
+  }
+
   async function openCard({ number, line }) {
     if (line) {
       router.push(`/product-lines/${line.id}`);
@@ -101,7 +132,7 @@ export default function ProductLinesPage() {
       <div className={s.header}>
         <div className={s.headerLeft}>
           <h1 className={s.title}>Medici</h1>
-          <span className={s.subtitle}>一个 WhatsApp 号码 = 一个 Medici 客服 · 点号码进入配置</span>
+          <span className={s.subtitle}>一个 WhatsApp 号码 = 一个 Medici 客服 · 点号码进入配置 · 右上角一键上班/下班</span>
         </div>
       </div>
 
@@ -119,6 +150,12 @@ export default function ProductLinesPage() {
       {openError && (
         <div className={s.errorBanner}>
           <span>{openError}</span>
+        </div>
+      )}
+
+      {toggleError && (
+        <div className={s.errorBanner}>
+          <span>{toggleError}</span>
         </div>
       )}
 
@@ -167,7 +204,24 @@ export default function ProductLinesPage() {
                   {opening
                     ? <span className={s.statusOff}>打开中…</span>
                     : configured
-                      ? <span className={s.statusOk}>已配置</span>
+                      ? (
+                        <span
+                          role="switch"
+                          aria-checked={line.reception_on !== false}
+                          tabIndex={0}
+                          className={`${s.dutyToggle} ${line.reception_on !== false ? s.dutyOn : s.dutyOff} ${togglingId === line.id ? s.dutyBusy : ''}`}
+                          title={line.reception_on !== false
+                            ? '上班中 · 点击下班(停用「超3轮自动转人工」)'
+                            : '已下班 · 点击上班(启用「超3轮自动转人工」)'}
+                          onClick={(e) => { e.stopPropagation(); e.preventDefault(); toggleReception(line); }}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); e.stopPropagation(); toggleReception(line); }
+                          }}
+                        >
+                          <span className={s.dutyDot} />
+                          {togglingId === line.id ? '…' : (line.reception_on !== false ? '上班' : '下班')}
+                        </span>
+                      )
                       : <span className={s.statusWarn}>待配置</span>}
                 </div>
 

@@ -134,6 +134,9 @@ export function assembleLineConfig(row) {
     lead_fields: Array.isArray(row.lead_fields) ? row.lead_fields : [],
     wa_phone_number_id: row.wa_phone_number_id || null,
     is_active: row.is_active !== false,
+    // 人工"上班/下班"开关:默认 ON(列缺失 / null 都视为 true)。queue-processor
+    // 据此决定"超3轮强制转人工"规则是否生效(见 inquiry-quality.js)。
+    reception_on: row.reception_on !== false,
   };
 }
 
