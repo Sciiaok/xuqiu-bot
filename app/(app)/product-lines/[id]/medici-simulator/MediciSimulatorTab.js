@@ -6,8 +6,8 @@ import s from './MediciSimulatorTab.module.css';
 
 // 与 src/config.js queue.aggregationWindow{Min,Max}Ms 保持一致 —— 客户端不能
 // import server config（process.env 读不到），这里手动镜像一份。改动时两处同改。
-const AGG_WINDOW_MIN_MS = 15000;
-const AGG_WINDOW_MAX_MS = 30000;
+const AGG_WINDOW_MIN_MS = 3000;
+const AGG_WINDOW_MAX_MS = 15000;
 function pickAggregationWindowMs() {
   return Math.floor(AGG_WINDOW_MIN_MS + Math.random() * (AGG_WINDOW_MAX_MS - AGG_WINDOW_MIN_MS));
 }

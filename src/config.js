@@ -55,11 +55,11 @@ export const config = {
   // 由唯一消费方 lib/repositories/queue.repository.js 自己读 process.pid。
   queue: {
     // 每次 burst 取 [min, max) 之间的随机毫秒数做聚合窗口。固定值会让回复
-    // 节奏过于机械，且 2s 太短，碎片消息（"I" / "want" / "info"）容易被拆成
-    // 多次 Medici 调用。15~30s 既能把同一意图的连发拼成一次，也让 AI 回复
+    // 节奏过于机械，且太短会把碎片消息（"I" / "want" / "info"）拆成多次
+    // Medici 调用。3~15s 既能把同一意图的连发拼成一次，也让 AI 回复
     // 看起来像"人类正在打字"而非毫秒级响应。
-    aggregationWindowMinMs: 15000,
-    aggregationWindowMaxMs: 30000,
+    aggregationWindowMinMs: 3000,
+    aggregationWindowMaxMs: 15000,
     maxRetries: 3,
     // 90s = medici 单次调用的隐式上限。锁超时后 release_stale_queue_locks 会
     // 把行释放回 pending，另一个 worker 可能抢同一会话并发跑 —— 所以
