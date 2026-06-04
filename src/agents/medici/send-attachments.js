@@ -17,6 +17,7 @@
  */
 
 import supabase from '../../../lib/supabase.js';
+import { getSupabaseAdmin } from '../../../lib/supabase-admin.js';
 import { sendMedia } from '../../whatsapp.service.js';
 import { createMessage } from '../../../lib/repositories/message.repository.js';
 import { filterAttachmentsBySkuContext } from './attachment-guard.js';
@@ -40,7 +41,10 @@ async function fetchAsset(assetId) {
   if (!row) throw new Error(`asset not found: ${assetId}`);
   if (!row.is_sendable) throw new Error(`asset not sendable: ${assetId}`);
 
-  const { data: file, error: dlError } = await supabase.storage
+  // kb-assets 是私有桶,只有 service-role 能读。队列进程用的 anon client 对它
+  // 没有读权限(download 直接 "Object not found"),所以这里必须走 admin,否则
+  // 整个附件发送在下载这步就挂了。表查询(上面)anon 可读,无需改。
+  const { data: file, error: dlError } = await getSupabaseAdmin().storage
     .from(STORAGE_BUCKET)
     .download(row.storage_path);
   if (dlError) throw dlError;
@@ -124,6 +128,30 @@ export async function sendMediciAttachments({
         phoneNumberId,
       );
 
+      // 把发出去的字节转存一份到 chat-media 公开桶,落持久 media_url —— 与人工
+      // 出站(/api/send-message)对齐,让附件气泡在收件箱里能直接预览。kb-assets
+      // 桶是私有的(只发 1h 签名 URL),不能直接引用;上传走 service-role,因为
+      // 队列进程用的是 anon client,对 chat-media 没有 RLS 写权限。转存失败时
+      // media_url 留空,气泡退回 `[image: 文件名]` 文字占位,不影响已发出的消息。
+      let mediaUrl = null;
+      try {
+        const ext = row.filename.slice(row.filename.lastIndexOf('.')) || '';
+        const safeName = `${Date.now()}_${Math.random().toString(36).slice(2, 8)}${ext}`;
+        const storagePath = `${waId}/${safeName}`;
+        const { error: uploadError } = await getSupabaseAdmin().storage
+          .from('chat-media')
+          .upload(storagePath, buffer, { contentType: row.mime_type, upsert: false });
+        if (!uploadError) {
+          mediaUrl = getSupabaseAdmin().storage
+            .from('chat-media')
+            .getPublicUrl(storagePath).data.publicUrl;
+        } else {
+          logger?.warn?.('queue.attachment.storage_failed', { asset_id: row.id, error: uploadError.message });
+        }
+      } catch (storageErr) {
+        logger?.warn?.('queue.attachment.storage_failed', { asset_id: row.id, error: storageErr.message });
+      }
+
       const messageContent = caption
         ? `[${mediaType}: ${row.filename}] ${caption}`
         : `[${mediaType}: ${row.filename}]`;
@@ -142,6 +170,7 @@ export async function sendMediciAttachments({
           media_type: mediaType,
           filename: row.filename,
           kb_asset_id: row.id,
+          ...(mediaUrl ? { media_url: mediaUrl } : {}),
           ...(outboundWamid ? { wa_message_id: outboundWamid } : {}),
           delivery: { status: 'sent', sent_at: new Date().toISOString() },
         },
