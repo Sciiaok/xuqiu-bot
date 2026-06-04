@@ -104,11 +104,11 @@ export default function ChatMessage({ msg, contactName }) {
   );
 }
 
-// 链路状态映射到 WA 风格小角标：
-//   sent      → ✓     灰色（"已提交至 Meta"）
-//   delivered → ✓✓    灰色（"已送达客户设备"）
-//   read      → ✓✓    蓝色（"客户已读"，前提是客户打开了已读回执）
-//   failed    → ✗     红色（hover 看错误详情）
+// 链路状态映射到角标：WA 风格勾子做快速扫视，后接中文文字消歧。
+//   sent      → ✓ 已发送    灰色（"已提交至 Meta"）
+//   delivered → ✓✓ 已送达   灰色（"已送达客户设备"）
+//   read      → ✓✓ 已读     蓝色（"客户已读"，前提是客户打开了已读回执）
+//   failed    → ✗ 发送失败  红色（hover 看错误详情）
 function renderDeliveryBadge(delivery) {
   const status = delivery.status;
   if (status === 'failed') {
@@ -118,13 +118,13 @@ function renderDeliveryBadge(delivery) {
     return <span className={`${s.msgDelivery} ${s.msgDeliveryFailed}`} title={title}>✗ 发送失败</span>;
   }
   if (status === 'read') {
-    return <span className={`${s.msgDelivery} ${s.msgDeliveryRead}`} title="客户已读">✓✓</span>;
+    return <span className={`${s.msgDelivery} ${s.msgDeliveryRead}`} title="客户已读">✓✓ 已读</span>;
   }
   if (status === 'delivered') {
-    return <span className={s.msgDelivery} title="已送达">✓✓</span>;
+    return <span className={s.msgDelivery} title="已送达客户设备">✓✓ 已送达</span>;
   }
   if (status === 'sent') {
-    return <span className={s.msgDelivery} title="已发送">✓</span>;
+    return <span className={s.msgDelivery} title="已提交至 Meta">✓ 已发送</span>;
   }
   return null;
 }
