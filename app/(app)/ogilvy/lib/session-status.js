@@ -66,6 +66,21 @@ const BUCKET_TO_STATE = {
   paused:   { tone: 'paused',   label: '已暂停' },
 };
 
+// Mirrors STAGING_STALE_MS in
+// app/api/ogilvy/conversations/[id]/launch/route.js. A `staging`/`staged` row
+// older than this — with no in-flight launch SSE refreshing updated_at — is an
+// abandoned launch (client disconnect / instance recycle), not active progress.
+// The backend already lets such a row be re-claimed; the UI must agree, or the
+// launch button shows "启动中…" forever and the user is locked out. Keep the
+// two constants in sync.
+export const STAGING_STALE_MS = 5 * 60 * 1000;
+
+export function isStagingStale(status, updatedAt) {
+  if (status !== 'staging' && status !== 'staged') return false;
+  if (!updatedAt) return false;
+  return Date.now() - new Date(updatedAt).getTime() > STAGING_STALE_MS;
+}
+
 /**
  * Derive what to render for a session's status. See file header for design
  * rule (Meta state primary, DB state fallback).
@@ -79,6 +94,8 @@ const BUCKET_TO_STATE = {
  *                      when session is launched/paused on Meta
  *   - launchProgress — { phase } during in-flight launch SSE (modal-only)
  *   - streaming      — true while draft_ad_plan streams (modal-only)
+ *   - updatedAt      — `session.updated_at`; used to detect an abandoned
+ *                      staging/staged launch (see isStagingStale)
  *
  * Returns: { tone, label }
  *
@@ -92,6 +109,7 @@ export function deriveSessionStatus({
   adStatuses = null,
   launchProgress = null,
   streaming = false,
+  updatedAt = null,
 } = {}) {
   // Ephemeral states win — DB is stale mid-stream by definition.
   if (streaming) return { tone: 'streaming', label: '生成中…' };
@@ -120,6 +138,18 @@ export function deriveSessionStatus({
 
   if (isLaunched)      return { tone: 'launched', label: '投放中' };
   if (isPaused)        return { tone: 'paused',   label: '已暂停' };
+
+  // Abandoned-launch recovery: a staging/staged row that's gone stale — no
+  // in-flight SSE refreshing updated_at — is a dead launch, not progress. The
+  // streaming / launchProgress guards above already shield a live in-modal
+  // launch. Surface it as recoverable (same threshold the backend uses to
+  // allow re-claiming the row) so the launch CTA flips back to a retry instead
+  // of a forever-spinning "启动中…".
+  if ((isStaged || isStaging) &&
+      (isStagingStale(sessionStatus, updatedAt) || isStagingStale(planStatus, updatedAt))) {
+    return { tone: 'failed', label: '启动中断' };
+  }
+
   if (isStaged)        return { tone: 'busy',     label: '激活中…' };
   if (isStaging)       return { tone: 'busy',     label: '启动中…' };
   if (isFailed)        return { tone: 'failed',   label: '启动失败' };

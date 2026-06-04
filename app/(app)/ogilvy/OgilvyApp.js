@@ -305,6 +305,7 @@ export default function OgilvyApp() {
         planStatus: sess.plan_json?.status,
         hasPlan: !!sess.plan_json,
         adStatuses: adStatuses?.[sess.id] || null,
+        updatedAt: sess.updated_at,
       });
       if (counts[tone] !== undefined) counts[tone] += 1;
     }
@@ -577,6 +578,7 @@ function SessionGridCard({ session, productLineName, metrics, metricsLoading, ad
     planStatus: session.plan_json?.status,
     hasPlan: !!session.plan_json,
     adStatuses,
+    updatedAt: session.updated_at,
   });
   const isLaunched = session.status === 'launched' || session.status === 'paused';
   const hasMetrics = metrics?.has_data;

@@ -4,7 +4,7 @@ import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import s from '../ogilvy.module.css';
 import AdCreativePreview from './AdCreativePreview';
-import { deriveSessionStatus, summarizeAdStatuses as sharedSummarize } from '../lib/session-status';
+import { deriveSessionStatus, summarizeAdStatuses as sharedSummarize, isStagingStale } from '../lib/session-status';
 
 // Re-export for backwards-compat with anything that imports from AdPlanCard.
 export { sharedSummarize as summarizeAdStatuses };
@@ -60,6 +60,7 @@ export default function AdPlanCard({
   launchProgress = null,
   controlBusy = false,
   streaming = false,
+  updatedAt = null,
 }) {
   if (!plan) return null;
 
@@ -124,7 +125,12 @@ export default function AdPlanCard({
 
   // Any ad missing its image_url means Meta will reject the launch; fail-fast.
   const missingImages = adSets.some(as => (as.ads || []).some(ad => !ad.creative?.image_url));
-  const isBusy = plan.status === 'staging' || plan.status === 'staged' || launchProgress?.phase;
+  // A staging/staged row past the stale threshold with no live SSE is an
+  // abandoned launch — treat it as retryable, not busy, so the CTA re-enables.
+  // launchProgress / streaming mean a launch is genuinely in flight here, so
+  // never call it stale in that case.
+  const stagingStale = isStagingStale(plan.status, updatedAt) && !launchProgress?.phase && !streaming;
+  const isBusy = (plan.status === 'staging' || plan.status === 'staged' || launchProgress?.phase) && !stagingStale;
   const isFailed = plan.status === 'failed';
   // liveOnMeta:DB 这边 plan.status 是 launched/paused —— 意味着 campaign /
   // adset / ad 已经在 Meta 创建过,pause / resume 行为成立。这层 gating 始终
@@ -301,6 +307,9 @@ export default function AdPlanCard({
           {isFailed && plan.failed_reason && (
             <span className={s.statusDetail}>{plan.failed_reason}</span>
           )}
+          {stagingStale && (
+            <span className={s.statusDetail}>上次启动未完成（页面关闭/网络中断），可重新启动</span>
+          )}
         </div>
 
         {liveOnMeta && onRefreshStatus && (
@@ -325,10 +334,11 @@ export default function AdPlanCard({
               streaming ? '方案生成中，完成后可启动'
               : missingImages ? '有广告还没生成素材图，请先让 AI 补全'
               : isBusy ? '正在启动中…'
+              : stagingStale ? '上次启动中断（页面关闭/网络中断），点此重新启动'
               : '启动投放：在 Meta 创建广告并激活'
             }
           >
-            {streaming ? '生成中…' : isBusy ? '启动中…' : isFailed ? '↻ 重新启动' : '✦ 启动投放'}
+            {streaming ? '生成中…' : isBusy ? '启动中…' : (isFailed || stagingStale) ? '↻ 重新启动' : '✦ 启动投放'}
           </button>
         )}
 

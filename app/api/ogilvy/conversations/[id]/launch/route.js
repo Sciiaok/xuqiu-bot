@@ -27,6 +27,9 @@ import { streamSSE } from '../../../../../../lib/sse.js';
 // normal `from:['active','failed']` retry gate locks the user out forever.
 // We treat staging older than this as abandoned and allow re-claiming it.
 // Full launches take 30-90s in practice; 5 min is a 3-6x safety margin.
+// The UI mirrors this value (STAGING_STALE_MS in
+// app/(app)/ogilvy/lib/session-status.js) to re-enable the launch CTA once a
+// row goes stale — keep the two in sync.
 const STAGING_STALE_MS = 5 * 60 * 1000;
 
 export async function POST(_request, { params }) {

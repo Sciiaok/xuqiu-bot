@@ -478,6 +478,7 @@ export default function SessionWorkspace({ sessionId, session, productLineName, 
     adStatuses,
     launchProgress,
     streaming: !!streamingPlan,
+    updatedAt: session?.updated_at,
   });
   const headerTitle = plan?.summary || session?.plan_json?.summary || session?.title || '(新项目)';
 
@@ -682,6 +683,7 @@ export default function SessionWorkspace({ sessionId, session, productLineName, 
             launchProgress={launchProgress}
             controlBusy={controlBusy}
             streaming={!!streamingPlan}
+            updatedAt={session?.updated_at}
           />
         ) : (
           <PlanBlueprint />
