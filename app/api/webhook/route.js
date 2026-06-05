@@ -162,6 +162,37 @@ async function buildQueuedMessage({
       caption,
       media_url: buildWhatsAppMediaProxyUrl(mediaId),
     };
+  } else if (messageType === 'video') {
+    const mediaId = message.video?.id;
+    const mimeType = message.video?.mime_type || 'video/mp4';
+    const caption = message.video?.caption?.trim() || '';
+    const filename = buildMediaFilename('video', mimeType, mediaId);
+
+    userMessage = buildInboundMediaPlaceholder({ type: 'video', filename, caption });
+    messageMetadata = {
+      media_type: 'video',
+      wa_media_id: mediaId,
+      mime_type: mimeType,
+      filename,
+      caption,
+      media_url: buildWhatsAppMediaProxyUrl(mediaId),
+    };
+  } else if (messageType === 'document') {
+    const mediaId = message.document?.id;
+    const mimeType = message.document?.mime_type || 'application/octet-stream';
+    const caption = message.document?.caption?.trim() || '';
+    // 文档自带真实文件名,优先用它;没有再按 type+mime 兜底。
+    const filename = buildMediaFilename('document', mimeType, mediaId, message.document?.filename);
+
+    userMessage = buildInboundMediaPlaceholder({ type: 'document', filename, caption });
+    messageMetadata = {
+      media_type: 'document',
+      wa_media_id: mediaId,
+      mime_type: mimeType,
+      filename,
+      caption,
+      media_url: buildWhatsAppMediaProxyUrl(mediaId),
+    };
   } else {
     logger.warn('webhook.message.unsupported', { message_type: messageType });
     if (!isTakeover) {
