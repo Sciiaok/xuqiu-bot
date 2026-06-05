@@ -285,9 +285,10 @@ export async function GET(request) {
       byHour: hourList,
       notes: {
         // 方法论披露 —— 看板覆盖范围：
-        //  - openrouter.messages.create / stream（所有 chat completion）
+        //  - openrouter.messages.create / stream（所有 chat completion;含 WhatsApp
+        //    语音转写,2026-06-05 起从 /audio/transcriptions + whisper-1 切到
+        //    /chat/completions + input_audio + Gemini 2.5 Flash Lite）
         //  - openrouter.embeddings.create（KB 向量化，2026-05-18 起埋）
-        //  - openai.audio.transcriptions（Whisper，2026-05-18 起埋）
         //  - 图片生成（gpt-image-2 / gpt-image-1 / gemini flash image）
         //
         // 未覆盖：直接走 fetch / SDK 但没经 llm-client 的 ad-hoc 调用——目前没有

@@ -126,7 +126,7 @@ async function buildQueuedMessage({
     };
 
     try {
-      userMessage = await transcribeWhatsAppAudio(mediaId, metaToken, { tenantId });
+      userMessage = await transcribeWhatsAppAudio(mediaId, metaToken, { tenantId, mimeType: message.audio?.mime_type });
       if (!userMessage) {
         if (!isTakeover) {
           await sendMessage(waId, "Sorry, I couldn't understand the voice message. Could you please type your message?", phoneNumberId);

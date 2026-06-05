@@ -2,21 +2,15 @@
 // OpenAI 直连价目表 —— 手动维护的静态常量
 // ══════════════════════════════════════════════════════════════════════
 //
-// 这一段是整个 llm-pricing.js 里唯一**必须手维护**的部分。OpenAI 不在
-// response 里返回 cost (跟 OpenRouter 的 usage.cost 不一样),只给 token
-// 数 / 音频秒数。下面常量 × API 返回的用量 = 我们落表的成本。
+// 这段是 llm-pricing.js 里唯一**必须手维护**的部分,专门给图片生成兜底
+// (OpenAI 不在 response 里返回 cost,只给 token 数 / 图片张数;OpenRouter
+// 的 usage.cost 不一定在所有 provider 路径上返回)。
 //
-// OpenAI 涨/降价时 → 改下面的数字、把 `LAST_VERIFIED` 改成当天日期、commit。
-// 别的地方不用动 (calcWhisperCostUsd 自己引这些常量)。
+// OpenAI 涨/降价时 → 改下面的数字 + commit。
 //
 // 校准来源:
-//   - Whisper:       https://openai.com/api/pricing/ (Audio models 段)
 //   - gpt-image-2:   https://openai.com/api/pricing/ (Image generation 段)
 // 价表 last verified: 2026-05-18
-
-/** Whisper 转录,USD / 音频分钟。乘以 (response.duration 秒数 / 60) 落表。
- *  2026-05-22 起 Whisper 切到 OpenRouter,这里只在 OR 没返 usage.cost 时兜底。 */
-export const OPENAI_WHISPER_USD_PER_MIN = 0.006;
 
 /** Flat fallback,USD / 张图。仅在 response.usage.cost 缺失时兜底。
  *  1024×1024 high quality 实测均值。usage 正常返回时不走这条。 */
@@ -73,8 +67,9 @@ const PRICES = {
   // Embeddings (OpenAI via OpenRouter or direct)
   'text-embedding-3-small':                { input: 0.00002, output: 0       },
 
-  // Whisper (OpenAI direct, 按分钟计价; calcWhisperCostUsd 走 audioSeconds)
-  'whisper-1':                             { input: 0,       output: 0       },
+  // Audio transcription (WhatsApp 语音 → 文字)。Gemini 2.5 Flash Lite,极便宜
+  // 且 verbatim 行为稳定。OR 实测 usage.cost 总会返回,这里只是兜底。
+  'google/gemini-2.5-flash-lite':          { input: 0.0001,  output: 0.0004  },
 };
 
 const UNKNOWN = { input: 0, output: 0 };
@@ -164,12 +159,3 @@ export function calcImageCostUsd({ model, count = 1 }) {
   return Math.round(lookupImagePrice(model) * count * 1_000_000) / 1_000_000;
 }
 
-// Whisper 按音频时长计费,单价来自文件顶部 OPENAI_WHISPER_USD_PER_MIN
-// 常量。2026-05-22 起 OR 路径优先用 response.usage.cost;这里只在缺失时
-// 兜底,caller 传 audioSeconds(来自 verbose_json response.duration)。
-const WHISPER_PRICE_PER_SEC = OPENAI_WHISPER_USD_PER_MIN / 60;
-
-export function calcWhisperCostUsd({ audioSeconds = 0 }) {
-  const s = Number(audioSeconds) || 0;
-  return Math.round(s * WHISPER_PRICE_PER_SEC * 1_000_000) / 1_000_000;
-}
