@@ -40,8 +40,14 @@ export async function transcodeToOggOpus(inputBuffer, inputExt = 'webm') {
       '-vn',                      // 丢掉任何视频轨
       '-ac', '1',                 // 单声道
       '-c:a', 'libopus',
-      '-b:a', '32k',
+      '-b:a', '24k',
       '-application', 'voip',     // 针对语音优化的 opus 模式
+      // 关键:限带宽到 WB(8kHz),强制 opus 走 SILK-only 模式。
+      // 不限的话 ffmpeg-static(Linux=johnvansickle 7.0.x)在全频带语音上会输出
+      // Hybrid(SILK+CELT)帧,WhatsApp 语音条解码器播不了 → 收件方 "This audio
+      // is no longer available"。WhatsApp 自家语音条就是 WB SILK,这里对齐它。
+      // (纯音/beep 走 CELT 能播,真人语音走 Hybrid 播不了——坑就在这。)
+      '-cutoff', '8000',
       '-f', 'ogg',
       'pipe:1',
     ]);
