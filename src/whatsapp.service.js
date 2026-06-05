@@ -135,6 +135,13 @@ const ALLOWED_MEDIA_TYPES = {
   'image/webp': 'image',
   'video/mp4': 'video',
   'video/3gpp': 'video',
+  // 语音:浏览器录的是 webm/opus(Chrome)或 mp4/aac(Safari),也接受直传的
+  // ogg/mp3。最终都会在 send-message 路由里被转码成 ogg/opus 再下发。
+  'audio/ogg': 'audio',
+  'audio/webm': 'audio',
+  'audio/mp4': 'audio',
+  'audio/mpeg': 'audio',
+  'audio/aac': 'audio',
   'application/pdf': 'document',
   'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': 'document',
   'application/vnd.openxmlformats-officedocument.wordprocessingml.document': 'document',
@@ -144,6 +151,7 @@ const ALLOWED_MEDIA_TYPES = {
 const MAX_MEDIA_SIZE = {
   image: 5 * 1024 * 1024,    // 5MB
   video: 16 * 1024 * 1024,   // 16MB
+  audio: 16 * 1024 * 1024,   // 16MB
   document: 100 * 1024 * 1024, // 100MB
 };
 
@@ -197,7 +205,8 @@ export async function sendMedia(waId, type, fileBuffer, mimeType, filename, capt
 
   // Step 2: Send message with media_id
   const mediaPayload = { id: mediaId };
-  if (caption) mediaPayload.caption = caption;
+  // Meta 的 audio 消息不支持 caption,带上会直接 400;只有 image/video/document 接。
+  if (caption && type !== 'audio') mediaPayload.caption = caption;
   if (type === 'document' && filename) mediaPayload.filename = filename;
 
   const payload = {

@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { sendMessage, sendMedia, validateMedia } from '../../../src/whatsapp.service.js';
+import { transcodeToOggOpus } from '../../../src/audio-transcode.service.js';
 import supabase from '../../../lib/supabase.js';
 import { getTenantContext } from '../../../lib/tenant-context.js';
 import { addOperatorMessage, getSessionByConversationId } from '../../../lib/session.js';
@@ -39,7 +40,9 @@ export async function POST(request) {
         );
       }
 
-      mimeType = file.type;
+      // 录音的 blob.type 常带 codec 参数(如 audio/webm;codecs=opus),白名单是
+      // 精确匹配,这里先剥掉参数再校验。
+      mimeType = (file.type || '').split(';')[0].trim();
       filename = file.name;
       fileBuffer = Buffer.from(await file.arrayBuffer());
 
@@ -146,6 +149,26 @@ export async function POST(request) {
         },
         { status: 409 }
       );
+    }
+
+    // 语音条:WhatsApp 只把 ogg/opus 渲染成语音气泡。浏览器录的是 webm/opus 或
+    // mp4/aac,统一转码成 ogg/opus 再走后面的上传 + 下发(转码失败就别发半成品)。
+    if (mediaType === 'audio' && mimeType !== 'audio/ogg') {
+      try {
+        const ext = mimeType.includes('mp4') ? 'mp4' : mimeType.includes('mpeg') ? 'mp3' : 'webm';
+        fileBuffer = await transcodeToOggOpus(fileBuffer, ext);
+        mimeType = 'audio/ogg';
+        filename = `${filename.replace(/\.[^.]+$/, '')}.ogg`;
+      } catch (transcodeErr) {
+        console.error('[send-message] audio transcode failed', {
+          conversation_id: conversationId,
+          error: transcodeErr.message,
+        });
+        return NextResponse.json(
+          { error: 'Audio Transcode Failed', message: '语音转码失败，请重试' },
+          { status: 500 }
+        );
+      }
     }
 
     console.log('[send-message] outbound', {

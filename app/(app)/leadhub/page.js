@@ -5,6 +5,7 @@ import { useSearchParams, useRouter, usePathname } from 'next/navigation';
 import s from './page.module.css';
 import Tag from '../../components/Tag/Tag';
 import Button from '../../components/Button/Button';
+import VoiceRecorder from './VoiceRecorder';
 import TabBar from '../../components/TabBar/TabBar';
 import { createClient } from '../../../lib/supabase-browser';
 import {
@@ -760,6 +761,35 @@ export default function LeadHubPage() {
     }
   }
 
+  // ── 发送语音条 ──
+  // 透传:操作员用客户语言录,原音发出。录到的 webm/mp4 由后端转 ogg/opus。
+  // 返回 boolean 给 VoiceRecorder:成功才清空录音、失败保留预览以便重试。
+  async function handleSendVoice(file) {
+    if (!selectedId || sending) return false;
+    setSending(true);
+    try {
+      const fd = new FormData();
+      fd.append('conversationId', selectedId);
+      fd.append('file', file);
+      const res = await fetch('/api/send-message', { method: 'POST', body: fd });
+      const data = await res.json();
+      if (data.success) return true;
+      if (res.status === 409 && data?.code === 'TAKEOVER_NOT_ACTIVE') {
+        setIsHumanTakeover(false);
+        setError(data.message || '接管已自动释放，请重新点「接管对话」');
+      } else {
+        setError(data.message || '发送失败');
+      }
+      return false;
+    } catch (err) {
+      console.error('Send voice error:', err);
+      setError('发送语音失败，请重试');
+      return false;
+    } finally {
+      setSending(false);
+    }
+  }
+
   // ── 翻译成客户语言（发送前最后一步）──
   async function handleTranslate() {
     const draft = msgText.trim();
@@ -1484,6 +1514,11 @@ export default function LeadHubPage() {
                         >
                           附件
                         </button>
+                        <VoiceRecorder
+                          disabled={!isHumanTakeover || sending}
+                          sending={sending}
+                          onSend={handleSendVoice}
+                        />
                         {(() => {
                           // 有附件 → caption 1024；纯文本 → text 4096
                           const limit = selectedFile ? WA_CAPTION_MAX : WA_TEXT_MAX;

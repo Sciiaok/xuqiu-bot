@@ -1122,6 +1122,94 @@
   gap: 8px;
   padding: 12px 18px;
   flex-shrink: 0;
+  position: relative; /* 录音浮层 .voiceBar 以此为定位基准覆盖整行 */
+}
+
+/* ── Voice recorder ───────────────────────────────────── */
+.voiceBar {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 18px;
+  background: var(--bg2);
+  z-index: 2;
+}
+
+.voiceDot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: #e5484d;
+  flex-shrink: 0;
+  animation: voicePulse 1s ease-in-out infinite;
+}
+
+@keyframes voicePulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.25; }
+}
+
+.voiceTimer {
+  font-size: 13px;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+  flex-shrink: 0;
+}
+
+.voiceHint {
+  flex: 1;
+  font-size: 12px;
+  color: var(--text3);
+}
+
+.voicePreviewAudio {
+  flex: 1;
+  height: 34px;
+  min-width: 0;
+}
+
+.voiceErr {
+  font-size: 12px;
+  color: #e5484d;
+  flex-shrink: 0;
+}
+
+.voiceStop {
+  height: 36px;
+  padding: 0 16px;
+  background: var(--accent);
+  border: none;
+  border-radius: var(--r);
+  color: #fff;
+  font-size: 12px;
+  font-family: var(--font-sans);
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.voiceStop:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.voiceCancel {
+  height: 36px;
+  padding: 0 12px;
+  background: var(--bg3);
+  border: 1px solid var(--border);
+  border-radius: var(--r);
+  color: var(--text2);
+  font-size: 12px;
+  font-family: var(--font-sans);
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.voiceCancel:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
 .chatInput {
