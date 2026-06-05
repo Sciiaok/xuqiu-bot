@@ -135,6 +135,7 @@ const ALLOWED_MEDIA_TYPES = {
   'image/webp': 'image',
   'video/mp4': 'video',
   'video/3gpp': 'video',
+  'video/quicktime': 'video', // iPhone .mov;send-message 会转成 H.264 mp4 再下发
   // 语音:浏览器录的是 webm/opus(Chrome)或 mp4/aac(Safari),也接受直传的
   // ogg/mp3。最终都会在 send-message 路由里被转码成 ogg/opus 再下发。
   'audio/ogg': 'audio',

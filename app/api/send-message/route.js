@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { sendMessage, sendMedia, validateMedia } from '../../../src/whatsapp.service.js';
-import { transcodeToOggOpus } from '../../../src/audio-transcode.service.js';
-import supabase from '../../../lib/supabase.js';
+import { transcodeToOggOpus, transcodeVideoToMp4 } from '../../../src/media-transcode.service.js';
+import { getSupabaseAdmin } from '../../../lib/supabase-admin.js';
 import { getTenantContext } from '../../../lib/tenant-context.js';
 import { addOperatorMessage, getSessionByConversationId } from '../../../lib/session.js';
 import { isHumanTakeover } from '../../../lib/repositories/conversation.repository.js';
@@ -171,6 +171,26 @@ export async function POST(request) {
       }
     }
 
+    // 视频:WhatsApp 只接 H.264 视频 + AAC 音频。iPhone 录屏/拍摄默认是 HEVC,
+    // Meta 直接 #131053 拒收。统一转 H.264 mp4 再下发。
+    if (mediaType === 'video') {
+      try {
+        const ext = mimeType.includes('quicktime') ? 'mov' : 'mp4';
+        fileBuffer = await transcodeVideoToMp4(fileBuffer, ext);
+        mimeType = 'video/mp4';
+        filename = `${filename.replace(/\.[^.]+$/, '')}.mp4`;
+      } catch (transcodeErr) {
+        console.error('[send-message] video transcode failed', {
+          conversation_id: conversationId,
+          error: transcodeErr.message,
+        });
+        return NextResponse.json(
+          { error: 'Video Transcode Failed', message: '视频转码失败，请重试或换一个文件' },
+          { status: 500 }
+        );
+      }
+    }
+
     console.log('[send-message] outbound', {
       conversation_id: conversationId,
       wa_id: waId,
@@ -188,14 +208,19 @@ export async function POST(request) {
         const ext = filename.slice(filename.lastIndexOf('.')) || '';
         const safeName = `${Date.now()}_${Math.random().toString(36).slice(2, 8)}${ext}`;
         const storagePath = `${waId}/${safeName}`;
-        const { error: uploadError } = await supabase.storage
+        // service-role 上传:chat-media 桶对匿名 key 没有 INSERT 策略(RLS 403),
+        // 这里是已校验过 tenant + takeover 的服务端可信写入,用 admin client 绕 RLS。
+        const admin = getSupabaseAdmin();
+        const { error: uploadError } = await admin.storage
           .from('chat-media')
           .upload(storagePath, fileBuffer, { contentType: mimeType, upsert: false });
         if (!uploadError) {
-          const { data: { publicUrl } } = supabase.storage
+          const { data: { publicUrl } } = admin.storage
             .from('chat-media')
             .getPublicUrl(storagePath);
           extraMetadata = { media_url: publicUrl, media_type: mediaType, filename };
+        } else {
+          console.warn('[send-message] chat-media upload failed:', uploadError.message);
         }
       } catch (storageErr) {
         console.warn('Storage upload failed, media will show as placeholder:', storageErr.message);
