@@ -209,6 +209,10 @@ export async function sendMedia(waId, type, fileBuffer, mimeType, filename, capt
   // Meta 的 audio 消息不支持 caption,带上会直接 400;只有 image/video/document 接。
   if (caption && type !== 'audio') mediaPayload.caption = caption;
   if (type === 'document' && filename) mediaPayload.filename = filename;
+  // 关键:不带 voice:true,ogg/opus 会被当成「普通音频文件」下发,收件方点开
+  // 播放报 "This audio is no longer available"。带上才渲染成原生语音条(PTT)。
+  // 非 ogg 格式 Meta 会自动忽略该 flag,所以无条件给 audio 加是安全的。
+  if (type === 'audio') mediaPayload.voice = true;
 
   const payload = {
     messaging_product: 'whatsapp',
