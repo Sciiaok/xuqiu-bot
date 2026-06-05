@@ -440,3 +440,15 @@
   .headerRow { padding: 6px 8px; }
   .toolbar { flex-wrap: wrap; }
 }
+
+@media (max-width: 768px) {
+  /* 展开面板里的字段行垂直堆叠,输入框铺满 */
+  .expandField { width: 100%; }
+  .expandField .cellInput,
+  .expandField .cellSelect { width: 100%; box-sizing: border-box; }
+  /* 子行(枚举 chips)从横排改竖排,chips 区铺满 */
+  .subRow { flex-direction: column; gap: 6px; padding-left: 16px; }
+  .chips { width: 100%; box-sizing: border-box; }
+  /* 行级错误缩进对齐到窄屏内边距 */
+  .rowErrors { padding-left: 16px; }
+}

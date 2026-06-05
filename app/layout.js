@@ -8,6 +8,16 @@ export const metadata = {
   description: 'B2B lead qualification service，一键式智能外贸获客平台。',
 };
 
+// viewport-fit=cover so the notch/home-indicator safe-area insets become
+// available to env(safe-area-inset-*); width/initial-scale keep mobile from
+// rendering at a desktop width. maximumScale intentionally left default so
+// pinch-zoom stays available (accessibility).
+export const viewport = {
+  width: 'device-width',
+  initialScale: 1,
+  viewportFit: 'cover',
+};
+
 export default async function RootLayout({ children }) {
   const locale = await getLocale();
   const messages = await getMessages();

@@ -381,3 +381,17 @@
   gap: 12px;
   font-size: 13px;
 }
+
+/* ── 移动端 ───────────────────────────────────────────────── */
+@media (max-width: 768px) {
+  .root { padding: 16px 14px; gap: 14px; }
+  /* 顶栏标题与图例垂直堆叠,避免挤压 */
+  .header { flex-direction: column; align-items: stretch; }
+  .legend { gap: 6px; }
+}
+
+@media (max-width: 480px) {
+  /* 卡片单列铺满 + 收紧内边距/间距 */
+  .cardList { grid-template-columns: 1fr; gap: 12px; }
+  .card { padding: 16px 14px 14px; gap: 12px; }
+}

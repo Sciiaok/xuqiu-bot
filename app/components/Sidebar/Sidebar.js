@@ -154,7 +154,7 @@ function avatarLetter(email) {
   return email.trim().charAt(0).toUpperCase();
 }
 
-export default function Sidebar() {
+export default function Sidebar({ mobileOpen = false, onClose }) {
   const pathname = usePathname();
   const router = useRouter();
   const [user, setUser] = useState(null);
@@ -196,6 +196,7 @@ export default function Sidebar() {
     try {
       const supabase = createClient();
       await supabase.auth.signOut();
+      onClose?.();
       router.push('/login');
       router.refresh();
     } finally {
@@ -203,10 +204,14 @@ export default function Sidebar() {
     }
   };
 
+  // Dismiss the drawer when a destination is tapped (no-op on desktop where the
+  // rail is always present and onClose just re-sets already-false state).
+  const handleNavClick = () => onClose?.();
+
   const isActive = (href) => pathname === href || pathname?.startsWith(href + '/');
 
   return (
-    <div className={s.sidebar}>
+    <div className={`${s.sidebar} ${mobileOpen ? s.open : ''}`}>
     <div className={s.inner}>
       {/* Logo */}
       <div className={s.logoWrap}>
@@ -223,6 +228,15 @@ export default function Sidebar() {
           alt="Prome Engine"
           className={s.logoFull}
         />
+        {/* Mobile-only: dismiss the drawer. Hidden on desktop via CSS. */}
+        <button
+          type="button"
+          className={s.closeBtn}
+          onClick={onClose}
+          aria-label="关闭菜单"
+        >
+          ✕
+        </button>
       </div>
 
       {/* Navigation */}
@@ -234,6 +248,7 @@ export default function Sidebar() {
               <Link
                 key={item.href}
                 href={item.href}
+                onClick={handleNavClick}
                 className={`${s.ni} ${isActive(item.href) ? s.active : ''}`}
               >
                 {ICONS[item.icon]}
@@ -249,6 +264,7 @@ export default function Sidebar() {
         {isFounder ? (
           <Link
             href="/dev-tools"
+            onClick={handleNavClick}
             className={`${s.ni} ${isActive('/dev-tools') ? s.active : ''}`}
           >
             {ICONS.devTools}
@@ -258,6 +274,7 @@ export default function Sidebar() {
           <>
             <Link
               href="/settings/meta-connection"
+              onClick={handleNavClick}
               className={`${s.ni} ${isActive('/settings/meta-connection') ? s.active : ''}`}
             >
               {ICONS.settings}
@@ -265,6 +282,7 @@ export default function Sidebar() {
             </Link>
             <Link
               href="/settings/notifications"
+              onClick={handleNavClick}
               className={`${s.ni} ${isActive('/settings/notifications') ? s.active : ''}`}
             >
               {ICONS.bell}

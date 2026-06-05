@@ -237,4 +237,21 @@
   .kpiGrid {
     grid-template-columns: 1fr 1fr;
   }
+  .suggestionsGrid {
+    grid-template-columns: 1fr;
+  }
+  .appendixTable {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+  .appendixHeader,
+  .appendixRow {
+    min-width: 480px;
+  }
+}
+
+@media (max-width: 480px) {
+  .kpiGrid {
+    grid-template-columns: 1fr;
+  }
 }

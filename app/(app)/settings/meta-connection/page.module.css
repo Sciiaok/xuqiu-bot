@@ -431,3 +431,30 @@
   margin-top: 8px;
   line-height: 1.5;
 }
+
+/* ── 移动端适配（≤768）─────────────────────────────────────────── */
+@media (max-width: 768px) {
+  /* 页面边距收紧 */
+  .page { padding: 16px; }
+  /* 卡片内边距收紧 */
+  .section { padding: 18px 16px; }
+  /* 两列字段改为竖排、各占满宽 */
+  .fieldRow { flex-direction: column; gap: 14px; }
+  /* 连接卡片头部纵向堆叠，操作按钮换行 */
+  .connHeader { flex-direction: column; }
+  .actions { flex-wrap: wrap; }
+  /* 选择列表卡片允许内容换行 */
+  .choiceRow { flex-wrap: wrap; }
+  /* 向导操作行换行避免溢出 */
+  .actionRow { flex-wrap: wrap; }
+  /* 裸 table 横向滚动，避免撑破视口 */
+  .table { display: block; overflow-x: auto; -webkit-overflow-scrolling: touch; white-space: nowrap; }
+}
+
+/* ── 超小屏微调（≤480）─────────────────────────────────────────── */
+@media (max-width: 480px) {
+  /* 页面边距进一步收紧 */
+  .page { padding: 12px; }
+  /* 标题略微缩小 */
+  .title { font-size: 22px; }
+}

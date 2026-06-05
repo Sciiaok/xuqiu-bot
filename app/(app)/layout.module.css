@@ -1,0 +1,52 @@
+/* App shell.
+ *
+ * Desktop: a flex row — Sidebar rail (60px, hover-expand) + scrolling main.
+ * Mobile (≤768px): a flex column — sticky top bar + scrolling main, with the
+ * Sidebar re-cast as a slide-in drawer (see Sidebar.module.css) over a dim
+ * backdrop. Moved off the old inline styles so these breakpoints can exist.
+ */
+.shell {
+  display: flex;
+  height: 100vh;
+  height: 100dvh;
+  overflow: hidden;
+}
+
+.main {
+  flex: 1;
+  min-width: 0; /* allow children to shrink instead of forcing sideways scroll */
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+}
+
+.content {
+  flex: 1;
+  overflow-y: auto;
+  min-height: 0;
+}
+
+/* Dim sheet behind the drawer; only ever shown on mobile while nav is open. */
+.backdrop {
+  display: none;
+}
+
+@media (max-width: 768px) {
+  .shell {
+    flex-direction: column;
+  }
+
+  .backdrop {
+    display: block;
+    position: fixed;
+    inset: 0;
+    z-index: 60; /* above content, below the drawer (z-index 70) */
+    background: rgba(15, 23, 42, 0.42);
+    animation: shellBackdropIn 0.18s ease;
+  }
+}
+
+@keyframes shellBackdropIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}

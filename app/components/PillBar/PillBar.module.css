@@ -41,3 +41,15 @@
   border-color: var(--border2);
   color: var(--text);
 }
+
+@media (max-width: 768px) {
+  /* pills scroll horizontally instead of wrapping into many rows */
+  .bar {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+  }
+  .bar::-webkit-scrollbar { display: none; }
+  .pill, .trPill { flex-shrink: 0; }
+}

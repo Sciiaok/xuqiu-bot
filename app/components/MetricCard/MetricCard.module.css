@@ -45,3 +45,13 @@
 .up { color: var(--green); }
 .down { color: var(--red); }
 .neutral { color: var(--text3); }
+
+@media (max-width: 768px) {
+  .card { padding: 13px 14px; }
+  .value { font-size: 22px; }
+}
+@media (max-width: 480px) {
+  /* tighten so two cards sit side-by-side on a phone */
+  .card { padding: 12px; }
+  .value { font-size: 20px; }
+}

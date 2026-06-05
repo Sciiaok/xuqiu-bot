@@ -151,3 +151,25 @@
   gap: 8px;
   margin-top: 16px;
 }
+
+/* ── 移动端适配（≤768）─────────────────────────────────────────── */
+@media (max-width: 768px) {
+  /* 页面边距收紧 */
+  .page { padding: 16px; }
+  /* 卡片内边距收紧 */
+  .section { padding: 18px 16px; }
+  /* 提交按钮占满宽，居中可点 */
+  .primaryBtn { align-self: stretch; }
+  /* 操作按钮纵向堆叠并占满宽 */
+  .actions { flex-direction: column; }
+  .actions .secondaryBtn,
+  .actions .dangerBtn { width: 100%; }
+}
+
+/* ── 超小屏微调（≤480）─────────────────────────────────────────── */
+@media (max-width: 480px) {
+  /* 页面边距进一步收紧 */
+  .page { padding: 12px; }
+  /* 标题略微缩小 */
+  .title { font-size: 22px; }
+}

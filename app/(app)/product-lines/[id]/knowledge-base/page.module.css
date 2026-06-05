@@ -1344,3 +1344,28 @@
 @keyframes spin {
   to { transform: rotate(360deg); }
 }
+
+/* ── 移动端 ───────────────────────────────────────────────── */
+@media (max-width: 768px) {
+  /* 整页改为随内容自然增高,可在外壳顶栏下方纵向滚动 */
+  .root { height: auto; overflow: visible; padding: 12px 14px 24px; }
+  /* 上传区两列卡片堆叠 */
+  .uploadRow { grid-template-columns: 1fr; }
+  /* 资产网格收窄 */
+  .assetGrid { grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; }
+  /* 对话布局:左侧会话列表移到编辑区上方,各给固定高度 */
+  .chatLayout {
+    grid-template-columns: 1fr;
+    height: auto;
+  }
+  .sessionSidebar {
+    border-right: none;
+    border-bottom: 1px solid var(--border);
+    max-height: 220px;
+  }
+  .chatMain { height: 70vh; }
+}
+
+@media (max-width: 480px) {
+  .assetGrid { grid-template-columns: 1fr 1fr; }
+}

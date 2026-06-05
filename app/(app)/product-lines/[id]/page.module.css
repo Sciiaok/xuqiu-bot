@@ -368,3 +368,11 @@
   .saveBar { margin-left: -14px; margin-right: -14px; padding-left: 14px; padding-right: 14px; }
   .section { padding: 16px 16px; }
 }
+
+@media (max-width: 768px) {
+  /* 标签栏溢出时横向滚动,不再换行挤压 */
+  .tabBar { overflow-x: auto; flex-wrap: nowrap; -webkit-overflow-scrolling: touch; }
+  .tab { white-space: nowrap; flex-shrink: 0; }
+  /* 任何两列字段行在窄屏堆叠 */
+  .uploadRow { grid-template-columns: 1fr; }
+}

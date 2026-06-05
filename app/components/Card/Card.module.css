@@ -18,3 +18,8 @@
 }
 .title { font-size: 13px; font-weight: 500; }
 .body { padding: 16px; display: flex; flex-direction: column; flex: 1; min-height: 0; }
+
+@media (max-width: 768px) {
+  .head { padding: 10px 14px; }
+  .body { padding: 14px; }
+}

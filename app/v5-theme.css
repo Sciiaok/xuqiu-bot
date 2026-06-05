@@ -57,6 +57,9 @@
   font-size: 13px;
   line-height: 1.45;
   height: 100vh;
+  /* dvh tracks the *visible* viewport as the mobile browser chrome shows/hides,
+     so the app never gets cut off behind the address bar. Desktop dvh == vh. */
+  height: 100dvh;
   overflow: hidden;
 }
 
@@ -88,4 +91,42 @@
 
 @keyframes blink {
   50% { opacity: 0; }
+}
+
+/* ── Mobile foundation ───────────────────────────────────────────────
+ *
+ * Project-wide breakpoint convention (use these exact values everywhere):
+ *   ≤ 1024px  tablet / narrow desktop  (collapse 3+ col grids → 2)
+ *   ≤ 768px   phone landscape & small tablet — THE mobile breakpoint
+ *   ≤ 480px   phone portrait — tightest spacing/typography tier
+ *
+ * Anything below lives here because it must apply globally (it can't sit in a
+ * single page's module.css). Page-specific responsive rules go in that page's
+ * own *.module.css using the same breakpoints.
+ */
+@media (max-width: 768px) {
+  /* Nothing in the app should be able to scroll the page sideways. Individual
+     wide elements (tables, code blocks) opt back in with their own
+     overflow-x:auto wrapper. */
+  .v5-root {
+    overflow-x: hidden;
+  }
+
+  /* iOS Safari zooms the page in whenever a focused field's font is < 16px,
+     which on this 12–13px-control UI yanks the layout every time the operator
+     taps an input. Pin form controls to 16px on phones to stop it. */
+  .v5-root input,
+  .v5-root select,
+  .v5-root textarea {
+    font-size: 16px;
+  }
+
+  /* Comfortable touch targets: bare icon buttons that are fine with a mouse
+     (≈28px) are hard to hit with a thumb. Floor interactive controls at 40px
+     of hit area without changing their visual box (padding-driven). */
+  .v5-root button,
+  .v5-root a[role='button'],
+  .v5-root [data-tap] {
+    touch-action: manipulation;
+  }
 }

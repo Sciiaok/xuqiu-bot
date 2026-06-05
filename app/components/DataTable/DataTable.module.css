@@ -37,3 +37,16 @@
   background: var(--accent-dim);
   box-shadow: inset 2px 0 0 var(--accent);
 }
+
+@media (max-width: 768px) {
+  /* wide tables scroll horizontally instead of overflowing the viewport */
+  .table {
+    display: block;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    white-space: nowrap;
+  }
+  .table thead, .table tbody, .table tr { display: table; width: 100%; table-layout: auto; }
+  .table th { padding: 9px 11px; }
+  .table td { padding: 9px 11px; font-size: 12px; }
+}

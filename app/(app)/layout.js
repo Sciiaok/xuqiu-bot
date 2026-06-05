@@ -1,11 +1,15 @@
 'use client';
 
+import { useEffect, useState } from 'react';
+import { usePathname } from 'next/navigation';
 import { Inter, Syne, DM_Mono } from 'next/font/google';
 import '../v5-theme.css';
 import Sidebar from '../components/Sidebar/Sidebar';
+import MobileTopBar from '../components/MobileTopBar/MobileTopBar';
 import MetaConnectionBanner from '../components/MetaConnectionBanner/MetaConnectionBanner';
 import PostLoginPreloader from '../components/PostLoginPreloader';
 import GlobalLoadingOverlay from '../components/GlobalLoadingOverlay/GlobalLoadingOverlay';
+import s from './layout.module.css';
 
 const inter = Inter({
   subsets: ['latin'],
@@ -27,17 +31,30 @@ const dmMono = DM_Mono({
 });
 
 export default function V5Layout({ children }) {
+  const pathname = usePathname();
+  const [navOpen, setNavOpen] = useState(false);
+
+  // Close the mobile drawer whenever the route changes (i.e. after a nav tap).
+  useEffect(() => {
+    setNavOpen(false);
+  }, [pathname]);
+
   return (
-    <div className={`v5-root ${inter.variable} ${syne.variable} ${dmMono.variable}`}
-         style={{ display: 'flex', height: '100vh' }}>
+    <div className={`v5-root ${inter.variable} ${syne.variable} ${dmMono.variable} ${s.shell}`}>
       <PostLoginPreloader />
       <GlobalLoadingOverlay />
-      <Sidebar />
-      <main style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column' }}>
+      <Sidebar mobileOpen={navOpen} onClose={() => setNavOpen(false)} />
+      {navOpen && (
+        <div
+          className={s.backdrop}
+          onClick={() => setNavOpen(false)}
+          aria-hidden="true"
+        />
+      )}
+      <main className={s.main}>
+        <MobileTopBar onMenuClick={() => setNavOpen(true)} />
         <MetaConnectionBanner />
-        <div style={{ flex: 1, overflowY: 'auto' }}>
-          {children}
-        </div>
+        <div className={s.content}>{children}</div>
       </main>
     </div>
   );

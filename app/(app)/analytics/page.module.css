@@ -305,3 +305,21 @@
   width: 28px;
   text-align: right;
 }
+
+/* ── Mobile ───────────────────────────────────────────── */
+@media (max-width: 768px) {
+  .root { padding: 14px; }
+  .header { padding: 0; }
+  .metrics { grid-template-columns: repeat(2, 1fr); }
+  .twoCol { grid-template-columns: 1fr; }
+  .agentStats {
+    margin-left: 0;
+    white-space: normal;
+  }
+}
+
+@media (max-width: 480px) {
+  /* KPI cards stay two-up even on small phones — far less scrolling than a
+     single column, and the values fit at the reduced MetricCard font size. */
+  .title { font-size: 18px; }
+}

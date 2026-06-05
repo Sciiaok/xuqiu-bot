@@ -322,7 +322,13 @@ export default function LeadHubPage() {
       setRouteBuckets(json.routeBuckets ?? { HUMAN_NOW: 0, CONTINUE: 0, FAQ_END: 0 });
       setHasMore(json.hasMore ?? false);
       setNextCursor(json.nextCursor ?? null);
-      if (resetSelection && !selectionApplied && mapped.length > 0) {
+      // Auto-open the first conversation to fill the right panel — but only on
+      // desktop. On mobile the panels are one column, so auto-selecting would
+      // bury the list under a thread on every load; let the user pick instead.
+      const isMobileViewport =
+        typeof window !== 'undefined' &&
+        window.matchMedia('(max-width: 768px)').matches;
+      if (resetSelection && !selectionApplied && mapped.length > 0 && !isMobileViewport) {
         setSelectedId(mapped[0].id);
         selectionApplied = true;
       }
@@ -1003,7 +1009,10 @@ export default function LeadHubPage() {
       </div>
 
       {/* ── Two-Panel ── */}
-      <div className={s.panels}>
+      {/* On mobile the two panels become one: the list is shown until a
+          conversation is selected, then the detail slides in over it.
+          `panelsDetail` drives that swap (see page.module.css @media). */}
+      <div className={`${s.panels} ${selected ? s.panelsDetail : ''}`}>
         {/* Left Panel */}
         <div className={s.leftPanel}>
           {/* Route Filter Bar */}

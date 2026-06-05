@@ -3,6 +3,7 @@
   display: flex;
   flex-direction: column;
   height: 100vh;
+  height: 100dvh;
   overflow: hidden;
   padding: 24px 24px 0;
   box-sizing: border-box;
@@ -1992,4 +1993,56 @@ button.idChip {
 
 .btnOk:hover {
   background: #256928;
+}
+
+/* ── Mobile: master-detail → single pane ─────────────────────────────
+ * Phone layout collapses the 420px+thread grid into one column. The list
+ * fills the screen; selecting a conversation swaps in the thread (over the
+ * list) with the existing ✕ acting as a back button. See `panelsDetail`. */
+@media (max-width: 768px) {
+  .root {
+    /* Fill the shell's content area (below the mobile top bar), not the whole
+       screen — otherwise we'd overflow by the top bar's height. */
+    height: 100%;
+    padding: 10px 0 0;
+  }
+
+  /* Page header keeps side breathing room now that .root padding is gone. */
+  .header {
+    padding: 0 14px;
+    gap: 10px;
+    margin-bottom: 10px;
+  }
+  .title { font-size: 18px; }
+  .titleHint { display: none; } /* redundant with the top-bar page title */
+
+  /* KPI strip spans the row and splits its three numbers evenly. */
+  .kpiStrip { width: 100%; }
+  .kpiItem { flex: 1; min-width: 0; padding: 0 10px; align-items: center; }
+  .kpiValue { font-size: 18px; }
+
+  /* One full-bleed pane. */
+  .panels {
+    grid-template-columns: 1fr;
+    border-left: none;
+    border-right: none;
+    border-radius: 0;
+    margin-bottom: 0;
+  }
+  .leftPanel { border-right: none; }
+  .rightPanel { display: none; }
+  .panelsDetail .leftPanel { display: none; }
+  .panelsDetail .rightPanel { display: flex; }
+
+  /* Detail header: let the action cluster wrap rather than overflow, and drop
+     the desktop indents that assumed a wide column. */
+  .detailRow1 { flex-wrap: wrap; }
+  .detailRow2 { padding-left: 0; }
+  .detailCloseBtn { width: 36px; height: 36px; font-size: 20px; }
+
+  /* Bubbles use more of the narrow width. */
+  .msgBubble { max-width: 86%; }
+
+  /* Keep the composer clear of the home indicator. */
+  .inputArea { padding-bottom: calc(12px + env(safe-area-inset-bottom)); }
 }

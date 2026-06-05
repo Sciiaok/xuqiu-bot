@@ -2197,3 +2197,28 @@
   color: var(--red);
   font-size: 12px;
 }
+
+/* ── Mobile (≤768) ─────────────────────────────────────────────
+ * 轻量适配:多列网格降到 2/1 列、标题缩小、表格保留横向滚动、内边距收紧。
+ * 只补 768 这一档手机间隙(桌面端规则不动)。 */
+@media (max-width: 768px) {
+  .root { padding: 16px 14px; gap: 16px; }
+  .header { padding-bottom: 12px; }
+  .title { font-size: 21px; }
+  /* KPI 指标条 → 2 列 */
+  .metrics { grid-template-columns: repeat(2, 1fr); }
+  /* 详情区双列内容 → 单列 */
+  .detailHero { grid-template-columns: 1fr; }
+  .metricsGrid { grid-template-columns: repeat(2, 1fr); }
+  .detailStatsGrid { grid-template-columns: 1fr; }
+  .assessmentGrid { grid-template-columns: 1fr; }
+  /* 归因页业务对比卡 3 列 → 1 列 */
+  .bizCompGrid { grid-template-columns: 1fr; }
+}
+
+/* ── Extra small phone (≤480) ──────────────────────────────────── */
+@media (max-width: 480px) {
+  .root { padding: 12px 10px; }
+  .title { font-size: 19px; }
+  /* KPI 卡片保持两列：手机上更省纵向空间，缩小字号后数字仍能放下 */
+}

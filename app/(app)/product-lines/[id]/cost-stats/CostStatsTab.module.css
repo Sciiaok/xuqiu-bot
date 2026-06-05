@@ -451,3 +451,13 @@
 @keyframes spin {
   to { transform: rotate(360deg); }
 }
+
+/* ── 移动端 ───────────────────────────────────────────────── */
+@media (max-width: 768px) {
+  /* 多列网格收成单列 */
+  .kpiGrid { grid-template-columns: 1fr; }
+  .volumeGrid { grid-template-columns: 1fr 1fr; }
+  /* 表格在窄屏横向滚动,不挤压列 */
+  .section { overflow-x: auto; }
+  .table { min-width: 520px; }
+}

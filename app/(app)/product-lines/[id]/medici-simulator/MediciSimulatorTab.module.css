@@ -569,3 +569,17 @@
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
+
+/* ─── 移动端 ─────────────────────────────────────────────── */
+@media (max-width: 768px) {
+  /* 用可用高度而非 calc(100vh - …),避免在外壳内溢出 */
+  .root { height: auto; min-height: 0; }
+  /* 单列:聊天在上,trace/leads 列在下 */
+  .split { grid-template-columns: 1fr; flex: none; }
+  .leftCol { min-height: 0; }
+  .chatPane { min-height: 70vh; }
+  .tracePane { min-height: 240px; }
+  .leadsPaneWrap { max-height: none; }
+  /* 顶栏 select 不再强撑最小宽度 */
+  .select { min-width: 0; max-width: none; flex: 1; }
+}

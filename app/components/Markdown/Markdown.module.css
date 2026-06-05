@@ -156,3 +156,10 @@
   border-top: 1px solid var(--border);
   margin: 12px 0;
 }
+
+@media (max-width: 768px) {
+  /* long content (images, tables, code) must not break the layout */
+  .root img { max-width: 100%; height: auto; }
+  .root pre { max-width: 100%; overflow-x: auto; padding: 12px 13px; }
+  .root table { display: block; max-width: 100%; overflow-x: auto; -webkit-overflow-scrolling: touch; }
+}

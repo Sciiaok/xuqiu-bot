@@ -3503,3 +3503,27 @@
   transition: background 0.12s;
 }
 .lightboxClose:hover { background: rgba(255, 255, 255, 0.25); }
+
+/* ─── Mobile (≤768) ───────────────────────────────────────────────
+ * 轻量适配:页面内边距收紧、品牌字号缩小、空状态/工具栏在窄屏换行不溢出。
+ * 模态/工作区已在 900px 档降为单列,这里只补手机间隙。 */
+@media (max-width: 768px) {
+  .root { padding: 16px 14px 24px; gap: 16px; }
+  /* 大字标缩小,避免横向溢出 */
+  .gridWordmarkText { font-size: 24px; }
+  /* 头部主簇允许换行 */
+  .gridHeaderLeft { gap: 16px; }
+  /* 空状态收紧 + 主标题缩小 */
+  .empty { padding: 32px 16px 36px; }
+  .emptyTitle { font-size: 24px; }
+  /* "如何工作"三步 → 单列,防止挤压溢出 */
+  .emptySteps { grid-template-columns: 1fr; }
+}
+
+/* ─── Extra small phone (≤480) ─────────────────────────────────── */
+@media (max-width: 480px) {
+  .root { padding: 12px 10px 20px; }
+  .gridWordmarkText { font-size: 21px; }
+  /* 会话卡网格 → 单列 */
+  .cardGrid { grid-template-columns: 1fr; }
+}
