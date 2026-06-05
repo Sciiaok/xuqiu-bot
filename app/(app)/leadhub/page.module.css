@@ -1557,6 +1557,178 @@ button.idChip {
   line-height: 1.4;
 }
 
+/* ── AI 建议回复卡片（接管态，输入框上方）──────────────── */
+/* 入口 / 加载 / 错误三态共用的窄横幅 */
+.suggestBar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 18px;
+  background: var(--accent-dim);
+  border-top: 1px solid rgba(37, 99, 235, 0.18);
+  flex-shrink: 0;
+}
+
+.suggestBarLabel {
+  flex: 1;
+  font-size: 12px;
+  color: var(--accent);
+  font-family: var(--font-sans);
+}
+
+.suggestBarError {
+  flex: 1;
+  font-size: 12px;
+  color: var(--amber);
+  font-family: var(--font-sans);
+}
+
+.suggestBarBtn {
+  font-size: 12px;
+  padding: 4px 12px;
+  border-radius: var(--r);
+  border: 1px solid var(--accent);
+  background: var(--accent);
+  color: #fff;
+  cursor: pointer;
+  font-family: var(--font-sans);
+  transition: background 0.15s;
+  flex-shrink: 0;
+}
+.suggestBarBtn:hover { background: var(--accent-hover); }
+
+.suggestSpinner {
+  width: 13px;
+  height: 13px;
+  border: 2px solid rgba(37, 99, 235, 0.25);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: suggestSpin 0.7s linear infinite;
+  flex-shrink: 0;
+}
+@keyframes suggestSpin { to { transform: rotate(360deg); } }
+
+/* 有建议时的完整卡片 */
+.suggestCard {
+  margin: 10px 18px;
+  padding: 12px 14px;
+  background:
+    radial-gradient(circle at 0% 0%, rgba(124, 77, 255, 0.06), transparent 60%),
+    radial-gradient(circle at 100% 100%, rgba(37, 99, 235, 0.08), transparent 60%),
+    var(--bg);
+  border: 1px solid rgba(37, 99, 235, 0.22);
+  border-radius: var(--r);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.suggestHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.suggestLabel {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--accent);
+  font-family: var(--font-mono);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.suggestGhostBtn {
+  font-size: 12px;
+  padding: 3px 10px;
+  border-radius: var(--r);
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text2);
+  cursor: pointer;
+  font-family: var(--font-sans);
+  transition: all 0.15s;
+}
+.suggestGhostBtn:hover { border-color: var(--accent); color: var(--accent); }
+
+.suggestReply {
+  font-size: 14px;
+  color: var(--text);
+  font-family: var(--font-sans);
+  line-height: 1.6;
+  white-space: pre-wrap;
+}
+
+.suggestReplyZh {
+  font-size: 13px;
+  color: var(--text2);
+  font-family: var(--font-sans);
+  line-height: 1.6;
+}
+
+.suggestFooter {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 2px;
+}
+
+.suggestBasis {
+  flex: 1;
+  font-size: 11px;
+  color: var(--text3);
+  font-family: var(--font-sans);
+  line-height: 1.4;
+}
+
+.suggestAdoptBtn {
+  font-size: 12px;
+  padding: 5px 14px;
+  border-radius: var(--r);
+  border: 1px solid var(--accent);
+  background: var(--accent);
+  color: #fff;
+  cursor: pointer;
+  font-family: var(--font-sans);
+  transition: background 0.15s;
+  flex-shrink: 0;
+}
+.suggestAdoptBtn:hover { background: var(--accent-hover); }
+
+/* ── 译文预览条（输入框上方，翻译后显示「将发送给客户」）──── */
+.sendPreview {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin: 0 18px 8px;
+  padding: 8px 12px;
+  background: var(--accent-dim);
+  border: 1px solid rgba(37, 99, 235, 0.22);
+  border-radius: var(--r);
+  flex-shrink: 0;
+}
+
+.sendPreviewLabel {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--accent);
+  font-family: var(--font-mono);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.sendPreviewText {
+  font-size: 14px;
+  color: var(--text);
+  font-family: var(--font-sans);
+  line-height: 1.6;
+  white-space: pre-wrap;
+}
+
 /* ── Input area wrapper + file preview chip ───────────── */
 .inputAreaWrap {
   display: flex;

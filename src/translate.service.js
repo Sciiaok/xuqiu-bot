@@ -259,6 +259,62 @@ export async function translateConversation(conversationId, { tenantId, productL
 }
 
 /**
+ * 临时单段文本翻译（不落库、不缓存）。两个用途：
+ *   - targetLang='zh'      ：把客户语言文本译成中文（建议回复的「中文对照」）。
+ *   - targetLang='customer'：把操作员的中文草稿译成客户语言（LeadHub「翻译并发」）。
+ *                            客户语言由 referenceText（最近几条客户消息）推断，
+ *                            拿不准时回落英文。
+ * 失败抛错，由 caller 决定如何兜底。模型同批量翻译，走 Haiku。
+ */
+export async function translateText(
+  text,
+  { targetLang = 'zh', referenceText = null, tenantId, productLine, sessionId, callSite = 'translate.adhoc' } = {},
+) {
+  const trimmed = (text || '').trim();
+  if (!trimmed) return '';
+
+  let instruction;
+  if (targetLang === 'zh') {
+    instruction = '把下面的文本翻译成简体中文。';
+  } else if (referenceText && referenceText.trim()) {
+    instruction =
+      '把下面的「待译文本」翻译成「参考消息」所使用的语言（即客户的语言）。' +
+      '若参考消息语言无法判断，则译成英文。\n\n' +
+      `参考消息：\n${referenceText.trim()}`;
+  } else {
+    instruction = '把下面的文本翻译成英文。';
+  }
+
+  const maxTokens = Math.min(
+    MAX_OUTPUT_TOKENS,
+    Math.max(MIN_OUTPUT_TOKENS, trimmed.length * OUTPUT_TOKEN_RATIO),
+  );
+
+  const response = await openrouter.messages.create(
+    {
+      models: [TRANSLATION_MODEL],
+      max_tokens: maxTokens,
+      messages: [
+        {
+          role: 'system',
+          content:
+            '你是专业的外贸客服翻译。只输出译文本身，保留品牌名 / 产品名 / 型号 / SKU / 数字 / 单位 / URL / 表情符号，' +
+            '不要解释、不要加引号或代码围栏。',
+        },
+        { role: 'user', content: `${instruction}\n\n待译文本：\n${trimmed}` },
+      ],
+    },
+    { tenantId, callSite, sessionId, productLine },
+  );
+
+  const out = (response?.choices?.[0]?.message?.content || '').trim();
+  return out
+    .replace(/^```(?:\w+)?\s*/i, '')
+    .replace(/```\s*$/i, '')
+    .trim();
+}
+
+/**
  * Fire-and-forget 翻译单条新消息。
  * 由 createMessage 在落库后调用（不 await）—— 翻译失败永远不能影响消息入库。
  *

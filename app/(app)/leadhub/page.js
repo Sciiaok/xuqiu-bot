@@ -37,6 +37,7 @@ import {
 } from './page-helpers';
 import InquiryCard from './InquiryCard';
 import ChatMessage from './ChatMessage';
+import SuggestReplyCard from './SuggestReplyCard';
 
 /* ── Constants ─────────────────────────────────────────── */
 
@@ -162,6 +163,18 @@ export default function LeadHubPage() {
   const [takeoverBusy, setTakeoverBusy] = useState(false);
   const [selectedFile, setSelectedFile] = useState(null);
   const [error, setError] = useState(null);
+  // 接管态 AI 建议回复（临时态，不落库）。forMessageId 记下生成时末条客户消息
+  // 的 id —— 来新消息后据此判定建议已过期、自动清掉。
+  const [suggestion, setSuggestion] = useState(null);
+  const [suggestLoading, setSuggestLoading] = useState(false);
+  const [suggestError, setSuggestError] = useState('');
+  // 译文（最终发给客户的客户语言内容）。null = 还没翻译；改动中文草稿即清空、
+  // 需重新翻译。发送时发的是 translatedText，不是输入框里的中文草稿。
+  const [translatedText, setTranslatedText] = useState(null);
+  // 采纳建议时记下「中文 / 客户语言」对照：草稿原样未改时直接用 AI 原生客户语言
+  // 版，省一次回译、也更准。
+  const [adoptedPair, setAdoptedPair] = useState(null);
+  const [translating, setTranslating] = useState(false);
   const [notes, setNotes] = useState([]);
   const [notesLoading, setNotesLoading] = useState(false);
   const [noteText, setNoteText] = useState('');
@@ -209,6 +222,30 @@ export default function LeadHubPage() {
     [cards, selectedId],
   );
   const selectedContactId = selected?.contactId || null;
+
+  // 接管态下，只要会话里有客户消息就常驻「建议」入口（不要求末条必须是未回复
+  // 的客户消息）——否则你回过一句后入口就消失、像是功能没生效。
+  const lastMessage = messages.length ? messages[messages.length - 1] : null;
+  const canSuggest = isHumanTakeover && messages.some((m) => m.role === 'user');
+
+  // 清掉过期建议：换会话 / 结束接管 / 来了新消息（末条 id 变了）都让建议失效。
+  useEffect(() => {
+    if (!canSuggest) {
+      setSuggestion(null);
+      setSuggestError('');
+      return;
+    }
+    if (suggestion && suggestion.forMessageId !== (lastMessage?.id || null)) {
+      setSuggestion(null);
+      setSuggestError('');
+    }
+  }, [canSuggest, lastMessage?.id, suggestion]);
+
+  // 换会话时清掉译文 / 采纳对照（草稿 msgText 沿用既有行为）。
+  useEffect(() => {
+    setTranslatedText(null);
+    setAdoptedPair(null);
+  }, [selectedId]);
 
   // Debounce search
   useEffect(() => {
@@ -671,8 +708,12 @@ export default function LeadHubPage() {
   }
 
   // ── Send message handler ──
+  // 文本走「先翻译后发」：实际发出去的是译文 translatedText（客户语言），不是
+  // 输入框里的中文草稿。附件保持原样：caption 用输入框文本，不翻译。
   async function handleSendMessage() {
-    if (!selectedId || (!msgText.trim() && !selectedFile) || sending) return;
+    if (!selectedId || sending) return;
+    const textToSend = selectedFile ? null : (translatedText || '').trim();
+    if (!selectedFile && !textToSend) return;
     setSending(true);
     try {
       let res;
@@ -686,13 +727,16 @@ export default function LeadHubPage() {
         res = await fetch('/api/send-message', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ conversationId: selectedId, message: msgText.trim() }),
+          body: JSON.stringify({ conversationId: selectedId, message: textToSend }),
         });
       }
       const data = await res.json();
       if (data.success) {
         setMsgText('');
         setSelectedFile(null);
+        setTranslatedText(null);
+        setAdoptedPair(null);
+        setSuggestion(null);
       } else if (res.status === 409 && data?.code === 'TAKEOVER_NOT_ACTIVE') {
         // 后端发现 takeover 已被 TTL 自动释放 —— 把本地 banner 立刻强刷为 false，
         // 让输入框禁用、UI 状态与服务端一致。Realtime 通常会先一步推过来，
@@ -708,6 +752,67 @@ export default function LeadHubPage() {
     } finally {
       setSending(false);
     }
+  }
+
+  // ── 翻译成客户语言（发送前最后一步）──
+  async function handleTranslate() {
+    const draft = msgText.trim();
+    if (!selectedId || !draft || translating) return;
+    // 草稿正是采纳进来、且一字未改 → 直接用 AI 原生客户语言版，不回译。
+    if (adoptedPair?.customer && draft === (adoptedPair.zh || '').trim()) {
+      setTranslatedText(adoptedPair.customer);
+      return;
+    }
+    setTranslating(true);
+    setError(null);
+    try {
+      const res = await fetch(`/api/conversations/${selectedId}/translate-draft`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text: draft }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.translated) {
+        throw new Error(data.message || '翻译失败，请重试');
+      }
+      setTranslatedText(data.translated);
+    } catch (err) {
+      console.error('Translate error:', err);
+      setError(err.message || '翻译失败，请重试');
+    } finally {
+      setTranslating(false);
+    }
+  }
+
+  // ── AI 建议回复 ──
+  async function generateSuggestion() {
+    if (!selectedId || suggestLoading) return;
+    setSuggestLoading(true);
+    setSuggestError('');
+    try {
+      const res = await fetch(`/api/conversations/${selectedId}/suggest-reply`, { method: 'POST' });
+      const data = await res.json();
+      if (!res.ok || !data.reply) {
+        throw new Error(data.message || '暂时给不出建议，请稍后重试');
+      }
+      const lastId = messages[messages.length - 1]?.id || null;
+      setSuggestion({ reply: data.reply, replyZh: data.replyZh || null, basis: data.basis || [], forMessageId: lastId });
+    } catch (err) {
+      console.error('Suggest error:', err);
+      setSuggestError(err.message || '生成失败');
+    } finally {
+      setSuggestLoading(false);
+    }
+  }
+
+  // 采纳 → 输入框拿到「中文草稿」（外贸员用中文改）。同时记下中文↔客户语言
+  // 对照，未改动时翻译可直接复用 AI 原生客户语言版。
+  function adoptSuggestion() {
+    if (!suggestion) return;
+    const zh = suggestion.replyZh || suggestion.reply;
+    setMsgText(zh);
+    setAdoptedPair({ zh, customer: suggestion.reply });
+    setTranslatedText(null);
   }
 
   // ── Notes CRUD ──
@@ -1321,6 +1426,18 @@ export default function LeadHubPage() {
                       </span>
                     </div>
 
+                    {/* AI 建议回复（接管态 + 会话里有客户消息时常驻） */}
+                    {canSuggest && (
+                      <SuggestReplyCard
+                        suggestion={suggestion}
+                        loading={suggestLoading}
+                        error={suggestError}
+                        onGenerate={generateSuggestion}
+                        onRegenerate={generateSuggestion}
+                        onAdopt={adoptSuggestion}
+                      />
+                    )}
+
                     {/* Input area + optional file preview */}
                     <div className={s.inputAreaWrap}>
                       {selectedFile && isHumanTakeover && (
@@ -1333,6 +1450,14 @@ export default function LeadHubPage() {
                           >
                             ×
                           </button>
+                        </div>
+                      )}
+                      {/* 译文预览：翻译后显示「将发送给客户」的客户语言原文，
+                          点发送即发这段。改动中文草稿会清掉它、需重新翻译。 */}
+                      {!selectedFile && translatedText && (
+                        <div className={s.sendPreview}>
+                          <span className={s.sendPreviewLabel}>将发送给客户</span>
+                          <span className={s.sendPreviewText}>{translatedText}</span>
                         </div>
                       )}
                       <div className={s.inputArea}>
@@ -1356,18 +1481,32 @@ export default function LeadHubPage() {
                           const len = msgText.length;
                           const overLimit = len > limit;
                           const showCounter = len > limit * 0.8; // 80% 起显示，避免日常打扰
+                          // 文本流程两段式：未翻译 → 主按钮「翻译成客户语言」；
+                          // 已翻译 → 主按钮「发送」（发的是译文）。附件直接发送。
+                          const readyToSend = Boolean(selectedFile) || Boolean(translatedText);
+                          const placeholder = !isHumanTakeover
+                            ? '点击右上「接管对话」开始输入'
+                            : selectedFile
+                              ? '可加一句说明，随附件发送'
+                              : '输入中文草稿，先翻译再发送';
                           return (
                             <>
                               <input
                                 className={s.chatInput}
-                                placeholder={isHumanTakeover ? '输入消息，回车发送' : '点击右上「接管对话」开始输入'}
+                                placeholder={placeholder}
                                 disabled={!isHumanTakeover || sending}
                                 value={msgText}
-                                onChange={e => setMsgText(e.target.value)}
+                                onChange={e => {
+                                  setMsgText(e.target.value);
+                                  // 改动草稿 → 旧译文作废，需重新翻译后才能发。
+                                  if (translatedText) setTranslatedText(null);
+                                }}
                                 onKeyDown={e => {
                                   if (e.key === 'Enter' && !e.shiftKey) {
                                     e.preventDefault();
-                                    if (!overLimit) handleSendMessage();
+                                    if (overLimit) return;
+                                    if (readyToSend) handleSendMessage();
+                                    else if (msgText.trim()) handleTranslate();
                                   }
                                 }}
                               />
@@ -1379,14 +1518,25 @@ export default function LeadHubPage() {
                                   {len}/{limit}
                                 </span>
                               )}
-                              <Button
-                                variant="primary"
-                                size="sm"
-                                onClick={handleSendMessage}
-                                disabled={!isHumanTakeover || (!msgText.trim() && !selectedFile) || sending || overLimit}
-                              >
-                                {sending ? '发送中…' : '发送'}
-                              </Button>
+                              {readyToSend ? (
+                                <Button
+                                  variant="primary"
+                                  size="sm"
+                                  onClick={handleSendMessage}
+                                  disabled={!isHumanTakeover || sending || overLimit}
+                                >
+                                  {sending ? '发送中…' : '发送'}
+                                </Button>
+                              ) : (
+                                <Button
+                                  variant="primary"
+                                  size="sm"
+                                  onClick={handleTranslate}
+                                  disabled={!isHumanTakeover || !msgText.trim() || translating || overLimit}
+                                >
+                                  {translating ? '翻译中…' : '🌐 翻译成客户语言'}
+                                </Button>
+                              )}
                             </>
                           );
                         })()}
