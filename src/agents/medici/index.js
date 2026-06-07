@@ -39,7 +39,7 @@ import {
 // ─── Constants ───────────────────────────────────────────────────────
 
 const MAX_TOKENS = 4096;
-const MAX_TOOL_ITERATIONS = 5;
+const MAX_TOOL_ITERATIONS = 8;
 const FORCE_SUBMIT_PROMPT =
   'Please call submit_response with your structured response now.';
 
@@ -794,16 +794,26 @@ export async function runMedici({
   //    MAX_TOOL_ITERATIONS, or model stopped with plain text). Pin the final
   //    turn with tool_choice=submit_response.
   if (!parsed) {
-    // tool_choice='any' 之后 finish_reason='stop' 不再可能（模型物理上必须调
-    // 工具）。force_submit 现在只剩两条路径：
-    //   1) iterations 撞 MAX_TOOL_ITERATIONS（=5）：模型陷在 KB 工具循环里，
-    //      可能是 prompt 没让它收敛、或是 KB tool_result 让它越调越多
-    //   2) 模型在 any 模式下却调了非 submit 工具但 history 已经过长——理论
-    //      上不会有，留作 defensive 兜底
-    // 把诊断信息打全，方便后续按 conversation_id 反查 messages 重放
+    const prevMsg = response.choices[0].message;
+    const tailToolCalls = prevMsg.tool_calls || [];
+    // Tail-check：循环在 iterations==MAX 时直接退出，最后一次 callClaude 的
+    // 返回还没被检查。如果模型已经收敛到 submit_response，直接 parse、不要
+    // 再付费多发一次 forced 请求。
+    const tailSubmit = tailToolCalls.find((tc) => tc.function?.name === 'submit_response');
+    if (tailSubmit) {
+      logger.info('medici.tool_use.submit_response', { iterations, source: 'post_loop_tail' });
+      parsed = safeParseJson(tailSubmit.function.arguments);
+    }
+  }
+
+  if (!parsed) {
+    // 进到这里意味着 MAX_TOOL_ITERATIONS 耗尽且最后一轮仍非 submit_response
+    // —— 真·工具循环未收敛（KB / quote_price / lookup_freight 等反复试）。
+    // 把诊断信息打全，方便后续按 conversation_id 反查 messages 重放。
     const prevMsg = response.choices[0].message;
     const lastToolNames = (prevMsg.tool_calls || []).map((tc) => tc.function?.name).filter(Boolean);
     logger.warn('medici.tool_use.force_submit', {
+      reason: 'tool_loop_no_convergence',
       stop_reason: response.choices[0].finish_reason,
       iterations,
       max_iterations_hit: iterations >= MAX_TOOL_ITERATIONS,
