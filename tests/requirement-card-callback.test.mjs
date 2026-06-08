@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-test('card callback response can return a toast and replacement card', async () => {
+test('card callback response returns only a toast', async () => {
   const { cardCallbackResponseBody } = await import('../src/requirement-card-callback.service.js');
 
   const card = {
@@ -11,23 +11,14 @@ test('card callback response can return a toast and replacement card', async () 
 
   assert.deepEqual(cardCallbackResponseBody('success', '已更新', card), {
     toast: { type: 'success', content: '已更新' },
-    card,
   });
 });
 
-test('card callback toast includes Bitable sync result', async () => {
+test('card callback toast says Bitable sync is queued', async () => {
   const { requirementActionToastMessage } = await import('../src/requirement-card-callback.service.js');
 
   assert.equal(
-    requirementActionToastMessage({ action: 'confirm_plan', syncResult: { ok: true, recordId: 'rec_1' } }),
-    '已更新，已同步多维表格',
-  );
-  assert.equal(
-    requirementActionToastMessage({ action: 'confirm_plan', syncResult: { ok: false, error: '没有权限' } }),
-    '已更新，但同步多维表格失败：没有权限',
-  );
-  assert.equal(
-    requirementActionToastMessage({ action: 'confirm_plan', syncResult: { skipped: true, reason: 'bitable_not_configured' } }),
-    '已更新，但没有同步多维表格：bitable_not_configured',
+    requirementActionToastMessage({ action: 'confirm_plan' }),
+    '已更新，多维表格后台同步中',
   );
 });

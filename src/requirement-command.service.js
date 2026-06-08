@@ -1,8 +1,13 @@
 import {
   addRequirementEvent,
+  getRequirementBotSettings,
   listRequirements,
   updateRequirement,
 } from '../lib/repositories/requirement.repository.js';
+import {
+  findBitableRequirementByNo,
+  updateBitableRequirement,
+} from './requirement-bitable.service.js';
 import {
   CURRENT_OWNER_BY_STATUS,
   REQUIREMENT_ACTIONS,
@@ -368,6 +373,36 @@ async function findRequirementByNo({ tenantId, reqNo }) {
   return items.find(item => normalizeReqNo(item.req_no) === normalizeReqNo(reqNo)) || null;
 }
 
+async function defaultRequirementStore(tenantId) {
+  const settings = await getRequirementBotSettings(tenantId, { includeSecrets: true });
+  return {
+    async findByNo({ reqNo }) {
+      try {
+        const fromBitable = await findBitableRequirementByNo({ settings, reqNo });
+        if (fromBitable) return fromBitable;
+      } catch (err) {
+        console.warn('[requirements] find from bitable failed, falling back to local store:', err.message);
+      }
+      return findRequirementByNo({ tenantId, reqNo });
+    },
+    async update({ requirement, patch }) {
+      if (requirement?.bitable_record_id) {
+        try {
+          return await updateBitableRequirement({ settings, requirement, patch });
+        } catch (err) {
+          console.warn('[requirements] update bitable requirement failed:', err.message);
+          throw err;
+        }
+      }
+      return updateRequirement({ tenantId, id: requirement.id, patch });
+    },
+  };
+}
+
+async function resolveRequirementStore(tenantId, requirementStore) {
+  return requirementStore || defaultRequirementStore(tenantId);
+}
+
 export function isExplicitNewRequirement(text) {
   return normalizeWhitespace(text).includes('【新需求】');
 }
@@ -382,12 +417,13 @@ function appendFollowUp(rawDescription, text) {
   return existing ? `${existing}\n\n${addition}` : addition;
 }
 
-export async function handleRequirementEditCommand({ tenantId, text, actorFeishuUserId }) {
+export async function handleRequirementEditCommand({ tenantId, text, actorFeishuUserId, requirementStore }) {
   const parsed = parseRequirementEditCommand(text);
   if (!parsed.handled) return { handled: false };
   if (parsed.ok === false) return parsed;
 
-  const requirement = await findRequirementByNo({ tenantId, reqNo: parsed.reqNo });
+  const store = await resolveRequirementStore(tenantId, requirementStore);
+  const requirement = await store.findByNo({ reqNo: parsed.reqNo });
   if (!requirement) {
     return {
       handled: true,
@@ -402,27 +438,25 @@ export async function handleRequirementEditCommand({ tenantId, text, actorFeishu
     ...patchForField(requirement, parsed.field, parsed.value),
     bitable_sync_status: 'pending',
   };
-  const updated = await updateRequirement({
-    tenantId,
-    id: requirement.id,
-    patch,
-  });
+  const updated = await store.update({ requirement, patch });
 
-  await addRequirementEvent({
-    tenantId,
-    requirementId: requirement.id,
-    actorFeishuUserId,
-    action: actionForField(parsed.field),
-    fromStatus: requirement.status,
-    toStatus: updated.status,
-    details: {
-      field: parsed.field,
-      from,
-      to: parsed.value,
-      raw_field: parsed.rawField,
-      raw_value: parsed.rawValue,
-    },
-  });
+  if (!requirement.bitable_record_id) {
+    await addRequirementEvent({
+      tenantId,
+      requirementId: requirement.id,
+      actorFeishuUserId,
+      action: actionForField(parsed.field),
+      fromStatus: requirement.status,
+      toStatus: updated.status,
+      details: {
+        field: parsed.field,
+        from,
+        to: parsed.value,
+        raw_field: parsed.rawField,
+        raw_value: parsed.rawValue,
+      },
+    });
+  }
 
   const label = FIELD_LABELS.get(parsed.field) || parsed.rawField;
   return {
@@ -433,11 +467,12 @@ export async function handleRequirementEditCommand({ tenantId, text, actorFeishu
   };
 }
 
-export async function handleRequirementSyncCommand({ tenantId, text, syncRequirementToBitable }) {
+export async function handleRequirementSyncCommand({ tenantId, text, syncRequirementToBitable, requirementStore }) {
   const parsed = parseRequirementSyncCommand(text);
   if (!parsed.handled) return { handled: false };
 
-  const requirement = await findRequirementByNo({ tenantId, reqNo: parsed.reqNo });
+  const store = await resolveRequirementStore(tenantId, requirementStore);
+  const requirement = await store.findByNo({ reqNo: parsed.reqNo });
   if (!requirement) {
     return {
       handled: true,
@@ -480,7 +515,7 @@ export async function handleRequirementSyncCommand({ tenantId, text, syncRequire
   }
 }
 
-export async function handleRequirementFollowUp({ tenantId, text, actorFeishuUserId }) {
+export async function handleRequirementFollowUp({ tenantId, text, actorFeishuUserId, requirementStore }) {
   if (isExplicitNewRequirement(text)) {
     return { handled: false, reason: 'explicit_new_requirement' };
   }
@@ -502,7 +537,8 @@ export async function handleRequirementFollowUp({ tenantId, text, actorFeishuUse
     };
   }
 
-  const requirement = await findRequirementByNo({ tenantId, reqNo });
+  const store = await resolveRequirementStore(tenantId, requirementStore);
+  const requirement = await store.findByNo({ reqNo });
   if (!requirement || TERMINAL_STATUSES.has(requirement.status)) {
     return {
       handled: true,
@@ -511,27 +547,28 @@ export async function handleRequirementFollowUp({ tenantId, text, actorFeishuUse
     };
   }
 
-  const updated = await updateRequirement({
-    tenantId,
-    id: requirement.id,
+  const updated = await store.update({
+    requirement,
     patch: {
       raw_description: appendFollowUp(requirement.raw_description, text),
       bitable_sync_status: 'pending',
     },
   });
 
-  await addRequirementEvent({
-    tenantId,
-    requirementId: requirement.id,
-    actorFeishuUserId,
-    action: REQUIREMENT_ACTIONS.UPDATE_PLAN,
-    fromStatus: requirement.status,
-    toStatus: requirement.status,
-    details: {
-      field: 'raw_description',
-      follow_up: String(text || '').trim(),
-    },
-  });
+  if (!requirement.bitable_record_id) {
+    await addRequirementEvent({
+      tenantId,
+      requirementId: requirement.id,
+      actorFeishuUserId,
+      action: REQUIREMENT_ACTIONS.UPDATE_PLAN,
+      fromStatus: requirement.status,
+      toStatus: requirement.status,
+      details: {
+        field: 'raw_description',
+        follow_up: String(text || '').trim(),
+      },
+    });
+  }
 
   return {
     handled: true,

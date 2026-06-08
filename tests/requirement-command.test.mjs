@@ -83,6 +83,40 @@ test('applies requirement edit commands and records an event', async () => {
   }
 });
 
+test('applies requirement edit commands against a Bitable-backed requirement store', async () => {
+  const calls = [];
+  const { handleRequirementEditCommand } = await import('../src/requirement-command.service.js');
+
+  const store = {
+    findByNo: async ({ reqNo }) => ({
+      id: 'rec_1',
+      bitable_record_id: 'rec_1',
+      req_no: reqNo,
+      title: '旧标题',
+      status: 'needs_pm',
+      priority: 'P2',
+      prd: { solution: '旧方案', acceptance_criteria: [] },
+    }),
+    update: async ({ requirement, patch }) => {
+      calls.push({ requirement, patch });
+      return { ...requirement, ...patch };
+    },
+  };
+
+  const result = await handleRequirementEditCommand({
+    tenantId: 'local',
+    text: '修改 REQ-20260608-001 优先级为P0',
+    actorFeishuUserId: 'ou_pm',
+    requirementStore: store,
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.requirement.priority, 'P0');
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].requirement.bitable_record_id, 'rec_1');
+  assert.equal(calls[0].patch.priority, 'P0');
+});
+
 test('applies product plan edits inside the requirement PRD', async () => {
   const dir = await mkdtemp(path.join(tmpdir(), 'requirement-command-'));
   process.env.REQUIREMENT_BOT_STORE_PATH = path.join(dir, 'store.json');

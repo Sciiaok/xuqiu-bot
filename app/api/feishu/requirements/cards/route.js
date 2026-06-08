@@ -130,8 +130,10 @@ export async function POST(request) {
         payload: value,
       });
 
-    const syncResult = await syncRequirementToBitable({ tenantId, requirement: updated });
-    const message = requirementActionToastMessage({ action, syncResult });
+    syncRequirementToBitable({ tenantId, requirement: updated }).catch(err => {
+      console.warn('[requirements] bitable sync after card action failed:', err.message);
+    });
+    const message = requirementActionToastMessage({ action });
     return cardCallbackResponse('success', message, cardFor(updated));
   } catch (err) {
     return callbackToast('error', err.message);
