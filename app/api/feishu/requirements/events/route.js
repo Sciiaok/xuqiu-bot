@@ -5,16 +5,22 @@ import {
   replyFeishuText,
   resolveRequirementBotTenantId,
   sendFeishuCard,
+  updateFeishuCard,
 } from '@/src/feishu-app.service';
 import {
   computeDraftInitialStatus,
   generateRequirementDraft,
 } from '@/src/requirement-draft.service';
-import { buildRequirementDraftCard } from '@/src/requirement-card.service';
+import {
+  buildRequirementDraftCard,
+  buildRequirementExecutionCard,
+} from '@/src/requirement-card.service';
 import { syncRequirementToBitable } from '@/src/requirement-bitable.service';
+import { handleRequirementEditCommand } from '@/src/requirement-command.service';
 import {
   CURRENT_OWNER_BY_STATUS,
   REQUIREMENT_ACTIONS,
+  REQUIREMENT_STATUSES,
 } from '@/src/requirement-constants';
 import {
   createRequirementWithEvent,
@@ -41,6 +47,16 @@ function messageChatId(message, settings) {
   return message.chat_id || settings?.default_chat_id || '';
 }
 
+function cardFor(requirement) {
+  if ([
+    REQUIREMENT_STATUSES.NEEDS_PM,
+    REQUIREMENT_STATUSES.NEEDS_INFO,
+  ].includes(requirement.status)) {
+    return buildRequirementDraftCard(requirement);
+  }
+  return buildRequirementExecutionCard(requirement);
+}
+
 export async function POST(request) {
   const body = await request.json();
   const verification = handleFeishuUrlVerification(body);
@@ -59,6 +75,44 @@ export async function POST(request) {
 
   const submitter = extractSenderId(sender);
   if (!submitter) return Response.json({ error: 'Feishu sender id is required' }, { status: 400 });
+
+  const commandResult = await handleRequirementEditCommand({
+    tenantId,
+    text: rawText,
+    actorFeishuUserId: submitter,
+  });
+  if (commandResult.handled) {
+    if (message.message_id) {
+      await replyFeishuText({
+        tenantId,
+        messageId: message.message_id,
+        content: commandResult.ok ? commandResult.message : `修改失败：${commandResult.error}`,
+      });
+    }
+
+    if (commandResult.ok) {
+      const updated = commandResult.requirement;
+      if (updated.feishu_card_message_id) {
+        await updateFeishuCard({
+          tenantId,
+          messageId: updated.feishu_card_message_id,
+          card: cardFor(updated),
+        }).catch(err => {
+          console.warn('[requirements] card refresh after edit command failed:', err.message);
+        });
+      }
+      syncRequirementToBitable({ tenantId, requirement: updated }).catch(err => {
+        console.warn('[requirements] bitable sync after edit command failed:', err.message);
+      });
+    }
+
+    return Response.json({
+      ok: Boolean(commandResult.ok),
+      handled: 'edit_command',
+      requirement_id: commandResult.requirement?.id || null,
+      error: commandResult.error || null,
+    });
+  }
 
   const draft = await generateRequirementDraft({
     tenantId,
