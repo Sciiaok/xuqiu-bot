@@ -1,12 +1,12 @@
 # Routes (auto-generated)
 
-Generated: 2026-06-04T08:32:28.390Z
+Generated: 2026-06-08T04:14:04.522Z
 
 Filesystem-derived list of API endpoints and UI pages. **Do not edit** — run `node scripts/build-index.mjs` to refresh.
 
 ## API Endpoints
 
-Total: **85**
+Total: **86**
 
 | Path | Methods | File |
 | --- | --- | --- |
@@ -94,11 +94,12 @@ Total: **85**
 | `/api/send-message` | POST | [app/api/send-message/route.js](../../app/api/send-message/route.js) |
 | `/api/settings/notifications` | GET, POST | [app/api/settings/notifications/route.js](../../app/api/settings/notifications/route.js) |
 | `/api/settings/notifications/test` | POST | [app/api/settings/notifications/test/route.js](../../app/api/settings/notifications/test/route.js) |
+| `/api/settings/requirement-bot` | GET, POST | [app/api/settings/requirement-bot/route.js](../../app/api/settings/requirement-bot/route.js) |
 | `/api/webhook` | GET, POST | [app/api/webhook/route.js](../../app/api/webhook/route.js) |
 
 ## UI Pages
 
-Total: **17**
+Total: **18**
 
 | URL | File |
 | --- | --- |
@@ -119,6 +120,7 @@ Total: **17**
 | `/reports/[id]` | [app/(app)/reports/[id]/page.js](../../app/(app)/reports/[id]/page.js) |
 | `/settings/meta-connection` | [app/(app)/settings/meta-connection/page.js](../../app/(app)/settings/meta-connection/page.js) |
 | `/settings/notifications` | [app/(app)/settings/notifications/page.js](../../app/(app)/settings/notifications/page.js) |
+| `/settings/requirement-bot` | [app/(app)/settings/requirement-bot/page.js](../../app/(app)/settings/requirement-bot/page.js) |
 
 ## Cron Jobs
 

@@ -75,6 +75,9 @@ export const config = {
 
   // 飞书通知改成 per-tenant webhook 后，FEISHU_APP_ID/SECRET/CHAT_ID 不再使用，
   // 配置在 notification_settings 表里（每个 tenant 自己粘 webhook URL）。
+  feishu: {
+    requirementBotCallbackTenantId: process.env.FEISHU_REQUIREMENT_BOT_CALLBACK_TENANT_ID || '',
+  },
 
   // Redis (queue + rate limiter + cache)
   redis: {
