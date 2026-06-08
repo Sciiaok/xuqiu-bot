@@ -1,12 +1,12 @@
 # Routes (auto-generated)
 
-Generated: 2026-06-08T04:17:01.084Z
+Generated: 2026-06-08T04:18:40.627Z
 
 Filesystem-derived list of API endpoints and UI pages. **Do not edit** — run `node scripts/build-index.mjs` to refresh.
 
 ## API Endpoints
 
-Total: **87**
+Total: **88**
 
 | Path | Methods | File |
 | --- | --- | --- |
@@ -44,6 +44,7 @@ Total: **87**
 | `/api/cron/recover-stale-kb-docs` | GET | [app/api/cron/recover-stale-kb-docs/route.js](../../app/api/cron/recover-stale-kb-docs/route.js) |
 | `/api/dev-tools/ai-sql` | POST | [app/api/dev-tools/ai-sql/route.js](../../app/api/dev-tools/ai-sql/route.js) |
 | `/api/dev-tools/sql` | POST | [app/api/dev-tools/sql/route.js](../../app/api/dev-tools/sql/route.js) |
+| `/api/feishu/requirements/cards` | POST | [app/api/feishu/requirements/cards/route.js](../../app/api/feishu/requirements/cards/route.js) |
 | `/api/feishu/requirements/events` | POST | [app/api/feishu/requirements/events/route.js](../../app/api/feishu/requirements/events/route.js) |
 | `/api/health` | GET | [app/api/health/route.js](../../app/api/health/route.js) |
 | `/api/inquiries` | GET | [app/api/inquiries/route.js](../../app/api/inquiries/route.js) |
