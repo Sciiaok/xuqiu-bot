@@ -129,6 +129,24 @@ function compactJson(value) {
   }
 }
 
+async function fetchWithTimeout(fetchImpl, url, options = {}, timeoutMs = 8000) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetchImpl(url, {
+      ...options,
+      signal: options.signal || controller.signal,
+    });
+  } catch (err) {
+    if (err?.name === 'AbortError') {
+      throw new Error(`飞书开放接口请求超时：${timeoutMs}ms`);
+    }
+    throw err;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 export function formatBitableSyncError(err) {
   const message = err?.message || String(err || '未知错误');
   const responseData =
@@ -141,7 +159,7 @@ export function formatBitableSyncError(err) {
 }
 
 async function feishuOpenApi({ tenantAccessToken, method = 'GET', path, data, fetchImpl = fetch }) {
-  const response = await fetchImpl(`https://open.feishu.cn/open-apis${path}`, {
+  const response = await fetchWithTimeout(fetchImpl, `https://open.feishu.cn/open-apis${path}`, {
     method,
     headers: {
       Authorization: `Bearer ${tenantAccessToken}`,
@@ -219,7 +237,7 @@ async function listBitableRecords({ tenantAccessToken, appToken, tableId, fetchI
 }
 
 async function getTenantAccessToken({ settings, fetchImpl = fetch }) {
-  const response = await fetchImpl('https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal', {
+  const response = await fetchWithTimeout(fetchImpl, 'https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
@@ -245,7 +263,7 @@ export async function resolveBitableAppToken({ settings, fetchImpl = fetch }) {
   const tenantAccessToken = await getTenantAccessToken({ settings, fetchImpl });
   const url = new URL('https://open.feishu.cn/open-apis/wiki/v2/spaces/get_node');
   url.searchParams.set('token', wikiNodeToken);
-  const response = await fetchImpl(url, {
+  const response = await fetchWithTimeout(fetchImpl, url, {
     method: 'GET',
     headers: {
       Authorization: `Bearer ${tenantAccessToken}`,

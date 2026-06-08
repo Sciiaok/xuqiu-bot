@@ -18,7 +18,10 @@ import {
   buildRequirementDraftCard,
   buildRequirementExecutionCard,
 } from '@/src/requirement-card.service';
-import { syncRequirementToBitable } from '@/src/requirement-bitable.service';
+import {
+  diagnoseBitableRequirementStore,
+  syncRequirementToBitable,
+} from '@/src/requirement-bitable.service';
 import {
   handleRequirementEditCommand,
   handleRequirementFollowUp,
@@ -27,7 +30,6 @@ import {
   isExplicitNewRequirement,
   stripNewRequirementMarker,
 } from '@/src/requirement-command.service';
-import { diagnoseBitableRequirementStore } from '@/src/requirement-bitable.service';
 import {
   CURRENT_OWNER_BY_STATUS,
   REQUIREMENT_ACTIONS,
@@ -124,6 +126,14 @@ export async function POST(request) {
   }
 
   if (isBitableDiagnosticCommand(rawText)) {
+    if (message.message_id) {
+      await replyFeishuText({
+        tenantId,
+        messageId: message.message_id,
+        content: '收到，开始诊断多维文档连接。',
+      });
+    }
+
     const diagnostic = await diagnoseBitableRequirementStore({
       settings: await getRequirementBotSettings(tenantId, { includeSecrets: true }),
     });
