@@ -296,5 +296,27 @@ test('parses manual bitable sync commands', async () => {
     parseRequirementSyncCommand('REQ-20260608-001 【更新多维文档】'),
     { handled: true, reqNo: 'REQ-20260608-001' },
   );
+  assert.deepEqual(
+    parseRequirementSyncCommand('回复 洪羽宁： @需求机器人 【更新多维文档】 REQ-20260608-001。'),
+    { handled: true, reqNo: 'REQ-20260608-001' },
+  );
+  assert.deepEqual(
+    parseRequirementSyncCommand('更新多维文档 REQ 20260608 001'),
+    { handled: true, reqNo: 'REQ-20260608-001' },
+  );
   assert.deepEqual(parseRequirementSyncCommand('REQ-20260608-001 补充一下'), { handled: false });
+});
+
+test('does not treat Bitable update intent as a requirement follow-up', async () => {
+  const { handleRequirementFollowUp } = await import('../src/requirement-command.service.js');
+
+  const result = await handleRequirementFollowUp({
+    tenantId: 'local',
+    text: '【更新多维文档】',
+    actorFeishuUserId: 'ou_user',
+  });
+
+  assert.equal(result.handled, true);
+  assert.equal(result.ok, false);
+  assert.match(result.error, /REQ-20260608-001/);
 });

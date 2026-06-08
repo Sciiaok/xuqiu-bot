@@ -114,7 +114,20 @@ function normalizeWhitespace(text) {
 }
 
 function normalizeReqNo(value) {
-  return String(value || '').trim().toUpperCase();
+  const raw = String(value || '').trim().toUpperCase();
+  const compact = raw.match(/^REQ\D*(\d{8})\D*(\d{3})$/);
+  if (compact) return `REQ-${compact[1]}-${compact[2]}`;
+  return raw;
+}
+
+function extractReqNo(text) {
+  const input = String(text || '').toUpperCase();
+  const match = input.match(/REQ\D*(\d{8})\D*(\d{3})/);
+  return match ? `REQ-${match[1]}-${match[2]}` : '';
+}
+
+function hasBitableUpdateIntent(text) {
+  return /更新\s*多维\s*(?:文档|表格)?/.test(String(text || ''));
 }
 
 function normalizeField(rawField) {
@@ -291,8 +304,8 @@ export function parseRequirementSyncCommand(text) {
   const match = input.match(/(?:^|[\s:：])(?:同步|同步多维表格)\s+(REQ-\d{8}-\d{3})(?:$|\s)/i);
   if (match) return { handled: true, reqNo: normalizeReqNo(match[1]) };
 
-  if (input.includes('【更新多维文档】')) {
-    const reqNo = input.match(/REQ-\d{8}-\d{3}/i)?.[0] || '';
+  if (hasBitableUpdateIntent(input)) {
+    const reqNo = extractReqNo(input);
     if (reqNo) return { handled: true, reqNo: normalizeReqNo(reqNo) };
   }
 
@@ -421,7 +434,15 @@ export async function handleRequirementFollowUp({ tenantId, text, actorFeishuUse
     return { handled: false, reason: 'explicit_new_requirement' };
   }
 
-  const reqNo = normalizeReqNo(text.match(/REQ-\d{8}-\d{3}/i)?.[0] || '');
+  if (hasBitableUpdateIntent(text)) {
+    return {
+      handled: true,
+      ok: false,
+      error: '请带上需求编号，例如：【更新多维文档】REQ-20260608-001。',
+    };
+  }
+
+  const reqNo = extractReqNo(text);
   if (!reqNo) {
     return {
       handled: true,
