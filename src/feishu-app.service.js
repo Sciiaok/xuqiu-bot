@@ -50,6 +50,16 @@ export function handleFeishuUrlVerification(body) {
   return null;
 }
 
+export function requirementBotRuntimeVersion() {
+  return (
+    process.env.ZEABUR_GIT_COMMIT ||
+    process.env.ZEABUR_COMMIT_SHA ||
+    process.env.GIT_COMMIT ||
+    process.env.NEXT_PUBLIC_VERCEL_GIT_COMMIT_SHA ||
+    'local-unknown'
+  );
+}
+
 export async function sendFeishuCard({ tenantId, receiveIdType = 'chat_id', receiveId, card }) {
   const client = await getRequirementBotClient(tenantId);
   const res = await client.im.message.create({

@@ -4,6 +4,7 @@ import {
   normalizeFeishuUserId,
   parseFeishuTextMessage,
   replyFeishuText,
+  requirementBotRuntimeVersion,
   resolveRequirementBotTenantId,
   sendFeishuCard,
   updateFeishuCard,
@@ -90,6 +91,21 @@ export async function POST(request) {
   const submitter = extractSenderId(sender);
   if (!submitter) return Response.json({ error: 'Feishu sender id is required' }, { status: 400 });
   const submitterName = extractSenderName(sender);
+
+  if (/^(?:版本|version)$/i.test(rawText.trim())) {
+    if (message.message_id) {
+      await replyFeishuText({
+        tenantId,
+        messageId: message.message_id,
+        content: `需求机器人版本：${requirementBotRuntimeVersion()}`,
+      });
+    }
+    return Response.json({
+      ok: true,
+      handled: 'version_command',
+      version: requirementBotRuntimeVersion(),
+    });
+  }
 
   const syncResult = await handleRequirementSyncCommand({
     tenantId,
