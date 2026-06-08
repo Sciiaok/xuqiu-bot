@@ -102,6 +102,7 @@ export const config = {
     defaultTesterFeishuUserId: process.env.FEISHU_DEFAULT_TESTER_USER_ID || '',
     defaultAcceptorFeishuUserId: process.env.FEISHU_DEFAULT_ACCEPTOR_USER_ID || '',
     bitableAppToken: process.env.FEISHU_BITABLE_APP_TOKEN || process.env.BITABLE_APP_TOKEN || '',
+    bitableWikiNodeToken: process.env.FEISHU_BITABLE_WIKI_NODE_TOKEN || '',
     bitableTableId: process.env.FEISHU_BITABLE_TABLE_ID || process.env.BITABLE_TABLE_ID || '',
     reminderHour: Number(process.env.FEISHU_REMINDER_HOUR || 10),
   },
