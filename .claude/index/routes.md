@@ -1,12 +1,12 @@
 # Routes (auto-generated)
 
-Generated: 2026-06-08T04:21:15.507Z
+Generated: 2026-06-08T04:24:27.544Z
 
 Filesystem-derived list of API endpoints and UI pages. **Do not edit** — run `node scripts/build-index.mjs` to refresh.
 
 ## API Endpoints
 
-Total: **90**
+Total: **92**
 
 | Path | Methods | File |
 | --- | --- | --- |
@@ -94,6 +94,8 @@ Total: **90**
 | `/api/reports` | GET, POST | [app/api/reports/route.js](../../app/api/reports/route.js) |
 | `/api/reports/[id]` | GET, POST | [app/api/reports/[id]/route.js](../../app/api/reports/[id]/route.js) |
 | `/api/reports/export` | GET | [app/api/reports/export/route.js](../../app/api/reports/export/route.js) |
+| `/api/requirements` | GET | [app/api/requirements/route.js](../../app/api/requirements/route.js) |
+| `/api/requirements/[id]` | GET | [app/api/requirements/[id]/route.js](../../app/api/requirements/[id]/route.js) |
 | `/api/requirements/[id]/sync-bitable` | POST | [app/api/requirements/[id]/sync-bitable/route.js](../../app/api/requirements/[id]/sync-bitable/route.js) |
 | `/api/send-message` | POST | [app/api/send-message/route.js](../../app/api/send-message/route.js) |
 | `/api/settings/notifications` | GET, POST | [app/api/settings/notifications/route.js](../../app/api/settings/notifications/route.js) |
@@ -103,7 +105,7 @@ Total: **90**
 
 ## UI Pages
 
-Total: **18**
+Total: **20**
 
 | URL | File |
 | --- | --- |
@@ -122,6 +124,8 @@ Total: **18**
 | `/product-lines/[id]` | [app/(app)/product-lines/[id]/page.js](../../app/(app)/product-lines/[id]/page.js) |
 | `/reports` | [app/(app)/reports/page.js](../../app/(app)/reports/page.js) |
 | `/reports/[id]` | [app/(app)/reports/[id]/page.js](../../app/(app)/reports/[id]/page.js) |
+| `/requirements` | [app/(app)/requirements/page.js](../../app/(app)/requirements/page.js) |
+| `/requirements/[id]` | [app/(app)/requirements/[id]/page.js](../../app/(app)/requirements/[id]/page.js) |
 | `/settings/meta-connection` | [app/(app)/settings/meta-connection/page.js](../../app/(app)/settings/meta-connection/page.js) |
 | `/settings/notifications` | [app/(app)/settings/notifications/page.js](../../app/(app)/settings/notifications/page.js) |
 | `/settings/requirement-bot` | [app/(app)/settings/requirement-bot/page.js](../../app/(app)/settings/requirement-bot/page.js) |

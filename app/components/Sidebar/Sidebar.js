@@ -15,6 +15,7 @@ const BUSINESS_NAV = [
     items: [
       { href: '/analytics', label: '监控看板', icon: 'analytics' },
       { href: '/reports', label: '周报日报', icon: 'reports' },
+      { href: '/requirements', label: '需求工作台', icon: 'requirements' },
     ],
   },
   {
@@ -59,6 +60,13 @@ const ICONS = {
       <line x1="5" y1="5" x2="10" y2="5"/>
       <line x1="5" y1="8" x2="10" y2="8"/>
       <line x1="5" y1="11" x2="8" y2="11"/>
+    </svg>
+  ),
+  requirements: (
+    <svg fill="none" stroke="currentColor" strokeWidth="1.4" viewBox="0 0 15 15">
+      <rect x="2" y="2" width="11" height="11" rx="2"/>
+      <path d="M5 5h5M5 7.5h5M5 10h3"/>
+      <path d="M3.8 5l.4.4.8-.9M3.8 7.5l.4.4.8-.9"/>
     </svg>
   ),
   campaign: (
@@ -287,6 +295,14 @@ export default function Sidebar({ mobileOpen = false, onClose }) {
             >
               {ICONS.bell}
               <span className={s.niLabel}>通知</span>
+            </Link>
+            <Link
+              href="/settings/requirement-bot"
+              onClick={handleNavClick}
+              className={`${s.ni} ${isActive('/settings/requirement-bot') ? s.active : ''}`}
+            >
+              {ICONS.requirements}
+              <span className={s.niLabel}>需求机器人</span>
             </Link>
           </>
         )}
