@@ -18,9 +18,9 @@ function presentSettings(row) {
     bitable_app_token: row.bitable_app_token || '',
     bitable_table_id: row.bitable_table_id || '',
     reminder_hour: row.reminder_hour ?? 10,
-    has_secret: Boolean(row.feishu_app_secret_encrypted),
-    has_encrypt_key: Boolean(row.feishu_encrypt_key_encrypted),
-    has_verification_token: Boolean(row.feishu_verification_token_encrypted),
+    has_secret: Boolean(row.has_secret || row.feishu_app_secret),
+    has_encrypt_key: Boolean(row.has_encrypt_key || row.feishu_encrypt_key),
+    has_verification_token: Boolean(row.has_verification_token || row.feishu_verification_token),
   };
 }
 

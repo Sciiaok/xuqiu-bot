@@ -4,10 +4,20 @@
 // Rule: no other .js file may read `process.env.XXX` directly.
 
 export const config = {
+  llm: {
+    provider: process.env.LLM_PROVIDER || (process.env.DEEPSEEK_API_KEY ? 'deepseek' : 'openrouter'),
+  },
+
   // OpenRouter — used by llm-client for all LLM calls (/chat/completions).
   openrouter: {
     apiKey: process.env.OPENROUTER_API_KEY,
     baseURL: 'https://openrouter.ai/api/v1',
+  },
+
+  deepseek: {
+    apiKey: process.env.DEEPSEEK_API_KEY,
+    baseURL: process.env.DEEPSEEK_BASE_URL || 'https://api.deepseek.com',
+    model: process.env.DEEPSEEK_MODEL || 'deepseek-chat',
   },
 
   // Supabase — URL + publishable/anon key (safe to include in client bundles)
@@ -76,7 +86,24 @@ export const config = {
   // 飞书通知改成 per-tenant webhook 后，FEISHU_APP_ID/SECRET/CHAT_ID 不再使用，
   // 配置在 notification_settings 表里（每个 tenant 自己粘 webhook URL）。
   feishu: {
-    requirementBotCallbackTenantId: process.env.FEISHU_REQUIREMENT_BOT_CALLBACK_TENANT_ID || '',
+    requirementBotCallbackTenantId: process.env.FEISHU_REQUIREMENT_BOT_CALLBACK_TENANT_ID || 'local',
+  },
+
+  requirementBot: {
+    storePath: process.env.REQUIREMENT_BOT_STORE_PATH || '/tmp/requirement-bot/store.json',
+    enabled: process.env.FEISHU_REQUIREMENT_BOT_ENABLED !== 'false',
+    feishuAppId: process.env.FEISHU_APP_ID || '',
+    feishuAppSecret: process.env.FEISHU_APP_SECRET || '',
+    feishuEncryptKey: process.env.FEISHU_ENCRYPT_KEY || '',
+    feishuVerificationToken: process.env.FEISHU_VERIFICATION_TOKEN || '',
+    defaultChatId: process.env.FEISHU_DEFAULT_CHAT_ID || '',
+    defaultPmFeishuUserId: process.env.FEISHU_DEFAULT_PM_USER_ID || '',
+    defaultDeveloperFeishuUserId: process.env.FEISHU_DEFAULT_DEVELOPER_USER_ID || '',
+    defaultTesterFeishuUserId: process.env.FEISHU_DEFAULT_TESTER_USER_ID || '',
+    defaultAcceptorFeishuUserId: process.env.FEISHU_DEFAULT_ACCEPTOR_USER_ID || '',
+    bitableAppToken: process.env.FEISHU_BITABLE_APP_TOKEN || process.env.BITABLE_APP_TOKEN || '',
+    bitableTableId: process.env.FEISHU_BITABLE_TABLE_ID || process.env.BITABLE_TABLE_ID || '',
+    reminderHour: Number(process.env.FEISHU_REMINDER_HOUR || 10),
   },
 
   // Redis (queue + rate limiter + cache)

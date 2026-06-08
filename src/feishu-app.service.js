@@ -15,10 +15,7 @@ export async function getRequirementBotClient(tenantId) {
 }
 
 export function resolveRequirementBotTenantId() {
-  if (!config.feishu.requirementBotCallbackTenantId) {
-    throw new Error('FEISHU_REQUIREMENT_BOT_CALLBACK_TENANT_ID is required');
-  }
-  return config.feishu.requirementBotCallbackTenantId;
+  return config.feishu.requirementBotCallbackTenantId || 'local';
 }
 
 export function normalizeFeishuUserId(eventUser = {}) {

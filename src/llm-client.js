@@ -59,6 +59,25 @@ function openrouterHeaders() {
   };
 }
 
+function deepseekHeaders() {
+  return {
+    'Content-Type': 'application/json',
+    Authorization: `Bearer ${config.deepseek.apiKey}`,
+  };
+}
+
+function activeChatProvider() {
+  return config.llm.provider === 'deepseek' ? 'deepseek' : 'openrouter';
+}
+
+function deepseekChatPayload(params) {
+  const { models, usage, ...rest } = params;
+  return {
+    ...rest,
+    model: params.model || config.deepseek.model || models?.[0] || 'deepseek-chat',
+  };
+}
+
 function parseSSELine(line) {
   if (!line || line.startsWith(':')) return null;
   if (line.startsWith('data: ')) {
@@ -154,6 +173,7 @@ function logLlmCall({
   // apply 的环境，PostgREST 会回 42703 undefined_column；这时退回到 baseRow
   // 老 schema，不丢日志。
   try {
+    if (!config.supabase.serviceRoleKey) return;
     const baseRow = {
       tenant_id: tenantId || null,
       call_site: callSite || 'unknown',
@@ -392,6 +412,50 @@ const openrouter = {
     // （ogilvy/medici 都用 uuid）。productLine 可选，挂上后 /product-lines/[id]
     // 的成本分析 tab 能按产品线聚合；Ogilvy 等不归属调用留空。
     async create(params, meta = {}) {
+      if (activeChatProvider() === 'deepseek') {
+        if (!config.deepseek.baseURL || !config.deepseek.apiKey) {
+          throw new Error('[llm-client] DEEPSEEK_API_KEY required');
+        }
+
+        const t0 = Date.now();
+        const payload = deepseekChatPayload(params);
+        const logMeta = {
+          method: 'create',
+          provider: 'deepseek',
+          models: [payload.model],
+          tools: params.tools?.length || 0,
+          toolChoice: typeof params.tool_choice === 'string' ? params.tool_choice : params.tool_choice?.function?.name || null,
+          tenantId: meta.tenantId,
+          callSite: meta.callSite,
+          sessionId: meta.sessionId,
+          productLine: meta.productLine,
+        };
+
+        const response = await fetchWithTimeout(
+          `${config.deepseek.baseURL}/chat/completions`,
+          {
+            method: 'POST',
+            headers: deepseekHeaders(),
+            body: JSON.stringify(payload),
+          },
+          120_000,
+        );
+        if (!response.ok) {
+          const body = await response.text();
+          throw new Error(`DeepSeek API error ${response.status}: ${body}`);
+        }
+        const result = await response.json();
+        logLlmCall({
+          ...logMeta,
+          responseModel: result.model || payload.model,
+          finishReason: result.choices?.[0]?.finish_reason,
+          promptTokens: result.usage?.prompt_tokens,
+          completionTokens: result.usage?.completion_tokens,
+          durationMs: Date.now() - t0,
+        });
+        return result;
+      }
+
       if (!config.openrouter.baseURL || !config.openrouter.apiKey) {
         throw new Error('[llm-client] OPENROUTER_API_KEY required');
       }
