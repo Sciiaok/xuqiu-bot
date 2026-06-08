@@ -313,6 +313,7 @@ test('extracts sender display name from Feishu event payloads', async () => {
   const {
     extractSenderName,
     requirementBotRuntimeVersion,
+    isRequirementBotVersionCommand,
   } = await import('../src/feishu-app.service.js');
 
   assert.equal(extractSenderName({ name: '张三' }), '张三');
@@ -320,6 +321,9 @@ test('extracts sender display name from Feishu event payloads', async () => {
   assert.equal(extractSenderName({ sender_id: { name: '王五' } }), '王五');
   assert.equal(extractSenderName({ sender_id: { open_id: 'ou_xxx' } }), '');
   assert.equal(typeof requirementBotRuntimeVersion(), 'string');
+  assert.equal(isRequirementBotVersionCommand('版本'), true);
+  assert.equal(isRequirementBotVersionCommand('回复 洪羽宁：@需求机器人 版本'), true);
+  assert.equal(isRequirementBotVersionCommand('REQ-20260608-001 补充版本说明'), false);
 });
 
 test('parses manual bitable sync commands', async () => {

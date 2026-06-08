@@ -60,6 +60,11 @@ export function requirementBotRuntimeVersion() {
   );
 }
 
+export function isRequirementBotVersionCommand(text) {
+  const input = String(text || '').trim();
+  return /(?:^|[\s:：@])版本(?:$|\s|。|，|,|！|!)/.test(input);
+}
+
 export async function sendFeishuCard({ tenantId, receiveIdType = 'chat_id', receiveId, card }) {
   const client = await getRequirementBotClient(tenantId);
   const res = await client.im.message.create({

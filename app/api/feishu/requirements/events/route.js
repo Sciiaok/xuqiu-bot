@@ -4,6 +4,7 @@ import {
   normalizeFeishuUserId,
   parseFeishuTextMessage,
   replyFeishuText,
+  isRequirementBotVersionCommand,
   requirementBotRuntimeVersion,
   resolveRequirementBotTenantId,
   sendFeishuCard,
@@ -92,7 +93,7 @@ export async function POST(request) {
   if (!submitter) return Response.json({ error: 'Feishu sender id is required' }, { status: 400 });
   const submitterName = extractSenderName(sender);
 
-  if (/^(?:版本|version)$/i.test(rawText.trim())) {
+  if (isRequirementBotVersionCommand(rawText)) {
     if (message.message_id) {
       await replyFeishuText({
         tenantId,
