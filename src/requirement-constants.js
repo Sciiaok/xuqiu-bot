@@ -10,6 +10,22 @@ export const REQUIREMENT_STATUSES = {
   REJECTED: 'rejected',
 };
 
+export const REQUIREMENT_STATUS_LABELS = {
+  [REQUIREMENT_STATUSES.NEEDS_PM]: '需要产品确认',
+  [REQUIREMENT_STATUSES.NEEDS_INFO]: '需要补充信息',
+  [REQUIREMENT_STATUSES.READY_FOR_DEV]: '需要开发',
+  [REQUIREMENT_STATUSES.IN_DEV]: '开发中',
+  [REQUIREMENT_STATUSES.READY_FOR_TEST]: '需要测试',
+  [REQUIREMENT_STATUSES.IN_TEST]: '测试中',
+  [REQUIREMENT_STATUSES.READY_FOR_ACCEPTANCE]: '需要验收',
+  [REQUIREMENT_STATUSES.CLOSED]: '已关闭',
+  [REQUIREMENT_STATUSES.REJECTED]: '已拒绝',
+};
+
+export function requirementStatusLabel(status) {
+  return REQUIREMENT_STATUS_LABELS[status] || status || '-';
+}
+
 export const REQUIREMENT_PRIORITIES = {
   P0: 'P0',
   P1: 'P1',

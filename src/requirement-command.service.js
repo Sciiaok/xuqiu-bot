@@ -104,6 +104,11 @@ const DATE_FIELDS = new Set([
   'planned_release_at',
 ]);
 
+const TERMINAL_STATUSES = new Set([
+  REQUIREMENT_STATUSES.CLOSED,
+  REQUIREMENT_STATUSES.REJECTED,
+]);
+
 function normalizeWhitespace(text) {
   return String(text || '').replace(/\s+/g, ' ').trim();
 }
@@ -286,6 +291,28 @@ async function findRequirementByNo({ tenantId, reqNo }) {
   return items.find(item => normalizeReqNo(item.req_no) === normalizeReqNo(reqNo)) || null;
 }
 
+function isExplicitNewRequirement(text) {
+  return /^(?:新需求|新增需求|创建需求|提个新需求|提一个新需求|记录新需求|再来一个需求|另一个需求)[:：\s]/.test(
+    normalizeWhitespace(text),
+  );
+}
+
+async function findSingleActiveRequirementForChat({ tenantId, chatId }) {
+  if (!chatId) return null;
+  const items = await listRequirements({ tenantId, limit: 500 });
+  const active = items.filter(item => (
+    item.feishu_chat_id === chatId &&
+    !TERMINAL_STATUSES.has(item.status)
+  ));
+  return active.length === 1 ? active[0] : null;
+}
+
+function appendFollowUp(rawDescription, text) {
+  const existing = String(rawDescription || '').trim();
+  const addition = `补充说明：${String(text || '').trim()}`;
+  return existing ? `${existing}\n\n${addition}` : addition;
+}
+
 export async function handleRequirementEditCommand({ tenantId, text, actorFeishuUserId }) {
   const parsed = parseRequirementEditCommand(text);
   if (!parsed.handled) return { handled: false };
@@ -334,5 +361,43 @@ export async function handleRequirementEditCommand({ tenantId, text, actorFeishu
     ok: true,
     requirement: updated,
     message: `已修改 ${updated.req_no}：${label} = ${displayValue(parsed.value)}`,
+  };
+}
+
+export async function handleRequirementFollowUp({ tenantId, chatId, text, actorFeishuUserId }) {
+  if (isExplicitNewRequirement(text)) {
+    return { handled: false, reason: 'explicit_new_requirement' };
+  }
+
+  const requirement = await findSingleActiveRequirementForChat({ tenantId, chatId });
+  if (!requirement) return { handled: false, reason: 'no_single_active_requirement' };
+
+  const updated = await updateRequirement({
+    tenantId,
+    id: requirement.id,
+    patch: {
+      raw_description: appendFollowUp(requirement.raw_description, text),
+      bitable_sync_status: 'pending',
+    },
+  });
+
+  await addRequirementEvent({
+    tenantId,
+    requirementId: requirement.id,
+    actorFeishuUserId,
+    action: REQUIREMENT_ACTIONS.UPDATE_PLAN,
+    fromStatus: requirement.status,
+    toStatus: requirement.status,
+    details: {
+      field: 'raw_description',
+      follow_up: String(text || '').trim(),
+    },
+  });
+
+  return {
+    handled: true,
+    ok: true,
+    requirement: updated,
+    message: `已补充到 ${updated.req_no}，不会新建需求。`,
   };
 }

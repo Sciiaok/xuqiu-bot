@@ -1,4 +1,5 @@
 import { getRequirementBotClient } from './feishu-app.service.js';
+import { requirementStatusLabel } from './requirement-constants.js';
 import {
   getRequirementBotSettings,
   updateRequirement,
@@ -17,11 +18,11 @@ export function isRequirementOverdue(requirement, now = new Date()) {
   return Boolean(due && new Date(due) < now && !['closed', 'rejected'].includes(requirement.status));
 }
 
-function requirementToBitableFields(requirement) {
+export function requirementToBitableFields(requirement) {
   return {
     '需求编号': requirement.req_no,
     '标题': requirement.title,
-    '状态': requirement.status,
+    '状态': requirementStatusLabel(requirement.status),
     '优先级': requirement.priority,
     'PM': requirement.pm_owner_feishu_user_id || '',
     '开发': requirement.developer_feishu_user_id || '',

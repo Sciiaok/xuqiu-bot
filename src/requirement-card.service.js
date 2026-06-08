@@ -1,4 +1,7 @@
-import { REQUIREMENT_STATUSES } from './requirement-constants.js';
+import {
+  REQUIREMENT_STATUSES,
+  requirementStatusLabel,
+} from './requirement-constants.js';
 
 function markdown(content) {
   return {
@@ -46,7 +49,7 @@ export function buildRequirementDraftCard(requirement) {
       template: statusTemplate(requirement.status),
     },
     elements: [
-      markdown(`**状态**：${requirement.status}`),
+      markdown(`**状态**：${requirementStatusLabel(requirement.status)}`),
       markdown(`**优先级**：${requirement.priority}｜${requirement.priority_reason || '-'}`),
       markdown(`**原始描述**：${requirement.raw_description}`),
       markdown(`**AI 方案**：${requirement.prd?.solution || '-'}`),
@@ -105,7 +108,7 @@ export function buildRequirementExecutionCard(requirement) {
       template: statusTemplate(requirement.status),
     },
     elements: [
-      markdown(`**状态**：${requirement.status}`),
+      markdown(`**状态**：${requirementStatusLabel(requirement.status)}`),
       markdown(currentOwnerLine(requirement)),
       markdown(`**方案**：${requirement.prd?.solution || '-'}`),
       markdown(`**验收标准**：\n${acceptanceCriteria(requirement.prd)}`),

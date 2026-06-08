@@ -16,7 +16,10 @@ import {
   buildRequirementExecutionCard,
 } from '@/src/requirement-card.service';
 import { syncRequirementToBitable } from '@/src/requirement-bitable.service';
-import { handleRequirementEditCommand } from '@/src/requirement-command.service';
+import {
+  handleRequirementEditCommand,
+  handleRequirementFollowUp,
+} from '@/src/requirement-command.service';
 import {
   CURRENT_OWNER_BY_STATUS,
   REQUIREMENT_ACTIONS,
@@ -111,6 +114,45 @@ export async function POST(request) {
       handled: 'edit_command',
       requirement_id: commandResult.requirement?.id || null,
       error: commandResult.error || null,
+    });
+  }
+
+  const followUpResult = await handleRequirementFollowUp({
+    tenantId,
+    chatId,
+    text: rawText,
+    actorFeishuUserId: submitter,
+  });
+  if (followUpResult.handled) {
+    if (message.message_id) {
+      await replyFeishuText({
+        tenantId,
+        messageId: message.message_id,
+        content: followUpResult.ok ? followUpResult.message : `补充失败：${followUpResult.error}`,
+      });
+    }
+
+    if (followUpResult.ok) {
+      const updated = followUpResult.requirement;
+      if (updated.feishu_card_message_id) {
+        await updateFeishuCard({
+          tenantId,
+          messageId: updated.feishu_card_message_id,
+          card: cardFor(updated),
+        }).catch(err => {
+          console.warn('[requirements] card refresh after follow-up failed:', err.message);
+        });
+      }
+      syncRequirementToBitable({ tenantId, requirement: updated }).catch(err => {
+        console.warn('[requirements] bitable sync after follow-up failed:', err.message);
+      });
+    }
+
+    return Response.json({
+      ok: Boolean(followUpResult.ok),
+      handled: 'follow_up',
+      requirement_id: followUpResult.requirement?.id || null,
+      error: followUpResult.error || null,
     });
   }
 
