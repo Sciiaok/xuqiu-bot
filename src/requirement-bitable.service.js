@@ -129,19 +129,19 @@ export async function resolveBitableAppToken({ settings, fetchImpl = fetch }) {
 }
 
 export async function syncRequirementToBitable({ tenantId, requirement }) {
-  const settings = await getRequirementBotSettings(tenantId);
-  const appToken = await resolveBitableAppToken({ settings });
-  if (!appToken || !settings?.bitable_table_id) {
-    await updateRequirement({
-      tenantId,
-      id: requirement.id,
-      patch: { bitable_sync_status: 'skipped', bitable_last_error: null },
-    });
-    return { skipped: true, reason: 'bitable_not_configured' };
-  }
-
-  const client = await getRequirementBotClient(tenantId);
+  const settings = await getRequirementBotSettings(tenantId, { includeSecrets: true });
   try {
+    const appToken = await resolveBitableAppToken({ settings });
+    if (!appToken || !settings?.bitable_table_id) {
+      await updateRequirement({
+        tenantId,
+        id: requirement.id,
+        patch: { bitable_sync_status: 'skipped', bitable_last_error: null },
+      });
+      return { skipped: true, reason: 'bitable_not_configured' };
+    }
+
+    const client = await getRequirementBotClient(tenantId);
     const existingFieldNames = await listBitableFieldNames({
       client,
       appToken,

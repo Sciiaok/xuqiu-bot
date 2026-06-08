@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { readFile } from 'node:fs/promises';
 
 test('resolves a wiki node token to the real bitable app token', async () => {
   const { resolveBitableAppToken } = await import('../src/requirement-bitable.service.js');
@@ -30,4 +31,13 @@ test('resolves a wiki node token to the real bitable app token', async () => {
 
   assert.equal(token, 'base-real-token');
   assert.equal(calls.length, 2);
+});
+
+test('Bitable sync loads Feishu settings with secrets', async () => {
+  const source = await readFile(new URL('../src/requirement-bitable.service.js', import.meta.url), 'utf8');
+
+  assert.match(
+    source,
+    /getRequirementBotSettings\(tenantId,\s*\{\s*includeSecrets:\s*true\s*\}\)/,
+  );
 });
