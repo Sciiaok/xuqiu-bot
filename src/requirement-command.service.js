@@ -291,20 +291,12 @@ async function findRequirementByNo({ tenantId, reqNo }) {
   return items.find(item => normalizeReqNo(item.req_no) === normalizeReqNo(reqNo)) || null;
 }
 
-function isExplicitNewRequirement(text) {
-  return /^(?:新需求|新增需求|创建需求|提个新需求|提一个新需求|记录新需求|再来一个需求|另一个需求)[:：\s]/.test(
-    normalizeWhitespace(text),
-  );
+export function isExplicitNewRequirement(text) {
+  return normalizeWhitespace(text).includes('【新需求】');
 }
 
-async function findSingleActiveRequirementForChat({ tenantId, chatId }) {
-  if (!chatId) return null;
-  const items = await listRequirements({ tenantId, limit: 500 });
-  const active = items.filter(item => (
-    item.feishu_chat_id === chatId &&
-    !TERMINAL_STATUSES.has(item.status)
-  ));
-  return active.length === 1 ? active[0] : null;
+export function stripNewRequirementMarker(text) {
+  return String(text || '').replace(/【新需求】/g, '').trim();
 }
 
 function appendFollowUp(rawDescription, text) {
@@ -364,13 +356,28 @@ export async function handleRequirementEditCommand({ tenantId, text, actorFeishu
   };
 }
 
-export async function handleRequirementFollowUp({ tenantId, chatId, text, actorFeishuUserId }) {
+export async function handleRequirementFollowUp({ tenantId, text, actorFeishuUserId }) {
   if (isExplicitNewRequirement(text)) {
     return { handled: false, reason: 'explicit_new_requirement' };
   }
 
-  const requirement = await findSingleActiveRequirementForChat({ tenantId, chatId });
-  if (!requirement) return { handled: false, reason: 'no_single_active_requirement' };
+  const reqNo = normalizeReqNo(text.match(/REQ-\d{8}-\d{3}/i)?.[0] || '');
+  if (!reqNo) {
+    return {
+      handled: true,
+      ok: false,
+      error: '请带上需求编号，例如：REQ-20260608-001 补充一下：具体说明。只有写【新需求】才会新建需求。',
+    };
+  }
+
+  const requirement = await findRequirementByNo({ tenantId, reqNo });
+  if (!requirement || TERMINAL_STATUSES.has(requirement.status)) {
+    return {
+      handled: true,
+      ok: false,
+      error: `找不到可更新的需求 ${reqNo}`,
+    };
+  }
 
   const updated = await updateRequirement({
     tenantId,

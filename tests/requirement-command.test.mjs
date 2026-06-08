@@ -142,7 +142,7 @@ test('applies product plan edits inside the requirement PRD', async () => {
   }
 });
 
-test('treats follow-up text as an update when a chat has one active requirement', async () => {
+test('requires a requirement id for follow-up text', async () => {
   const dir = await mkdtemp(path.join(tmpdir(), 'requirement-command-'));
   process.env.REQUIREMENT_BOT_STORE_PATH = path.join(dir, 'store.json');
   process.env.FEISHU_REQUIREMENT_BOT_ENABLED = 'true';
@@ -172,26 +172,68 @@ test('treats follow-up text as an update when a chat has one active requirement'
     });
 
     assert.equal(result.handled, true);
-    assert.equal(result.ok, true);
-    assert.equal(result.requirement.id, requirement.id);
-    assert.match(result.requirement.raw_description, /登录页打不开/);
-    assert.match(result.requirement.raw_description, /补充一下：只在移动端微信内打开会失败/);
-    assert.equal(result.message, '已补充到 REQ-20260608-003，不会新建需求。');
+    assert.equal(result.ok, false);
+    assert.match(result.error, /请带上需求编号/);
 
     const rows = await repo.listRequirements({ tenantId, limit: 10 });
     assert.equal(rows.length, 1);
+    assert.equal(rows[0].id, requirement.id);
+    assert.equal(rows[0].raw_description, '登录页打不开');
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
 });
 
-test('allows explicit new requirement text even when a chat has one active requirement', async () => {
+test('updates follow-up text only when it mentions a requirement id', async () => {
   const dir = await mkdtemp(path.join(tmpdir(), 'requirement-command-'));
   process.env.REQUIREMENT_BOT_STORE_PATH = path.join(dir, 'store.json');
   process.env.FEISHU_REQUIREMENT_BOT_ENABLED = 'true';
 
   const repo = await import('../lib/repositories/requirement.repository.js');
   const { handleRequirementFollowUp } = await import('../src/requirement-command.service.js');
+  const tenantId = `follow-id-${Date.now()}`;
+  const chatId = `oc_chat_${Date.now()}`;
+
+  try {
+    const requirement = await repo.createRequirement({
+      tenant_id: tenantId,
+      req_no: 'REQ-20260608-004',
+      title: '登录页异常',
+      status: 'needs_pm',
+      priority: 'P1',
+      raw_description: '登录页打不开',
+      feishu_chat_id: chatId,
+    });
+
+    const result = await handleRequirementFollowUp({
+      tenantId,
+      chatId,
+      text: 'REQ-20260608-004 补充一下：只在移动端微信内打开会失败',
+      actorFeishuUserId: 'ou_submitter',
+    });
+
+    assert.equal(result.handled, true);
+    assert.equal(result.ok, true);
+    assert.equal(result.requirement.id, requirement.id);
+    assert.match(result.requirement.raw_description, /登录页打不开/);
+    assert.match(result.requirement.raw_description, /只在移动端微信内打开会失败/);
+    assert.equal(result.message, '已补充到 REQ-20260608-004，不会新建需求。');
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('allows only bracketed new requirement text to create a requirement', async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), 'requirement-command-'));
+  process.env.REQUIREMENT_BOT_STORE_PATH = path.join(dir, 'store.json');
+  process.env.FEISHU_REQUIREMENT_BOT_ENABLED = 'true';
+
+  const repo = await import('../lib/repositories/requirement.repository.js');
+  const {
+    handleRequirementFollowUp,
+    isExplicitNewRequirement,
+    stripNewRequirementMarker,
+  } = await import('../src/requirement-command.service.js');
   const tenantId = `explicit-${Date.now()}`;
   const chatId = `oc_chat_${Date.now()}`;
 
@@ -205,10 +247,14 @@ test('allows explicit new requirement text even when a chat has one active requi
       feishu_chat_id: chatId,
     });
 
+    assert.equal(isExplicitNewRequirement('新需求：导出报表增加金额字段'), false);
+    assert.equal(isExplicitNewRequirement('【新需求】导出报表增加金额字段'), true);
+    assert.equal(stripNewRequirementMarker('【新需求】导出报表增加金额字段'), '导出报表增加金额字段');
+
     const result = await handleRequirementFollowUp({
       tenantId,
       chatId,
-      text: '新需求：导出报表增加金额字段',
+      text: '【新需求】导出报表增加金额字段',
       actorFeishuUserId: 'ou_submitter',
     });
 

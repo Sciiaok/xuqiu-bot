@@ -20,6 +20,8 @@ import { syncRequirementToBitable } from '@/src/requirement-bitable.service';
 import {
   handleRequirementEditCommand,
   handleRequirementFollowUp,
+  isExplicitNewRequirement,
+  stripNewRequirementMarker,
 } from '@/src/requirement-command.service';
 import {
   CURRENT_OWNER_BY_STATUS,
@@ -158,9 +160,32 @@ export async function POST(request) {
     });
   }
 
+  if (!isExplicitNewRequirement(rawText)) {
+    if (message.message_id) {
+      await replyFeishuText({
+        tenantId,
+        messageId: message.message_id,
+        content: '我没有新建需求。请带上需求编号，例如：REQ-20260608-001 补充一下：具体说明。只有写【新需求】才会新建需求。',
+      });
+    }
+    return Response.json({ ok: true, skipped: 'missing_requirement_id_or_new_marker' });
+  }
+
+  const requirementText = stripNewRequirementMarker(rawText);
+  if (!requirementText) {
+    if (message.message_id) {
+      await replyFeishuText({
+        tenantId,
+        messageId: message.message_id,
+        content: '请在【新需求】后面写需求内容。',
+      });
+    }
+    return Response.json({ ok: true, skipped: 'empty_new_requirement' });
+  }
+
   const draft = await generateRequirementDraft({
     tenantId,
-    rawDescription: rawText,
+    rawDescription: requirementText,
     submitterName: submitter,
   });
   const status = computeDraftInitialStatus(draft);
@@ -176,7 +201,7 @@ export async function POST(request) {
       tenant_id: tenantId,
       req_no: reqNo,
       title: draft.title,
-      raw_description: rawText,
+      raw_description: requirementText,
       status,
       requirement_type: draft.requirement_type,
       prd_template_type: draft.prd_template_type,
