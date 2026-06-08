@@ -19,7 +19,10 @@ test('Feishu requirement cards display status in Chinese', async () => {
 });
 
 test('Bitable requirement sync writes status in Chinese', async () => {
-  const { requirementToBitableFields } = await import('../src/requirement-bitable.service.js');
+  const {
+    pickExistingBitableFields,
+    requirementToBitableFields,
+  } = await import('../src/requirement-bitable.service.js');
 
   const fields = requirementToBitableFields({
     id: 'req_1',
@@ -41,4 +44,14 @@ test('Bitable requirement sync writes status in Chinese', async () => {
   assert.equal(fields['提出人'], '张三');
   assert.equal(fields['具体方案'], '登录页超时后展示重试按钮');
   assert.equal(fields['验收标准'], '1. 超时后出现重试按钮\n2. 点击重试能重新请求');
+
+  assert.deepEqual(
+    pickExistingBitableFields(fields, new Set(['需求编号', '标题', '状态', '具体方案'])),
+    {
+      '需求编号': 'REQ-20260608-001',
+      '标题': '登录页异常',
+      '状态': '需要开发',
+      '具体方案': '登录页超时后展示重试按钮',
+    },
+  );
 });

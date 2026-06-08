@@ -49,6 +49,40 @@ export function requirementToBitableFields(requirement) {
   };
 }
 
+export function pickExistingBitableFields(fields, existingFieldNames) {
+  if (!existingFieldNames?.size) return fields;
+  return Object.fromEntries(
+    Object.entries(fields).filter(([name]) => existingFieldNames.has(name)),
+  );
+}
+
+async function listBitableFieldNames({ client, appToken, tableId }) {
+  const names = new Set();
+  let pageToken = '';
+
+  do {
+    const result = await client.bitable.appTableField.list({
+      path: {
+        app_token: appToken,
+        table_id: tableId,
+      },
+      params: {
+        page_size: 100,
+        page_token: pageToken || undefined,
+      },
+    });
+    const data = result?.data || result || {};
+    const items = data.items || data.field_items || [];
+    for (const item of items) {
+      if (item?.field_name) names.add(item.field_name);
+      if (item?.name) names.add(item.name);
+    }
+    pageToken = data.page_token || data.next_page_token || '';
+  } while (pageToken);
+
+  return names;
+}
+
 async function getTenantAccessToken({ settings, fetchImpl = fetch }) {
   const response = await fetchImpl('https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal', {
     method: 'POST',
@@ -107,8 +141,17 @@ export async function syncRequirementToBitable({ tenantId, requirement }) {
   }
 
   const client = await getRequirementBotClient(tenantId);
-  const fields = requirementToBitableFields(requirement);
   try {
+    const existingFieldNames = await listBitableFieldNames({
+      client,
+      appToken,
+      tableId: settings.bitable_table_id,
+    });
+    const fields = pickExistingBitableFields(requirementToBitableFields(requirement), existingFieldNames);
+    if (!Object.keys(fields).length) {
+      throw new Error('多维表格没有匹配的字段，请至少创建「需求编号」或「标题」字段');
+    }
+
     let result;
     if (requirement.bitable_record_id) {
       result = await client.bitable.appTableRecord.update({

@@ -61,6 +61,17 @@ const TRANSITIONS = {
   },
 };
 
+const IDEMPOTENT_ACTION_STATUSES = {
+  [REQUIREMENT_ACTIONS.CONFIRM_PLAN]: [
+    REQUIREMENT_STATUSES.READY_FOR_DEV,
+    REQUIREMENT_STATUSES.IN_DEV,
+    REQUIREMENT_STATUSES.READY_FOR_TEST,
+    REQUIREMENT_STATUSES.IN_TEST,
+    REQUIREMENT_STATUSES.READY_FOR_ACCEPTANCE,
+    REQUIREMENT_STATUSES.CLOSED,
+  ],
+};
+
 function assertCanAct(requirement, actorFeishuUserId, actorField) {
   if (!actorField) return;
   const expected = requirement[actorField];
@@ -84,6 +95,9 @@ export async function applyRequirementAction({
   const transition = TRANSITIONS[action];
   if (!transition) throw new Error(`Unsupported requirement action: ${action}`);
   if (!transition.from.includes(requirement.status)) {
+    if (IDEMPOTENT_ACTION_STATUSES[action]?.includes(requirement.status)) {
+      return requirement;
+    }
     throw new Error('当前状态不能执行这个操作');
   }
   assertCanAct(requirement, actorFeishuUserId, transition.actorField);
