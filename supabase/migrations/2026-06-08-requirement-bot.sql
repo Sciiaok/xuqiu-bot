@@ -68,9 +68,11 @@ CREATE TABLE IF NOT EXISTS requirements (
   feishu_message_url TEXT,
   feishu_card_url TEXT,
   bitable_record_id TEXT,
-  bitable_sync_status TEXT NOT NULL DEFAULT 'pending',
+  bitable_sync_status TEXT NOT NULL DEFAULT 'pending'
+    CHECK (bitable_sync_status IN ('pending', 'synced', 'failed', 'skipped')),
   bitable_last_error TEXT,
-  ai_confidence NUMERIC(4,3),
+  ai_confidence NUMERIC(4,3)
+    CHECK (ai_confidence IS NULL OR (ai_confidence >= 0 AND ai_confidence <= 1)),
   ai_raw_output JSONB NOT NULL DEFAULT '{}'::jsonb,
   prd JSONB NOT NULL DEFAULT '{}'::jsonb,
   pm_due_at TIMESTAMPTZ,
@@ -86,42 +88,53 @@ CREATE TABLE IF NOT EXISTS requirements (
   last_reminded_at TIMESTAMPTZ,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (tenant_id, id),
   UNIQUE (tenant_id, req_no)
 );
 
 CREATE TABLE IF NOT EXISTS requirement_events (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   tenant_id UUID NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
-  requirement_id UUID NOT NULL REFERENCES requirements(id) ON DELETE CASCADE,
+  requirement_id UUID NOT NULL,
   actor_feishu_user_id TEXT,
   action TEXT NOT NULL,
   from_status TEXT,
   to_status TEXT,
   details JSONB NOT NULL DEFAULT '{}'::jsonb,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (tenant_id, requirement_id, id),
+  FOREIGN KEY (tenant_id, requirement_id)
+    REFERENCES requirements(tenant_id, id) ON DELETE CASCADE
 );
 
 CREATE TABLE IF NOT EXISTS requirement_attachments (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   tenant_id UUID NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
-  requirement_id UUID NOT NULL REFERENCES requirements(id) ON DELETE CASCADE,
-  event_id UUID REFERENCES requirement_events(id) ON DELETE SET NULL,
+  requirement_id UUID NOT NULL,
+  event_id UUID,
   kind TEXT NOT NULL,
   feishu_file_key TEXT,
   url TEXT,
   title TEXT,
   created_by_feishu_user_id TEXT,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  FOREIGN KEY (tenant_id, requirement_id)
+    REFERENCES requirements(tenant_id, id) ON DELETE CASCADE,
+  FOREIGN KEY (tenant_id, requirement_id, event_id)
+    REFERENCES requirement_events(tenant_id, requirement_id, id)
+    ON DELETE SET NULL (event_id)
 );
 
 CREATE TABLE IF NOT EXISTS requirement_reminder_logs (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   tenant_id UUID NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
-  requirement_id UUID NOT NULL REFERENCES requirements(id) ON DELETE CASCADE,
+  requirement_id UUID NOT NULL,
   reminder_type TEXT NOT NULL,
   target_feishu_user_id TEXT,
   sent_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-  details JSONB NOT NULL DEFAULT '{}'::jsonb
+  details JSONB NOT NULL DEFAULT '{}'::jsonb,
+  FOREIGN KEY (tenant_id, requirement_id)
+    REFERENCES requirements(tenant_id, id) ON DELETE CASCADE
 );
 
 CREATE SEQUENCE IF NOT EXISTS requirement_req_no_seq;
