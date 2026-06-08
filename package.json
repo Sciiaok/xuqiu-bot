@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "node scripts/dev-with-redis.mjs",
     "build": "next build",
-    "start": "next start -p 3002",
+    "start": "next start -p ${PORT:-3002}",
     "lint": "next lint",
     "deploy": "sh ./scripts/deploy.sh",
     "queue:start": "pm2 start ecosystem.config.cjs --only queue-cron",
