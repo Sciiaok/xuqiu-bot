@@ -1,12 +1,12 @@
 # Routes (auto-generated)
 
-Generated: 2026-06-08T04:20:10.712Z
+Generated: 2026-06-08T04:21:15.507Z
 
 Filesystem-derived list of API endpoints and UI pages. **Do not edit** — run `node scripts/build-index.mjs` to refresh.
 
 ## API Endpoints
 
-Total: **89**
+Total: **90**
 
 | Path | Methods | File |
 | --- | --- | --- |
@@ -42,6 +42,7 @@ Total: **89**
 | `/api/cron/meta-health-check` | POST | [app/api/cron/meta-health-check/route.js](../../app/api/cron/meta-health-check/route.js) |
 | `/api/cron/process-queue` | GET | [app/api/cron/process-queue/route.js](../../app/api/cron/process-queue/route.js) |
 | `/api/cron/recover-stale-kb-docs` | GET | [app/api/cron/recover-stale-kb-docs/route.js](../../app/api/cron/recover-stale-kb-docs/route.js) |
+| `/api/cron/requirements-reminders` | GET | [app/api/cron/requirements-reminders/route.js](../../app/api/cron/requirements-reminders/route.js) |
 | `/api/dev-tools/ai-sql` | POST | [app/api/dev-tools/ai-sql/route.js](../../app/api/dev-tools/ai-sql/route.js) |
 | `/api/dev-tools/sql` | POST | [app/api/dev-tools/sql/route.js](../../app/api/dev-tools/sql/route.js) |
 | `/api/feishu/requirements/cards` | POST | [app/api/feishu/requirements/cards/route.js](../../app/api/feishu/requirements/cards/route.js) |
@@ -131,3 +132,4 @@ Total: **18**
 - `/api/cron/meta-health-check` → [app/api/cron/meta-health-check/route.js](../../app/api/cron/meta-health-check/route.js)
 - `/api/cron/process-queue` → [app/api/cron/process-queue/route.js](../../app/api/cron/process-queue/route.js)
 - `/api/cron/recover-stale-kb-docs` → [app/api/cron/recover-stale-kb-docs/route.js](../../app/api/cron/recover-stale-kb-docs/route.js)
+- `/api/cron/requirements-reminders` → [app/api/cron/requirements-reminders/route.js](../../app/api/cron/requirements-reminders/route.js)
