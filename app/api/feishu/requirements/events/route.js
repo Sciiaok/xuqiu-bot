@@ -134,20 +134,24 @@ export async function POST(request) {
       });
     }
 
-    const diagnostic = await diagnoseBitableRequirementStore({
+    diagnoseBitableRequirementStore({
       settings: await getRequirementBotSettings(tenantId, { includeSecrets: true }),
-    });
-    if (message.message_id) {
-      await replyFeishuText({
-        tenantId,
-        messageId: message.message_id,
-        content: bitableDiagnosticText(diagnostic),
+    })
+      .then(diagnostic => {
+        if (!message.message_id) return null;
+        return replyFeishuText({
+          tenantId,
+          messageId: message.message_id,
+          content: bitableDiagnosticText(diagnostic),
+        });
+      })
+      .catch(err => {
+        console.warn('[requirements] bitable diagnostic reply failed:', err.message);
       });
-    }
     return Response.json({
-      ok: Boolean(diagnostic.ok),
+      ok: true,
       handled: 'bitable_diagnostic',
-      diagnostic,
+      queued: true,
     });
   }
 

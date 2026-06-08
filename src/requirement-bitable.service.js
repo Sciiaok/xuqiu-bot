@@ -298,6 +298,13 @@ export async function findBitableRequirementByNo({ settings, reqNo, fetchImpl = 
 }
 
 export async function diagnoseBitableRequirementStore({ settings, fetchImpl = fetch }) {
+  console.info('[requirements] bitable diagnostic started', {
+    has_app_id: Boolean(settings?.feishu_app_id),
+    has_app_secret: Boolean(settings?.feishu_app_secret),
+    has_wiki_node_token: Boolean(settings?.bitable_wiki_node_token),
+    has_app_token: Boolean(settings?.bitable_app_token),
+    table_id: settings?.bitable_table_id || '',
+  });
   if (!hasBitableRequirementStore(settings)) {
     return {
       ok: false,
@@ -306,14 +313,18 @@ export async function diagnoseBitableRequirementStore({ settings, fetchImpl = fe
   }
 
   try {
+    console.info('[requirements] bitable diagnostic step: tenant_access_token');
     const tenantAccessToken = await getTenantAccessToken({ settings, fetchImpl });
+    console.info('[requirements] bitable diagnostic step: app_token');
     const appToken = await resolveBitableAppToken({ settings, fetchImpl });
+    console.info('[requirements] bitable diagnostic step: fields');
     const fieldNames = [...await listBitableFieldNames({
       tenantAccessToken,
       appToken,
       tableId: settings.bitable_table_id,
       fetchImpl,
     })];
+    console.info('[requirements] bitable diagnostic step: records');
     const records = await listBitableRecords({
       tenantAccessToken,
       appToken,
@@ -333,6 +344,7 @@ export async function diagnoseBitableRequirementStore({ settings, fetchImpl = fe
         .filter(Boolean),
     };
   } catch (err) {
+    console.warn('[requirements] bitable diagnostic failed:', formatBitableSyncError(err));
     return {
       ok: false,
       error: formatBitableSyncError(err),
