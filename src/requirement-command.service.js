@@ -17,6 +17,15 @@ const FIELD_ALIASES = new Map([
   ['优先级', 'priority'],
   ['紧急程度', 'priority'],
   ['状态', 'status'],
+  ['PM', 'pm_owner_name'],
+  ['产品负责人', 'pm_owner_name'],
+  ['开发', 'developer_name'],
+  ['开发负责人', 'developer_name'],
+  ['测试', 'tester_name'],
+  ['测试负责人', 'tester_name'],
+  ['验收人', 'acceptor_name'],
+  ['验收负责人', 'acceptor_name'],
+  ['当前负责人', 'current_owner_name'],
   ['开发截止', 'dev_due_at'],
   ['开发时间', 'dev_due_at'],
   ['开发截止时间', 'dev_due_at'],
@@ -55,6 +64,11 @@ const FIELD_LABELS = new Map([
   ['title', '标题'],
   ['priority', '优先级'],
   ['status', '状态'],
+  ['pm_owner_name', 'PM'],
+  ['developer_name', '开发负责人'],
+  ['tester_name', '测试负责人'],
+  ['acceptor_name', '验收人'],
+  ['current_owner_name', '当前负责人'],
   ['dev_due_at', '开发截止'],
   ['test_due_at', '测试截止'],
   ['acceptance_due_at', '验收截止'],
@@ -216,6 +230,15 @@ function normalizeValue(field, rawValue) {
 
 function actionForField(field) {
   if (field === 'priority') return REQUIREMENT_ACTIONS.UPDATE_PRIORITY;
+  if ([
+    'pm_owner_name',
+    'developer_name',
+    'tester_name',
+    'acceptor_name',
+    'current_owner_name',
+  ].includes(field)) {
+    return REQUIREMENT_ACTIONS.UPDATE_OWNERS;
+  }
   if (field === 'dev_due_at' || field === 'test_due_at' || field === 'acceptance_due_at' || field === 'planned_release_at') {
     return REQUIREMENT_ACTIONS.UPDATE_SCHEDULE;
   }
@@ -242,6 +265,34 @@ function patchForField(requirement, field, value) {
     patch.current_owner_feishu_user_id = currentOwnerField
       ? requirement[currentOwnerField] || null
       : null;
+    const currentOwnerNameField = currentOwnerField
+      ? currentOwnerField.replace('_feishu_user_id', '_name')
+      : '';
+    patch.current_owner_name = currentOwnerNameField ? requirement[currentOwnerNameField] || null : null;
+  }
+  if (
+    field === 'pm_owner_name' &&
+    [REQUIREMENT_STATUSES.NEEDS_PM].includes(requirement.status)
+  ) {
+    patch.current_owner_name = value;
+  }
+  if (
+    field === 'developer_name' &&
+    [REQUIREMENT_STATUSES.READY_FOR_DEV, REQUIREMENT_STATUSES.IN_DEV].includes(requirement.status)
+  ) {
+    patch.current_owner_name = value;
+  }
+  if (
+    field === 'tester_name' &&
+    [REQUIREMENT_STATUSES.READY_FOR_TEST, REQUIREMENT_STATUSES.IN_TEST].includes(requirement.status)
+  ) {
+    patch.current_owner_name = value;
+  }
+  if (
+    field === 'acceptor_name' &&
+    [REQUIREMENT_STATUSES.READY_FOR_ACCEPTANCE].includes(requirement.status)
+  ) {
+    patch.current_owner_name = value;
   }
   return patch;
 }

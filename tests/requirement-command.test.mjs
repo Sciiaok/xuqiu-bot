@@ -142,6 +142,51 @@ test('applies product plan edits inside the requirement PRD', async () => {
   }
 });
 
+test('applies owner edits by display name', async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), 'requirement-command-'));
+  process.env.REQUIREMENT_BOT_STORE_PATH = path.join(dir, 'store.json');
+  process.env.FEISHU_REQUIREMENT_BOT_ENABLED = 'true';
+
+  const repo = await import('../lib/repositories/requirement.repository.js');
+  const { handleRequirementEditCommand } = await import('../src/requirement-command.service.js');
+
+  try {
+    const requirement = await repo.createRequirement({
+      tenant_id: 'local',
+      req_no: 'REQ-20260608-010',
+      title: '登录页异常',
+      status: 'needs_pm',
+      priority: 'P1',
+    });
+
+    const result = await handleRequirementEditCommand({
+      tenantId: 'local',
+      text: '修改 REQ-20260608-010 PM为张三',
+      actorFeishuUserId: 'ou_pm',
+    });
+
+    assert.equal(result.handled, true);
+    assert.equal(result.ok, true);
+    assert.equal(result.requirement.pm_owner_name, '张三');
+    assert.equal(result.message, '已修改 REQ-20260608-010：PM = 张三');
+
+    const devResult = await handleRequirementEditCommand({
+      tenantId: 'local',
+      text: '修改 REQ-20260608-010 开发负责人为李四',
+      actorFeishuUserId: 'ou_pm',
+    });
+    assert.equal(devResult.requirement.developer_name, '李四');
+
+    const events = await repo.listRequirementEvents({
+      tenantId: 'local',
+      requirementId: requirement.id,
+    });
+    assert.equal(events[0].action, 'update_owners');
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 test('requires a requirement id for follow-up text', async () => {
   const dir = await mkdtemp(path.join(tmpdir(), 'requirement-command-'));
   process.env.REQUIREMENT_BOT_STORE_PATH = path.join(dir, 'store.json');

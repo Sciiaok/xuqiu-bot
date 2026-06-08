@@ -33,6 +33,7 @@ function acceptanceCriteria(prd) {
 }
 
 function currentOwnerLine(requirement) {
+  if (requirement.current_owner_name) return `**当前负责人**：${requirement.current_owner_name}`;
   if (!requirement.current_owner_feishu_user_id) return '**当前负责人**：-';
   return `**当前负责人**：<at id="${requirement.current_owner_feishu_user_id}"></at>`;
 }
@@ -50,6 +51,7 @@ export function buildRequirementDraftCard(requirement) {
     },
     elements: [
       markdown(`**状态**：${requirementStatusLabel(requirement.status)}`),
+      markdown(currentOwnerLine(requirement)),
       markdown(`**优先级**：${requirement.priority}｜${requirement.priority_reason || '-'}`),
       markdown(`**原始描述**：${requirement.raw_description}`),
       markdown(`**AI 方案**：${requirement.prd?.solution || '-'}`),
@@ -60,8 +62,6 @@ export function buildRequirementDraftCard(requirement) {
         actions: [
           actionButton('生成/刷新方案', 'generate_plan', requirement.id),
           actionButton('确认方案', 'confirm_plan', requirement.id, 'primary'),
-          actionButton('打回补充', 'request_info', requirement.id),
-          actionButton('先不处理', 'reject_as_invalid', requirement.id, 'danger'),
         ],
       },
     ],

@@ -223,6 +223,9 @@ export async function POST(request) {
   const currentOwner = currentOwnerField === 'submitter_feishu_user_id'
     ? submitter
     : settings?.default_pm_feishu_user_id || null;
+  const currentOwnerName = currentOwnerField === 'submitter_feishu_user_id'
+    ? submitterName
+    : null;
 
   let requirement = await createRequirementWithEvent({
     tenantId,
@@ -239,10 +242,15 @@ export async function POST(request) {
       submitter_feishu_user_id: submitter,
       submitter_feishu_name: submitterName,
       pm_owner_feishu_user_id: settings?.default_pm_feishu_user_id || null,
+      pm_owner_name: '',
       developer_feishu_user_id: settings?.default_developer_feishu_user_id || null,
+      developer_name: '',
       tester_feishu_user_id: settings?.default_tester_feishu_user_id || null,
+      tester_name: '',
       acceptor_feishu_user_id: settings?.default_acceptor_feishu_user_id || null,
+      acceptor_name: '',
       current_owner_feishu_user_id: currentOwner,
+      current_owner_name: currentOwnerName,
       feishu_chat_id: chatId,
       feishu_root_message_id: message.message_id || null,
       ai_confidence: draft.ai_confidence,
@@ -274,9 +282,14 @@ export async function POST(request) {
     });
   }
 
-  syncRequirementToBitable({ tenantId, requirement }).catch(err => {
-    console.warn('[requirements] bitable sync after create failed:', err.message);
-  });
+  const bitableResult = await syncRequirementToBitable({ tenantId, requirement });
+  if (!bitableResult.ok && !bitableResult.skipped && message.message_id) {
+    await replyFeishuText({
+      tenantId,
+      messageId: message.message_id,
+      content: `需求 ${requirement.req_no} 已记录，但同步多维表格失败：${bitableResult.error}`,
+    });
+  }
 
   if (status === 'needs_info' && message.message_id) {
     await replyFeishuText({
