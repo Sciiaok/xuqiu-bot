@@ -158,7 +158,7 @@ async function feishuOpenApi({ tenantAccessToken, method = 'GET', path, data, fe
   return result;
 }
 
-async function listBitableFieldNames({ tenantAccessToken, appToken, tableId }) {
+async function listBitableFieldNames({ tenantAccessToken, appToken, tableId, fetchImpl = fetch }) {
   const names = new Set();
   let pageToken = '';
 
@@ -168,6 +168,7 @@ async function listBitableFieldNames({ tenantAccessToken, appToken, tableId }) {
     const result = await feishuOpenApi({
       tenantAccessToken,
       path: `/bitable/v1/apps/${appToken}/tables/${tableId}/fields?${params.toString()}`,
+      fetchImpl,
     });
     const data = result?.data || result || {};
     const items = data.items || data.field_items || [];
@@ -276,6 +277,49 @@ export async function findBitableRequirementByNo({ settings, reqNo, fetchImpl = 
   const normalized = String(reqNo || '').trim().toUpperCase();
   const found = records.find(record => fieldText(record?.fields?.['需求编号']).toUpperCase() === normalized);
   return found ? bitableRecordToRequirement(found) : null;
+}
+
+export async function diagnoseBitableRequirementStore({ settings, fetchImpl = fetch }) {
+  if (!hasBitableRequirementStore(settings)) {
+    return {
+      ok: false,
+      error: '多维表格配置不完整：需要 FEISHU_APP_ID、FEISHU_APP_SECRET、FEISHU_BITABLE_TABLE_ID，以及 WIKI_NODE_TOKEN 或 APP_TOKEN',
+    };
+  }
+
+  try {
+    const tenantAccessToken = await getTenantAccessToken({ settings, fetchImpl });
+    const appToken = await resolveBitableAppToken({ settings, fetchImpl });
+    const fieldNames = [...await listBitableFieldNames({
+      tenantAccessToken,
+      appToken,
+      tableId: settings.bitable_table_id,
+      fetchImpl,
+    })];
+    const records = await listBitableRecords({
+      tenantAccessToken,
+      appToken,
+      tableId: settings.bitable_table_id,
+      fetchImpl,
+    });
+
+    return {
+      ok: true,
+      appToken,
+      tableId: settings.bitable_table_id,
+      fieldNames,
+      recordCount: records.length,
+      sampleReqNos: records
+        .slice(0, 5)
+        .map(record => fieldText(record?.fields?.['需求编号']))
+        .filter(Boolean),
+    };
+  } catch (err) {
+    return {
+      ok: false,
+      error: formatBitableSyncError(err),
+    };
+  }
 }
 
 export async function updateBitableRequirement({ settings, requirement, patch, fetchImpl = fetch }) {

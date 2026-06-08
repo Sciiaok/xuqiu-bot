@@ -137,3 +137,50 @@ test('finds a requirement by number from Bitable records', async () => {
   assert.equal(requirement.req_no, 'REQ-20260608-001');
   assert.ok(calls.some(call => call.url.includes('/bitable/v1/apps/base-real-token/tables/tbl_xxx/records?')));
 });
+
+test('diagnoses Bitable connection without writing records', async () => {
+  const { diagnoseBitableRequirementStore } = await import('../src/requirement-bitable.service.js');
+  const calls = [];
+  const fetchImpl = async (url, options = {}) => {
+    calls.push({ url: String(url), options });
+    if (String(url).endsWith('/auth/v3/tenant_access_token/internal')) {
+      return Response.json({ code: 0, tenant_access_token: 't-token' });
+    }
+    if (String(url).includes('/wiki/v2/spaces/get_node')) {
+      return Response.json({
+        code: 0,
+        data: { node: { obj_token: 'base-real-token', obj_type: 'bitable' } },
+      });
+    }
+    if (String(url).includes('/fields?')) {
+      return Response.json({
+        code: 0,
+        data: { items: [{ field_name: '需求编号' }, { field_name: '标题' }] },
+      });
+    }
+    if (String(url).includes('/records?')) {
+      return Response.json({
+        code: 0,
+        data: { items: [{ record_id: 'rec_1', fields: { '需求编号': 'REQ-1' } }] },
+      });
+    }
+    throw new Error(`Unexpected URL ${url}`);
+  };
+
+  const diagnostic = await diagnoseBitableRequirementStore({
+    settings: {
+      feishu_app_id: 'cli_xxx',
+      feishu_app_secret: 'secret_xxx',
+      bitable_wiki_node_token: 'H73ywYJhTioyUZk0piJc0sWTnXi',
+      bitable_table_id: 'tbl_xxx',
+    },
+    fetchImpl,
+  });
+
+  assert.equal(diagnostic.ok, true);
+  assert.equal(diagnostic.appToken, 'base-real-token');
+  assert.equal(diagnostic.tableId, 'tbl_xxx');
+  assert.deepEqual(diagnostic.fieldNames, ['需求编号', '标题']);
+  assert.equal(diagnostic.recordCount, 1);
+  assert.equal(calls.some(call => call.options?.method === 'POST' && call.url.includes('/records')), false);
+});

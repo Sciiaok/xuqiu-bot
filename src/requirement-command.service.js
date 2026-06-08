@@ -368,6 +368,10 @@ export function parseRequirementSyncCommand(text) {
   return { handled: false };
 }
 
+export function isBitableDiagnosticCommand(text) {
+  return /诊断\s*多维\s*(?:文档|表格)?/.test(String(text || ''));
+}
+
 async function findRequirementByNo({ tenantId, reqNo }) {
   const items = await listRequirements({ tenantId, limit: 500 });
   return items.find(item => normalizeReqNo(item.req_no) === normalizeReqNo(reqNo)) || null;

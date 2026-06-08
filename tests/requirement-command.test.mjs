@@ -394,6 +394,14 @@ test('parses manual bitable sync commands', async () => {
   assert.deepEqual(parseRequirementSyncCommand('REQ-20260608-001 补充一下'), { handled: false });
 });
 
+test('parses Bitable diagnostic commands', async () => {
+  const { isBitableDiagnosticCommand } = await import('../src/requirement-command.service.js');
+
+  assert.equal(isBitableDiagnosticCommand('诊断多维文档'), true);
+  assert.equal(isBitableDiagnosticCommand('回复 洪羽宁：@需求机器人 诊断多维表格'), true);
+  assert.equal(isBitableDiagnosticCommand('REQ-20260608-001 补充一下'), false);
+});
+
 test('does not treat Bitable update intent as a requirement follow-up', async () => {
   const { handleRequirementFollowUp } = await import('../src/requirement-command.service.js');
 

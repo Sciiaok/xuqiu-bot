@@ -23,9 +23,11 @@ import {
   handleRequirementEditCommand,
   handleRequirementFollowUp,
   handleRequirementSyncCommand,
+  isBitableDiagnosticCommand,
   isExplicitNewRequirement,
   stripNewRequirementMarker,
 } from '@/src/requirement-command.service';
+import { diagnoseBitableRequirementStore } from '@/src/requirement-bitable.service';
 import {
   CURRENT_OWNER_BY_STATUS,
   REQUIREMENT_ACTIONS,
@@ -67,6 +69,19 @@ function cardFor(requirement) {
   return buildRequirementExecutionCard(requirement);
 }
 
+function bitableDiagnosticText(diagnostic) {
+  if (!diagnostic.ok) return `多维文档诊断失败：${diagnostic.error}`;
+  return [
+    '多维文档诊断通过：',
+    `app_token：${diagnostic.appToken}`,
+    `table_id：${diagnostic.tableId}`,
+    `字段数：${diagnostic.fieldNames.length}`,
+    `字段：${diagnostic.fieldNames.slice(0, 20).join('、') || '-'}`,
+    `当前记录数：${diagnostic.recordCount}`,
+    `样例需求编号：${diagnostic.sampleReqNos.join('、') || '-'}`,
+  ].join('\n');
+}
+
 export async function POST(request) {
   const body = await request.json();
   const verification = handleFeishuUrlVerification(body);
@@ -105,6 +120,24 @@ export async function POST(request) {
       ok: true,
       handled: 'version_command',
       version: requirementBotRuntimeVersion(),
+    });
+  }
+
+  if (isBitableDiagnosticCommand(rawText)) {
+    const diagnostic = await diagnoseBitableRequirementStore({
+      settings: await getRequirementBotSettings(tenantId, { includeSecrets: true }),
+    });
+    if (message.message_id) {
+      await replyFeishuText({
+        tenantId,
+        messageId: message.message_id,
+        content: bitableDiagnosticText(diagnostic),
+      });
+    }
+    return Response.json({
+      ok: Boolean(diagnostic.ok),
+      handled: 'bitable_diagnostic',
+      diagnostic,
     });
   }
 
