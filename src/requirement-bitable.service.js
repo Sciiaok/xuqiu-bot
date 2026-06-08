@@ -56,6 +56,26 @@ export function pickExistingBitableFields(fields, existingFieldNames) {
   );
 }
 
+function compactJson(value) {
+  if (!value) return '';
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return String(value);
+  }
+}
+
+export function formatBitableSyncError(err) {
+  const message = err?.message || String(err || '未知错误');
+  const responseData =
+    err?.response?.data ||
+    err?.data ||
+    err?.error ||
+    null;
+  const detail = compactJson(responseData);
+  return detail ? `${message}；飞书响应：${detail}` : message;
+}
+
 async function listBitableFieldNames({ client, appToken, tableId }) {
   const names = new Set();
   let pageToken = '';
@@ -188,19 +208,20 @@ export async function syncRequirementToBitable({ tenantId, requirement }) {
     });
     return { ok: true, recordId };
   } catch (err) {
+    const error = formatBitableSyncError(err);
     await updateRequirement({
       tenantId,
       id: requirement.id,
       patch: {
         bitable_sync_status: 'failed',
-        bitable_last_error: err.message,
+        bitable_last_error: error,
       },
     });
     console.warn('[requirements] bitable sync failed:', {
       requirement_id: requirement.id,
       req_no: requirement.req_no,
-      error: err.message,
+      error,
     });
-    return { ok: false, error: err.message };
+    return { ok: false, error };
   }
 }

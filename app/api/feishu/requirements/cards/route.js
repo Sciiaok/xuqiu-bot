@@ -7,7 +7,10 @@ import {
   buildRequirementDraftCard,
   buildRequirementExecutionCard,
 } from '@/src/requirement-card.service';
-import { cardCallbackResponse } from '@/src/requirement-card-callback.service';
+import {
+  cardCallbackResponse,
+  requirementActionToastMessage,
+} from '@/src/requirement-card-callback.service';
 import { syncRequirementToBitable } from '@/src/requirement-bitable.service';
 import { applyRequirementAction } from '@/src/requirement-state.service';
 import {
@@ -127,13 +130,8 @@ export async function POST(request) {
         payload: value,
       });
 
-    syncRequirementToBitable({ tenantId, requirement: updated }).catch(err => {
-      console.warn('[requirements] bitable sync after card action failed:', err.message);
-    });
-
-    const message = action === REQUIREMENT_ACTIONS.GENERATE_PLAN
-      ? '方案刷新会在后续版本接入'
-      : '已更新';
+    const syncResult = await syncRequirementToBitable({ tenantId, requirement: updated });
+    const message = requirementActionToastMessage({ action, syncResult });
     return cardCallbackResponse('success', message, cardFor(updated));
   } catch (err) {
     return callbackToast('error', err.message);

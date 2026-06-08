@@ -41,3 +41,20 @@ test('Bitable sync loads Feishu settings with secrets', async () => {
     /getRequirementBotSettings\(tenantId,\s*\{\s*includeSecrets:\s*true\s*\}\)/,
   );
 });
+
+test('Bitable sync error includes Feishu response details', async () => {
+  const { formatBitableSyncError } = await import('../src/requirement-bitable.service.js');
+  const err = new Error('Request failed with status code 400');
+  err.response = {
+    status: 400,
+    data: {
+      code: 1254001,
+      msg: 'field not found',
+    },
+  };
+
+  assert.equal(
+    formatBitableSyncError(err),
+    'Request failed with status code 400；飞书响应：{"code":1254001,"msg":"field not found"}',
+  );
+});
