@@ -1,5 +1,6 @@
 import {
   handleFeishuUrlVerification,
+  extractSenderName,
   normalizeFeishuUserId,
   parseFeishuTextMessage,
   replyFeishuText,
@@ -78,6 +79,7 @@ export async function POST(request) {
 
   const submitter = extractSenderId(sender);
   if (!submitter) return Response.json({ error: 'Feishu sender id is required' }, { status: 400 });
+  const submitterName = extractSenderName(sender);
 
   const commandResult = await handleRequirementEditCommand({
     tenantId,
@@ -181,6 +183,7 @@ export async function POST(request) {
       priority: draft.priority,
       priority_reason: draft.priority_reason,
       submitter_feishu_user_id: submitter,
+      submitter_feishu_name: submitterName,
       pm_owner_feishu_user_id: settings?.default_pm_feishu_user_id || null,
       developer_feishu_user_id: settings?.default_developer_feishu_user_id || null,
       tester_feishu_user_id: settings?.default_tester_feishu_user_id || null,

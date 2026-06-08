@@ -217,3 +217,12 @@ test('allows explicit new requirement text even when a chat has one active requi
     await rm(dir, { recursive: true, force: true });
   }
 });
+
+test('extracts sender display name from Feishu event payloads', async () => {
+  const { extractSenderName } = await import('../src/feishu-app.service.js');
+
+  assert.equal(extractSenderName({ name: '张三' }), '张三');
+  assert.equal(extractSenderName({ sender_name: '李四' }), '李四');
+  assert.equal(extractSenderName({ sender_id: { name: '王五' } }), '王五');
+  assert.equal(extractSenderName({ sender_id: { open_id: 'ou_xxx' } }), '');
+});

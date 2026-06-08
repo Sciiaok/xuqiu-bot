@@ -18,12 +18,21 @@ export function isRequirementOverdue(requirement, now = new Date()) {
   return Boolean(due && new Date(due) < now && !['closed', 'rejected'].includes(requirement.status));
 }
 
+function acceptanceCriteriaText(prd) {
+  const items = Array.isArray(prd?.acceptance_criteria) ? prd.acceptance_criteria : [];
+  return items.map((item, index) => `${index + 1}. ${item}`).join('\n');
+}
+
 export function requirementToBitableFields(requirement) {
   return {
     '需求编号': requirement.req_no,
     '标题': requirement.title,
     '状态': requirementStatusLabel(requirement.status),
     '优先级': requirement.priority,
+    '原始描述': requirement.raw_description || '',
+    '提出人': requirement.submitter_feishu_name || requirement.submitter_feishu_user_id || '',
+    '具体方案': requirement.prd?.solution || '',
+    '验收标准': acceptanceCriteriaText(requirement.prd),
     'PM': requirement.pm_owner_feishu_user_id || '',
     '开发': requirement.developer_feishu_user_id || '',
     '测试': requirement.tester_feishu_user_id || '',

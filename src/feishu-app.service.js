@@ -22,6 +22,16 @@ export function normalizeFeishuUserId(eventUser = {}) {
   return eventUser.open_id || eventUser.user_id || eventUser.union_id || '';
 }
 
+export function extractSenderName(sender = {}) {
+  return String(
+    sender.name ||
+    sender.sender_name ||
+    sender.sender_id?.name ||
+    sender.sender_id?.user_name ||
+    '',
+  ).trim();
+}
+
 export function parseFeishuTextMessage(message = {}) {
   const raw = message.content || '{}';
   let parsed = {};
