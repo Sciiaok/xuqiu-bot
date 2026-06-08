@@ -2,12 +2,12 @@ import {
   handleFeishuUrlVerification,
   normalizeFeishuUserId,
   resolveRequirementBotTenantId,
-  updateFeishuCard,
 } from '@/src/feishu-app.service';
 import {
   buildRequirementDraftCard,
   buildRequirementExecutionCard,
 } from '@/src/requirement-card.service';
+import { cardCallbackResponse } from '@/src/requirement-card-callback.service';
 import { syncRequirementToBitable } from '@/src/requirement-bitable.service';
 import { applyRequirementAction } from '@/src/requirement-state.service';
 import {
@@ -31,7 +31,7 @@ function callbackUser(body) {
 }
 
 function callbackToast(type, content) {
-  return Response.json({ toast: { type, content } });
+  return cardCallbackResponse(type, content);
 }
 
 function cardFor(requirement) {
@@ -127,14 +127,6 @@ export async function POST(request) {
         payload: value,
       });
 
-    if (updated.feishu_card_message_id) {
-      await updateFeishuCard({
-        tenantId,
-        messageId: updated.feishu_card_message_id,
-        card: cardFor(updated),
-      });
-    }
-
     syncRequirementToBitable({ tenantId, requirement: updated }).catch(err => {
       console.warn('[requirements] bitable sync after card action failed:', err.message);
     });
@@ -142,7 +134,7 @@ export async function POST(request) {
     const message = action === REQUIREMENT_ACTIONS.GENERATE_PLAN
       ? '方案刷新会在后续版本接入'
       : '已更新';
-    return callbackToast('success', message);
+    return cardCallbackResponse('success', message, cardFor(updated));
   } catch (err) {
     return callbackToast('error', err.message);
   }
