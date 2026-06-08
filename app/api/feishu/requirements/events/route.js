@@ -11,6 +11,7 @@ import {
   generateRequirementDraft,
 } from '@/src/requirement-draft.service';
 import { buildRequirementDraftCard } from '@/src/requirement-card.service';
+import { syncRequirementToBitable } from '@/src/requirement-bitable.service';
 import {
   CURRENT_OWNER_BY_STATUS,
   REQUIREMENT_ACTIONS,
@@ -71,7 +72,7 @@ export async function POST(request) {
     ? submitter
     : settings?.default_pm_feishu_user_id || null;
 
-  const requirement = await createRequirementWithEvent({
+  let requirement = await createRequirementWithEvent({
     tenantId,
     requirement: {
       tenant_id: tenantId,
@@ -113,12 +114,16 @@ export async function POST(request) {
   });
   const messageId = cardResult?.message_id || cardResult?.data?.message_id || null;
   if (messageId) {
-    await updateRequirement({
+    requirement = await updateRequirement({
       tenantId,
       id: requirement.id,
       patch: { feishu_card_message_id: messageId },
     });
   }
+
+  syncRequirementToBitable({ tenantId, requirement }).catch(err => {
+    console.warn('[requirements] bitable sync after create failed:', err.message);
+  });
 
   if (status === 'needs_info' && message.message_id) {
     await replyFeishuText({

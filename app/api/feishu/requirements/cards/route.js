@@ -8,6 +8,7 @@ import {
   buildRequirementDraftCard,
   buildRequirementExecutionCard,
 } from '@/src/requirement-card.service';
+import { syncRequirementToBitable } from '@/src/requirement-bitable.service';
 import { applyRequirementAction } from '@/src/requirement-state.service';
 import {
   REQUIREMENT_ACTIONS,
@@ -133,6 +134,10 @@ export async function POST(request) {
         card: cardFor(updated),
       });
     }
+
+    syncRequirementToBitable({ tenantId, requirement: updated }).catch(err => {
+      console.warn('[requirements] bitable sync after card action failed:', err.message);
+    });
 
     const message = action === REQUIREMENT_ACTIONS.GENERATE_PLAN
       ? '方案刷新会在后续版本接入'

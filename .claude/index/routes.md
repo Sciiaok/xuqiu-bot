@@ -1,12 +1,12 @@
 # Routes (auto-generated)
 
-Generated: 2026-06-08T04:18:40.627Z
+Generated: 2026-06-08T04:20:10.712Z
 
 Filesystem-derived list of API endpoints and UI pages. **Do not edit** — run `node scripts/build-index.mjs` to refresh.
 
 ## API Endpoints
 
-Total: **88**
+Total: **89**
 
 | Path | Methods | File |
 | --- | --- | --- |
@@ -93,6 +93,7 @@ Total: **88**
 | `/api/reports` | GET, POST | [app/api/reports/route.js](../../app/api/reports/route.js) |
 | `/api/reports/[id]` | GET, POST | [app/api/reports/[id]/route.js](../../app/api/reports/[id]/route.js) |
 | `/api/reports/export` | GET | [app/api/reports/export/route.js](../../app/api/reports/export/route.js) |
+| `/api/requirements/[id]/sync-bitable` | POST | [app/api/requirements/[id]/sync-bitable/route.js](../../app/api/requirements/[id]/sync-bitable/route.js) |
 | `/api/send-message` | POST | [app/api/send-message/route.js](../../app/api/send-message/route.js) |
 | `/api/settings/notifications` | GET, POST | [app/api/settings/notifications/route.js](../../app/api/settings/notifications/route.js) |
 | `/api/settings/notifications/test` | POST | [app/api/settings/notifications/test/route.js](../../app/api/settings/notifications/test/route.js) |
