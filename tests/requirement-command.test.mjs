@@ -288,5 +288,13 @@ test('parses manual bitable sync commands', async () => {
     parseRequirementSyncCommand('回复 洪羽宁：同步 REQ-20260608-001'),
     { handled: true, reqNo: 'REQ-20260608-001' },
   );
+  assert.deepEqual(
+    parseRequirementSyncCommand('【更新多维文档】REQ-20260608-001'),
+    { handled: true, reqNo: 'REQ-20260608-001' },
+  );
+  assert.deepEqual(
+    parseRequirementSyncCommand('REQ-20260608-001 【更新多维文档】'),
+    { handled: true, reqNo: 'REQ-20260608-001' },
+  );
   assert.deepEqual(parseRequirementSyncCommand('REQ-20260608-001 补充一下'), { handled: false });
 });

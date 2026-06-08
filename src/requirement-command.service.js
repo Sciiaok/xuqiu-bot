@@ -289,8 +289,14 @@ export function parseRequirementEditCommand(text) {
 export function parseRequirementSyncCommand(text) {
   const input = normalizeWhitespace(text);
   const match = input.match(/(?:^|[\s:：])(?:同步|同步多维表格)\s+(REQ-\d{8}-\d{3})(?:$|\s)/i);
-  if (!match) return { handled: false };
-  return { handled: true, reqNo: normalizeReqNo(match[1]) };
+  if (match) return { handled: true, reqNo: normalizeReqNo(match[1]) };
+
+  if (input.includes('【更新多维文档】')) {
+    const reqNo = input.match(/REQ-\d{8}-\d{3}/i)?.[0] || '';
+    if (reqNo) return { handled: true, reqNo: normalizeReqNo(reqNo) };
+  }
+
+  return { handled: false };
 }
 
 async function findRequirementByNo({ tenantId, reqNo }) {
