@@ -15,7 +15,6 @@ const BUSINESS_NAV = [
     items: [
       { href: '/analytics', label: '监控看板', icon: 'analytics' },
       { href: '/reports', label: '周报日报', icon: 'reports' },
-      { href: '/requirements', label: '需求工作台', icon: 'requirements' },
     ],
   },
   {

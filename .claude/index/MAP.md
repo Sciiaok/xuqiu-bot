@@ -101,6 +101,14 @@ Goal: when Claude Code picks up a task touching feature X, read this file first 
 - **Tables**: `ai_reports`, `llm_usage_logs`, `inquiry_dashboard_summaries` (LLM-summary cache for `/analytics`, 7-day TTL)
 - **Notes**: AI report streams via SSE. LLM cost dashboard reads `llm_usage_logs`. The inquiry-dashboard summary panel calls `/api/inquiry-dashboard/summary` which writes-through to `inquiry_dashboard_summaries`; raw dashboard data still comes from `/api/inquiry-dashboard` querying `leads` directly.
 
+### Requirement Bot — Feishu-driven product requirement workflow
+- **UI**: `app/(app)/settings/requirement-bot/page.js`
+- **API**: `/api/feishu/requirements/events`, `/api/feishu/requirements/cards`, `/api/requirements`, `/api/requirements/[id]`, `/api/requirements/[id]/sync-bitable`, `/api/settings/requirement-bot`, `/api/cron/requirements-reminders`
+- **Services**: `src/requirement-draft.service.js`, `src/requirement-state.service.js`, `src/requirement-card.service.js`, `src/requirement-reminder.service.js`, `src/requirement-bitable.service.js`, `src/feishu-app.service.js`
+- **Repository**: `lib/repositories/requirement.repository.js`
+- **Tables**: `requirement_bot_settings`, `requirement_feishu_users`, `requirements`, `requirement_events`, `requirement_attachments`, `requirement_reminder_logs`
+- **Notes**: Feishu card is the primary workflow surface. Feishu Bitable is the global ledger. Backend only provides settings, archival APIs, and sync/retry surfaces. Bitable sync is one-way.
+
 ### Onboarding & Auth
 - **UI**: `app/(auth)/*` (login/signup pages), `app/(app)/admin/invitations/page.js`
 - **API**: `/api/auth/signup`, `/api/auth/invitation/[token]`, `/api/onboarding/progress`

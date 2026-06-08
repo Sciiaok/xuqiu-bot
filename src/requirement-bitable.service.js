@@ -34,8 +34,8 @@ function requirementToBitableFields(requirement) {
     '上线时间': requirement.planned_release_at || '',
     '是否延期': isRequirementOverdue(requirement) ? '是' : '否',
     '当前阻塞': requirement.blocked_reason || '',
-    '飞书卡片链接': requirement.feishu_card_url || '',
-    '后台详情链接': `/requirements/${requirement.id}`,
+    '飞书卡片链接': requirement.feishu_card_url || '飞书卡片内处理',
+    '归档ID': requirement.id,
   };
 }
 

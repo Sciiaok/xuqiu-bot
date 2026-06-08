@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Build a Feishu-card-driven requirement workflow where team members submit issues in a Feishu group, AI generates a PRD, PM confirms it, owners advance delivery through Feishu card actions, the backend shows the global view, and Bitable receives a one-way synced ledger.
+**Goal:** Build a Feishu-card-driven requirement workflow where team members submit issues in a Feishu group, AI generates a PRD, PM confirms it, owners advance delivery through Feishu card actions, and Feishu Bitable receives the global ledger.
 
-**Architecture:** Add a focused `requirements` domain alongside existing LeadEngine modules. Feishu application events and card callbacks enter through new API routes, domain services handle AI drafting/state transitions/card rendering/reminders/Bitable sync, and Supabase stores the source of truth. The backend dashboard reads the same tables but does not become the primary workflow surface.
+**Architecture:** Add a focused `requirements` domain alongside existing LeadEngine modules. Feishu application events and card callbacks enter through new API routes, domain services handle AI drafting/state transitions/card rendering/reminders/Bitable sync, and Supabase stores the source of truth. Daily workflow stays in Feishu cards; the global view lives in Feishu Bitable. LeadEngine only exposes bot configuration and backend archival/API surfaces.
 
 **Tech Stack:** Next.js App Router, Supabase/Postgres, existing `@larksuiteoapi/node-sdk`, existing `src/llm-client.js`, Feishu application bot event callbacks, Feishu interactive cards, Feishu Bitable API.
 
@@ -14,12 +14,14 @@
 
 This plan implements the first-version design in `docs/superpowers/specs/2026-06-08-feishu-requirement-bot-design.md`.
 
+Latest scope correction: the product does not include a LeadEngine "requirement workspace" page. The team works from Feishu cards and Feishu Bitable; LeadEngine keeps settings, storage, audit events, and integration APIs.
+
 Repository instruction override: `CLAUDE.md` says not to write test files or run `npm test`. This plan therefore uses:
 
 - migration syntax review,
 - route-level smoke checks where possible,
 - `npm run build`,
-- one system test through Feishu callback fixtures and the local UI,
+- one system test through Feishu callback fixtures and the settings UI,
 - no new automated test files.
 
 Feishu docs checked while writing this plan:
@@ -69,10 +71,10 @@ Create:
   Feishu card action callback receiver.
 
 - `app/api/requirements/route.js`  
-  Dashboard list endpoint.
+  Internal archive list endpoint.
 
 - `app/api/requirements/[id]/route.js`  
-  Dashboard detail endpoint.
+  Internal archive detail endpoint.
 
 - `app/api/requirements/[id]/sync-bitable/route.js`  
   Manual Bitable retry endpoint.
@@ -83,12 +85,6 @@ Create:
 - `app/api/cron/requirements-reminders/route.js`  
   Reminder cron entrypoint.
 
-- `app/(app)/requirements/page.js` and `app/(app)/requirements/page.module.css`  
-  Global dashboard page.
-
-- `app/(app)/requirements/[id]/page.js` and `app/(app)/requirements/[id]/page.module.css`  
-  Requirement detail page.
-
 - `app/(app)/settings/requirement-bot/page.js` and `app/(app)/settings/requirement-bot/page.module.css`  
   Settings page for Feishu app and Bitable configuration.
 
@@ -98,10 +94,10 @@ Modify:
   Add Feishu app configuration values.
 
 - `app/components/Sidebar/Sidebar.js` and `app/components/Sidebar/Sidebar.module.css`  
-  Add links for requirements and requirement bot settings.
+  Add the requirement bot settings link only.
 
 - `lib/prefetch-keys.js`  
-  Add fetchers/cache keys for requirement dashboard and settings.
+  Add fetchers/cache keys for requirement bot settings only.
 
 - `.claude/index/MAP.md`, `.claude/index/glossary.md`, `.claude/index/routes.md`, `.claude/index/schema.md`  
   Refresh/update after routes and schema are implemented.
@@ -1358,8 +1354,8 @@ function requirementToBitableFields(requirement) {
     '上线时间': requirement.planned_release_at || '',
     '是否延期': isRequirementOverdue(requirement) ? '是' : '否',
     '当前阻塞': requirement.blocked_reason || '',
-    '飞书卡片链接': requirement.feishu_card_url || '',
-    '后台详情链接': `/requirements/${requirement.id}`,
+    '飞书卡片链接': requirement.feishu_card_url || '飞书卡片内处理',
+    '归档ID': requirement.id,
   };
 }
 
@@ -1605,20 +1601,16 @@ git commit -m "feat(requirements): send workflow reminders"
 
 ---
 
-### Task 8: Backend Dashboard and Detail Pages
+### Task 8: Settings Page, Internal Archive APIs, and Feishu-Only Workflow Surface
 
 **Files:**
 - Create: `app/api/requirements/route.js`
 - Create: `app/api/requirements/[id]/route.js`
-- Create: `app/(app)/requirements/page.js`
-- Create: `app/(app)/requirements/page.module.css`
-- Create: `app/(app)/requirements/[id]/page.js`
-- Create: `app/(app)/requirements/[id]/page.module.css`
 - Modify: `app/components/Sidebar/Sidebar.js`
 - Modify: `app/components/Sidebar/Sidebar.module.css`
 - Modify: `lib/prefetch-keys.js`
 
-- [ ] **Step 1: Create list endpoint**
+- [ ] **Step 1: Keep internal list endpoint**
 
 Create `app/api/requirements/route.js`:
 
@@ -1644,7 +1636,7 @@ export async function GET(request) {
 }
 ```
 
-- [ ] **Step 2: Create detail endpoint**
+- [ ] **Step 2: Keep internal detail endpoint**
 
 Create `app/api/requirements/[id]/route.js`:
 
@@ -1665,40 +1657,26 @@ export async function GET(_request, { params }) {
 }
 ```
 
-- [ ] **Step 3: Create dashboard page**
+- [ ] **Step 3: Keep workflow out of LeadEngine pages**
 
-Create a dense operational page:
+Do not add a LeadEngine requirement list or detail page. Daily work happens in Feishu cards, and the global list lives in Feishu Bitable.
 
-- header title: `需求工作台`
-- KPI row: total open, overdue, P0/P1, closed this week
-- filters: status, priority, current owner text input, type
-- table columns: req no, title, status, priority, current owner, next due, Bitable sync status, Feishu link
+If a backend page was created during implementation, remove:
 
-Use existing dashboard/page module CSS patterns from `app/(app)/analytics` and `app/(app)/leadhub`; avoid marketing layout.
+- `app/(app)/requirements/page.js`
+- `app/(app)/requirements/page.module.css`
+- `app/(app)/requirements/[id]/page.js`
+- `app/(app)/requirements/[id]/page.module.css`
 
-- [ ] **Step 4: Create detail page**
-
-Detail page sections:
-
-- title/status/priority summary
-- PRD block
-- owners and schedule
-- attachments/test evidence
-- status history
-- actions: open Feishu link, retry Bitable sync
-
-Do not add status mutation buttons to the backend in first version.
-
-- [ ] **Step 5: Add sidebar links**
+- [ ] **Step 4: Add settings link only**
 
 Add:
 
-- `/requirements` labeled `需求工作台`
 - `/settings/requirement-bot` labeled `需求机器人`
 
 Match existing sidebar icon/style patterns.
 
-- [ ] **Step 6: Verify UI build and commit**
+- [ ] **Step 5: Verify build and commit**
 
 Run:
 
@@ -1711,8 +1689,8 @@ Expected: pages compile, routes compile.
 Commit:
 
 ```bash
-git add app/api/requirements 'app/(app)/requirements' 'app/(app)/settings/requirement-bot' app/components/Sidebar lib/prefetch-keys.js
-git commit -m "feat(requirements): add dashboard and detail views"
+git add app/api/requirements 'app/(app)/settings/requirement-bot' app/components/Sidebar lib/prefetch-keys.js
+git commit -m "feat(requirements): add settings and archive APIs"
 ```
 
 ---
@@ -1731,12 +1709,12 @@ Update `.claude/index/MAP.md` with a new feature section:
 
 ```md
 ### Requirement Bot — Feishu-driven product requirement workflow
-- **UI**: `app/(app)/requirements/page.js`, `app/(app)/requirements/[id]/page.js`, `app/(app)/settings/requirement-bot/page.js`
+- **UI**: `app/(app)/settings/requirement-bot/page.js`
 - **API**: `/api/feishu/requirements/events`, `/api/feishu/requirements/cards`, `/api/requirements`, `/api/requirements/[id]`, `/api/requirements/[id]/sync-bitable`, `/api/settings/requirement-bot`, `/api/cron/requirements-reminders`
 - **Services**: `src/requirement-draft.service.js`, `src/requirement-state.service.js`, `src/requirement-card.service.js`, `src/requirement-reminder.service.js`, `src/requirement-bitable.service.js`, `src/feishu-app.service.js`
 - **Repository**: `lib/repositories/requirement.repository.js`
 - **Tables**: `requirement_bot_settings`, `requirement_feishu_users`, `requirements`, `requirement_events`, `requirement_attachments`, `requirement_reminder_logs`
-- **Notes**: Feishu card is the primary workflow surface. Backend is global dashboard/archive. Bitable sync is one-way.
+- **Notes**: Feishu card is the primary workflow surface. Feishu Bitable is the global ledger. Backend only provides settings, archival APIs, and sync/retry surfaces. Bitable sync is one-way.
 ```
 
 Update `.claude/index/glossary.md` with:
@@ -1746,7 +1724,7 @@ Update `.claude/index/glossary.md` with:
 
 - **Requirement** — Internal product requirement created from Feishu group @bot messages. Stored in `requirements`.
 - **Requirement card** — Feishu interactive card used as the main workflow UI.
-- **Bitable sync** — One-way ledger sync from the system to Feishu Bitable. Bitable edits are not imported in v1.
+- **Bitable sync** — One-way ledger sync from the system to Feishu Bitable. This is the global requirement list for the team; Bitable edits are not imported in v1.
 ```
 
 - [ ] **Step 2: Refresh generated index docs**
@@ -1801,7 +1779,6 @@ Expected:
 
 Open:
 
-- `http://localhost:3000/requirements`
 - `http://localhost:3000/settings/requirement-bot`
 
 Check:

@@ -1,6 +1,6 @@
 # Routes (auto-generated)
 
-Generated: 2026-06-08T04:24:27.544Z
+Generated: 2026-06-08T05:51:17.447Z
 
 Filesystem-derived list of API endpoints and UI pages. **Do not edit** — run `node scripts/build-index.mjs` to refresh.
 
@@ -105,7 +105,7 @@ Total: **92**
 
 ## UI Pages
 
-Total: **20**
+Total: **18**
 
 | URL | File |
 | --- | --- |
@@ -124,8 +124,6 @@ Total: **20**
 | `/product-lines/[id]` | [app/(app)/product-lines/[id]/page.js](../../app/(app)/product-lines/[id]/page.js) |
 | `/reports` | [app/(app)/reports/page.js](../../app/(app)/reports/page.js) |
 | `/reports/[id]` | [app/(app)/reports/[id]/page.js](../../app/(app)/reports/[id]/page.js) |
-| `/requirements` | [app/(app)/requirements/page.js](../../app/(app)/requirements/page.js) |
-| `/requirements/[id]` | [app/(app)/requirements/[id]/page.js](../../app/(app)/requirements/[id]/page.js) |
 | `/settings/meta-connection` | [app/(app)/settings/meta-connection/page.js](../../app/(app)/settings/meta-connection/page.js) |
 | `/settings/notifications` | [app/(app)/settings/notifications/page.js](../../app/(app)/settings/notifications/page.js) |
 | `/settings/requirement-bot` | [app/(app)/settings/requirement-bot/page.js](../../app/(app)/settings/requirement-bot/page.js) |

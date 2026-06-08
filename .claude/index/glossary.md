@@ -73,6 +73,13 @@ Words that appear repeatedly across code, schema, and UI. Many are not self-expl
 - **BM** — Business Manager. `meta-bm-resolver` figures out which BM/WABA → tenant + product-line.
 - **Token crypto** — Meta access tokens are envelope-encrypted with `META_TOKEN_ENCRYPTION_KEY`. See `lib/meta-token-crypto.js`.
 
+## Requirement Bot
+
+- **Requirement** — Internal product requirement created from Feishu group @bot messages. Stored in `requirements`.
+- **Requirement card** — Feishu interactive card used as the main workflow UI for PM confirmation, development, testing, acceptance, blocking, and deadline changes.
+- **Requirement status** — Workflow state: `needs_pm`, `needs_info`, `ready_for_dev`, `in_dev`, `ready_for_test`, `in_test`, `ready_for_acceptance`, `closed`, or `rejected`.
+- **Bitable sync** — One-way ledger sync from the system to Feishu Bitable. This is the global requirement list for the team; Bitable edits are not imported in v1.
+
 ## Infra / cross-cutting
 
 - **Tenant context** (`lib/tenant-context.js`) — Server-side helper that resolves the current request's tenant. Returns `{ tenantId, userId, supabase }`.
