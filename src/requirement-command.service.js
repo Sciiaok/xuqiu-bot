@@ -288,7 +288,7 @@ export function parseRequirementEditCommand(text) {
 
 export function parseRequirementSyncCommand(text) {
   const input = normalizeWhitespace(text);
-  const match = input.match(/^(?:同步|同步多维表格)\s+(REQ-\d{8}-\d{3})$/i);
+  const match = input.match(/(?:^|[\s:：])(?:同步|同步多维表格)\s+(REQ-\d{8}-\d{3})(?:$|\s)/i);
   if (!match) return { handled: false };
   return { handled: true, reqNo: normalizeReqNo(match[1]) };
 }

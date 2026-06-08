@@ -32,6 +32,7 @@ import {
 import {
   createRequirementWithEvent,
   getRequirementBotSettings,
+  markFeishuMessageProcessed,
   nextRequirementNo,
   updateRequirement,
 } from '@/lib/repositories/requirement.repository';
@@ -75,6 +76,12 @@ export async function POST(request) {
   const sender = event.sender || {};
   const rawText = parseFeishuTextMessage(message);
   if (!rawText) return Response.json({ ok: true, skipped: 'empty_text' });
+
+  const messageId = message.message_id || '';
+  const isFirstDelivery = await markFeishuMessageProcessed({ tenantId, messageId });
+  if (!isFirstDelivery) {
+    return Response.json({ ok: true, skipped: 'duplicate_message' });
+  }
 
   const settings = await getRequirementBotSettings(tenantId);
   const chatId = messageChatId(message, settings);
@@ -258,12 +265,12 @@ export async function POST(request) {
     receiveId: requirement.feishu_chat_id,
     card: buildRequirementDraftCard(requirement),
   });
-  const messageId = cardResult?.message_id || cardResult?.data?.message_id || null;
-  if (messageId) {
+  const cardMessageId = cardResult?.message_id || cardResult?.data?.message_id || null;
+  if (cardMessageId) {
     requirement = await updateRequirement({
       tenantId,
       id: requirement.id,
-      patch: { feishu_card_message_id: messageId },
+      patch: { feishu_card_message_id: cardMessageId },
     });
   }
 

@@ -62,6 +62,14 @@ test('requirement bot repository works without Supabase', async () => {
     assert.equal(rows.length, 1);
     assert.equal(events.length, 2);
     assert.equal(reminders.length, 1);
+    assert.equal(await repo.markFeishuMessageProcessed({
+      tenantId: 'local',
+      messageId: 'om_msg_1',
+    }), true);
+    assert.equal(await repo.markFeishuMessageProcessed({
+      tenantId: 'local',
+      messageId: 'om_msg_1',
+    }), false);
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
