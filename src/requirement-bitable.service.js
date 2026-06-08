@@ -196,6 +196,11 @@ export async function syncRequirementToBitable({ tenantId, requirement }) {
         bitable_last_error: err.message,
       },
     });
+    console.warn('[requirements] bitable sync failed:', {
+      requirement_id: requirement.id,
+      req_no: requirement.req_no,
+      error: err.message,
+    });
     return { ok: false, error: err.message };
   }
 }

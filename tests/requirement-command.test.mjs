@@ -272,3 +272,17 @@ test('extracts sender display name from Feishu event payloads', async () => {
   assert.equal(extractSenderName({ sender_id: { name: '王五' } }), '王五');
   assert.equal(extractSenderName({ sender_id: { open_id: 'ou_xxx' } }), '');
 });
+
+test('parses manual bitable sync commands', async () => {
+  const { parseRequirementSyncCommand } = await import('../src/requirement-command.service.js');
+
+  assert.deepEqual(
+    parseRequirementSyncCommand('同步 REQ-20260608-001'),
+    { handled: true, reqNo: 'REQ-20260608-001' },
+  );
+  assert.deepEqual(
+    parseRequirementSyncCommand('同步多维表格 req-20260608-001'),
+    { handled: true, reqNo: 'REQ-20260608-001' },
+  );
+  assert.deepEqual(parseRequirementSyncCommand('REQ-20260608-001 补充一下'), { handled: false });
+});

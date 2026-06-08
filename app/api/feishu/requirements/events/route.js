@@ -20,6 +20,7 @@ import { syncRequirementToBitable } from '@/src/requirement-bitable.service';
 import {
   handleRequirementEditCommand,
   handleRequirementFollowUp,
+  handleRequirementSyncCommand,
   isExplicitNewRequirement,
   stripNewRequirementMarker,
 } from '@/src/requirement-command.service';
@@ -82,6 +83,27 @@ export async function POST(request) {
   const submitter = extractSenderId(sender);
   if (!submitter) return Response.json({ error: 'Feishu sender id is required' }, { status: 400 });
   const submitterName = extractSenderName(sender);
+
+  const syncResult = await handleRequirementSyncCommand({
+    tenantId,
+    text: rawText,
+    syncRequirementToBitable,
+  });
+  if (syncResult.handled) {
+    if (message.message_id) {
+      await replyFeishuText({
+        tenantId,
+        messageId: message.message_id,
+        content: syncResult.ok ? syncResult.message : `同步失败：${syncResult.error}`,
+      });
+    }
+    return Response.json({
+      ok: Boolean(syncResult.ok),
+      handled: 'sync_command',
+      requirement_id: syncResult.requirement?.id || null,
+      error: syncResult.error || null,
+    });
+  }
 
   const commandResult = await handleRequirementEditCommand({
     tenantId,

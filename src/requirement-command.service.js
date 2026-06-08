@@ -286,6 +286,13 @@ export function parseRequirementEditCommand(text) {
   };
 }
 
+export function parseRequirementSyncCommand(text) {
+  const input = normalizeWhitespace(text);
+  const match = input.match(/^(?:同步|同步多维表格)\s+(REQ-\d{8}-\d{3})$/i);
+  if (!match) return { handled: false };
+  return { handled: true, reqNo: normalizeReqNo(match[1]) };
+}
+
 async function findRequirementByNo({ tenantId, reqNo }) {
   const items = await listRequirements({ tenantId, limit: 500 });
   return items.find(item => normalizeReqNo(item.req_no) === normalizeReqNo(reqNo)) || null;
@@ -354,6 +361,53 @@ export async function handleRequirementEditCommand({ tenantId, text, actorFeishu
     requirement: updated,
     message: `已修改 ${updated.req_no}：${label} = ${displayValue(parsed.value)}`,
   };
+}
+
+export async function handleRequirementSyncCommand({ tenantId, text, syncRequirementToBitable }) {
+  const parsed = parseRequirementSyncCommand(text);
+  if (!parsed.handled) return { handled: false };
+
+  const requirement = await findRequirementByNo({ tenantId, reqNo: parsed.reqNo });
+  if (!requirement) {
+    return {
+      handled: true,
+      ok: false,
+      error: `找不到需求 ${parsed.reqNo}`,
+    };
+  }
+
+  try {
+    const result = await syncRequirementToBitable({ tenantId, requirement });
+    if (result.ok) {
+      return {
+        handled: true,
+        ok: true,
+        requirement,
+        message: `已同步 ${requirement.req_no} 到多维表格。记录 ID：${result.recordId || '-'}`,
+      };
+    }
+    if (result.skipped) {
+      return {
+        handled: true,
+        ok: false,
+        requirement,
+        error: `没有同步：${result.reason || '未配置多维表格'}`,
+      };
+    }
+    return {
+      handled: true,
+      ok: false,
+      requirement,
+      error: result.error || '未知同步失败',
+    };
+  } catch (err) {
+    return {
+      handled: true,
+      ok: false,
+      requirement,
+      error: err.message,
+    };
+  }
 }
 
 export async function handleRequirementFollowUp({ tenantId, text, actorFeishuUserId }) {
